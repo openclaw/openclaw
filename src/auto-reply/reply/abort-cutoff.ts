@@ -1,4 +1,3 @@
-// Resolves abort cutoff markers used to stop stale reply streams.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -11,28 +10,28 @@ export type AbortCutoff = {
 
 type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">;
 
+function buildAbortCutoff(
+  messageSid: string | undefined,
+  rawTimestamp: unknown,
+): AbortCutoff | undefined {
+  const timestamp = asFiniteNumber(rawTimestamp);
+  return messageSid || timestamp !== undefined ? { messageSid, timestamp } : undefined;
+}
+
 export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
-  const messageSid =
-    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid);
-  const timestamp = asFiniteNumber(ctx.Timestamp);
-  if (!messageSid && timestamp === undefined) {
-    return undefined;
-  }
-  return { messageSid, timestamp };
+  return buildAbortCutoff(
+    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+    ctx.Timestamp,
+  );
 }
 
 export function readAbortCutoffFromSessionEntry(
   entry: SessionAbortCutoffEntry | undefined,
 ): AbortCutoff | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const messageSid = normalizeOptionalString(entry.abortCutoffMessageSid);
-  const timestamp = asFiniteNumber(entry.abortCutoffTimestamp);
-  if (!messageSid && timestamp === undefined) {
-    return undefined;
-  }
-  return { messageSid, timestamp };
+  return buildAbortCutoff(
+    normalizeOptionalString(entry?.abortCutoffMessageSid),
+    entry?.abortCutoffTimestamp,
+  );
 }
 
 export function hasAbortCutoff(entry: SessionAbortCutoffEntry | undefined): boolean {
@@ -47,13 +46,12 @@ export function applyAbortCutoffToSessionEntry(
   entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
 
-function toNumericMessageSid(value: string | undefined): bigint | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed || !/^\d+$/.test(trimmed)) {
+function toNumericMessageSid(value: string): bigint | undefined {
+  if (!/^\d+$/.test(value)) {
     return undefined;
   }
   try {
-    return BigInt(trimmed);
+    return BigInt(value);
   } catch {
     return undefined;
   }

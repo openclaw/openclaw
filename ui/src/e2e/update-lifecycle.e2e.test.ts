@@ -102,9 +102,10 @@ suite.define(() => {
             .getByRole("button", { name: "Update and restart", exact: true })
             .waitFor();
           if (artifactDir) {
-            // The modal fades in; capture it settled so the proof is readable.
-            await page.waitForTimeout(500);
-            await page.screenshot({ path: path.join(artifactDir, "1-confirm-dialog.png") });
+            await page.screenshot({
+              path: path.join(artifactDir, "1-confirm-dialog.png"),
+              animations: "disabled",
+            });
           }
           await page
             .locator("openclaw-modal-dialog")
@@ -174,7 +175,9 @@ suite.define(() => {
             (await gateway.waitForRequest("update.runs.get", { after: reads })).params,
           ).toEqual({ runId: run.runId });
           await dialog
-            .getByText("✅ OpenClaw updated to 9f3c21a0 (from 11111111).", { exact: true })
+            .getByText("✅ OpenClaw updated to 2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111)).", {
+              exact: true,
+            })
             .first()
             .waitFor();
           if (artifactDir) {
@@ -266,8 +269,10 @@ suite.define(() => {
           );
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           if (artifactDir) {
-            await page.waitForTimeout(300);
-            await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
+            await page.screenshot({
+              path: path.join(artifactDir, "5-failure-in-dialog.png"),
+              animations: "disabled",
+            });
           }
           expect(pageErrors).toEqual([]);
         },

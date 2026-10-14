@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
+import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { assistantTextMessage } from "./session-history-fixtures.test-support.js";
+
+const internalContext = (text: string) =>
+  ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", text, "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"].join("\n");
+const userTextMessage = (text: string) => ({
+  role: "user",
+  content: [{ type: "text", text }],
+  __openclaw: { seq: 1 },
+});
 
 describe("internal history display projection", () => {
   it("hides attributed child coordination without hiding peer messages or parent answers", () => {
@@ -34,69 +44,43 @@ describe("internal history display projection", () => {
 
   it("strips legacy internal envelopes before exposing history", () => {
     const projected = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "secret runtime context",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "",
-              "visible ask",
-            ].join("\n"),
-          },
-        ],
-        __openclaw: { seq: 1 },
-      },
+      userTextMessage(`${internalContext("secret runtime context")}\n\nvisible ask`),
     ]);
 
-    expect(projected).toHaveLength(1);
-    expect(
-      (
-        projected[0] as {
-          content?: Array<{ text?: string }>;
-        }
-      ).content?.[0]?.text,
-    ).toBe("visible ask");
+    expect(projected).toMatchObject([{ content: [{ text: "visible ask" }] }]);
   });
 
   it("drops internal-only user messages after envelope stripping", () => {
     const projected = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "subagent completion payload",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-            ].join("\n"),
-          },
-        ],
-        __openclaw: { seq: 1 },
-      },
+      userTextMessage(internalContext("subagent completion payload")),
       assistantTextMessage("visible answer", 2),
     ]);
 
     expect(projected).toEqual([assistantTextMessage("visible answer", 2)]);
   });
 
-  it("drops hidden runtime-context custom messages from projected history", () => {
-    const projected = projectChatDisplayMessages([
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "secret runtime context",
-        display: false,
-        __openclaw: { seq: 1 },
-      },
-      assistantTextMessage("visible answer", 2),
-    ]);
+  it.each([
+    "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT",
+    "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT",
+  ])("hides internal exec notifications without suppressing user text: %s", (text) => {
+    const completion = {
+      ...userTextMessage(text),
+      provenance: { kind: "internal_system", sourceTool: " exec " },
+    };
+    const original = structuredClone(completion);
+    const user = { ...userTextMessage(text), provenance: { kind: "external_user" } };
+    const restart = {
+      ...userTextMessage("Gateway restarted during update."),
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+    };
+    const answer = assistantTextMessage("The checks finished. Continuing the task.", 2);
 
-    expect(projected).toEqual([assistantTextMessage("visible answer", 2)]);
+    expect(projectChatDisplayMessages([completion, user, restart, answer])).toEqual([
+      user,
+      restart,
+      answer,
+    ]);
+    expect(completion).toEqual(original);
   });
 
   it.each(["subagent_announce", "subagent_settle"])(
@@ -104,25 +88,18 @@ describe("internal history display projection", () => {
     (sourceTool) => {
       const projected = projectChatDisplayMessages([
         {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
-                "This content was routed by OpenClaw from another session or internal tool.",
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
+          ...userTextMessage(
+            [
+              `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
+              "This content was routed by OpenClaw from another session or internal tool.",
+              internalContext("subagent completion payload"),
+            ].join("\n"),
+          ),
           provenance: {
             kind: "inter_session",
             sourceSessionKey: "agent:main:subagent:child",
             sourceTool,
           },
-          __openclaw: { seq: 1 },
         },
         assistantTextMessage("clean child result", 2),
       ]);
@@ -145,24 +122,19 @@ describe("internal history display projection", () => {
     };
     const projected = projectChatDisplayMessages([
       {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "A background task completed. Use this result to reply normally.",
-              "session_key: image_generate:task-123",
-              'path="/root/.openclaw/media/tool-image-generation/private.png"',
-            ].join("\n"),
-          },
-        ],
+        ...userTextMessage(
+          [
+            "A background task completed. Use this result to reply normally.",
+            "session_key: image_generate:task-123",
+            'path="/root/.openclaw/media/tool-image-generation/private.png"',
+          ].join("\n"),
+        ),
         provenance: {
           kind: "inter_session",
           sourceChannel: "internal",
           sourceSessionKey: "image_generate:task-123",
           sourceTool: "image_generate",
         },
-        __openclaw: { seq: 1 },
       },
       assistantReply,
     ]);
@@ -203,3 +175,114 @@ describe("internal history display projection", () => {
     ]);
   });
 });
+
+it.each([
+  [
+    "agent:main:main",
+    {
+      senderLabel: "Forwarded from main",
+      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
+    },
+  ],
+  [
+    "legacy-session",
+    { senderLabel: "Forwarded agent message", senderSession: { sessionKey: "legacy-session" } },
+  ],
+  [undefined, { senderLabel: "Forwarded agent message" }],
+] as const)(
+  "uses structured forwarding provenance and preserves indentation: %s",
+  (sourceSessionKey, sender) => {
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceTool: "sessions_send",
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
+    };
+    const body = "\n    indented body\n\n";
+    const message = {
+      role: "user",
+      provenance,
+      content: annotateInterSessionPromptText(body, {
+        ...provenance,
+        sourceSessionKey: "agent:other:main",
+      }),
+    };
+    expect(projectChatDisplayMessages([message])).toStrictEqual([
+      { ...message, role: "assistant", content: body, ...sender },
+    ]);
+  },
+);
+
+const jobId = "11111111-1111-4111-8111-111111111111";
+const runId = "22222222-2222-4222-8222-222222222222";
+const sessionKey = `agent:main:cron:${jobId}:run:${runId}`;
+const provenance = {
+  kind: "internal_system",
+  sourceTool: "cron",
+  jobId,
+  runId,
+  sourceSessionKey: sessionKey,
+  sourcePromptPrefix: `[cron:${jobId} Old report]`,
+};
+
+it("projects only recorded cron envelopes and current labels without changing model input", () => {
+  const body = "Check the queue.\n    Keep indentation.";
+  const renamedPrefix = `[cron:${jobId} Daily\nreport]]`;
+  const retry = "[cron:literal example] Continue from the last result.";
+  for (const [prefix, content, label, expected] of [
+    [renamedPrefix, `${renamedPrefix} ${body}`, "Renamed report", body],
+    [provenance.sourcePromptPrefix, retry, "Daily report", retry],
+    [
+      provenance.sourcePromptPrefix,
+      [{ type: "text", text: `${provenance.sourcePromptPrefix} ${body}` }],
+      undefined,
+      [{ type: "text", text: body }],
+    ],
+  ] as const) {
+    const message = {
+      role: "user",
+      provenance: { ...provenance, sourcePromptPrefix: prefix },
+      content,
+    };
+    const original = structuredClone(message);
+    expect(
+      projectChatDisplayMessages([message], { resolveCronJobName: () => label }),
+    ).toMatchObject([
+      {
+        role: "assistant",
+        senderSession: { sessionKey, agentId: "main", label: label ?? "Automation" },
+        content: expected,
+      },
+    ]);
+    expect(message).toEqual(original);
+  }
+});
+
+it.each(["state_contention", "unknown"])(
+  "allowlists only certified presentation, never raw report diagnostics (%s)",
+  (errorKind) => {
+    const [result] = projectChatDisplayMessages([
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: "Public summary",
+        details: {
+          runId: "run-1",
+          errorKind,
+          error: "PRIVATE_ERROR_CANARY",
+          diagnostic: "PRIVATE_DIAGNOSTIC_CANARY",
+          path: "PRIVATE_PATH_CANARY",
+        },
+      },
+    ]);
+    expect(result).toMatchObject({ content: "Public summary", __openclaw: { runId: "run-1" } });
+    if (errorKind === "state_contention") {
+      expect(result).toHaveProperty("details", {
+        errorKind,
+        diagnostic: STATE_CONTENTION_DIAGNOSTIC,
+      });
+    } else {
+      expect(result).not.toHaveProperty("details");
+    }
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+  },
+);

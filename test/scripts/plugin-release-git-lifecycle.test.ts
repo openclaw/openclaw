@@ -106,9 +106,10 @@ const modes: Record<
   },
 };
 
-function pluginRun(mode: PluginMode, options: RunOptions = {}) {
+function pluginRun(signal: AbortSignal, mode: PluginMode, options: RunOptions = {}) {
   const selected = modes[mode];
   return runCiGitStep({
+    signal,
     workflow: selected.workflow,
     fetchResults: [],
     ...options,
@@ -121,7 +122,7 @@ function gitCommands(report: Awaited<ReturnType<typeof pluginRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
-posixIt.each([
+posixIt.for([
   {
     mode: "clawhub-resolve" as const,
     commands: [
@@ -162,8 +163,9 @@ posixIt.each([
   },
 ])(
   "$mode drains every Git tree before success or output",
-  async ({ commands, mode, output }) => {
-    const report = await pluginRun(mode);
+  { timeout: 55_000 },
+  async ({ commands, mode, output }, { signal }) => {
+    const report = await pluginRun(signal, mode);
     expect(report.code, report.output).toBe(0);
     expect(gitCommands(report)).toEqual(commands);
     expect(report.githubOutput).toBe(output);
@@ -172,14 +174,14 @@ posixIt.each([
       expect(report.boundaries.some(({ name }) => name === "output")).toBe(true);
     }
   },
-  55_000,
 );
 
-posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
+posixIt.for(["npm-preflight-read", "npm-publish-read"] as const)(
   "%s preserves exact source package bytes before the next consumer",
-  async (mode) => {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
     const sourceRef = mode === "npm-preflight-read" ? "SOURCE_SHA" : "TARGET_SHA";
-    const report = await pluginRun(mode, {
+    const report = await pluginRun(signal, mode, {
       commandResults: {
         [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson },
       },
@@ -192,13 +194,13 @@ posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
     expect(report.pluginSourcePackage).toBe(packageJson);
     expect(modes[mode].env[sourceRef]).toBe(sha);
   },
-  55_000,
 );
 
-posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
+posixIt.for(["npm-preflight-read", "npm-publish-read"] as const)(
   "%s rejects partial source package output after ordinary show failure",
-  async (mode) => {
-    const report = await pluginRun(mode, {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await pluginRun(signal, mode, {
       commandResults: {
         [`show ${sha}:${packageDir}/package.json`]: { code: 23, output: "{partial" },
       },
@@ -207,28 +209,28 @@ posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
     expect(gitCommands(report).at(-1)?.[0]).toBe("show");
     expect(report.pluginSourcePackage).toBe("");
   },
-  55_000,
 );
 
-posixIt.each(
+posixIt.for(
   (["npm-preflight-read", "npm-publish-read"] as const).flatMap((mode) =>
     ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
   ),
 )(
   "$mode fetch failure $failure stops before source package readback",
-  async ({ failure, mode }) => {
-    const report = await pluginRun(mode, { fetchResults: [failure] });
+  { timeout: 55_000 },
+  async ({ failure, mode }, { signal }) => {
+    const report = await pluginRun(signal, mode, { fetchResults: [failure] });
     expect(report.code, report.output).toBe(failure === "hang" ? 124 : failure);
     expect(gitCommands(report).at(-1)?.[0]).toBe("fetch");
     expect(report.pluginSourcePackage).toBe("");
   },
-  55_000,
 );
 
-posixIt.each([1, 125, 143])(
+posixIt.for([1, 125, 143])(
   "ClawHub resolves origin fallback after safely drained ordinary local probe failure %s",
-  async (code) => {
-    const report = await pluginRun("clawhub-resolve", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await pluginRun(signal, "clawhub-resolve", {
       env: { TARGET_REF: "release/fixture" },
       commandResults: {
         "rev-parse --verify --quiet release/fixture^{commit}": { code, output: "" },
@@ -252,13 +254,12 @@ posixIt.each([1, 125, 143])(
     ]);
     expect(report.githubOutput).toBe(`sha=${sha}\n`);
   },
-  55_000,
 );
 
 posixIt(
   "ClawHub release tags retain their second bounded fetch",
-  async () => {
-    const report = await pluginRun("clawhub-resolve", {
+  async ({ signal }) => {
+    const report = await pluginRun(signal, "clawhub-resolve", {
       env: { RELEASE_TAG: releaseTag },
     });
     expect(report.code, report.output).toBe(0);
@@ -278,8 +279,8 @@ posixIt(
 
 posixIt(
   "ClawHub protected tooling validates the exact peeled release target",
-  async () => {
-    const report = await pluginRun("clawhub-oidc", {
+  async ({ signal }) => {
+    const report = await pluginRun(signal, "clawhub-oidc", {
       env: {
         RELEASE_PUBLISH_RUN_ATTEMPT: "2",
         RELEASE_PUBLISH_RUN_ID: "123",
@@ -299,10 +300,11 @@ posixIt(
   55_000,
 );
 
-posixIt.each([1, 125])(
+posixIt.for([1, 125])(
   "ClawHub protected tag ordinary lookup failure %s retains OIDC rejection",
-  async (code) => {
-    const report = await pluginRun("clawhub-oidc", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await pluginRun(signal, "clawhub-oidc", {
       env: {
         RELEASE_PUBLISH_RUN_ATTEMPT: "2",
         RELEASE_PUBLISH_RUN_ID: "123",
@@ -318,13 +320,13 @@ posixIt.each([1, 125])(
       "Plugin ClawHub OIDC publish target is not bound to protected tooling and the exact release tag.",
     );
   },
-  55_000,
 );
 
-posixIt.each(["clawhub-trust", "npm-trust"] as const)(
+posixIt.for(["clawhub-trust", "npm-trust"] as const)(
   "%s accepts a release branch only after successful enumeration",
-  async (mode) => {
-    const report = await pluginRun(mode, {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await pluginRun(signal, mode, {
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
         "for-each-ref --format=%(refname) refs/remotes/origin/release": {
@@ -342,13 +344,12 @@ posixIt.each(["clawhub-trust", "npm-trust"] as const)(
       "refs/remotes/origin/release/2026.8.1",
     ]);
   },
-  55_000,
 );
 
 posixIt(
   "npm-trust rejects a Tideclaw alpha publish after main and release misses",
-  async () => {
-    const report = await pluginRun("npm-trust", {
+  async ({ signal }) => {
+    const report = await pluginRun(signal, "npm-trust", {
       env: { WORKFLOW_REF: `refs/heads/${alphaBranch}` },
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
@@ -366,8 +367,8 @@ posixIt(
 
 posixIt(
   "clawhub-trust rejects a retired Tideclaw alpha branch before ancestry admission",
-  async () => {
-    const report = await pluginRun("clawhub-trust", {
+  async ({ signal }) => {
+    const report = await pluginRun(signal, "clawhub-trust", {
       env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
@@ -382,11 +383,12 @@ posixIt(
   55_000,
 );
 
-posixIt.each(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
+posixIt.for(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
   "npm extended-stable preflight retains exact-tip admission from %s",
-  async (workflowRef) => {
+  { timeout: 55_000 },
+  async (workflowRef, { signal }) => {
     const branch = "extended-stable/2026.8.33";
-    const report = await pluginRun("npm-trust", {
+    const report = await pluginRun(signal, "npm-trust", {
       env: {
         PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",
@@ -407,7 +409,6 @@ posixIt.each(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
     // Preflight adds its exact-source check before the extended-stable tip check.
     expect(gitCommands(report).filter(([operation]) => operation === "rev-parse")).toHaveLength(6);
   },
-  55_000,
 );
 
 const candidateAdmissionCases: Array<{
@@ -471,10 +472,11 @@ const candidateAdmissionCases: Array<{
   },
 ];
 
-posixIt.each(candidateAdmissionCases)(
+posixIt.for(candidateAdmissionCases)(
   "npm canonical candidate admission: $name",
-  async ({ env, commands, code, message }) => {
-    const report = await pluginRun("npm-trust", {
+  { timeout: 55_000 },
+  async ({ env, commands, code, message }, { signal }) => {
+    const report = await pluginRun(signal, "npm-trust", {
       env: {
         NPM_DIST_TAG: "extended-stable",
         PUBLISH_SCOPE: "all-publishable",
@@ -497,18 +499,18 @@ posixIt.each(candidateAdmissionCases)(
       ]);
     }
   },
-  55_000,
 );
 
-posixIt.each([
+posixIt.for([
   ["moved canonical tip", "refs/heads/main", "c".repeat(40)],
   ["untrusted workflow branch", "refs/heads/topic", sha],
   ["same-name main tag", "refs/tags/main", sha],
-])(
+] as const)(
   "npm extended-stable preflight rejects %s",
-  async (_name, workflowRef, branchSha) => {
+  { timeout: 55_000 },
+  async ([_name, workflowRef, branchSha], { signal }) => {
     const branch = "extended-stable/2026.8.33";
-    const report = await pluginRun("npm-trust", {
+    const report = await pluginRun(signal, "npm-trust", {
       env: {
         PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",
@@ -524,13 +526,12 @@ posixIt.each([
     expect(report.code, report.output).toBe(1);
     expect(report.output).toContain("Extended-stable plugin");
   },
-  55_000,
 );
 
 posixIt(
   "npm preflight rejects before Tideclaw fallback after main and release misses",
-  async () => {
-    const report = await pluginRun("npm-trust", {
+  async ({ signal }) => {
+    const report = await pluginRun(signal, "npm-trust", {
       env: { PREFLIGHT_ONLY: "true", SOURCE_REF: sha, WORKFLOW_REF: `refs/heads/${alphaBranch}` },
       revisions: { [`${sha}^{commit}`]: sha },
       commandResults: {
@@ -548,23 +549,24 @@ posixIt(
   55_000,
 );
 
-posixIt.each(["clawhub-trust", "npm-trust"] as const)(
+posixIt.for(["clawhub-trust", "npm-trust"] as const)(
   "%s treats merge-base errors other than ordinary 1 as terminal",
-  async (mode) => {
-    const report = await pluginRun(mode, {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await pluginRun(signal, mode, {
       commandResults: { "merge-base --is-ancestor HEAD origin/main": { code: 23 } },
     });
     expect(report.code, report.output).toBe(23);
     expect(gitCommands(report)).toHaveLength(mode === "npm-trust" ? 2 : 1);
     expect(report.fetches).toHaveLength(mode === "npm-trust" ? 1 : 0);
   },
-  55_000,
 );
 
-posixIt.each(["clawhub-trust", "npm-trust"] as const)(
+posixIt.for(["clawhub-trust", "npm-trust"] as const)(
   "%s treats release-ref enumeration failure as terminal",
-  async (mode) => {
-    const report = await pluginRun(mode, {
+  { timeout: 55_000 },
+  async (mode, { signal }) => {
+    const report = await pluginRun(signal, mode, {
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
         "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 23 },
@@ -574,7 +576,6 @@ posixIt.each(["clawhub-trust", "npm-trust"] as const)(
     expect(gitCommands(report).at(-1)?.[0]).toBe("for-each-ref");
     expect(report.fetches).toHaveLength(mode === "npm-trust" ? 1 : 0);
   },
-  55_000,
 );
 
 const terminalCases: Array<{
@@ -657,7 +658,7 @@ const terminalCases: Array<{
   },
 ];
 
-posixIt.each(
+posixIt.for(
   terminalCases.flatMap((entry) =>
     (["cleanup-failure", "cancel"] as const).map((failure) =>
       Object.assign({}, entry, { failure }),
@@ -665,8 +666,9 @@ posixIt.each(
   ),
 )(
   "$mode $operation $failure fences every later Git/output/consumer boundary",
-  async ({ commandResults, env, failure, match, mode, operation, revisions }) => {
-    const report = await pluginRun(mode, {
+  { timeout: 55_000 },
+  async ({ commandResults, env, failure, match, mode, operation, revisions }, { signal }) => {
+    const report = await pluginRun(signal, mode, {
       commandResults,
       env,
       revisions,
@@ -680,20 +682,19 @@ posixIt.each(
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => ["node", "pnpm"].includes(tool))).toBe(false);
   },
-  55_000,
 );
 
-posixIt.each(
+posixIt.for(
   (["clawhub-resolve", "npm-resolve", "npm-preflight-read", "npm-publish-read"] as const).flatMap(
     (mode) => (["owner", "python", "git"] as const).map((setupFailure) => ({ mode, setupFailure })),
   ),
 )(
   "$mode setup failure $setupFailure cannot publish or consume Git output",
-  async ({ mode, setupFailure }) => {
-    const report = await pluginRun(mode, { setupFailure });
+  { timeout: 55_000 },
+  async ({ mode, setupFailure }, { signal }) => {
+    const report = await pluginRun(signal, mode, { setupFailure });
     expect(report.code, report.output).not.toBe(0);
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => ["node", "pnpm"].includes(tool))).toBe(false);
   },
-  55_000,
 );

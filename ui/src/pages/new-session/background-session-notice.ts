@@ -1,5 +1,6 @@
+import { sleepWithAbort } from "@openclaw/retry";
+import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   autoPromptNotificationsOnSend,
@@ -15,23 +16,9 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
-
-type AgentWaitResult = {
-  status?: "error" | "ok" | "pending" | "timeout";
-  endedAt?: number;
-  error?: string;
-  pendingError?: boolean;
-  providerStarted?: boolean;
-  stopReason?: string;
-};
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
-
-const delayRetry = () =>
-  new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, RETRY_DELAY_MS);
-  });
 
 async function notifyWhenBackgroundSessionEnds(params: {
   agentId: string;
@@ -41,10 +28,10 @@ async function notifyWhenBackgroundSessionEnds(params: {
   runId: string;
   isCurrentOwner: () => boolean;
 }): Promise<void> {
-  let result: AgentWaitResult | undefined;
+  let result: Partial<AgentWaitResult> | undefined;
   while (!result) {
     try {
-      const observed = await params.client.request<AgentWaitResult>(
+      const observed = await params.client.request<Partial<AgentWaitResult>>(
         "agent.wait",
         { runId: params.runId, timeoutMs: 30_000 },
         { timeoutMs: null },
@@ -59,7 +46,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
         !observed.stopReason &&
         observed.providerStarted !== true;
       if (observed.status === "pending" || observed.pendingError === true) {
-        await delayRetry();
+        await sleepWithAbort(RETRY_DELAY_MS);
       } else if (observationalTimeout) {
         // Startup display errors can mean unconfirmed delivery, not a failed run.
         const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
@@ -67,7 +54,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
           result = { status: "error", error: initialTurn.sendError };
         } else {
           // A wait deadline is not a run outcome, even after startup custody retires.
-          await delayRetry();
+          await sleepWithAbort(RETRY_DELAY_MS);
         }
       } else {
         result = observed;
@@ -81,7 +68,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
       if (gateway.client !== params.client || !reconnecting) {
         return;
       }
-      await delayRetry();
+      await sleepWithAbort(RETRY_DELAY_MS);
     }
   }
 
@@ -122,21 +109,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
       if (!params.isCurrentOwner()) {
         return;
       }
-      selectApplicationSession({
-        selection: params.context.agentSelection,
-        gateway: params.context.gateway,
-        sessionKey: params.key,
-        agentId: params.agentId,
-      });
-      params.context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context: params.context,
-          face: "chat",
-          sessionKey: params.key,
-          agentId: params.agentId,
-        }).options,
-      );
+      openSessionNoticeTarget(params.context, params.key, params.agentId);
     },
   });
 }

@@ -5,10 +5,11 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -19,13 +20,11 @@ import {
 } from "../../plugins/types.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
-export function requireWorkerProfile(
-  value: unknown,
-  serviceError: (code: "invalid_profile", message: string) => Error,
-): WorkerProfile {
-  const error = validateCloudWorkerProfileSettings(value);
+export function requireWorkerProfile(value: unknown): WorkerProfile {
+  const error = validateProviderSettings(value, "Worker profile");
   if (error) {
     throw serviceError("invalid_profile", error);
   }
@@ -33,12 +32,25 @@ export function requireWorkerProfile(
   return value as WorkerProfile;
 }
 
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
+}
+
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,
   providerId: string,
   settings: unknown,
   configuredProviderId: string | undefined,
-  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
 ): void {
   if (
     providerId === DEVICE_WORKER_PROVIDER_ID &&

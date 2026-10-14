@@ -24,6 +24,7 @@ type CommandCall = {
   args: string[];
   status?: number | null;
   aliasKind?: "symlink" | "directory" | null;
+  installerSource?: string;
 };
 
 function readCommandCalls(log: string): CommandCall[] {
@@ -355,6 +356,9 @@ describe("Docker E2E source and harness inputs", () => {
       writeFileSync(packageTgz, "fixture package bytes");
       const captureSource = script === "cli-installer-distribution-docker.sh";
       if (captureSource) {
+        mkdirSync(path.join(target, "scripts"));
+        writeFileSync(path.join(target, "scripts/install.sh"), "#!/bin/bash\necho installer\n");
+        writeFileSync(path.join(target, "scripts/install-cli.sh"), "#!/bin/bash\necho cli\n");
         prepareSourceCaptureCommands(bin, root);
       }
       for (const command of ["docker", "git"]) {
@@ -364,7 +368,9 @@ describe("Docker E2E source and harness inputs", () => {
           `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command: ${JSON.stringify(command)}, args }) + '\\n');
+const installerMount = args.find((arg) => arg.endsWith(':/tmp/install.sh:ro'));
+const installerSource = installerMount ? fs.readFileSync(installerMount.slice(0, -':/tmp/install.sh:ro'.length), 'utf8') : undefined;
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command: ${JSON.stringify(command)}, args, installerSource }) + '\\n');
 if (${JSON.stringify(command)} === 'git') {
   if (args.includes('rev-parse')) console.log('a'.repeat(40));
 } else if (args[0] === 'build' || args[0] === 'buildx') {
@@ -456,8 +462,10 @@ if (${JSON.stringify(command)} === 'git') {
             ["-C", target],
           ]);
           expect(
-            calls.find((call) => call.args[0] === "run" && call.args.includes("-d"))?.args,
-          ).toContain(`${target}/scripts/install.sh:/tmp/install.sh:ro`);
+            calls.find((call) => call.args[0] === "run" && call.args.includes("-d"))
+              ?.installerSource,
+          ).toBe("#!/bin/bash\necho installer\n");
+          expect(existsSync(path.join(target, "dist"))).toBe(false);
           const runs = calls.filter(
             (call) =>
               call.command === "docker" && call.args[0] === "run" && call.args.includes("-d"),

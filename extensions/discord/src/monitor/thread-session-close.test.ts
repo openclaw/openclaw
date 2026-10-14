@@ -1,13 +1,14 @@
 // Discord tests cover thread session close plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type ResolveStorePath = typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 
 const hoisted = vi.hoisted(() => {
   const deleteSessionEntry = vi.fn();
-  const listSessionEntries = vi.fn();
+  const listSessionEntriesAsync = vi.fn();
   const resolveStorePath = vi.fn<ResolveStorePath>(() => "/tmp/openclaw-sessions.json");
-  return { deleteSessionEntry, listSessionEntries, resolveStorePath };
+  return { deleteSessionEntry, listSessionEntriesAsync, resolveStorePath };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -17,15 +18,13 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     deleteSessionEntry: hoisted.deleteSessionEntry,
-    listSessionEntries: hoisted.listSessionEntries,
+    listSessionEntriesAsync: hoisted.listSessionEntriesAsync,
     resolveStorePath: hoisted.resolveStorePath,
   };
 });
 
-let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
-
 function setupStore(store: Record<string, { sessionId?: string; updatedAt: number }>) {
-  hoisted.listSessionEntries.mockImplementation(() =>
+  hoisted.listSessionEntriesAsync.mockImplementation(async () =>
     Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   );
   hoisted.deleteSessionEntry.mockImplementation(
@@ -57,13 +56,9 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeAll(async () => {
-    ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
-  });
-
   beforeEach(() => {
     hoisted.deleteSessionEntry.mockReset();
-    hoisted.listSessionEntries.mockReset();
+    hoisted.listSessionEntriesAsync.mockReset();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
   });
@@ -92,7 +87,7 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(0);
-    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntriesAsync).not.toHaveBeenCalled();
     expect(hoisted.deleteSessionEntry).not.toHaveBeenCalled();
   });
 
@@ -126,7 +121,7 @@ describe("closeDiscordThreadSessions", () => {
       },
     };
     setupStore(store);
-    hoisted.listSessionEntries.mockReturnValue([
+    hoisted.listSessionEntriesAsync.mockResolvedValue([
       {
         sessionKey: MATCHED_KEY,
         entry: {
@@ -156,7 +151,7 @@ describe("closeDiscordThreadSessions", () => {
       work: { [`agent:work:discord:channel:${THREAD_ID}`]: { updatedAt: 2_000 } },
     };
     hoisted.resolveStorePath.mockReturnValue(fixedStorePath);
-    hoisted.listSessionEntries.mockImplementation(({ agentId }: { agentId?: string }) =>
+    hoisted.listSessionEntriesAsync.mockImplementation(async ({ agentId }: { agentId?: string }) =>
       Object.entries(agentId ? (entriesByAgent[agentId] ?? {}) : {}).map(([sessionKey, entry]) => ({
         sessionKey,
         entry,
@@ -167,15 +162,15 @@ describe("closeDiscordThreadSessions", () => {
     const count = await closeDiscordThreadSessions({
       cfg: {
         session: { store: fixedStorePath },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       threadId: THREAD_ID,
     });
 
     expect(count).toBe(2);
     for (const agentId of ["main", "work"]) {
-      expect(hoisted.listSessionEntries).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId, storePath: fixedStorePath, readOnly: true }),
+      expect(hoisted.listSessionEntriesAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, storePath: fixedStorePath }),
       );
     }
   });

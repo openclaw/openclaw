@@ -44,6 +44,10 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.migrate.js")).registerMigrateCommand(program),
   ],
   [
+    ["storage"],
+    async (program) => (await import("./register.storage.js")).registerStorageCommand(program),
+  ],
+  [
     ["audit"],
     async (program) => (await import("./register.audit.js")).registerAuditCommand(program),
   ],

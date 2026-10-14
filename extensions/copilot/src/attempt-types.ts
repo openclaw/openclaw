@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveSandboxContext as defaultResolveSandboxContext,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { OnAssistantDeltaPayload } from "./event-bridge.js";
@@ -47,47 +47,7 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     ? { ...terminal, failure: { source: "prompt", error } }
     : { kind: "failed", source: "prompt", error };
 }
-export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
-export type CopilotSessionConfig = Pick<
-  SessionConfig,
-  | "availableTools"
-  | "coauthorEnabled"
-  | "customAgents"
-  | "customAgentsLocalOnly"
-  | "embeddingCacheStorage"
-  | "enableConfigDiscovery"
-  | "enableFileHooks"
-  | "enableHostGitOperations"
-  | "enableOnDemandInstructionDiscovery"
-  | "enableSessionStore"
-  | "enableSkills"
-  | "enableSessionTelemetry"
-  | "excludedTools"
-  | "gitHubToken"
-  | "hooks"
-  | "includeSubAgentStreamingEvents"
-  | "instructionDirectories"
-  | "infiniteSessions"
-  | "manageScheduleEnabled"
-  | "mcpOAuthTokenStorage"
-  | "mcpServers"
-  | "memory"
-  | "model"
-  | "onPermissionRequest"
-  | "onUserInputRequest"
-  | "pluginDirectories"
-  | "provider"
-  | "reasoningEffort"
-  | "remoteSession"
-  | "requestCanvasRenderer"
-  | "requestExtensions"
-  | "skipCustomInstructions"
-  | "skipEmbeddingRetrieval"
-  | "skillDirectories"
-  | "systemMessage"
-  | "tools"
-  | "workingDirectory"
->;
+export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> & {
   hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"];
   auth?: {
@@ -150,10 +110,10 @@ export interface CopilotAttemptDeps {
   isHostScopedToolActive?: (toolName: string) => boolean;
   resolveSandboxContextOverride?: ResolveSandboxContextFn;
   onSessionEstablished?: (info: {
-    compactionSessionConfig?: CopilotSessionConfig;
+    compactionSessionConfig?: SessionConfig;
     sdkSessionId: string;
     pooledClient: PooledClient;
-    sessionConfig: CopilotSessionConfig;
+    sessionConfig: SessionConfig;
   }) => void | Promise<void>;
   onDeferredCompaction?: (info: {
     abort: () => void;

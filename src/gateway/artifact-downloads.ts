@@ -1,83 +1,26 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeMimeType, sliceMimeSniffBuffer } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isAnimatedWebpBuffer, isStillPngBuffer } from "../media/image-ops.js";
-import type {
-  ArtifactDownloadResponse,
-  ArtifactDownloadResponseRequest,
-  PreparedArtifactDownload,
-} from "./artifact-download-projection.js";
+import {
+  assertArtifactDownloadGrantCurrent,
+  getArtifactDownloadGrant,
+} from "./artifact-download-grants.js";
+import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
+import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
 } from "./managed-image-thumbnail-cache.js";
 import type { GatewayClient } from "./server-methods/types.js";
-
-const DOWNLOAD_TTL_MS = 5 * 60_000;
-const MAX_DOWNLOADS_PER_CONNECTION = 128;
-
-type Download = {
-  expiresAt: number;
-  digest: string;
-  image: boolean;
-  assertCurrent: () => void;
-  read: (request: ArtifactDownloadResponseRequest) => Promise<ArtifactDownloadResponse | undefined>;
-};
-
-// Connection-owned grants retain only a reader, never artifact bytes or durable state.
-const downloads = new WeakMap<GatewayClient, Map<string, Download>>();
-
-export function canCreateArtifactDownload(
-  client: GatewayClient | null,
-): client is GatewayClient & { connId: string } {
-  return Boolean(
-    client?.connId && client.connectionSignal?.aborted === false && !client.invalidated,
-  );
-}
-
-export function createArtifactDownload(params: {
-  client: GatewayClient | null;
-  prepared: PreparedArtifactDownload;
-  assertCurrent: Download["assertCurrent"];
-  read: Download["read"];
-}): { url: string; expiresAt: string } {
-  const { client } = params;
-  if (!canCreateArtifactDownload(client)) {
-    throw new Error("Artifact download connection is no longer available");
-  }
-  params.assertCurrent();
-  let grants = downloads.get(client);
-  if (!grants) {
-    grants = new Map();
-    downloads.set(client, grants);
-  }
-  const now = Date.now();
-  for (const [ticket, grant] of grants) {
-    if (grant.expiresAt <= now) {
-      grants.delete(ticket);
-    }
-  }
-  pruneMapToMaxSize(grants, MAX_DOWNLOADS_PER_CONNECTION - 1);
-  const ticket = randomBytes(32).toString("base64url");
-  const expiresAt = now + DOWNLOAD_TTL_MS;
-  grants.set(ticket, {
-    expiresAt,
-    digest: params.prepared.digest,
-    image: params.prepared.artifact.type === "image",
-    assertCurrent: params.assertCurrent,
-    read: params.read,
-  });
-  return {
-    url: `${ARTIFACT_DOWNLOAD_PATH}${encodeURIComponent(client.connId)}/${ticket}`,
-    expiresAt: new Date(expiresAt).toISOString(),
-  };
-}
 
 /** The RPC chooses and authorizes the resource; HTTP never accepts a replacement query. */
 export async function handleArtifactDownloadHttpRequest(
@@ -101,23 +44,23 @@ export async function handleArtifactDownloadHttpRequest(
   const client = [...opts.clients].find(
     (candidate) => candidate.connId && encodeURIComponent(candidate.connId) === connection,
   );
-  const grants = client ? downloads.get(client) : undefined;
-  const grant = ticket && extra === undefined ? grants?.get(ticket) : undefined;
+  const grant =
+    client && ticket && extra === undefined ? getArtifactDownloadGrant(client, ticket) : undefined;
   if (!client || !grant || !ticket) {
     respondNotFound(res);
     return true;
   }
   const assertCurrent = () => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
     if (
-      !opts.clients.has(client) ||
-      client.connectionSignal?.aborted !== false ||
-      client.invalidated ||
-      grant.expiresAt <= Date.now() ||
-      grants?.get(ticket) !== grant
+      ingress &&
+      client.internal?.remoteIngressPrincipal?.assertCurrent !==
+        ingress.resolvePrincipal().assertCurrent
     ) {
-      throw new Error("Artifact download expired");
+      throw new Error("Artifact download belongs to another ingress grant");
     }
-    grant.assertCurrent();
+    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   };
   let prepared: ArtifactDownloadResponse | undefined;
   const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
@@ -174,8 +117,7 @@ export async function handleArtifactDownloadHttpRequest(
       assertCurrent();
     }
   } catch {
-    respondNotFound(res);
-    return true;
+    prepared = undefined;
   }
   if (!prepared) {
     respondNotFound(res);

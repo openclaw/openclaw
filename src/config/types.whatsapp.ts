@@ -1,4 +1,3 @@
-// Defines WhatsApp channel configuration types from the canonical schema.
 import type { z } from "zod";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig } from "./types.tools.js";
@@ -47,5 +46,4 @@ export type WhatsAppConfig = Omit<
     accounts?: Record<string, WhatsAppAccountConfig>;
   };
 
-export type WhatsAppActionConfig = NonNullable<WhatsAppConfig["actions"]>;
 export type WhatsAppReactionLevel = NonNullable<WhatsAppConfig["reactionLevel"]>;

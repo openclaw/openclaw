@@ -11,7 +11,7 @@ import {
   clearCronJobActive,
   markCronJobActive,
 } from "../../cron/active-jobs.js";
-import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
@@ -139,6 +139,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
     const config: OpenClawConfig = {
+      agents: { entries: { ops: {} }, defaults: { workspace: state.workspaceDir } },
       gateway: {
         mode: "remote",
         port: local.port,
@@ -270,7 +271,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
-  let promptAdmission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
+  let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
   let pending: ReturnType<ReturnType<typeof createMessageTool>["execute"]> | undefined;
   try {
     const configA: OpenClawConfig = {
@@ -332,7 +333,8 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     } as GatewayRequestContext;
     const resolveGatewayContext = () => context;
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      prepareCronPromptRunAdmission({
+      prepareCronRunAdmission({
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: configA,
         agentId: "ops",
         runId,

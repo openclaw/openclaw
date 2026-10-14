@@ -1,4 +1,3 @@
-// Configure wizard helper for removing channel config sections safely.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listChatChannels } from "../channels/chat-meta.js";
@@ -8,8 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { confirm, select } from "./configure.shared.js";
-import { guardCancel } from "./onboard-helpers.js";
+import { createConfigurePrompts } from "./configure.prompts.js";
 
 type ConfiguredChannelRemovalChoice = {
   id: string;
@@ -27,7 +25,10 @@ function listConfiguredChannelRemovalChoices(
     return [];
   }
   const labelsById = new Map(
-    listChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
+    listChatChannels().map((meta) => [
+      meta.id,
+      sanitizeTerminalText(meta.label) || formatUnknownChannelRemovalLabel(meta.id),
+    ]),
   );
   return Object.keys(channels)
     .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
@@ -37,10 +38,6 @@ function listConfiguredChannelRemovalChoices(
       label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
     }))
     .toSorted(compareChannelRemovalChoices);
-}
-
-function formatChannelRemovalLabel(label: string, fallback: string): string {
-  return sanitizeTerminalText(label) || formatUnknownChannelRemovalLabel(fallback);
 }
 
 function formatUnknownChannelRemovalLabel(id: string): string {
@@ -57,12 +54,12 @@ function compareChannelRemovalChoices(
   );
 }
 
-/** Prompt for configured channel sections to remove from openclaw.json. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
   const next = { ...cfg };
+  const prompts = createConfigurePrompts(runtime);
 
   while (true) {
     const configured = listConfiguredChannelRemovalChoices(next);
@@ -77,21 +74,17 @@ export async function removeChannelConfigWizard(
       return next;
     }
 
-    const choice = guardCancel(
-      await select<ChannelRemovalSelectValue>({
-        message: "Remove which channel config?",
-        options: [
-          ...configured.map((meta) => ({
-            value: { kind: "channel" as const, id: meta.id },
-            label: meta.label,
-            hint: "Deletes tokens + settings from config (credentials stay on disk)",
-          })),
-          { value: { kind: "done" }, label: "Done" },
-        ],
-      }),
-      runtime,
-      1,
-    );
+    const choice = await prompts.select<ChannelRemovalSelectValue>({
+      message: "Remove which channel config?",
+      options: [
+        ...configured.map((meta) => ({
+          value: { kind: "channel" as const, id: meta.id },
+          label: meta.label,
+          hint: "Deletes tokens + settings from config (credentials stay on disk)",
+        })),
+        { value: { kind: "done" }, label: "Done" },
+      ],
+    });
 
     if (choice.kind === "done") {
       return next;
@@ -99,14 +92,10 @@ export async function removeChannelConfigWizard(
 
     const channel = choice.id;
     const label = configured.find((entry) => entry.id === channel)?.label ?? channel;
-    const confirmed = guardCancel(
-      await confirm({
-        message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
-        initialValue: false,
-      }),
-      runtime,
-      1,
-    );
+    const confirmed = await prompts.confirm({
+      message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
+      initialValue: false,
+    });
     if (!confirmed) {
       continue;
     }

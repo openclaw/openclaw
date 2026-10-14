@@ -5,7 +5,7 @@ import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectConditionalChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
-  createChannelSecretTargetRegistryEntries,
+  collectSecretInputAssignment,
   resolveChannelAccountSurface,
   type ResolverContext,
 } from "./channel-secret-basic-runtime.js";
@@ -21,105 +21,19 @@ function createContext(): ResolverContext {
   };
 }
 
-describe("createChannelSecretTargetRegistryEntries", () => {
-  it("builds account and channel SecretInput targets with fixed registry metadata", () => {
-    expect(
-      createChannelSecretTargetRegistryEntries({
-        channelKey: "example",
-        account: ["token"],
-        channel: ["token"],
-      }),
-    ).toEqual([
-      {
-        id: "channels.example.accounts.*.token",
-        targetType: "channels.example.accounts.*.token",
-        configFile: "openclaw.json",
-        pathPattern: "channels.example.accounts.*.token",
-        secretShape: "secret_input",
-        expectedResolvedValue: "string",
-        includeInPlan: true,
-        includeInConfigure: true,
-        includeInAudit: true,
-      },
-      {
-        id: "channels.example.token",
-        targetType: "channels.example.token",
-        configFile: "openclaw.json",
-        pathPattern: "channels.example.token",
-        secretShape: "secret_input",
-        expectedResolvedValue: "string",
-        includeInPlan: true,
-        includeInConfigure: true,
-        includeInAudit: true,
-      },
-    ]);
-  });
-
-  it("supports sibling refs and CLI target aliases", () => {
-    expect(
-      createChannelSecretTargetRegistryEntries({
-        channelKey: "example",
-        account: [
-          {
-            path: "credentials",
-            refPath: "credentialsRef",
-            targetType: "channels.example.credentials",
-            targetTypeAliases: ["channels.example.accounts.*.credentials"],
-            secretShape: "sibling_ref",
-            expectedResolvedValue: "string-or-object",
-            accountIdPathSegmentIndex: 3,
-          },
-        ],
-      })[0],
-    ).toMatchObject({
-      id: "channels.example.accounts.*.credentials",
-      targetType: "channels.example.credentials",
-      targetTypeAliases: ["channels.example.accounts.*.credentials"],
-      pathPattern: "channels.example.accounts.*.credentials",
-      refPathPattern: "channels.example.accounts.*.credentialsRef",
-      secretShape: "sibling_ref",
-      expectedResolvedValue: "string-or-object",
-      accountIdPathSegmentIndex: 3,
-    });
-  });
-
-  it("partitions inherited and overridden credentials by channel account", () => {
-    const channel = {
-      token: { source: "env" as const, provider: "default", id: "FIXTURE_SHARED" },
-      accounts: {
-        alpha: {},
-        beta: {
-          token: { source: "env" as const, provider: "default", id: "FIXTURE_BETA" },
-        },
-        disabled: { enabled: false },
-      },
-    };
+describe("channel secret assignments", () => {
+  it("keeps providerless refs accepted by the public assignment collector", () => {
     const context = createContext();
-
-    collectSimpleChannelFieldAssignments({
-      channelKey: "example",
-      field: "token",
-      channel,
-      surface: resolveChannelAccountSurface(channel),
-      defaults: undefined,
+    collectSecretInputAssignment({
+      value: { source: "env", id: "SYNTHETIC_CHANNEL_KEY" },
+      path: "channels.example.token",
+      expected: "string",
+      defaults: { env: "channel-env" },
       context,
-      topInactiveReason: "inactive",
-      accountInactiveReason: "inactive account",
+      apply: () => undefined,
     });
-
-    expect(
-      context.assignments.map(({ path, ownerKind, ownerId }) => ({ path, ownerKind, ownerId })),
-    ).toEqual([
-      {
-        path: "channels.example.token",
-        ownerKind: "account",
-        ownerId: "example:alpha",
-      },
-      {
-        path: "channels.example.accounts.beta.token",
-        ownerKind: "account",
-        ownerId: "example:beta",
-      },
+    expect(context.assignments.map(({ ref }) => ref)).toEqual([
+      { source: "env", provider: "channel-env", id: "SYNTHETIC_CHANNEL_KEY" },
     ]);
   });
 
@@ -200,9 +114,7 @@ describe("createChannelSecretTargetRegistryEntries", () => {
     expect(new Set(changed).size).toBe(1);
     expect(changed[0]).not.toBe(initial[0]);
   });
-});
 
-describe("collectSimpleChannelFieldAssignments", () => {
   it("finds authored env refs for account keys that need bracket quoting", () => {
     const read = resolveConfigForRead(
       {

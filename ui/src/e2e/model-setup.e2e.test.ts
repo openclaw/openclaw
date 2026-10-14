@@ -726,28 +726,10 @@ suite.define(() => {
           page
             .locator("[data-manual-provider]")
             .evaluateAll((options) => options.some((option) => option === document.activeElement));
-        const providerHideMarker = "data-openclaw-test-after-hide";
-        const armProviderHide = () =>
-          providerPicker.evaluate((element, marker) => {
-            element.removeAttribute(marker);
-            element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
-              once: true,
-            });
-          }, providerHideMarker);
-        const waitForProviderHide = async () => {
-          await expect
-            .poll(() =>
-              providerPicker.evaluate(
-                (element, marker) => element.hasAttribute(marker),
-                providerHideMarker,
-              ),
-            )
-            .toBe(true);
-          await providerPicker.evaluate(
-            (element, marker) => element.removeAttribute(marker),
-            providerHideMarker,
-          );
-        };
+        const waitForProviderHide = () =>
+          expect
+            .poll(() => providerPicker.locator('[role="menu"]').getAttribute("data-phase"))
+            .toBe("hidden");
         const providerIds = await page
           .locator("[data-manual-provider]")
           .evaluateAll((options) =>
@@ -760,9 +742,7 @@ suite.define(() => {
         const firstProviderId = providerIds[0]!;
         const lastProviderId = providerIds.at(-1)!;
         await providerTrigger.click();
-        await expect
-          .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
-          .toBe(true);
+        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => page.locator('[data-manual-provider="qwen-cn"]').getAttribute("aria-label"))
           .toContain("Qwen Cloud");
@@ -775,35 +755,38 @@ suite.define(() => {
           )
           .toBe(1);
 
+        const providerMenuWidth = () =>
+          providerPicker
+            .locator('[role="menu"]')
+            .evaluate((menu) => Math.round(menu.getBoundingClientRect().width));
+        await expect.poll(providerMenuWidth).toBe(620);
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
             path: path.join(artifactDir, "provider-picker-desktop.png"),
           });
-          await page.setViewportSize({ height: 844, width: 390 });
-          await providerPicker.scrollIntoViewIfNeeded();
+        }
+        await page.setViewportSize({ height: 844, width: 390 });
+        await providerPicker.scrollIntoViewIfNeeded();
+        await expect.poll(providerMenuWidth).toBe(358);
+        if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
             path: path.join(artifactDir, "provider-picker-mobile.png"),
           });
-          await page.setViewportSize({ height: 1000, width: 1440 });
         }
-        await armProviderHide();
+        await page.setViewportSize({ height: 1000, width: 1440 });
         await page.keyboard.press("Escape");
         await waitForProviderHide();
-        await expect
-          .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
-          .toBe(false);
+        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
 
         const accessValue = page.locator('.model-setup__manual input[type="password"]');
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await page.keyboard.press("Enter");
-        await expect
-          .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
-          .toBe(true);
+        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Home");
         await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
@@ -817,7 +800,6 @@ suite.define(() => {
           await page.keyboard.press("ArrowDown");
         }
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
-        await armProviderHide();
         await page.keyboard.press("Enter");
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Z.AI");
@@ -828,7 +810,6 @@ suite.define(() => {
         await accessValue.fill("same-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        await armProviderHide();
         await page.locator('[data-manual-provider="zai-cn"]').click();
         await waitForProviderHide();
         await expect.poll(() => accessValue.inputValue()).toBe("same-provider-secret");
@@ -838,7 +819,6 @@ suite.define(() => {
 
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        await armProviderHide();
         await page.keyboard.press("Shift+Tab");
         await waitForProviderHide();
         await expect
@@ -848,9 +828,7 @@ suite.define(() => {
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Tab");
-        await expect
-          .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
-          .toBe(false);
+        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
         await expect
           .poll(() => accessValue.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -858,7 +836,6 @@ suite.define(() => {
         await accessValue.fill("sk-old-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
@@ -869,12 +846,9 @@ suite.define(() => {
           .toBe(true);
 
         await providerTrigger.click();
-        await armProviderHide();
         await page.locator('[data-manual-provider="qwen-cn"]').click();
         await waitForProviderHide();
-        await expect
-          .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
-          .toBe(false);
+        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
         await expect.poll(() => providerTrigger.textContent()).toContain("Qwen Cloud");
         await accessValue.fill("qwen-test-secret");
         await expect.poll(() => accessValue.inputValue()).toBe("qwen-test-secret");
@@ -931,7 +905,6 @@ suite.define(() => {
           .toBe(detectCountBeforeDismiss + 1);
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");

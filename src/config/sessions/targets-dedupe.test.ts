@@ -8,6 +8,30 @@ import { dedupeSessionStoreTargetsBySqliteTarget } from "./targets.js";
 
 describe("session store target dedupe", () => {
   it.runIf(process.platform !== "win32")(
+    "leaves a sole canonical target's inspection to its consumer",
+    async () => {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const agentsDir = path.join(stateDir, "agents");
+        await fs.mkdir(agentsDir, { recursive: true });
+        await fs.symlink("one", path.join(agentsDir, "one"), "dir");
+        const target = {
+          agentId: "one",
+          storePath: path.join(agentsDir, "one", "sessions", "sessions.json"),
+        };
+
+        expect(
+          dedupeSessionStoreTargetsBySqliteTarget([target], {
+            defaultAgentId: "one",
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            registeredDatabases: [],
+          }),
+        ).toEqual([target]);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "refreshes aliased SQLite locators between dedupe calls",
     async () => {
       await withTempHome(async (home) => {
@@ -97,6 +121,9 @@ describe("session store target dedupe", () => {
       await Promise.all(
         [...databaseDirs].map((databaseDir) => fs.mkdir(databaseDir, { recursive: true })),
       );
+      const databasePaths = new Set(
+        [...databaseDirs].map((databaseDir) => path.join(databaseDir, "openclaw-agent.sqlite")),
+      );
       const realpathNative = vi.spyOn(realpathSync, "native");
       try {
         expect(
@@ -104,8 +131,9 @@ describe("session store target dedupe", () => {
             defaultAgentId: targets[0]!.agentId,
           }),
         ).toEqual(targets);
+        // Parent lookup can use fs-safe's native backend; every identity starts here.
         const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
-          typeof pathname === "string" && databaseDirs.has(pathname) ? [pathname] : [],
+          typeof pathname === "string" && databasePaths.has(pathname) ? [pathname] : [],
         );
         expect(preparedPaths).toHaveLength(targets.length);
         expect(new Set(preparedPaths).size).toBe(preparedPaths.length);

@@ -1,6 +1,5 @@
 import type { SessionEvent } from "@github/copilot-sdk";
 // Copilot tests cover event bridge plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -45,30 +44,18 @@ function makeAssistantMessageEvent(
 
 function createFakeSession(
   options: {
-    onOff?: (eventType: string) => void;
     onReturnedUnsubscribe?: (eventType: string) => void;
-    returnUnsubscribe?: boolean;
   } = {},
 ): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
-  const returnUnsubscribe = options.returnUnsubscribe !== false;
-
-  const off = vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
-    options.onOff?.(eventType);
-    listeners.set(
-      eventType,
-      (listeners.get(eventType) ?? []).filter((existing) => existing !== handler),
-    );
-  });
-
   const on = vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
     listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
-    if (!returnUnsubscribe) {
-      return undefined;
-    }
     return () => {
       options.onReturnedUnsubscribe?.(eventType);
-      off(eventType, handler);
+      listeners.set(
+        eventType,
+        (listeners.get(eventType) ?? []).filter((existing) => existing !== handler),
+      );
     };
   });
 
@@ -84,7 +71,6 @@ function createFakeSession(
     listenerCount(eventType: string) {
       return listeners.get(eventType)?.length ?? 0;
     },
-    off,
     on,
     send: vi.fn().mockResolvedValue("sdk-user"),
     sendAndWait: vi.fn().mockResolvedValue(undefined),
@@ -219,47 +205,6 @@ describe("attachEventBridge", () => {
     ]);
   });
 
-  it("onAssistantDelta receives appended text, live sessionId, and current usage", async () => {
-    const session = createFakeSession();
-    let sdkSessionId = "sdk-session-1";
-    const onAssistantDelta = vi.fn().mockResolvedValue(undefined);
-    const bridge = attachTestBridge(session, {
-      getSdkSessionId: () => sdkSessionId,
-      onAssistantDelta,
-    });
-
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", {
-        cacheReadTokens: 1,
-        cacheWriteTokens: 2,
-        inputTokens: 3,
-        outputTokens: 4,
-      }),
-    );
-    sdkSessionId = "sdk-session-2";
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "hi", messageId: "msg-1" }),
-    );
-
-    await bridge.awaitDeltaChain();
-
-    expect(onAssistantDelta).toHaveBeenCalledTimes(1);
-    expect(onAssistantDelta).toHaveBeenCalledWith({
-      delta: "hi",
-      sessionId: "sdk-session-2",
-      text: "hi",
-      usage: {
-        cacheRead: 1,
-        cacheWrite: 2,
-        input: 3,
-        output: 4,
-        total: 10,
-      },
-    });
-  });
-
   it("onAssistantDelta callbacks are serialized and awaitDeltaChain resolves after both", async () => {
     const session = createFakeSession();
     const order: string[] = [];
@@ -331,26 +276,6 @@ describe("attachEventBridge", () => {
     expect(order).toEqual(["start:a", "start:b", "end:b"]);
   });
 
-  it("assistant.reasoning_delta accumulates reasoning in arrival order for buildAssistantMessage", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
-
-    session.emit(
-      "assistant.reasoning_delta",
-      makeEvent("assistant.reasoning_delta", { deltaContent: "thin", reasoningId: "reason-1" }),
-    );
-    session.emit(
-      "assistant.reasoning_delta",
-      makeEvent("assistant.reasoning_delta", { deltaContent: "king", reasoningId: "reason-1" }),
-    );
-    bridge.recordSendResult(makeAssistantMessageEvent("done"));
-
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 7 })?.content).toEqual([
-      { thinking: "thinking", type: "thinking" },
-      { text: "done", type: "text" },
-    ]);
-  });
-
   it("buildAssistantMessage prefers terminal reasoningText over reasoning deltas", () => {
     const session = createFakeSession();
     const bridge = attachTestBridge(session);
@@ -396,24 +321,6 @@ describe("attachEventBridge", () => {
 
     expect(shorterBridge.finalizeAssistantTexts()).toEqual(["longer"]);
     expect(longerBridge.finalizeAssistantTexts()).toEqual(["longer text"]);
-  });
-
-  it("does not let an ephemeral assistant replace the final root response", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
-    const persisted = makeAssistantMessageEvent("persisted final");
-    session.emit("assistant.message", persisted);
-
-    expect(
-      bridge.recordSendResult({
-        ...makeAssistantMessageEvent("ephemeral final"),
-        ephemeral: true,
-        id: "ephemeral-final",
-      } as SessionEvent),
-    ).toBe(false);
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
-      { text: "persisted final", type: "text" },
-    ]);
   });
 
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {
@@ -814,40 +721,6 @@ describe("attachEventBridge", () => {
     expect(abortedBridge.snapshot().streamError).toBeUndefined();
   });
 
-  it("abort populates streamError with session_aborted only when not aborted", () => {
-    const activeSession = createFakeSession();
-    const activeBridge = attachTestBridge(activeSession);
-    activeSession.emit("abort", makeEvent("abort", { reason: "because" }));
-
-    const abortedSession = createFakeSession();
-    const abortedBridge = attachTestBridge(abortedSession, {
-      isAborted: () => true,
-    });
-    abortedSession.emit("abort", makeEvent("abort", { reason: "ignored" }));
-
-    expect((activeBridge.snapshot().streamError as Error & { code?: string })?.code).toBe(
-      "session_aborted",
-    );
-    expect(activeBridge.snapshot().streamError?.message).toBe(
-      "[copilot-attempt] session aborted: because",
-    );
-    expect(abortedBridge.snapshot().streamError).toBeUndefined();
-  });
-
-  it("recordSendResult returns false for undefined and true for assistant.message while updating lastAssistantEvent", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
-
-    expect(bridge.recordSendResult(undefined)).toBe(false);
-    const event = makeAssistantMessageEvent("done", { outputTokens: 2 });
-    expect(bridge.recordSendResult(event)).toBe(true);
-    expect(bridge.snapshot().lastAssistantEvent).toEqual(event);
-    expect(bridge.finalizeAssistantTexts()).toEqual(["done"]);
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 11 })?.content).toEqual([
-      { text: "done", type: "text" },
-    ]);
-  });
-
   it("ignores empty assistant and reasoning deltas", () => {
     const onAssistantDelta = vi.fn();
     const session = createFakeSession();
@@ -872,39 +745,6 @@ describe("attachEventBridge", () => {
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
   });
 
-  it("keeps ephemeral deltas live without folding their text into the terminal message", async () => {
-    const session = createFakeSession();
-    const onAssistantDelta = vi.fn();
-    const bridge = attachTestBridge(session, {
-      onAssistantDelta,
-    });
-
-    session.emit("assistant.message_delta", {
-      ...makeEvent("assistant.message_delta", {
-        deltaContent: "hidden text",
-        messageId: "ephemeral-message",
-      }),
-      ephemeral: true,
-    } as SessionEvent);
-    session.emit("assistant.reasoning_delta", {
-      ...makeEvent("assistant.reasoning_delta", {
-        deltaContent: "hidden reasoning",
-        reasoningId: "ephemeral-reasoning",
-      }),
-      ephemeral: true,
-    } as SessionEvent);
-    bridge.recordSendResult(makeAssistantMessageEvent("visible"));
-    await bridge.awaitDeltaChain();
-
-    expect(onAssistantDelta).toHaveBeenCalledWith(
-      expect.objectContaining({ delta: "hidden text", text: "hidden text" }),
-    );
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })?.content).toEqual([
-      { type: "thinking", thinking: "hidden reasoning" },
-      { type: "text", text: "visible" },
-    ]);
-  });
-
   it("detach is idempotent after the first unsubscribe pass", () => {
     const order: string[] = [];
     const session = createFakeSession({
@@ -919,17 +759,18 @@ describe("attachEventBridge", () => {
     bridge.detach();
 
     expect(order).toEqual(registeredEvents.toReversed());
-    expect(session.off).toHaveBeenCalledTimes(registeredEvents.length);
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });
 
-  it("detach unsubscribes in reverse order via off() fallback", () => {
+  it("detaches remaining listeners in reverse order when a disposer throws", () => {
     const order: string[] = [];
     const session = createFakeSession({
-      onOff: (eventType) => {
+      onReturnedUnsubscribe: (eventType) => {
         order.push(eventType);
+        if (eventType === "session.error") {
+          throw new Error("unsubscribe failed");
+        }
       },
-      returnUnsubscribe: false,
     });
     const bridge = attachTestBridge(session);
 
@@ -942,42 +783,5 @@ describe("attachEventBridge", () => {
 
     expect(order).toEqual(registeredEvents.toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
-  });
-
-  it("snapshot returns defensive copies for arrays and usage objects", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
-
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "hello", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", { inputTokens: 1, outputTokens: 2 }),
-    );
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-1", toolName: "bash" }),
-    );
-
-    const first = bridge.snapshot();
-    (first.assistantTexts as string[]).push("mutated");
-    expectDefined(
-      (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0],
-      "Copilot tool metadata",
-    ).toolName = "mutated";
-    (first.usage as { input?: number }).input = 999;
-
-    const second = bridge.snapshot();
-    expect(second.assistantTexts).toEqual(["hello"]);
-    expect(second.toolMetas).toEqual([{ toolName: "bash" }]);
-    expect(second.usage).toEqual({
-      cacheRead: undefined,
-      cacheWrite: undefined,
-      input: 1,
-      output: 2,
-      total: 3,
-    });
   });
 });

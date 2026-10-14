@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
@@ -31,7 +33,7 @@ async function withSyntheticReader(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: {
         roles: {
           default: "blocked",
@@ -43,6 +45,7 @@ async function withSyntheticReader(
       },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     const reader = ensureProfileForEmail("synthetic-reader@example.test");
     const ownerEmail = "synthetic-owner@example.test";
     const owner = ensureProfileForEmail(ownerEmail);
@@ -107,19 +110,22 @@ async function withSyntheticReader(
           catalogGate = createDeferred();
           catalogEntered = createDeferred();
           const readEntered = createDeferred();
-          const ensure = projection.ensureMaterialized.bind(projection);
+          const prepare = projection.prepareSelection.bind(projection);
           // Background catalog work uses a private closure; this observes the actual reader.
           const readiness = vi
-            .spyOn(projection, "ensureMaterialized")
-            .mockImplementationOnce(() => {
+            .spyOn(projection, "prepareSelection")
+            .mockImplementationOnce((...args) => {
               readEntered.resolve();
-              return ensure();
+              return prepare(...args);
             });
           restoreReadiness = () => readiness.mockRestore();
           sessionChanges.emit({ all: true, scope: "catalog" });
           return {
             entered: catalogEntered.promise,
-            readEntered: readEntered.promise,
+            readEntered: readEntered.promise.then(() => {
+              expect(readiness).toHaveBeenCalledOnce();
+              expect(readiness).toHaveBeenCalledWith({ yieldForCatalog: true });
+            }),
             release: () => catalogGate?.resolve(),
           };
         },

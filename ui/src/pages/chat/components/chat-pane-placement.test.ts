@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
-import { renderChatPanePlacement } from "./chat-pane-placement.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatPanePlacement } from "./chat-pane-placement.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -37,54 +38,78 @@ function mount(
       runner: status ? { kind: "device", status } : undefined,
     },
   };
-  render(
-    renderChatPanePlacement({
-      session,
-      placementStartupStatus,
-      placementReclaimDisabledReason:
-        status === "offline"
-          ? "Reconnect the device to stop and sync its workspace, or Continue on Gateway."
-          : undefined,
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(ChatPanePlacement, {
+        session,
+        placementStartupStatus,
+        placementReclaimDisabledReason:
+          status === "offline"
+            ? "Reconnect the device to stop and sync its workspace, or Continue on Gateway."
+            : undefined,
+      }),
+    { container },
   );
   return container;
 }
 
 describe("chat pane device placement", () => {
-  it("presents active post-turn reconciliation as cloud file sync", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    containers.push(container);
-    const session = {
-      key: "agent:main:cloud-sync",
-      kind: "direct",
-      updatedAt: 0,
-      placement: {
-        state: "active",
-        workspaceResultReconciling: true,
-        generation: 2,
-        createdAtMs: 100_000,
-        updatedAtMs: 300_000,
-        stateChangedAtMs: 300_000,
-        environmentId: "worker:cloud",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
-        workspaceBaseManifestRef: "base-manifest",
-        remoteWorkspaceDir: "/worker/repo",
-      },
-    } satisfies GatewaySessionRow;
+  it.each(["profile", "device"] as const)(
+    "presents post-turn workspace sync for %s without cloud-only wording",
+    (target) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      const session = {
+        key: "agent:main:cloud-sync",
+        kind: "direct",
+        updatedAt: 0,
+        agentRuntime: { id: "openclaw", source: "model" as const },
+        placement: {
+          state: "active",
+          workspaceResultReconciling: true,
+          ...(target === "device"
+            ? {
+                providerId: "device",
+                profileId: "native",
+                inference: "worker" as const,
+                runner: {
+                  kind: "device" as const,
+                  deviceId: "paired",
+                  status: "available" as const,
+                },
+              }
+            : {}),
+          generation: 2,
+          createdAtMs: 100_000,
+          updatedAtMs: 300_000,
+          stateChangedAtMs: 300_000,
+          environmentId: "worker:cloud",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      } satisfies GatewaySessionRow;
 
-    render(renderChatPanePlacement({ session }), container);
+      mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
-    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-      "Cloud · syncing files",
-    );
-    expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
-      "Safely applying cloud edits",
-    );
-    expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
-  });
+      expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+        "Worker · syncing files",
+      );
+      expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
+        "Finalizing worker workspace",
+      );
+      expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
+      if (target === "device") {
+        expect(container.textContent).toContain("Inference");
+        expect(container.textContent).toContain("Direct from worker");
+      } else {
+        expect(container.textContent).not.toContain("Inference");
+        expect(container.textContent).not.toContain("Through Gateway");
+      }
+    },
+  );
 
   it.each([
     {
@@ -166,7 +191,9 @@ describe("chat pane device placement", () => {
           : {}),
       };
 
-      render(renderChatPanePlacement({ session, onPlacementRecover }), container);
+      mountSolid(() => createComponent(ChatPanePlacement, { session, onPlacementRecover }), {
+        container,
+      });
 
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
         "Worker required",
@@ -199,7 +226,7 @@ describe("chat pane device placement", () => {
       },
     };
 
-    render(renderChatPanePlacement({ session }), container);
+    mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
     expect(container.querySelector(".chat-pane__placement-recovery")?.textContent?.trim()).toBe(
       "Restart session…",
@@ -226,7 +253,7 @@ describe("chat pane device placement", () => {
       },
     };
 
-    render(renderChatPanePlacement({ session }), container);
+    mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
     expect(container.querySelector(".chat-pane__placement-recovery")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(

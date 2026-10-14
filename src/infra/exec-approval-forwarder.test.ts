@@ -64,80 +64,6 @@ function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {})
   } as OpenClawConfig;
 }
 
-async function expectDiscordSessionTargetRequest(params: {
-  cfg: OpenClawConfig;
-  expectedAccepted: boolean;
-  expectedDeliveryCount: number;
-}) {
-  vi.useFakeTimers();
-  const { deliver, forwarder } = createForwarder({
-    cfg: params.cfg,
-    resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
-    nativeRoutes: [{ channel: "discord", accountId: "default" }],
-  });
-
-  await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(params.expectedAccepted);
-  if (params.expectedDeliveryCount === 0) {
-    expect(deliver).not.toHaveBeenCalled();
-    return;
-  }
-  expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
-}
-
-async function expectSessionFilterRequestResult(params: {
-  sessionFilter: string[];
-  sessionKey: string;
-  expectedAccepted: boolean;
-  expectedDeliveryCount: number;
-}) {
-  const cfg = {
-    approvals: {
-      exec: {
-        enabled: true,
-        mode: "session",
-        sessionFilter: params.sessionFilter,
-      },
-    },
-  } as OpenClawConfig;
-
-  const { deliver, forwarder } = createForwarder({
-    cfg,
-    resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
-  });
-
-  const request = {
-    ...baseRequest,
-    request: {
-      ...baseRequest.request,
-      sessionKey: params.sessionKey,
-    },
-  };
-
-  await expect(forwarder.handleRequested(request)).resolves.toBe(params.expectedAccepted);
-  expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
-}
-
-async function expectForwardedApprovalText(params: {
-  command?: string;
-  request?: Partial<ExecApprovalRequest["request"]>;
-  expectedText: string;
-}) {
-  vi.useFakeTimers();
-  const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-  await expect(
-    forwarder.handleRequested({
-      ...baseRequest,
-      request: {
-        ...baseRequest.request,
-        ...(params.command ? { command: params.command } : {}),
-        ...params.request,
-      },
-    }),
-  ).resolves.toBe(true);
-  await Promise.resolve();
-  expect(getFirstDeliveryText(deliver)).toContain(params.expectedText);
-}
-
 describe("exec approval forwarder", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
@@ -229,52 +155,63 @@ describe("exec approval forwarder", () => {
     }
   });
 
-  it("keeps pending delivery ahead of a resolution received during route lookup", async () => {
-    const target = createDeferred<{ channel: "slack"; to: string }>();
-    const pendingDelivery = createDeferred();
-    const deliveryOrder: string[] = [];
-    const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
-      const text = deliveryParams.payloads?.[0]?.text ?? "";
-      const kind = text.includes("required") ? "pending" : "resolved";
-      deliveryOrder.push(kind);
-      if (kind === "pending") {
-        await pendingDelivery.promise;
-      }
-      return [];
-    });
-    const resolveSessionTarget = vi.fn(() => target.promise);
-    const { forwarder } = createForwarder({
-      cfg: makeSessionCfg(),
-      deliver,
-      resolveSessionTarget,
-    });
-
-    const requested = forwarder.handleRequested(baseRequest);
-    try {
-      await vi.waitFor(() => expect(resolveSessionTarget).toHaveBeenCalledOnce());
-      await forwarder.handleResolved({
-        id: baseRequest.id,
-        decision: "allow-once",
-        resolvedBy: "slack:U1",
-        ts: 2000,
+  it.each(["resolution", "expiry"] as const)(
+    "keeps pending delivery ahead of %s",
+    async (terminal) => {
+      vi.useFakeTimers();
+      const lookupEntered = createDeferred();
+      const target = createDeferred<{ channel: "slack"; to: string }>();
+      const pendingDelivery = createDeferred();
+      const deliveryOrder: string[] = [];
+      const deliver = vi.fn(async (params: { payloads?: Array<{ text?: string }> }) => {
+        const kind = params.payloads?.[0]?.text?.includes("required") ? "pending" : terminal;
+        deliveryOrder.push(kind);
+        if (kind === "pending") {
+          await pendingDelivery.promise;
+        }
+        return [];
       });
-
-      target.resolve({ channel: "slack", to: "U1" });
-      await expect(requested).resolves.toBe(true);
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-      expect(deliveryOrder).toEqual(["pending"]);
-
-      pendingDelivery.resolve();
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
-      expect(deliveryOrder).toEqual(["pending", "resolved"]);
-      expect(resolveSessionTarget).toHaveBeenCalledOnce();
-    } finally {
-      target.resolve({ channel: "slack", to: "U1" });
-      pendingDelivery.resolve();
-      await requested.catch(() => {});
-      await forwarder.stop();
-    }
-  });
+      const resolveSessionTarget = vi.fn(() => {
+        lookupEntered.resolve();
+        return target.promise;
+      });
+      const { forwarder } = createForwarder({
+        cfg: makeSessionCfg(),
+        deliver,
+        resolveSessionTarget,
+      });
+      const requested = forwarder.handleRequested(baseRequest);
+      try {
+        await lookupEntered.promise;
+        if (terminal === "resolution") {
+          await forwarder.handleResolved({
+            id: baseRequest.id,
+            decision: "allow-once",
+            resolvedBy: "slack:U1",
+            ts: 2000,
+          });
+        }
+        target.resolve({ channel: "slack", to: "U1" });
+        await expect(requested).resolves.toBe(true);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliveryOrder).toEqual(["pending"]);
+        if (terminal === "expiry") {
+          await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
+          expect(deliveryOrder).toEqual(["pending"]);
+        }
+        pendingDelivery.resolve();
+        await forwarder.stop();
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(deliveryOrder).toEqual(["pending", terminal]);
+        expect(resolveSessionTarget).toHaveBeenCalledOnce();
+      } finally {
+        target.resolve({ channel: "slack", to: "U1" });
+        pendingDelivery.resolve();
+        await requested.catch(() => {});
+        await forwarder.stop();
+      }
+    },
+  );
 
   it("does not arm new expiry while an admitted route lookup finishes during stop", async () => {
     vi.useFakeTimers();
@@ -311,36 +248,6 @@ describe("exec approval forwarder", () => {
       delivery.resolve();
       await requested.catch(() => {});
       await (stopping ?? forwarder.stop());
-    }
-  });
-
-  it("keeps pending delivery ahead of expiry", async () => {
-    vi.useFakeTimers();
-    const pendingDelivery = createDeferred();
-    const deliveryOrder: string[] = [];
-    const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
-      const text = deliveryParams.payloads?.[0]?.text ?? "";
-      const kind = text.includes("required") ? "pending" : "expired";
-      deliveryOrder.push(kind);
-      if (kind === "pending") {
-        await pendingDelivery.promise;
-      }
-      return [];
-    });
-    const { forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
-
-    try {
-      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-      expect(deliveryOrder).toEqual(["pending"]);
-      await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
-      expect(deliveryOrder).toEqual(["pending"]);
-
-      pendingDelivery.resolve();
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
-      expect(deliveryOrder).toEqual(["pending", "expired"]);
-    } finally {
-      pendingDelivery.resolve();
-      await forwarder.stop();
     }
   });
 
@@ -523,121 +430,83 @@ describe("exec approval forwarder", () => {
         expiresAtMs: 601_000,
       };
 
-      it("asks the requesting chat with an /approve reply when no native card owns it", async () => {
-        vi.useFakeTimers();
-        const { deliver, forwarder } = createForwarder({
-          cfg: unconfigured,
-          resolveSessionTarget,
-        });
+      it.each(["applied", "expired"] as const)(
+        "reports the Gateway's %s terminal once after the deadline",
+        async (terminal) => {
+          vi.useFakeTimers();
+          const texts: string[] = [];
+          const deliver = vi.fn(async (params: { payloads: Array<{ text?: string }> }) => {
+            texts.push(params.payloads[0]?.text ?? "");
+            return [];
+          });
+          const { forwarder } = createForwarder({
+            cfg: unconfigured,
+            resolveSessionTarget,
+            deliver,
+          });
+          await expect(
+            forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
+          ).resolves.toBe(true);
+          expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({ to: "-100999" });
+          const text = getFirstDeliveryText(deliver);
+          expect(text).toContain("set agents.defaults.memorySearch.provider to openai");
+          expect(text).toContain("/approve system-agent:req-1 allow-once|deny");
+          await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
+          const resolved = {
+            id: systemAgentRequest.id,
+            decision: terminal === "applied" ? ("allow-once" as const) : ("deny" as const),
+            ts: systemAgentRequest.expiresAtMs + (terminal === "applied" ? 1 : 0),
+            request: systemAgentRequest.request,
+            applicationStatus: terminal === "applied" ? ("applied" as const) : undefined,
+            terminalStatus: terminal === "expired" ? ("expired" as const) : undefined,
+          };
+          await forwarder.handleSystemAgentApprovalResolved?.(resolved);
+          if (terminal === "expired") {
+            await forwarder.handleSystemAgentApprovalResolved?.(resolved);
+          }
+          expect(deliver).toHaveBeenCalledTimes(2);
+          expect(texts.filter((entry) => /expired/i.test(entry))).toHaveLength(
+            terminal === "expired" ? 1 : 0,
+          );
+          if (terminal === "applied") {
+            expect(texts.filter((entry) => entry.includes("approved and applied"))).toHaveLength(1);
+            expect(deliver).toHaveBeenLastCalledWith(
+              expect.objectContaining({
+                payloads: [
+                  expect.objectContaining({
+                    text: expect.stringContaining("approved and applied"),
+                  }),
+                ],
+              }),
+            );
+          }
+        },
+      );
 
-        await expect(
-          forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
-        ).resolves.toBe(true);
-        expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({ to: "-100999" });
-        const text = getFirstDeliveryText(deliver);
-        expect(text).toContain("set agents.defaults.memorySearch.provider to openai");
-        expect(text).toContain("/approve system-agent:req-1 allow-once|deny");
-
-        await forwarder.handleSystemAgentApprovalResolved?.({
-          id: systemAgentRequest.id,
-          decision: "allow-once",
-          ts: 2000,
-          request: systemAgentRequest.request,
-          applicationStatus: "applied",
-        });
-        expect(deliver).toHaveBeenCalledTimes(2);
-        expect(deliver).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            payloads: [
-              expect.objectContaining({ text: expect.stringContaining("approved and applied") }),
-            ],
-          }),
-        );
-      });
-
-      it("leaves the chat to a running native approval card", async () => {
-        vi.useFakeTimers();
-        const { deliver, forwarder } = createForwarder({
-          cfg: unconfigured,
-          resolveSessionTarget,
-          nativeRoutes: [{ channel: "telegram", accountId: "default" }],
-        });
-
-        await expect(
-          forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
-        ).resolves.toBe(false);
-        expect(deliver).not.toHaveBeenCalled();
-      });
-
-      it.each([
-        { origin: "terminal", turnSourceChannel: undefined },
-        { origin: "webchat", turnSourceChannel: "webchat" },
-      ])(
-        "never sends a $origin request to the session's saved chat",
-        async ({ turnSourceChannel }) => {
+      it.each(["native", "terminal", "webchat"] as const)(
+        "does not forward a %s-owned change request",
+        async (origin) => {
           vi.useFakeTimers();
           const { deliver, forwarder } = createForwarder({
             cfg: unconfigured,
             resolveSessionTarget,
+            nativeRoutes:
+              origin === "native" ? [{ channel: "telegram", accountId: "default" }] : [],
           });
-
           await expect(
             forwarder.handleSystemAgentApprovalRequested?.({
               ...systemAgentRequest,
               request: {
                 ...systemAgentRequest.request,
-                turnSourceChannel,
-                turnSourceTo: undefined,
+                turnSourceChannel:
+                  origin === "native" ? "telegram" : origin === "webchat" ? "webchat" : undefined,
+                turnSourceTo: origin === "native" ? "-100999" : undefined,
               },
             }),
           ).resolves.toBe(false);
           expect(deliver).not.toHaveBeenCalled();
         },
       );
-
-      const deliveredTexts = (deliver: ReturnType<typeof vi.fn>) =>
-        deliver.mock.calls.map(
-          ([call]) => (call as { payloads: Array<{ text?: string }> }).payloads[0]?.text ?? "",
-        );
-
-      it("reports a change applied after the deadline without a false expiry", async () => {
-        vi.useFakeTimers();
-        const { deliver, forwarder } = createForwarder({ cfg: unconfigured, resolveSessionTarget });
-        await forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest);
-        // Approved just before the deadline; applying finishes after it.
-        await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
-
-        await forwarder.handleSystemAgentApprovalResolved?.({
-          id: systemAgentRequest.id,
-          decision: "allow-once",
-          ts: systemAgentRequest.expiresAtMs + 1,
-          request: systemAgentRequest.request,
-          applicationStatus: "applied",
-        });
-
-        const texts = deliveredTexts(deliver);
-        expect(texts.filter((text) => /expired/i.test(text))).toHaveLength(0);
-        expect(texts.filter((text) => text.includes("approved and applied"))).toHaveLength(1);
-      });
-
-      it("reports the Gateway's recorded expiry once", async () => {
-        vi.useFakeTimers();
-        const { deliver, forwarder } = createForwarder({ cfg: unconfigured, resolveSessionTarget });
-        await forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest);
-        await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
-        const expired = {
-          id: systemAgentRequest.id,
-          decision: "deny" as const,
-          ts: systemAgentRequest.expiresAtMs,
-          request: systemAgentRequest.request,
-          terminalStatus: "expired" as const,
-        };
-
-        await forwarder.handleSystemAgentApprovalResolved?.(expired);
-        await forwarder.handleSystemAgentApprovalResolved?.(expired);
-
-        expect(deliveredTexts(deliver).filter((text) => /expired/i.test(text))).toHaveLength(1);
-      });
     });
   });
 
@@ -724,128 +593,117 @@ describe("exec approval forwarder", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
-  it("stores exec metadata on generic forwarded fallback payloads", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const payload = requireFirstPayload(deliver);
-    const execApproval = requireRecord(payload.channelData?.execApproval, "exec approval metadata");
-    expect(execApproval.approvalId).toBe("req-1");
-    expect(execApproval.approvalKind).toBe("exec");
-    expect(execApproval.agentId).toBe("main");
-    expect(execApproval.sessionKey).toBe("agent:main:main");
-  });
-
-  it("formats single-line commands as inline code", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-    await Promise.resolve();
-    const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("🔒 Exec approval required");
-    expect(text).toContain("Command: `echo hello`");
-    expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
-  });
-
-  it("omits allow-always from forwarded fallback text when ask=always", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-    await expect(
-      forwarder.handleRequested({
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          ask: "always",
-        },
-      }),
-    ).resolves.toBe(true);
-    await Promise.resolve();
-    const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
-    expect(text).not.toContain("allow-once|allow-always|deny");
-    expect(text).toContain("Allow Always is unavailable");
-  });
-
-  it.each([
+  it.each<{ request: Partial<ExecApprovalRequest["request"]>; expectedText: string }>([
+    { request: {}, expectedText: "Command: `echo hello`" },
+    { request: { ask: "always" }, expectedText: "Reply with: /approve req-1 allow-once|deny" },
     {
-      command: "bash safe\u200B.sh",
+      request: { command: "bash safe\u200B.sh" },
       expectedText: "Command: `bash safe\\u{200B}.sh`",
     },
     {
-      command: "echo `uname`\necho done",
+      request: { command: "echo `uname`\necho done" },
       expectedText: "```\necho `uname`\\u{A}echo done\n```",
     },
-    {
-      command: "echo ```danger```",
-      expectedText: "````\necho ```danger```\n````",
+    { request: { command: "echo ```danger```" }, expectedText: "````\necho ```danger```\n````" },
+  ])(
+    "forwards exec metadata and policy-aware command text for $request",
+    async ({ request, expectedText }) => {
+      vi.useFakeTimers();
+      const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: { ...baseRequest.request, ...request },
+        }),
+      ).resolves.toBe(true);
+      await Promise.resolve();
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const execApproval = requireRecord(
+        requireFirstPayload(deliver).channelData?.execApproval,
+        "exec approval metadata",
+      );
+      expect(execApproval).toMatchObject({
+        approvalId: "req-1",
+        approvalKind: "exec",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+      const text = getFirstDeliveryText(deliver);
+      expect(text).toContain(expectedText);
+      expect(text).toContain("🔒 Exec approval required");
+      expect(text).toContain("Expires in: 5s");
+      if (request.ask === "always") {
+        expect(text).not.toContain("allow-once|allow-always|deny");
+        expect(text).toContain("Allow Always is unavailable");
+      } else {
+        expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
+      }
     },
-  ])("formats forwarded approval text for %j", async ({ command, expectedText }) => {
-    await expectForwardedApprovalText({ command, expectedText });
-  });
-
-  it("returns false when forwarding is disabled", async () => {
-    const { deliver, forwarder } = createForwarder({
-      cfg: {} as OpenClawConfig,
-    });
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
-    expect(deliver).not.toHaveBeenCalled();
-  });
+  );
 
   it.each([
     {
-      sessionFilter: ["(a+)+$"],
-      sessionKey: `${"a".repeat(28)}!`,
-      expectedAccepted: false,
-      expectedDeliveryCount: 0,
+      enabled: false,
+      sessionFilter: undefined,
+      sessionKey: baseRequest.request.sessionKey,
+      accepted: false,
     },
+    { enabled: true, sessionFilter: ["(a+)+$"], sessionKey: `${"a".repeat(28)}!`, accepted: false },
     {
+      enabled: true,
       sessionFilter: ["discord:tail$"],
       sessionKey: `${"x".repeat(5000)}discord:tail`,
-      expectedAccepted: true,
-      expectedDeliveryCount: 1,
+      accepted: true,
     },
-  ])("handles sessionFilter case %j", async (params) => {
-    await expectSessionFilterRequestResult(params);
-  });
-
-  it.each([
-    {
-      cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
-      expectedAccepted: false,
-      expectedDeliveryCount: 0,
+  ])(
+    "applies forwarding configuration and session filters for %j",
+    async ({ enabled, sessionFilter, sessionKey, accepted }) => {
+      const { deliver, forwarder } = createForwarder({
+        cfg: enabled ? { approvals: { exec: { enabled, mode: "session", sessionFilter } } } : {},
+        resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+      });
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: { ...baseRequest.request, sessionKey },
+        }),
+      ).resolves.toBe(accepted);
+      expect(deliver).toHaveBeenCalledTimes(accepted ? 1 : 0);
     },
-    {
-      cfg: makeSessionCfg(),
-      expectedAccepted: true,
-      expectedDeliveryCount: 1,
+  );
+
+  it.each(["disabled", "session", "cross-channel"] as const)(
+    "checks the default native account for %s forwarding",
+    async (mode) => {
+      vi.useFakeTimers();
+      const enabled = mode !== "disabled";
+      const cfg: OpenClawConfig = {
+        ...makeSessionCfg({ discordExecApprovalsEnabled: enabled }),
+        ...(mode === "cross-channel"
+          ? makeTargetsCfg([{ channel: "discord", to: "channel:123" }])
+          : {}),
+      };
+      const { deliver, forwarder } = createForwarder({
+        cfg,
+        resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+        nativeRoutes: (mode === "cross-channel" ? ["default", "ops"] : ["default"]).map(
+          (accountId) => ({ channel: "discord", accountId }),
+        ),
+      });
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            ...(mode === "cross-channel"
+              ? { turnSourceChannel: "telegram", turnSourceAccountId: "work" }
+              : {}),
+          },
+        }),
+      ).resolves.toBe(!enabled);
+      expect(deliver).toHaveBeenCalledTimes(enabled ? 0 : 1);
     },
-  ])("handles discord session target forwarding case %j", async (params) => {
-    await expectDiscordSessionTargetRequest(params);
-  });
-
-  it("checks a cross-channel target without an account against that channel's default account", async () => {
-    const { forwarder } = createForwarder({
-      cfg: {
-        ...makeTargetsCfg([{ channel: "discord", to: "channel:123" }]),
-        channels: { discord: { execApprovals: { enabled: true, approvers: ["123"] } } },
-      } as OpenClawConfig,
-      nativeRoutes: ["default", "ops"].map((accountId) => ({ channel: "discord", accountId })),
-    });
-    const request = {
-      ...baseRequest,
-      request: {
-        ...baseRequest.request,
-        turnSourceChannel: "telegram",
-        turnSourceAccountId: "work",
-      },
-    };
-
-    await expect(forwarder.handleRequested(request)).resolves.toBe(false);
-  });
+  );
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
     const { deliver, forwarder } = createForwarder({

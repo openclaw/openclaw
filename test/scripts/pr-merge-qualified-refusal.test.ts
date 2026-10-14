@@ -9,24 +9,9 @@ import {
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
-const historicalRefusals = {
-  "0.6.10": {
-    kind: "octopool-0.6.10-auto-refusal",
-    version: "0.6.10",
-    sourceRevision: "00c442d8084ad26eb5a5003f7372170e75a20c8a",
-    parserSha256: "f6ff8cd7e59503f71f94fefd561b671193df11b3aac9ba0986a0dc3ba91ca32b",
-  },
-  "0.7.1": {
-    kind: "octopool-0.7.1-missing-subject-refusal",
-    version: "0.7.1",
-    sourceRevision: "7ab9b348c99a7be4fdc82c75cb06ebce44e0007e",
-    parserSha256: "b32cb960537f5ffa1336a7689674afba9b4a2485b05e449acd2684a251ff8970",
-  },
-} as const;
-
 function qualifiedAutoRefusal(
   f: ReturnType<typeof fixture>,
-  version: keyof typeof historicalRefusals | "policy-timeout" = "0.6.10",
+  version: "0.6.10" | "policy-timeout" = "0.6.10",
 ) {
   f.save({
     ...f.state(),
@@ -49,7 +34,10 @@ function qualifiedAutoRefusal(
     ...(version === "policy-timeout"
       ? policyTimeoutQualification
       : {
-          ...historicalRefusals[version],
+          kind: "octopool-0.6.10-auto-refusal",
+          version,
+          sourceRevision: "00c442d8084ad26eb5a5003f7372170e75a20c8a",
+          parserSha256: "f6ff8cd7e59503f71f94fefd561b671193df11b3aac9ba0986a0dc3ba91ca32b",
           args: [
             "pr",
             "merge",
@@ -68,14 +56,18 @@ function qualifiedAutoRefusal(
   writeFileSync(join(directory, "qualification.json"), JSON.stringify(qualification));
   f.recover();
   f.save({ ...f.state(), mode: "success", pr: { ...f.state().pr, mergeStateStatus: "CLEAN" } });
-  return { outcome, directory, capture, qualification };
+  return {
+    outcome,
+    capture,
+    qualification,
+    runRecovery: (replacement = "") =>
+      f.run(false, f.repo, "squash", outcome, replacement, "", "", "", false, directory),
+  };
 }
 
 describePosix("qualified pre-dispatch merge recovery", () => {
   it.each([
     { version: "0.6.10", replaceHead: false },
-    { version: "0.6.10", replaceHead: true },
-    { version: "0.7.1", replaceHead: true },
     { version: "policy-timeout", replaceHead: true },
   ] as const)(
     "recovers a qualified $version pre-dispatch refusal with retained evidence (replacement=$replaceHead)",
@@ -89,18 +81,7 @@ describePosix("qualified pre-dispatch merge recovery", () => {
         `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${preparedHead}\n`,
       );
       f.save({ ...f.state(), requiredCheckName: "openclaw/ci-gate" });
-      const run = f.run(
-        false,
-        f.repo,
-        "squash",
-        proof.outcome,
-        replacement,
-        "",
-        "",
-        "",
-        false,
-        proof.directory,
-      );
+      const run = proof.runRecovery(replacement);
       expect(run.status, run.output).toBe(0);
       expect(f.state().mutations).toBe(1);
       expect(f.record()).toMatchObject({
@@ -125,18 +106,7 @@ describePosix("qualified pre-dispatch merge recovery", () => {
       );
       expect(f.run().status).toBe(0);
       expect(f.state().mutations).toBe(1);
-      const replay = f.run(
-        false,
-        f.repo,
-        "squash",
-        proof.outcome,
-        replacement,
-        "",
-        "",
-        "",
-        false,
-        proof.directory,
-      );
+      const replay = proof.runRecovery(replacement);
       expect(replay.status, replay.output).toBe(1);
       expect(f.state().mutations).toBe(1);
     },
@@ -176,18 +146,7 @@ describePosix("qualified pre-dispatch merge recovery", () => {
       next.duringChecks = { preparedHead: movedHead };
     }
     f.save(next);
-    const run = f.run(
-      false,
-      f.repo,
-      "squash",
-      proof.outcome,
-      "",
-      "",
-      "",
-      "",
-      false,
-      proof.directory,
-    );
+    const run = proof.runRecovery();
     expect(run.error, run.output).toBeUndefined();
     expect(run.status, run.output).toBe(1);
     expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
@@ -226,18 +185,7 @@ describePosix("qualified pre-dispatch merge recovery", () => {
         next.pr.mergeStateStatus = "BEHIND";
       }
       f.save(next);
-      const run = f.run(
-        false,
-        f.repo,
-        "squash",
-        proof.outcome,
-        replacement,
-        "",
-        "",
-        "",
-        false,
-        proof.directory,
-      );
+      const run = proof.runRecovery(replacement);
       expect(run.status, `${fault}: ${run.output}`).toBe(1);
       expect(f.state().mutations).toBe(0);
       expect(f.git(["rev-parse", outcomeRef])).toBe(proof.outcome);

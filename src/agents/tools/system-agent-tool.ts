@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
+  type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
@@ -18,7 +19,6 @@ import {
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   secretStoreNameForConfigPath,
-  type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
   hashSystemAgentOperation,
@@ -249,18 +249,6 @@ const SystemAgentToolSchema = Type.Object({
   ),
 });
 
-function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`openclaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
-}
-
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
   if (!value) {
@@ -285,8 +273,32 @@ function readSetupTarget(
   throw new ToolInputError(`openclaw: unknown setup target "${target}"`);
 }
 
+const SIMPLE_ACTIONS = new Map<string, SystemAgentOperation>([
+  ["status", { kind: "status" }],
+  ["models", { kind: "models" }],
+  ["agents", { kind: "agents" }],
+  ["audit", { kind: "audit" }],
+  ["doctor", { kind: "doctor" }],
+  ["channels", { kind: "channel-list" }],
+  ["validate_config", { kind: "config-validate" }],
+  ["gateway_status", { kind: "gateway-status" }],
+  ["plugin_list", { kind: "plugin-list" }],
+  ["configure_skills", { kind: "skills-setup" }],
+  ["configure_search", { kind: "search-setup" }],
+  ["configure_gateway", { kind: "gateway-config-setup" }],
+  ["import_memory", { kind: "memory-import" }],
+  ["manage_model_accounts", { kind: "model-accounts" }],
+  ["gateway_start", { kind: "gateway-start" }],
+  ["gateway_stop", { kind: "gateway-stop" }],
+  ["gateway_restart", { kind: "gateway-restart" }],
+]);
+
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
   const action = readToolStringParam(params, "action", { required: true });
+  const simple = SIMPLE_ACTIONS.get(action);
+  if (simple) {
+    return { ...simple };
+  }
   const optionalStrings = <K extends string>(...keys: K[]): Partial<Record<K, string>> => {
     const fields: Partial<Record<K, string>> = {};
     for (const key of keys) {
@@ -298,40 +310,16 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     return fields;
   };
   switch (action) {
-    case "status":
-    case "models":
-    case "agents":
-    case "audit":
-    case "doctor":
-      return { kind: action };
-    case "channels":
-      return { kind: "channel-list" };
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
-    case "validate_config":
-      return { kind: "config-validate" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema":
       return { kind: "config-schema", ...optionalStrings("path") };
-    case "gateway_status":
-      return { kind: "gateway-status" };
-    case "plugin_list":
-      return { kind: "plugin-list" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
-    case "configure_skills":
-      return { kind: "skills-setup" };
-    case "configure_search":
-      return { kind: "search-setup" };
-    case "configure_gateway":
-      return { kind: "gateway-config-setup" };
-    case "import_memory":
-      return { kind: "memory-import" };
     case "configure_model_provider":
       return { kind: "model-setup", ...optionalStrings("workspace") };
-    case "manage_model_accounts":
-      return { kind: "model-accounts" };
     case "open_agent":
       return { kind: "open-tui", ...optionalStrings("agentId", "workspace") };
     case "open_setup": {
@@ -343,12 +331,6 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
         ...(channel ? { channel } : {}),
       };
     }
-    case "gateway_start":
-      return { kind: "gateway-start" };
-    case "gateway_stop":
-      return { kind: "gateway-stop" };
-    case "gateway_restart":
-      return { kind: "gateway-restart" };
     case "plugin_search":
       return { kind: "plugin-search", query: requireParam(params, "query") };
     case "plugin_install": {
@@ -427,7 +409,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
           id: requireParam(params, "envVar"),
         };
       }
-      // Before the proposal exists anywhere, so plans, logs, and transcripts mask it.
+      // Register before creating the proposal so logs and diagnostics mask the value.
       registerSecretValueForRedaction(secret);
       if (readToolStringParam(params, "envVar")) {
         throw new ToolInputError(
@@ -462,7 +444,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
       "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
-      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
+      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then validated and saved by OpenClaw. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
@@ -594,7 +576,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           {},
         );
       }
-      const capture = createCaptureRuntime();
+      const lines: string[] = [];
+      const capture: RuntimeEnv = {
+        log: (...values) => lines.push(values.join(" ")),
+        error: (...values) => lines.push(values.join(" ")),
+        exit: (code) => {
+          throw new Error(`openclaw operation exited with code ${String(code)}`);
+        },
+      };
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
@@ -608,11 +597,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
-          error: true,
-        });
+        return textResult(
+          [lines.join("\n").trim(), `error: ${message}`].filter(Boolean).join("\n"),
+          {
+            error: true,
+          },
+        );
       }
-      return textResult(capture.read() || "done", {});
+      return textResult(lines.join("\n").trim() || "done", {});
     },
   };
 }

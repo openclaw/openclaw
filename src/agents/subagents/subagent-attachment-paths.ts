@@ -20,7 +20,6 @@ export function resolveSubagentSessionAttachmentRootDir(params: {
   );
 }
 
-/** Resolves a per-session attachment root only when a run identity is available. */
 export function subagentAttachmentRootForRun(
   agentId: string | undefined,
   childSessionKey: string | undefined,
@@ -28,16 +27,4 @@ export function subagentAttachmentRootForRun(
   return agentId && childSessionKey
     ? resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey })
     : undefined;
-}
-
-export function resolveSubagentAttachmentDir(
-  agentId: string,
-  childSessionKey: string,
-  attachmentId: string,
-  env?: NodeJS.ProcessEnv,
-): string {
-  return path.join(
-    resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey, env }),
-    attachmentId,
-  );
 }

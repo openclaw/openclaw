@@ -1,5 +1,5 @@
 // Snapshots every SQLite database owned by the frozen backup resource inventory.
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -7,13 +7,17 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   sealBackupResourceInventory,
+  createBackupResourcePlan,
   type BackupCoreDatabase,
   type BackupResourceInventory,
   type BackupResourcePlan,
 } from "../commands/backup-resource-inventory.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
@@ -34,6 +38,7 @@ import {
   type BackupSqliteSourceGroup,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
+import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import {
@@ -48,6 +53,7 @@ import {
   rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
+import { collectStateDatabasePaths } from "./update-candidate-state.js";
 import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 
 type SqliteBackupAsset = {
@@ -55,6 +61,12 @@ type SqliteBackupAsset = {
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
+
+function ignoreMissingSource(error: unknown): undefined {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+}
 
 function findLegacyAuditBackupStateChange(
   error: unknown,
@@ -69,7 +81,7 @@ function findLegacyAuditBackupStateChange(
 
 type CanonicalSqliteSource = {
   archiveSourcePath: string;
-  identity: Stats;
+  identity: BigIntStats;
   sourcePath: string;
 } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string });
 
@@ -177,6 +189,49 @@ async function discoverBackupSqliteSources(params: {
   };
 }
 
+export async function discoverBackupDatabasePaths(params: {
+  stateDir: string;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const discovered = await collectStateDatabasePaths(params);
+  const paths = [...discovered.values()].flatMap((database) => database.spellings);
+  const plugins = resolvePluginMetadataSnapshot(params);
+  const capable = new Set(
+    listDatabaseEngineStores()
+      .filter((store) => store.postgres)
+      .map((store) => store.id),
+  );
+  // Retained engine stores remain downgrade-sensitive when their plugin is disabled.
+  const retained = plugins.plugins.flatMap((plugin) =>
+    capable.has(plugin.id)
+      ? (plugin.backupResources ?? []).map((resource) =>
+          Object.assign({}, resource, { pluginId: plugin.id }),
+        )
+      : [],
+  );
+  const resources = await createBackupResourcePlan({
+    stateDir: params.stateDir,
+    configPaths: [],
+    oauthDirs: [],
+    workspaceDirs: [],
+    excludedWorkspaceDirs: [],
+    agentRoots: [],
+    pluginResources: retained,
+    pluginRoots: plugins.plugins.map((plugin) => plugin.rootDir),
+  });
+  const inventory = sealBackupResourceInventory(resources, []);
+  paths.push(...(await discoverBackupSqliteSources({ inventory })).snapshotPaths);
+  const existing: string[] = [];
+  for (const file of new Set(paths)) {
+    const info = await fs.stat(file).catch(ignoreMissingSource);
+    if (info?.isFile()) {
+      existing.push(await fs.realpath(file));
+    }
+  }
+  return [...new Set(existing)].toSorted();
+}
+
 async function planBackupSqliteSources(
   inventory: BackupResourceInventory,
   snapshotPaths: readonly string[],
@@ -184,11 +239,11 @@ async function planBackupSqliteSources(
   const sources: Array<{
     archiveSourcePath: string;
     path: string;
-    identity: Stats;
+    identity: BigIntStats;
     canonicalSource: CanonicalSqliteSource | undefined;
   }> = [];
   for (const archiveSourcePath of snapshotPaths) {
-    const identity = await fs.stat(archiveSourcePath);
+    const identity = await fs.stat(archiveSourcePath, { bigint: true });
     const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
     if (!owner || owner.role === "unresolvable-link") {
       throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
@@ -239,7 +294,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
     }
     if (
       canonicalSource &&
-      !sameFileIdentity(canonicalSource.identity, await fs.stat(archiveSourcePath))
+      !sameFileIdentity(
+        canonicalSource.identity,
+        await fs.stat(archiveSourcePath, { bigint: true }),
+      )
     ) {
       throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
     }
@@ -313,6 +371,33 @@ export async function createBackupSqliteSnapshotPlan(params: {
         { cause: error },
       );
     }
+    if (readBackupEngineImage(sourcePath, sourceDatabasePath).engine === "postgres") {
+      const directory = path.join(
+        `${sourcePath}.postgres`,
+        path.basename(`${archiveSourcePath}.postgres`),
+      );
+      await fs.mkdir(path.dirname(directory), { mode: 0o700 });
+      await capturePostgresBackup({ sourcePath: sourceDatabasePath, directory });
+      for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) {
+        snapshots.push({
+          sourcePath: path.join(directory, name),
+          archiveSourcePath: `${archiveSourcePath}.postgres/${name}`,
+          skippedSourcePaths: new Set(),
+        });
+      }
+      const anchorPath = `${sourcePath}.anchor`;
+      await fs.copyFile(
+        path.join(directory, "anchor.sqlite"),
+        anchorPath,
+        fs.constants.COPYFILE_EXCL,
+      );
+      snapshots.push({
+        sourcePath: anchorPath,
+        archiveSourcePath,
+        skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
+      });
+      return;
+    }
     snapshots.push({
       sourcePath,
       archiveSourcePath,
@@ -328,16 +413,13 @@ export async function createBackupSqliteSnapshotPlan(params: {
     ...process.env,
     OPENCLAW_STATE_DIR: params.resources.stateDir,
   });
-  const globalEntry = await fs.lstat(globalPath).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
-  let globalIdentity: Stats | undefined;
+  const globalEntry = await fs.lstat(globalPath, { bigint: true }).catch(ignoreMissingSource);
+  let globalIdentity: BigIntStats | undefined;
   let globalGroup: BackupSqliteSourceGroup | undefined;
   if (globalEntry) {
-    globalIdentity = globalEntry.isSymbolicLink() ? await fs.stat(globalPath) : globalEntry;
+    globalIdentity = globalEntry.isSymbolicLink()
+      ? await fs.stat(globalPath, { bigint: true })
+      : globalEntry;
     if (!globalIdentity.isFile()) {
       throw new Error(
         `Canonical global SQLite path must be a regular file or symlink to one: ${globalPath}`,
@@ -363,12 +445,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     await captureSource(globalPath, globalGroup, globalSource);
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
-      const exists = await fs.lstat(sidecar).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
       if (exists) {
         throw new Error(
           `Canonical global SQLite database is missing but a sidecar remains: ${sidecar}`,
@@ -405,12 +482,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
       })),
   ];
   for (const { discoveredPath, ...database } of candidates) {
-    const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const identity = await fs
+      .stat(database.sourcePath, { bigint: true })
+      .catch(ignoreMissingSource);
     if (identity && !identity.isFile()) {
       throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }
@@ -447,7 +521,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
     await assertBackupSqliteSourceGroup(globalGroup);
   }
   for (const source of coreDatabases) {
-    if (source.identity && !sameFileIdentity(source.identity, await fs.stat(source.sourcePath))) {
+    if (
+      source.identity &&
+      !sameFileIdentity(source.identity, await fs.stat(source.sourcePath, { bigint: true }))
+    ) {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }

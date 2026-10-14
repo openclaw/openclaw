@@ -2,10 +2,7 @@ import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
-import type {
-  WorkerEnvironmentCommitAdmission,
-  WorkerEnvironmentFacts,
-} from "./store-worker-contract.js";
+import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
 export function digestWorkerEnvironmentAuthority(
   environment: WorkerEnvironmentRecord | undefined,

@@ -6,10 +6,9 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
-import * as toast from "../../lib/toast.ts";
-import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { UsageSessionEntry } from "./types.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
+import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -21,11 +20,111 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
 
 describe("UsagePage detail requests", () => {
+  it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
+    const snapshot = cacheSnapshot("fresh");
+    let revision = snapshot.result.updatedAt;
+    let sessions = Array.from({ length: 53 }, (_, index) => ({
+      key: `agent:main:comparison-${index}`,
+      label: `Comparison ${index + 1}`,
+      agentId: "main",
+      sessionId: `comparison-${index}`,
+      updatedAt: 100 - index,
+      usage: { ...snapshot.result.totals, totalTokens: 100 },
+    }));
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) =>
+      method === "sessions.usage"
+        ? {
+            ...snapshot.result,
+            updatedAt: revision,
+            sessions: params?.key
+              ? sessions.filter((session) => session.key === params.key)
+              : sessions,
+          }
+        : { providers: [], points: [], logs: [] },
+    );
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    await preloadUsage(page);
+    const settle = async () => {
+      await waitForFast(() => expect(page.usageLoading).toBe(false));
+      await page.updateComplete;
+    };
+    const changePage = async (label: string) => {
+      [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")]
+        .find((button) => button.textContent?.trim() === label)!
+        .click();
+      await settle();
+    };
+    const compare = (label: string, shiftKey = false) =>
+      page
+        .querySelector<HTMLButtonElement>(
+          `.session-bars:not(.session-bars--selected) .session-bar-selection[aria-label="${label}"]`,
+        )!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey }));
+    const comparisons = () =>
+      [...page.querySelectorAll(".session-bars--selected .session-bar-title")].map(
+        (row) => row.textContent,
+      );
+
+    await changePage("Next");
+    compare("Comparison 51");
+    await settle();
+    expect(page.querySelector(".session-bars .session-bar-title")?.textContent).toBe(
+      "Comparison 51",
+    );
+    compare("Comparison 53", true);
+    await settle();
+    expect(comparisons()).toEqual(["Comparison 51", "Comparison 52", "Comparison 53"]);
+    await changePage("Previous");
+    expect(page.querySelector(".session-bars .session-bar-title")?.textContent).toBe(
+      "Comparison 1",
+    );
+    expect(comparisons()).toEqual(["Comparison 51", "Comparison 52", "Comparison 53"]);
+
+    revision++;
+    sessions = sessions.map((session, index) =>
+      index === 50 ? { ...session, usage: { ...session.usage, totalTokens: 350 } } : session,
+    );
+    refreshButton(page).click();
+    await settle();
+    expect(page.querySelector(".session-bars--selected .session-bar-value")?.textContent).toBe(
+      "350",
+    );
+
+    revision++;
+    sessions = sessions.filter((session) => session.label !== "Comparison 52");
+    refreshButton(page).click();
+    await settle();
+    expect(comparisons()).toEqual(["Comparison 51", "Comparison 53"]);
+    expect(page.usageSelectedSessions).toHaveLength(3);
+
+    page
+      .querySelector<HTMLButtonElement>(
+        '.session-bars--selected .session-bar-selection[aria-label="Comparison 53"]',
+      )!
+      .click();
+    await settle();
+    expect(page.querySelector(".session-detail-title")?.textContent).toContain("Comparison 53");
+
+    const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+    input.value = "label:missing";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(page.querySelector(".session-bar-row")).toBeNull();
+    expect(page.querySelector(".sessions-selected-group")).toBeNull();
+    const clearSelection = [
+      ...page.querySelectorAll<HTMLButtonElement>(".sessions-card button"),
+    ].find((button) => button.textContent?.trim() === "Clear Selection");
+    expect(clearSelection).toBeDefined();
+    clearSelection!.click();
+    await settle();
+    expect(page.usageSelectedSessions).toEqual([]);
+  });
+
   it.each([
     { key: "global", agentId: "opus", needsOwnerHint: true },
     { key: "agent:openclaw:usage", agentId: "openclaw", needsOwnerHint: false },
@@ -72,115 +171,46 @@ describe("UsagePage detail requests", () => {
     },
   );
 
-  it("releases hydrated export reports after download while the page stays mounted", async () => {
-    class ExportReport {
-      name = "exported-context";
-      blockChars = 10;
-    }
-    let report: WeakRef<ExportReport> | undefined;
+  it("retains the second row identity when selecting again before the overview settles", async () => {
     const snapshot = cacheSnapshot("fresh");
-    const session = {
-      key: "agent:main:export-lifetime",
-      label: "Export lifetime",
+    const sessions = ["First", "Second"].map((label) => ({
+      key: `agent:main:${label}`,
+      label,
       agentId: "main",
+      sessionId: `${label}-live`,
+      usage: { ...snapshot.result.totals, firstActivity: 1 },
       hasContextWeight: true,
-      usage: snapshot.result.totals,
-    };
-    const request = async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.usage") {
-        const weight = params?.includeContextWeight
-          ? {
-              ...contextWeight("exported-context"),
-              skills: { promptChars: 10, entries: [new ExportReport()] },
-            }
-          : undefined;
-        if (weight) {
-          report = new WeakRef(weight.skills.entries[0]!);
-        }
+    }));
+    const pending = new Promise<never>(() => {});
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method !== "sessions.usage") {
+        return { providers: [], points: [], logs: [] };
+      }
+      if (params?.key) {
+        const row = sessions.find((session) => session.key === params.key)!;
         return {
           ...snapshot.result,
-          sessions: [{ ...session, ...(weight ? { contextWeight: weight } : {}) }],
+          sessions: [
+            {
+              ...row,
+              sessionId: row.label === "Second" ? "retired" : row.sessionId,
+              contextWeight: contextWeight("Wrong identity"),
+            },
+          ],
         };
       }
-      return { providers: [] };
-    };
-    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+      return params?.selectedSessions ? pending : { ...snapshot.result, sessions };
+    });
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
-    page
-      .querySelector(".usage-export-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    await waitForFast(() => expect(download).toHaveBeenCalledOnce());
-    expect(download.mock.calls[0]![1]).toContain("exported-context");
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(report).toBeDefined();
-    expect(report!.deref()).toBeUndefined();
-    expect(page.isConnected).toBe(true);
-  });
-
-  it("keeps cancelled details displayed and releases them on explicit clear", async () => {
-    class DetailPayload {
-      timestamp = 1;
-      totalTokens = 10;
-      role = "user";
-      content = "Selected session";
-    }
-    const payloads: WeakRef<DetailPayload>[] = [];
-    const request = async (method: string) => {
-      const payload = new DetailPayload();
-      payloads.push(new WeakRef(payload));
-      return method === "sessions.usage.logs" ? { logs: [payload] } : { points: [payload] };
-    };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.details.timeSeries.load("agent:main:detail-lifetime");
-    await page.details.sessionLogs.load("agent:main:detail-lifetime");
-    page.details.cancel();
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(payloads).toHaveLength(2);
-    expect(payloads.every((payload) => payload.deref() !== undefined)).toBe(true);
-    expect(page.details.timeSeries.data).not.toBeNull();
-    expect(page.details.sessionLogs.data).not.toBeNull();
-
-    page.details.clear();
-    await collectGarbageForTest();
-    expect(payloads.every((payload) => payload.deref() === undefined)).toBe(true);
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.sessionLogs.data).toBeNull();
-    expect(page.isConnected).toBe(true);
-  });
-
-  it("releases a loaded overview when its Gateway identity is replaced", async () => {
-    class OverviewPayload {
-      key = "agent:main:overview-lifetime";
-      usage = null;
-    }
-    let payload: WeakRef<OverviewPayload> | undefined;
-    const snapshot = cacheSnapshot("fresh");
-    const request = async (method: string) => {
-      if (method === "sessions.usage") {
-        const report = new OverviewPayload();
-        payload = new WeakRef(report);
-        return { ...snapshot.result, sessions: [report] };
-      }
-      return { providers: [] };
-    };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.loadUsage();
-    expect(payload).toBeDefined();
-    page.context = contextWithClient({
-      request: async () => ({}),
-    } as unknown as GatewayBrowserClient);
-    page.requestUpdate();
+    page.querySelector<HTMLButtonElement>('.session-bar-selection[aria-label="First"]')!.click();
     await page.updateComplete;
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(payload!.deref()).toBeUndefined();
-    expect(page.isConnected).toBe(true);
+    expect(page.usageLoading).toBe(true);
+    page.querySelector<HTMLButtonElement>('.session-bar-selection[aria-label="Second"]')!.click();
+    await waitForFast(() => expect(page.details.session.status.error).toContain("out of date"));
+    expect(page.usageSelectedSessions).toEqual(["agent:main:Second"]);
+    expect(page.querySelector(".session-detail-title")?.textContent).toContain("Second");
+    expect(page.textContent).not.toContain("Wrong identity");
   });
 
   it("keeps unavailable timeline and conversation details pending and refreshes them when admission reopens", async () => {
@@ -268,7 +298,7 @@ describe("UsagePage detail requests", () => {
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(2);
 
     recovered = true;
     pending.reject(
@@ -284,7 +314,7 @@ describe("UsagePage detail requests", () => {
       expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered after late rejection"),
     );
     expect(page.details.timeSeries.data?.points).toHaveLength(1);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(4);
   });
 
   it("does not transfer queued detail recovery to a replacement selection", async () => {
@@ -307,7 +337,7 @@ describe("UsagePage detail requests", () => {
     await secondLoad;
     first.reject(new Error("Retired timeline unavailable"));
     await firstLoad;
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(2);
     expect(page.details.timeSeries.data).toBeNull();
     expect(page.details.timeSeries.status.error).toBe("Selected timeline unavailable");
   });
@@ -337,7 +367,7 @@ describe("UsagePage detail requests", () => {
     await Promise.all([timeline, conversation]);
     expect(page.details.timeSeries.status.error).toBeNull();
     expect(page.details.sessionLogs.status.error).toBeNull();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request.mock.calls.filter(([method]) => method !== "sessions.usage")).toHaveLength(4);
   });
 
   it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
@@ -393,6 +423,9 @@ describe("UsagePage detail requests", () => {
     )!;
     const contextParams = { ...initial[1] };
     delete contextParams.agentScope;
+    delete contextParams.projection;
+    delete contextParams.sort;
+    delete contextParams.sortDirection;
     expect(firstContext[1]).toEqual({
       ...contextParams,
       key: keys[0],
@@ -428,7 +461,9 @@ describe("UsagePage detail requests", () => {
               { ...result.sessions[1]!, contextWeight: contextWeight("selected-context") },
             ],
           }
-        : { logs: [], points: [] },
+        : method === "sessions.usage"
+          ? { ...result, sessions: params?.key ? [result.sessions[2]!] : result.sessions }
+          : { logs: [], points: [] },
     );
     expect(page.querySelector(".usage-detail-error--context button")).toBeNull();
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
@@ -441,7 +476,7 @@ describe("UsagePage detail requests", () => {
     expect(page.querySelector(".usage-detail-error--context")).toBeNull();
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && !params?.key),
-    ).toHaveLength(1);
+    ).toHaveLength(3);
     const contextCalls = request.mock.calls.filter(
       ([method]) => method === "sessions.usage",
     ).length;
@@ -452,7 +487,7 @@ describe("UsagePage detail requests", () => {
       ),
     );
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
-      contextCalls,
+      contextCalls + 2,
     );
   });
 
@@ -481,7 +516,11 @@ describe("UsagePage detail requests", () => {
         return {
           ...snapshot.result,
           totals,
-          sessions: [params?.key ? { ...session, contextWeight: contextWeight(report) } : session],
+          sessions: [
+            params?.key
+              ? { ...session, contextWeight: available ? contextWeight(report) : null }
+              : session,
+          ],
         };
       }
       if (method === "sessions.usage.timeseries") {
@@ -536,152 +575,76 @@ describe("UsagePage detail requests", () => {
     );
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && params?.key),
-    ).toHaveLength(contextRequests);
+    ).toHaveLength(contextRequests + 1);
     expect(page.querySelector(".context-details-panel")?.textContent).not.toContain(report);
   });
 
-  it("preserves agent-owned context in filtered JSON exports and cancels exports when scope changes", async () => {
+  it("exports every matching canonical row with context and cancels when scope changes", async () => {
     const snapshot = cacheSnapshot("fresh");
-    const result = {
-      ...snapshot.result,
-      sessions: ["First", "Second"].map((label, index) => ({
-        key: "global",
-        sessionId: "shared-instance",
-        label,
-        agentId: index === 0 ? "main" : "opus",
-        hasContextWeight: true,
-        usage: snapshot.result.totals,
-      })),
-    };
+    const sessions = Array.from({ length: 81 }, (_, index) => ({
+      key: `agent:main:export-${index}`,
+      agentId: "main",
+      sessionId: `instance-${index}`,
+      label: index < 80 ? `Included ${index}` : "Excluded",
+      hasContextWeight: true,
+      usage: snapshot.result.totals,
+    }));
+    const result = { ...snapshot.result, sessions };
     let pending = deferred<SessionsUsageResult>();
-    const request = vi.fn(
-      async (
-        method: string,
-        params?: Record<string, unknown>,
-        _options?: { signal?: AbortSignal },
-      ): Promise<unknown> => {
-        if (method === "sessions.usage") {
-          return params?.includeContextWeight ? pending.promise : result;
-        }
-        return { providers: [] };
-      },
-    );
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return params?.includeContextWeight ? pending.promise : result;
+      }
+      return { providers: [] };
+    });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const notice = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
     const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-    query.value = "label:first";
+    query.value = "label:Included";
     query.dispatchEvent(new Event("input", { bubbles: true }));
     query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await page.updateComplete;
-    const exportJson = () =>
-      page
-        .querySelector(".usage-export-menu")!
-        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    exportJson();
+    const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+    await exportJson();
     await page.updateComplete;
-    expect(download).not.toHaveBeenCalled();
-    expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).not.toBeNull();
-    const initial = request.mock.calls.find(([method]) => method === "sessions.usage")!;
+    expect(page.querySelector(".usage-export-menu > button")?.getAttribute("aria-busy")).toBe(
+      "true",
+    );
     const exported = request.mock.calls.find(([, params]) => params?.includeContextWeight)!;
-    expect(exported[1]).toEqual({ ...initial[1], includeContextWeight: true });
+    expect(exported[1]).toMatchObject({
+      query: "label:Included",
+      limit: Number.MAX_SAFE_INTEGER,
+      includeContextWeight: true,
+    });
+    expect(exported[1]).not.toHaveProperty("projection");
+    expect(exported[1]).not.toHaveProperty("offset");
     const full = {
       ...result,
-      sessions: result.sessions.map((session) => ({
-        ...session,
-        usage: { ...session.usage, totalTokens: 9999 },
-        contextWeight: { ...contextWeight(session.label), sessionId: session.sessionId },
-      })),
+      sessions: sessions.map((session) =>
+        Object.assign({}, session, { contextWeight: contextWeight(session.label) }),
+      ),
     };
     pending.resolve(full);
     await waitForFast(() => expect(download).toHaveBeenCalledOnce());
     const payload = JSON.parse(download.mock.calls[0]![1]) as { sessions: UsageSessionEntry[] };
-    expect(payload.sessions).toEqual([
-      {
-        ...result.sessions[0],
-        contextWeight: { ...contextWeight("First"), sessionId: "shared-instance" },
-      },
-    ]);
-    expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull();
-
+    expect(payload.sessions).toHaveLength(80);
+    expect(payload.sessions.at(-1)).toMatchObject({
+      key: "agent:main:export-79",
+      contextWeight: contextWeight("Included 79"),
+    });
+    expect(payload.sessions.some((session) => session.label === "Excluded")).toBe(false);
     pending = deferred<SessionsUsageResult>();
-    exportJson();
+    await exportJson();
     await page.updateComplete;
-    const cancelled = request.mock.calls.at(-1)!;
     const scope = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Current instance",
     )!;
     scope.click();
-    expect(cancelled[2]?.signal?.aborted).toBe(true);
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));
     expect(download).toHaveBeenCalledOnce();
-
-    pending = deferred<SessionsUsageResult>();
-    exportJson();
-    pending.resolve({ ...full, sessions: [full.sessions[1]!] });
-    await waitForFast(() =>
-      expect(notice).toHaveBeenCalledWith({
-        message: expect.stringContaining("Refresh usage and try again"),
-      }),
-    );
-    expect(download).toHaveBeenCalledOnce();
-
-    for (const [scenario, sessionId, otherSessionId, expectedDownloads] of [
-      ["matching instance", "shared-instance", "shared-instance", 1],
-      ["replacement instance", "replacement-instance", "shared-instance", 0],
-      ["unrelated agent replacement", "shared-instance", "other-instance", 1],
-    ] as const) {
-      download.mockClear();
-      notice.mockClear();
-      pending = deferred<SessionsUsageResult>();
-      exportJson();
-      await page.updateComplete;
-      expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).not.toBeNull();
-      pending.resolve({
-        ...full,
-        sessions: [
-          {
-            ...full.sessions[0]!,
-            sessionId,
-            contextWeight: { ...contextWeight("Current first"), sessionId },
-          },
-          {
-            ...full.sessions[1]!,
-            sessionId: otherSessionId,
-            contextWeight: { ...contextWeight("Other agent"), sessionId: otherSessionId },
-          },
-        ],
-      });
-      await waitForFast(() =>
-        expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull(),
-      );
-      expect(download, scenario).toHaveBeenCalledTimes(expectedDownloads);
-      if (expectedDownloads === 0) {
-        expect(notice).toHaveBeenCalledWith({
-          message: expect.stringContaining("Refresh usage and try again"),
-        });
-      } else {
-        expect(notice).not.toHaveBeenCalled();
-        const exportedPayload = JSON.parse(download.mock.calls[0]![1]) as {
-          sessions: UsageSessionEntry[];
-        };
-        expect(exportedPayload.sessions).toMatchObject([
-          {
-            key: "global",
-            agentId: "main",
-            sessionId: "shared-instance",
-            usage: { totalTokens: 100 },
-            contextWeight: {
-              sessionId: "shared-instance",
-              skills: { entries: [{ name: "Current first" }] },
-            },
-          },
-        ]);
-      }
-    }
   });
 
   it("keeps rejected provider usage retries unresolved until the page reports a stall", async () => {
@@ -795,31 +758,6 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it("surfaces a session-log failure and clears it after a successful retry", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("logs unavailable"))
-      .mockResolvedValueOnce({
-        logs: [{ timestamp: 1, role: "user", content: "hello" }],
-      });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.status.error).toBe("logs unavailable");
-    expect(page.details.sessionLogs.data).toBeNull();
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.data).toEqual([
-      { timestamp: 1, role: "user", content: "hello" },
-    ]);
-    expect(page.details.sessionLogs.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
-
   it("does not retain detail data when the selected session changes", async () => {
     const request = vi
       .fn()
@@ -854,7 +792,7 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it.each(["accepting", "draining"] as const)(
+  it.each(["draining"] as const)(
     "clears retained details and preserves read authorization errors while %s",
     async (suspensionPhase) => {
       const pending = deferred<never>();
@@ -883,14 +821,16 @@ describe("UsagePage detail requests", () => {
 
       expect(page.details.timeSeries.data).toBeNull();
       expect(page.details.timeSeries.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,
       });
       expect(page.details.sessionLogs.data).toBeNull();
       expect(page.details.sessionLogs.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,

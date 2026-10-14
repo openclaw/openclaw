@@ -22,8 +22,9 @@ import {
 import * as subagentControl from "../agents/subagents/registry/subagent-control.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import * as queueCleanup from "../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
-import { getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { callGatewayCli } from "./call.js";
@@ -45,7 +46,7 @@ const gatewayToken = "abort-authorization-test-token";
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let registration: MockInstance<typeof chatAbort.registerChatAbortController>;
 let childCancellation: MockInstance<typeof subagentControl.killAllControlledSubagentRuns>;
-let queueClearing: MockInstance<typeof queueCleanup.clearSessionQueues>;
+let queueClearing: MockInstance<typeof queueCleanup.clearSessionLifecycleQueues>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness({
@@ -54,7 +55,7 @@ beforeAll(async () => {
   // Observe production admission and effects without replacing their implementations.
   registration = vi.spyOn(chatAbort, "registerChatAbortController");
   childCancellation = vi.spyOn(subagentControl, "killAllControlledSubagentRuns");
-  queueClearing = vi.spyOn(queueCleanup, "clearSessionQueues");
+  queueClearing = vi.spyOn(queueCleanup, "clearSessionLifecycleQueues");
 });
 
 beforeEach(async () => {
@@ -268,7 +269,8 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
-      queueCleanup.clearSessionQueues([run.sessionKey]);
+      clearFollowupQueue(run.sessionKey);
+      clearFollowupDrainCallback(run.sessionKey);
       try {
         await run.finish();
       } finally {
@@ -293,8 +295,17 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     }
     const run = await startNativeRun(owner, requester);
     try {
+      const result = await rpcReq(stopper.ws, "sessions.abort", {
+        key: run.sessionKey,
+        runId: run.runId,
+      });
       expect(
-        await rpcReq(stopper.ws, "sessions.abort", { key: run.sessionKey, runId: run.runId }),
+        result,
+        JSON.stringify({
+          result,
+          controllerAborted: run.entry.controller.signal.aborted,
+          nativeAbortCalls: run.nativeAbort.mock.calls.length,
+        }),
       ).toMatchObject({
         ok: true,
         payload: { status: "aborted", abortedRunId: run.runId },
@@ -367,7 +378,8 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     };
     setActiveEmbeddedRun("recovered-session", handle, sessionKey);
     try {
-      expect(await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId })).toMatchObject({
+      const result = await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId });
+      expect(result, JSON.stringify(result.error)).toMatchObject({
         ok: true,
         payload: { status: "aborted", abortedRunId: runId },
       });

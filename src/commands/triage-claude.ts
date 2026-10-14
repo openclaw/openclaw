@@ -5,11 +5,13 @@ type ClaudeSafeModeProbeResult = { ok: true; supported: boolean } | { ok: false;
 export async function probeClaudeSafeMode(params: {
   argv: string[];
   env: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   cwd?: string;
 }): Promise<ClaudeSafeModeProbeResult> {
   try {
     const help = await runUtf8CommandWithTimeout([...params.argv, "--help"], {
       env: params.env,
+      signal: params.signal,
       ...(params.cwd ? { cwd: params.cwd } : {}),
       timeoutMs: 10_000,
       killProcessTree: true,

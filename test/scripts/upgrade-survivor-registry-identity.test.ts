@@ -3,9 +3,10 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
@@ -43,14 +44,14 @@ async function expectArchive(url: string, archive: string) {
   expect(Buffer.from(await response.arrayBuffer())).toEqual(readFileSync(archive));
 }
 
-it.each([
+it.for([
   { scenario: "legacy-operator-state", version: BASELINE },
   { scenario: "legacy-operator-state", version: "2026.9.6" },
   { scenario: "base", version: BASELINE },
   { scenario: "base", version: "2026.9.6" },
 ])(
   "preserves installed published registry bytes for $scenario while selecting candidate $version",
-  async ({ scenario, version }) => {
+  async ({ scenario, version }, { signal }) => {
     const root = tempDirs.make("upgrade-survivor-registry-identity-");
     const artifact = join(root, "artifact");
     const bin = join(root, "bin");
@@ -143,18 +144,31 @@ trap 'openclaw_e2e_stop_process "\${plugin_registry_pid:-}"' EXIT
 baseline_version="${BASELINE}"
 candidate_version="${version}"
 if [ "$SCENARIO" = legacy-operator-state ]; then configure_plugin_registry baseline; fi
-printf '%s' "\${NPM_CONFIG_REGISTRY:-upstream}" > "$FIXTURE_ROOT/baseline-url"
+printf 'registry-stage baseline %s\\n' "\${NPM_CONFIG_REGISTRY:-upstream}"
 read -r next_stage
 openclaw_e2e_stop_process "$plugin_registry_pid"
 plugin_registry_pid=""
 configure_plugin_registry
 printf '%s\\n' "\${published_plugin_registry_args[@]-}" > "$FIXTURE_ROOT/published-paths"
 printf '%s' "\${baseline_plugin_tarball:-}" > "$FIXTURE_ROOT/published-path"
-printf '%s' "$NPM_CONFIG_REGISTRY" > "$FIXTURE_ROOT/candidate-url"
+printf 'registry-stage candidate %s\\n' "$NPM_CONFIG_REGISTRY"
 read -r done
 `,
     );
     const child = spawn(resolveWorkflowBash(), [shell], { env, stdio: ["pipe", "pipe", "pipe"] });
+    const stages = {
+      baseline: createDeferred<string>(),
+      candidate: createDeferred<string>(),
+    };
+    const lines = createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      for (const stage of ["baseline", "candidate"] as const) {
+        const prefix = `registry-stage ${stage} `;
+        if (line.startsWith(prefix)) {
+          stages[stage].resolve(line.slice(prefix.length));
+        }
+      }
+    });
     let output = "";
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -175,14 +189,20 @@ read -r done
     onTestFinished(stop);
     const waitForStage = async (stage: "baseline" | "candidate") => {
       try {
-        await waitForFixtureFile(join(root, `${stage}-url`), closed);
+        return await withinTest(
+          awaitGateBeforeSettlement(
+            stages[stage].promise,
+            closed,
+            `Registry ${stage} startup failed:\n${output}`,
+          ),
+          signal,
+        );
       } catch (cause) {
         throw new Error(`Registry ${stage} startup failed:\n${output}`, { cause });
       }
     };
     try {
-      await waitForStage("baseline");
-      const baselineUrl = readFileSync(join(root, "baseline-url"), "utf8");
+      const baselineUrl = await waitForStage("baseline");
       if (scenario === "legacy-operator-state") {
         const companion = packages[0];
         assert(companion, "Missing published companion fixture");
@@ -215,8 +235,7 @@ read -r done
         { stateDir: state },
       );
       child.stdin.write("candidate\n");
-      await waitForStage("candidate");
-      const candidateUrl = readFileSync(join(root, "candidate-url"), "utf8");
+      const candidateUrl = await waitForStage("candidate");
       const publishedPaths = readFileSync(join(root, "published-paths"), "utf8").trim().split("\n");
       for (const { id, name, published, candidate } of packages) {
         const selected = version === BASELINE ? published : candidate;
@@ -274,9 +293,10 @@ read -r done
         expect(wrongBytes.stderr).toContain(`${id} plugin registry artifact integrity changed`);
       }
       child.stdin.end("done\n");
-      expect(await closed, output).toBe(0);
+      expect(await withinTest(closed, signal), output).toBe(0);
     } finally {
       await stop();
+      lines.close();
     }
   },
 );

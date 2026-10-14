@@ -23,7 +23,6 @@ export type CloudWorkerProfileDraft = {
 
 export type ConfiguredCloudWorkerProfile = CloudWorkerProfileDraft & {
   providerId: string;
-  install: "bundle" | "npm";
 };
 
 export type CloudWorkerDraftError =
@@ -76,7 +75,6 @@ export function readCloudWorkerProfiles(
         {
           id,
           providerId: normalizeOptionalString(raw.provider) ?? "",
-          install: raw.install === "npm" ? "npm" : "bundle",
           backend: stringSetting(settings, "provider"),
           target: stringSetting(settings, "target"),
           machineClass: stringSetting(settings, "class"),

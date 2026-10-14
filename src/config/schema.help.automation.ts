@@ -36,7 +36,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.mainKey":
     'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
-    "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
+    "Controls session delivery using allow/deny rules evaluated against channel, chatType, and key prefixes. This is separate from incoming and outgoing peer-message admission; use session.communication for those defaults.",
+  "session.communication":
+    "Defaults for new messages between sessions. Each direction accepts always, ask, or never and defaults to always. Sessions inherit these values until a human selects an override; existing access restrictions still apply.",
+  "session.communication.send":
+    "Default for initiating messages to other sessions: always permits, ask requires human approval before sending, and never blocks. Requested replies and authorized delegated-task communication keep their existing authority.",
+  "session.communication.receive":
+    "Default for accepting new messages from other sessions: always permits, ask requires human approval before model input or new work, and never blocks. This does not change history visibility or human access.",
   "session.sendPolicy.default":
     'Sets fallback action when no sendPolicy rule matches: "allow" or "deny". Keep "allow" for simpler setups, or choose "deny" when you require explicit allow rules for every destination.',
   "session.sendPolicy.rules":
@@ -283,9 +289,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.byChannel":
-    "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel's traffic pattern needs different behavior than global defaults.",
+    "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":
-    "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
+    "Per-channel debounce overrides for queue behavior keyed by channel ID, including plugin channels. Use this to tune burst handling independently for chat surfaces with different pacing.",
   "messages.queue.cap":
     "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
   "messages.queue.drop":

@@ -7,11 +7,7 @@ import {
   resolveConversationToolPolicies,
 } from "../conversation-tool-policy-pipeline.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
-import {
-  applyToolPolicyPipeline,
-  type ToolPolicyFilterEvent,
-  type ToolPolicyPipelineStep,
-} from "../tool-policy-pipeline.js";
+import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "../tool-policy-pipeline.js";
 import { collectExplicitDenylist } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
@@ -47,14 +43,14 @@ export function applyFinalEffectiveToolPolicy(
   const policies = resolveConversationToolPolicies({ capabilityProfile });
   // Core tools are absent from this subset but already validated. Suppress only
   // their unavailable warnings; the pipeline still reports unknown entries.
-  const pipelineSteps: ToolPolicyPipelineStep[] = buildConversationToolPolicyPipelineSteps({
+  const pipelineSteps = buildConversationToolPolicyPipelineSteps({
     capabilityProfile,
     policies,
     includeRuntimeToolPolicy: false,
   }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: params.bundledTools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: getPluginToolMeta,
     warn: params.warn,
     steps: pipelineSteps,
     onFilter: params.onFilter,

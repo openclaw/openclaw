@@ -105,6 +105,9 @@ def env_or_config(env_name, config, key, default=""):
 
 
 def load_config():
+    # TDLib creates its database under the process umask; retained-lease recovery
+    # refuses credential state that is readable beyond its owner.
+    os.umask(0o077)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.chmod(stat.S_IRWXU)
     config = read_json(CONFIG_PATH)
@@ -237,22 +240,44 @@ def find_tdjson(config):
     return None
 
 
-def telegram_bot(token, method, payload=None, test_dc=False):
-    data = json.dumps(payload or {}).encode()
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/{'test/' if test_dc else ''}{method}",
-        data=data,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
+def telegram_bot(token, method, payload=None, test_dc=False, *, files=None):
     try:
+        content_type = "application/json"
+        data = json.dumps(payload or {}).encode()
+        if files:
+            boundary = secrets.token_hex(16)
+            parts = []
+            for name, value in (payload or {}).items():
+                value = value if isinstance(value, str) else json.dumps(value)
+                parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+            for name, path in files.items():
+                parts.extend([
+                    f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="upload"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode(),
+                    Path(path).read_bytes(), b"\r\n",
+                ])
+            parts.append(f"--{boundary}--\r\n".encode())
+            data = b"".join(parts)
+            content_type = f"multipart/form-data; boundary={boundary}"
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/{'test/' if test_dc else ''}{method}",
+            data=data,
+            headers={"content-type": content_type},
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=15) as response:
             body = json.loads(response.read().decode())
     except (OSError, ValueError):
         raise DriverError(f"Telegram Bot API {method} request failed") from None
     if not body.get("ok"):
-        raise DriverError(body.get("description") or f"{method} failed")
+        raise DriverError((body.get("description") or f"{method} failed").replace(token, "<redacted>"))
     return body["result"]
+
+
+def photo_file(path):
+    photo_path = Path(path).expanduser().resolve()
+    if not photo_path.is_file():
+        raise DriverError(f"Photo file not found: {photo_path}")
+    return photo_path
 
 
 def resolve_sut(config, bot_config):
@@ -746,9 +771,7 @@ class UserDriver:
         }
 
     def photo_content(self, path, caption=""):
-        photo_path = Path(path).expanduser().resolve()
-        if not photo_path.is_file():
-            raise DriverError(f"Photo file not found: {photo_path}")
+        photo_path = photo_file(path)
         return {
             "@type": "inputMessagePhoto",
             "photo": {
@@ -818,6 +841,45 @@ class UserDriver:
             timeout=60,
         )
         return [self.settle_sent_message(message) for message in response.get("messages", [])]
+
+    def post_forward_sources(self, text, photo_path):
+        photo = photo_file(photo_path)
+        me = self.client.request({"@type": "getMe"})
+        token = self.bot_config["sutBotToken"]
+        test_dc = self.config.get("testDc") is True
+        telegram_bot(token, "sendMessage", {
+            "chat_id": me["id"], "text": text, "disable_notification": True,
+        }, test_dc=test_dc)
+        telegram_bot(token, "sendPhoto", {
+            "chat_id": me["id"], "disable_notification": True,
+        }, test_dc=test_dc, files={"photo": photo})
+
+    def forward_messages(self, chat_id, from_chat_id, message_ids):
+        response = self.client.request(
+            {
+                "@type": "forwardMessages",
+                "chat_id": chat_id,
+                "topic_id": None,
+                "from_chat_id": from_chat_id,
+                "message_ids": message_ids,
+                "options": {
+                    "@type": "messageSendOptions",
+                    "disable_notification": True,
+                    "from_background": False,
+                    "scheduling_state": None,
+                },
+                "send_copy": False,
+                "remove_caption": False,
+            },
+            timeout=30,
+        )
+        messages = response.get("messages") or []
+        if len(messages) != len(message_ids) or any(message is None for message in messages):
+            raise DriverError("Telegram did not return every forwarded message")
+        settled = [self.settle_sent_message(message) for message in messages]
+        if any(not message.get("forward_info") for message in settled):
+            raise DriverError("Telegram attached no forward origin; the burst cannot exercise the SUT forward lane")
+        return settled
 
     def settle_sent_message(self, message, timeout=30):
         if not message.get("sending_state"):
@@ -1118,15 +1180,26 @@ def cleanup_owned_group(driver, manifest_path):
     return {"ok": True, **record}
 
 
-def private_forum_identity(driver):
-    if driver.config.get("testDc") is True:
-        raise DriverError("Private production forum setup requires Telegram production.")
+# Run-owned forums are created by the Convex-leased QA user on Telegram's Test
+# Server, or by an operator's own account for private production proof. Each
+# command family refuses the other environment.
+def forum_manifest(test_server):
+    return STATE_DIR / ("owned-test-forum.json" if test_server else "owned-private-forum.json")
+
+
+def forum_identity(driver, test_server):
+    if (driver.config.get("testDc") is True) is not test_server:
+        raise DriverError(
+            "Run-owned forum setup requires Telegram's Test Server."
+            if test_server
+            else "Private production forum setup requires Telegram production."
+        )
     me = driver.client.request({"@type": "getMe"})
     if str(me["id"]) != str(driver.config.get("testerUserId")):
-        raise DriverError("Private production forum setup requires the leased QA user.")
+        raise DriverError("Forum setup requires the leased QA user.")
     sut = resolve_sut(driver.config, driver.bot_config)
     if not sut["id"] or not sut["username"]:
-        raise DriverError("Private production forum setup requires the SUT bot identity.")
+        raise DriverError("Forum setup requires the SUT bot identity.")
     return {
         "testerUserId": str(me["id"]),
         "sutBotId": str(sut["id"]),
@@ -1134,25 +1207,25 @@ def private_forum_identity(driver):
     }
 
 
-def public_private_forum_record(record):
-    return {
-        key: record[key]
-        for key in ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
-        if key in record
-    }
+def public_forum_record(record):
+    keys = ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
+    if record.get("creationUncertain"):
+        keys += ("testerUserId", "createdAt", "error", "deletion", "deletionReadback")
+    return {key: record[key] for key in keys if key in record}
 
 
-def prepare_private_forum(driver, manifest_path):
-    identity = private_forum_identity(driver)
+def prepare_forum(driver, manifest_path, test_server):
+    identity = forum_identity(driver, test_server)
     if manifest_path.exists():
         raise DriverError(
-            "This lease already has a private forum record; clean it before another creation."
+            "This lease already has a forum record; clean it before another creation."
         )
     record = {
         **identity,
         "status": "creating",
-        "title": f"OpenClaw private QA {secrets.token_hex(6)}",
-        "topicTitle": f"Identity proof {secrets.token_hex(4)}",
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "title": f"OpenClaw {'QA forum' if test_server else 'private QA'} {secrets.token_hex(6)}",
+        "topicTitle": f"{'Topic' if test_server else 'Identity'} proof {secrets.token_hex(4)}",
     }
     write_json_private(manifest_path, record)
     try:
@@ -1224,40 +1297,94 @@ def prepare_private_forum(driver, manifest_path):
         )
         record.update(status="topic-created", forumTopicId=int(topic["forum_topic_id"]))
         write_json_private(manifest_path, record)
-        invite = driver.client.request(
-            {
-                "@type": "createChatInviteLink",
-                "chat_id": int(record["groupId"]),
-                "name": "OpenClaw private qualification",
-                "expiration_date": 0,
-                "member_limit": 1,
-                "creates_join_request": False,
-            }
-        )
-        record.update(status="ready", inviteLink=invite["invite_link"], ok=True)
+        if not test_server:
+            # Private production participants join through this one-use link.
+            invite = driver.client.request(
+                {
+                    "@type": "createChatInviteLink",
+                    "chat_id": int(record["groupId"]),
+                    "name": "OpenClaw private qualification",
+                    "expiration_date": 0,
+                    "member_limit": 1,
+                    "creates_join_request": False,
+                }
+            )
+            record["inviteLink"] = invite["invite_link"]
+        record.update(status="ready", ok=True)
         write_json_private(manifest_path, record)
-        return public_private_forum_record(record)
+        return public_forum_record(record)
     except (DriverError, KeyError, TypeError, ValueError):
         record["status"] = "setup-failed"
         write_json_private(manifest_path, record)
         raise
 
 
-def cleanup_private_forum(driver, manifest_path):
+def verify_forum_deletion(driver, manifest_path, record):
+    try:
+        group_id = int(record.get("groupId") or record["basicGroupId"])
+        remaining = driver.client.request({
+            "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+        })
+        if group_id in remaining["chat_ids"]:
+            chat_type = record["deletionChatType"]
+            if chat_type["@type"] == "chatTypeBasicGroup":
+                group = driver.client.request({
+                    "@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"],
+                })
+                deleted = group.get("is_active") is False
+            else:
+                group = driver.client.request({
+                    "@type": "getSupergroup", "supergroup_id": chat_type["supergroup_id"],
+                })
+                deleted = group["status"]["@type"] in {
+                    "chatMemberStatusLeft", "chatMemberStatusBanned",
+                }
+            if not deleted:
+                raise DriverError("Deleted forum is still active in the deletion read-back.")
+        record.pop("error", None)
+        record.update(status="deleted", ok=True, deletionReadback=True)
+    except (DriverError, KeyError, TypeError, ValueError) as error:
+        record.update(ok=False, error=str(error))
+    write_json_private(manifest_path, record)
+    return public_forum_record(record)
+
+
+def cleanup_forum(driver, manifest_path, test_server):
     record = read_json(manifest_path)
     if not record:
         return {"ok": True, "status": "not-created"}
-    identity = private_forum_identity(driver)
+    identity = forum_identity(driver, test_server)
     if any(record.get(key) != identity[key] for key in ("testerUserId", "sutBotId")):
-        raise DriverError("Private forum cleanup record belongs to a different identity.")
+        raise DriverError("Forum cleanup record belongs to a different identity.")
     if record.get("status") == "deleted":
-        return public_private_forum_record(record)
+        return public_forum_record(record)
+    if record.get("status") == "deletion-pending-verification":
+        return verify_forum_deletion(driver, manifest_path, record)
     group_id = record.get("groupId") or record.get("basicGroupId")
+    reconciled = not group_id or record.get("creationUncertain") is True
     if not group_id:
-        record.pop("inviteLink", None)
-        record.update(status="not-created", ok=True)
+        record["creationUncertain"] = True
         write_json_private(manifest_path, record)
-        return public_private_forum_record(record)
+        # A create timeout says nothing about whether Telegram committed it.
+        # Search the leased user's server chats, then require exact ownership.
+        try:
+            matches = driver.client.request({
+                "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+            })
+            chats = [
+                driver.client.request({"@type": "getChat", "chat_id": chat_id})
+                for chat_id in matches["chat_ids"]
+            ]
+            exact = [chat for chat in chats if chat.get("title") == record["title"]]
+            if len(exact) != 1:
+                raise DriverError("Creation remains uncertain: exact-title search did not find one chat.")
+            group_id = exact[0]["id"]
+            record["groupId"] = str(group_id)
+            write_json_private(manifest_path, record)
+        except (DriverError, KeyError, TypeError, ValueError) as error:
+            record.update(status="uncertain-creation", ok=False, error=str(error))
+            write_json_private(manifest_path, record)
+            return public_forum_record(record)
     chat = driver.client.request({"@type": "getChat", "chat_id": int(group_id)})
     membership = driver.client.request(
         {
@@ -1274,7 +1401,7 @@ def cleanup_private_forum(driver, manifest_path):
         or chat["type"].get("is_channel") is True
         or membership["status"].get("@type") != "chatMemberStatusCreator"
     ):
-        raise DriverError("The leased QA user cannot delete the private forum for all members.")
+        raise DriverError("The leased QA user cannot delete the forum for all members.")
     # The can_be_deleted projection can lag immediately after creation. The
     # creator-owned delete is authoritative; retry only its observed propagation error.
     for attempt in range(5):
@@ -1287,17 +1414,29 @@ def cleanup_private_forum(driver, manifest_path):
             if "The chat can't be deleted" not in str(error) or attempt == 4:
                 raise
             time.sleep(1)
+    if reconciled:
+        record.update(
+            status="deletion-pending-verification",
+            deletion=deletion,
+            deletionChatType=chat["type"],
+            ok=False,
+        )
+        record.pop("inviteLink", None)
+        write_json_private(manifest_path, record)
+        return verify_forum_deletion(driver, manifest_path, record)
     record.pop("inviteLink", None)
+    record.pop("error", None)
     record.update(status="deleted", deletion=deletion, ok=True)
     write_json_private(manifest_path, record)
-    return public_private_forum_record(record)
+    return public_forum_record(record)
 
 
-def command_private_forum(args):
+def command_forum(args):
     if not os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR"):
-        raise DriverError("Private forum commands require runner-owned leased credential state.")
-    manifest = STATE_DIR / "owned-private-forum.json"
-    if args.command == "cleanup-private-forum" and not manifest.exists():
+        raise DriverError("Forum commands require runner-owned leased credential state.")
+    test_server = args.command in {"prepare-forum", "cleanup-forum"}
+    manifest = forum_manifest(test_server)
+    if args.command.startswith("cleanup-") and not manifest.exists():
         print_result({"ok": True, "status": "not-created"}, args.json, args.output)
         return
     config, bot_config = load_config()
@@ -1305,9 +1444,9 @@ def command_private_forum(args):
     if not driver.authorize(args, need_ready=False):
         raise DriverError("The leased QA user is not authorized.")
     result = (
-        prepare_private_forum(driver, manifest)
-        if args.command == "prepare-private-forum"
-        else cleanup_private_forum(driver, manifest)
+        prepare_forum(driver, manifest, test_server)
+        if args.command.startswith("prepare-")
+        else cleanup_forum(driver, manifest, test_server)
     )
     print_result(result, args.json, args.output)
 
@@ -1660,9 +1799,7 @@ def command_serve(args):
                 raise DriverError("serve command requires a string id")
             method = request.get("method")
             if method == "cleanup-private-forum":
-                result = cleanup_private_forum(
-                    driver, STATE_DIR / "owned-private-forum.json"
-                )
+                result = cleanup_forum(driver, forum_manifest(False), False)
                 write_ndjson({"type": "response", "id": request_id, "result": result})
                 continue
             if method != "send":
@@ -1750,8 +1887,8 @@ def main():
         group = command_parser(name, command_test_group)
         group.add_argument("--chat", default="")
 
-    for name in ("prepare-private-forum", "cleanup-private-forum"):
-        command_parser(name, command_private_forum)
+    for name in ("prepare-forum", "cleanup-forum", "prepare-private-forum", "cleanup-private-forum"):
+        command_parser(name, command_forum)
 
     confirm_qr = command_parser("confirm-qr", command_confirm_qr)
     confirm_qr.add_argument("--link", required=True)

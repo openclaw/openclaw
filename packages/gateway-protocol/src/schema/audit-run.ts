@@ -18,10 +18,7 @@ const ExecutionIdentityContextCoverageStateSchema = Type.Union([
 ]);
 const ExecutionIdentityDecisionCoverageStateSchema = Type.Union([
   Type.Literal("enforced"),
-  Type.Literal("attribution-only"),
-  Type.Literal("unattributed"),
-  Type.Literal("unknown"),
-  Type.Literal("unsupported"),
+  ...ExecutionIdentityContextCoverageStateSchema.anyOf,
 ]);
 const ExecutionIdentityRefArraySchema = Type.Array(ExecutionIdentityRefSchema, { maxItems: 16 });
 

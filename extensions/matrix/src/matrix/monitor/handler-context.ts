@@ -48,7 +48,7 @@ export async function resolveMatrixInboundContext(config: {
     historyLimit,
     dmSessionScope,
     resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
     finalizeInboundContext,
   } = handler;
   const {
@@ -144,14 +144,14 @@ export async function resolveMatrixInboundContext(config: {
   const storePath = resolveStorePathImpl(cfg.session?.store, {
     agentId: _route.agentId,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
   const sharedDmNoticeSessionKey = threadTarget
     ? _route.mainSessionKey || _route.sessionKey
     : _route.sessionKey;
   const sharedDmContextNotice = isDirectMessage
     ? hasExplicitSessionBinding
       ? null
-      : resolveMatrixSharedDmContextNotice({
+      : await resolveMatrixSharedDmContextNotice({
           storePath,
           sessionKey: sharedDmNoticeSessionKey,
           roomId,
@@ -259,6 +259,7 @@ export async function resolveMatrixInboundContext(config: {
     },
     sessionTranscript: { historyLimit: isRoom ? historyLimit : 0 },
     access: {
+      toolPolicy: isRoom ? (roomConfig?.tools ?? {}) : undefined,
       ...(isRoom
         ? {
             mentions: {
@@ -274,6 +275,7 @@ export async function resolveMatrixInboundContext(config: {
     },
     extra: {
       GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
+      GroupChannel: isRoom ? roomId : undefined,
       GroupId: isRoom ? roomId : undefined,
       ...locationPayload?.context,
       CommandSource: "text" as const,

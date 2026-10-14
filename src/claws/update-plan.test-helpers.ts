@@ -98,7 +98,14 @@ export async function createUpdatePlanFixture(
           config.mcp = { ...config.mcp, servers };
           return { ok: true, path: "config", config, mcpServers: servers };
         },
-        listMcpServers: async () => ({ ok: true, path: "config", config, mcpServers: {} }),
+        listMcpServers: async () => ({
+          ok: true,
+          path: "config",
+          config,
+          mcpServers: {},
+          runtimeConfig: config,
+          sourceConfigBeforeMigrations: config,
+        }),
       }),
     cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });

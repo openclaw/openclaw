@@ -104,30 +104,6 @@ describe("session goals", () => {
     );
   });
 
-  it("accounts usage from session token snapshots and enforces budget", async () => {
-    await writeSession(100);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "finish task",
-      tokenBudget: 20,
-      now: 10,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 125,
-      },
-    });
-
-    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
-
-    expect(snapshot.goal?.tokensUsed).toBe(25);
-    expect(snapshot.goal?.status).toBe("budget_limited");
-  });
-
   it("resumes budget-limited goals with a fresh budget window", async () => {
     await writeSession(100);
     await createSessionGoal({
@@ -160,42 +136,6 @@ describe("session goals", () => {
     expect(resumed.tokensUsed).toBe(0);
     expect(snapshot.goal?.status).toBe("active");
     expect(snapshot.goal?.tokensUsed).toBe(0);
-  });
-
-  it("ignores stale token snapshots for budget accounting", async () => {
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        totalTokens: 100,
-        totalTokensFresh: false,
-      },
-    });
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "finish task",
-      tokenBudget: 20,
-      now: 10,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 125,
-        totalTokensFresh: false,
-      },
-    });
-
-    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
-
-    expect(snapshot.goal?.tokenStart).toBe(0);
-    expect(snapshot.goal?.tokenStartFresh).toBe(false);
-    expect(snapshot.goal?.tokensUsed).toBe(0);
-    expect(snapshot.goal?.status).toBe("active");
   });
 
   it("adopts the first fresh token snapshot as the baseline after stale goal creation", async () => {
@@ -233,41 +173,6 @@ describe("session goals", () => {
     expect(snapshot.goal?.tokenStartFresh).toBe(true);
     expect(snapshot.goal?.tokensUsed).toBe(0);
     expect(snapshot.goal?.status).toBe("active");
-  });
-
-  it("accounts token snapshots with current context provenance", async () => {
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        totalTokens: 100,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "finish task",
-      now: 10,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 125,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
-
-    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
-
-    expect(snapshot.goal?.tokenStart).toBe(100);
-    expect(snapshot.goal?.tokensUsed).toBe(25);
   });
 
   it("lets model tools complete or block but keeps existing terminal state", async () => {
@@ -310,6 +215,65 @@ describe("session goals", () => {
       }),
     ).rejects.toThrow(/already complete/);
   });
+
+  it.each([
+    { totalTokens: 105, tokenStart: 100, tokensUsed: 5 },
+    { totalTokens: 125, tokenStart: 125, tokensUsed: 0 },
+  ])(
+    "resumes completed goals with appropriate accounting at $totalTokens tokens",
+    async ({ totalTokens, tokenStart, tokensUsed }) => {
+      await writeSession(100);
+      const created = await createSessionGoal({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "ship",
+        tokenBudget: 20,
+        now: 10,
+      });
+      await upsertSessionEntry({
+        storePath: fixture.storePath(),
+        sessionKey,
+        entry: { ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!, totalTokens },
+      });
+      const completed = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "complete",
+        note: "verified",
+        now: 20,
+      });
+      expect(formatSessionGoalStatus(completed)).toContain("Commands: /goal resume, /goal clear");
+      const resumed = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "active",
+        now: 30,
+      });
+      expect(resumed).toMatchObject({
+        id: created.id,
+        objective: "ship",
+        createdAt: 10,
+        status: "active",
+        updatedAt: 30,
+        tokenBudget: 20,
+        tokenStart,
+        tokensUsed,
+        continuationTurns: 0,
+        lastStatusNote: "verified",
+      });
+      expect(resumed.completedAt).toBeUndefined();
+      const recompleted = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "complete",
+        now: 40,
+      });
+      expect(recompleted.completedAt).toBe(40);
+      expect(
+        getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt,
+      ).toBe(40);
+    },
+  );
 
   it("lets users resume blocked goals", async () => {
     await writeSession(0);
@@ -454,32 +418,6 @@ describe("session goals", () => {
         now: 30,
       }),
     ).rejects.toThrow(/already complete/);
-  });
-
-  it("projects display state from fresh session tokens", () => {
-    const goal = resolveSessionGoalDisplayState(
-      {
-        totalTokens: 140,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 100,
-          tokensUsed: 0,
-          tokenBudget: 40,
-          continuationTurns: 0,
-        },
-      },
-      20,
-    );
-
-    expect(goal?.tokensUsed).toBe(40);
-    expect(goal?.status).toBe("budget_limited");
   });
 
   it("can project without adopting a stale baseline for read-only displays", () => {

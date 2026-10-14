@@ -584,7 +584,6 @@ export const testing = {
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
-  repoRoot,
   resolveDefaultLimitsMb,
   runStartupMemoryCheck,
   sampleCount: STARTUP_MEMORY_SAMPLE_COUNT,

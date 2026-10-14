@@ -88,12 +88,16 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
 }));
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: async () => undefined,
 }));
-vi.mock("./status.js", () => ({ buildPluginSnapshotReport: () => ({ plugins: [] }) }));
+// mock-isolation: Keep status discovery and its persistent state outside the install fixture.
+vi.mock("./status.js", () => ({
+  buildPluginSnapshotReport: () => ({ plugins: [] }),
+  buildPluginSnapshotReportAsync: async () => ({ plugins: [] }),
+}));
 const { installManagedPluginSource } = await import("./management-install.js");
 const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
 const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({

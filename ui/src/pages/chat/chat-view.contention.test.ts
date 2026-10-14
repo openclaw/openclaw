@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
-import * as chatMessage from "./components/chat-message-stream.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -11,7 +10,6 @@ import {
 
 beforeEach(() => {
   installTranscriptDomMocks();
-  vi.spyOn(chatMessage, "renderStreamGroup");
 });
 
 afterEach(() => {
@@ -52,7 +50,7 @@ describe("chat view state contention", () => {
       onAbort,
       onSend,
     });
-    expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]?.startupLabel).toBe(
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Temporarily busy—retrying…",
     );
     expect(container.querySelector(".chat-error")).toBeNull();

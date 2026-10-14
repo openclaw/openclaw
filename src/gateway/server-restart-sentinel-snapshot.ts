@@ -1,7 +1,7 @@
 import type { DeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinel } from "../infra/restart-sentinel-store.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { importLegacyUpdateRestartSentinel } from "../infra/state-migrations.restart-sentinel-runtime.js";
+import { assertNoRetiredRestartSentinelFiles } from "../infra/state-migrations.restart-sentinel.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 
@@ -28,12 +28,12 @@ export async function readRestartSentinelStartupSnapshot(params: {
   context: DeliveryQueueStateContext;
   pendingUpdate?: PendingUpdateSentinelIdentity;
   shouldRun?: () => boolean;
-  warn?: (message: string) => void;
 }) {
   if (params.shouldRun?.() === false) {
     return null;
   }
   const env = params.context.workerContext.environment;
+  assertNoRetiredRestartSentinelFiles(env.OPENCLAW_STATE_DIR);
   let sentinel = await readRestartSentinel(env);
   if (params.shouldRun?.() === false) {
     return null;
@@ -43,34 +43,6 @@ export async function readRestartSentinelStartupSnapshot(params: {
     (!sentinel || !matchesPendingUpdateSentinel(sentinel, params.pendingUpdate))
   ) {
     return null;
-  }
-  if (params.shouldRun) {
-    const imported = await importLegacyUpdateRestartSentinel({
-      context: params.context.workerContext,
-      shouldRun: params.shouldRun,
-      ...(sentinel ? { expectedRevision: sentinel.revision } : {}),
-    });
-    if (!params.shouldRun()) {
-      return null;
-    }
-    if (imported.superseded) {
-      return null;
-    }
-    for (const warning of imported.warnings) {
-      params.warn?.(warning);
-    }
-    if (imported.importedRevision !== undefined) {
-      sentinel = await readRestartSentinel(env);
-      // Import custody cannot consume a native notification published after its commit.
-      if (!sentinel || sentinel.revision !== imported.importedRevision) {
-        return null;
-      }
-    } else if (sentinel && (imported.changes.length > 0 || imported.warnings.length > 0)) {
-      const current = await readRestartSentinel(env);
-      if (!current || current.revision !== sentinel.revision) {
-        return null;
-      }
-    }
   }
   if (!sentinel || params.shouldRun?.() === false) {
     return null;

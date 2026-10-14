@@ -95,9 +95,12 @@ class ChatComposerDraftTest {
 
     val request = requireNotNull(state.beginSend(owner).request)
 
-    assertEquals("  edited text  ", request.inputSnapshot)
     assertEquals("edited text", request.message)
     assertEquals(listOf(retained), request.attachments)
+
+    state.completeSend(request, accepted = false)
+    assertEquals("  edited text  ", state.textDrafts[owner])
+    assertEquals(listOf(retained), state.attachments.value[owner])
   }
 
   @Test
@@ -696,18 +699,21 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun sharedAttachmentsAtomicallyMergeWithAConcurrentPickerImport() {
+  fun sharedAttachmentsMergeWithAnInFlightPickerImportAtTheComposerOwner() {
     val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
-    val store = ChatComposerAttachmentStore()
+    val state = ChatComposerStateStore()
     val existing = pendingAttachment("existing")
     val picker = pendingAttachment("picker")
     val shared = pendingAttachment("shared")
-    store.add(owner, listOf(existing))
+    state.addAttachments(owner, listOf(existing))
+    val authorization = requireNotNull(state.beginMediaAcquisition(owner))
+    val importId = requireNotNull(state.beginMediaImport(owner, authorization, owner.sessionKey))
 
-    store.add(owner, listOf(picker))
-    store.add(owner, listOf(shared))
+    state.addAttachments(owner, listOf(shared))
+    state.completeMediaImport(importId, listOf(picker), failedCount = 0)
 
-    assertEquals(listOf(existing, picker, shared), store.get(owner))
+    assertEquals(listOf(existing, shared, picker), state.attachments.value[owner])
+    assertFalse(state.hasPendingImport(owner))
   }
 
   @Test
@@ -764,17 +770,6 @@ class ChatComposerDraftTest {
 
     assertEquals(listOf(video), admit(listOf(video, document)).accepted)
     assertEquals(listOf(video), admit(listOf(document, video)).accepted)
-  }
-
-  @Test
-  fun stagedShareCommitsOnlyForMatchingQueueHead() {
-    val current = ChatShareDraft(id = 7, text = "current", attachments = emptyList(), droppedAttachmentCount = 0)
-    val replacement = ChatShareDraft(id = 8, text = "replacement", attachments = emptyList(), droppedAttachmentCount = 0)
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
-
-    assertTrue(canCommitStagedChatShare(current.id, current, owner, owner))
-    assertFalse(canCommitStagedChatShare(current.id, replacement, owner, owner))
-    assertFalse(canCommitStagedChatShare(current.id, null, owner, owner))
   }
 
   @Test
@@ -980,21 +975,6 @@ class ChatComposerDraftTest {
         gatewayDefaultAgentId = "  ",
         sessionKey = "main",
         mainSessionKey = "main",
-      ),
-    )
-  }
-
-  @Test
-  fun stagedShareRejectsAReplacementComposerOwner() {
-    val share = ChatShareDraft(id = 7, text = "share", attachments = emptyList(), droppedAttachmentCount = 0)
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
-
-    assertFalse(
-      canCommitStagedChatShare(
-        stagedId = share.id,
-        currentHead = share,
-        ownerSnapshot = owner,
-        currentOwner = owner.copy(sessionKey = "session-b"),
       ),
     )
   }

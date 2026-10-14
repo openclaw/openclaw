@@ -1,13 +1,16 @@
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -23,7 +26,6 @@ import {
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
@@ -56,7 +58,8 @@ export class SidebarAttentionStoreController implements StoreController {
   private cronRefresh: { generation: number; requested: boolean } | null = null;
   private cronRefreshNeeded = false;
   private cronRetryAt?: number;
-  private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
+  private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
+    null;
   private readonly stopSubscriptions: Array<() => void>;
   private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
   private disposed = false;
@@ -73,10 +76,8 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.load(false);
-        } else if (event.event === "config.changed") {
-          this.load();
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }
@@ -86,6 +87,7 @@ export class SidebarAttentionStoreController implements StoreController {
       sources.overlays.subscribe(onChange),
       this.mentions.subscribe(onChange),
       subscribeStoredChatOutboxChanges(onChange),
+      subscribeChatOutboxAttentionChanges(onChange),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
@@ -145,7 +147,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.healthRefreshTimer = undefined;
     if (
       this.disposed ||
-      this.sources.gateway.snapshot.phase !== "connected" ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
       document.visibilityState === "hidden"
     ) {
       return;
@@ -230,15 +232,7 @@ export class SidebarAttentionStoreController implements StoreController {
       return outbox;
     }
     const overlay = this.sources.overlays.snapshot;
-    const updateState = resolveSidebarUpdateAttention(this.sources);
-    const update = buildUpdateInboxEntry({
-      canDismiss: updateState.canUpdate,
-      dismissal: updateState.dismissal,
-      forced: updateState.forced,
-      requiresAction: updateState.forced || (updateState.canUpdate && updateState.actionable),
-      severity: overlay.updateStatusBanner?.tone === "danger" ? "error" : "warning",
-      visible: updateState.present,
-    });
+    const update = resolveSidebarUpdateAttention(this.sources);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
       scopes: gateway.hello?.auth?.scopes,
       state: this.sources.scopeUpgrade.state,
@@ -278,7 +272,11 @@ export class SidebarAttentionStoreController implements StoreController {
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (gateway.phase !== "connected" || !client) {
+    if (
+      !isGatewayAvailable(gateway) ||
+      !client ||
+      !hasOperatorReadAccess(gateway.hello?.auth ?? null)
+    ) {
       return;
     }
     const owner = this.owner();
@@ -289,10 +287,9 @@ export class SidebarAttentionStoreController implements StoreController {
     this.loadedAgentScope = agentScope;
     const current = () =>
       generation === this.loadGeneration &&
-      this.sources.gateway.snapshot.phase === "connected" &&
+      isGatewayAvailable(this.sources.gateway.snapshot) &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
-      this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
       this.sources.agentSelection.state.scopeId === agentScope.scopeId;
     const publishSource = (scope: {
       cronInventoryComplete: boolean;
@@ -392,20 +389,27 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId
     ) {
       this.modelAuthRefreshAt = undefined;
-      if (this.modelAuthRefresh?.generation === generation) {
+      if (
+        this.modelAuthRefresh?.generation === generation &&
+        this.modelAuthRefresh.agentId === agentScope.selectedId
+      ) {
         // Only explicit freshness loads queue auth work; cron events cannot
         // invalidate a pending auth response or schedule another auth request.
         this.modelAuthRefresh.requested ||= refreshModelAuth;
       } else {
-        const refresh = { generation, requested: true };
         const agentId = agentScope.selectedId;
+        const refresh = { generation, agentId, requested: true };
+        const currentAuth = () =>
+          current() &&
+          this.modelAuthRefresh === refresh &&
+          this.sources.agentSelection.state.selectedId === agentId;
         this.modelAuthRefresh = refresh;
         void (async () => {
           try {
-            while (refresh.requested && current()) {
+            while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (current()) {
+              if (currentAuth()) {
                 this.modelAuthStatus = status;
                 this.modelAuthAgentId = agentId;
                 this.modelAuthRefreshAt = status ? nextModelAuthStatusRefreshAt(status) : undefined;
@@ -433,12 +437,22 @@ export class SidebarAttentionStoreController implements StoreController {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+    ) {
       this.loadGeneration += 1;
       this.loadedOwner = null;
       this.loadedClient = null;
       this.clearHealth();
       this.onChange();
+      return;
+    }
+    if (!isGatewayAvailable(snapshot)) {
+      this.loadGeneration += 1;
+      this.loadedClient = null;
+      this.scheduleHealthRefresh();
       return;
     }
     const owner = this.owner();
@@ -454,6 +468,18 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId === this.loadedAgentScope.selectedId &&
       agentScope.scopeId === this.loadedAgentScope.scopeId
     ) {
+      return;
+    }
+    if (
+      !ownerChanged &&
+      snapshot.client === this.loadedClient &&
+      agentScope.scopeId === this.loadedAgentScope.scopeId
+    ) {
+      // Chat selection changes auth ownership, not the Inbox inventory's filter.
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
+      this.load(true, false);
+      this.onChange();
       return;
     }
     let scopeChanged = false;

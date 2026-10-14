@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
-  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
@@ -264,8 +264,8 @@ suite.define(() => {
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-      const splitEntry = page.getByRole("button", { name: "Open split view" });
-      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      const layout = page.getByRole("button", { name: "Layout", exact: true });
+      await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
       const taskHeader = page.locator(".chat-pane__header");
       const regularHeaderPadding = await taskHeader.evaluate(
@@ -315,12 +315,10 @@ suite.define(() => {
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
       });
       await page.setViewportSize({ height: 900, width: 1100 });
-      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await expect.poll(() => layout.isVisible()).toBe(true);
       await page.setViewportSize({ height: 900, width: 1440 });
       await expect
-        .poll(() =>
-          splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
-        )
+        .poll(() => layout.evaluate((node) => node.closest(".agent-chat__composer-shell") == null))
         .toBe(true);
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (
@@ -331,7 +329,7 @@ suite.define(() => {
       });
       const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
       await gateway.deferNext("chat.startup");
-      await splitEntry.click();
+      await selectChatLayoutAction(page, "Open split view");
       await expect
         .poll(async () => (await gateway.getRequests("chat.startup")).length)
         .toBeGreaterThan(startupRequestsBeforeSplit);
@@ -369,24 +367,14 @@ suite.define(() => {
           return visible.every(Boolean);
         })
         .toBe(true);
-      await expect.poll(() => splitEntry.count()).toBe(0);
-      // The pane header owns one side-panel toggle; individual tools live in its tab strip.
-      await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
+      // Each pane keeps a single Layout menu for its own panels and split actions.
+      await expect.poll(() => headers.first().locator(".chat-pane__layout-menu").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       const cells = page.locator(".chat-split-view__cell");
       const actionRows = headers.locator(".chat-pane__actions");
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
-      expect(
-        await headers
-          .first()
-          .locator(".chat-pane__close-pane")
-          .evaluate((button) => {
-            (button as HTMLElement).focus();
-            return document.activeElement === button;
-          }),
-      ).toBe(false);
 
       await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
@@ -722,7 +710,7 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
+    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: {
@@ -736,19 +724,29 @@ suite.define(() => {
           key: pinnedSessionKey,
           kind: "direct",
           label: "Pinned Session",
-          pinned: true,
-          pinnedAt: 1,
+          createdAt: 2_000,
           updatedAt: 50,
         },
         ...createdSessionKeys.map((key, index) => ({
           key,
           kind: "direct",
           label: `Session ${key.slice(-1).toUpperCase()}`,
+          createdAt: 1_000 - index,
           updatedAt: (index + 1) * 100,
         })),
       ],
       ts: Date.now(),
     };
+    await page.addInitScript(
+      ({ storageKey, entry }) => {
+        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
+      },
+      {
+        storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        entry: `session:${pinnedSessionKey}`,
+      },
+    );
     await installMockGateway(page, {
       methodResponses: { "sessions.list": sessions },
       sessionKey: "agent:main:session-a",
@@ -761,7 +759,12 @@ suite.define(() => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
+      // Personal shortcuts do not add a row to the ten-row Sessions page.
+      const pinnedLink = page.locator(
+        `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      );
+      await pinnedLink.waitFor();
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
       await page.getByRole("button", { name: "Show more" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -783,13 +786,15 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .locator(".sidebar-recent-session__name")
         .evaluate((label) => getComputedStyle(label).fontWeight);
-      expect(activeWeight).toBe(inactiveWeight);
+      expect(activeWeight).toBe("600");
+      expect(inactiveWeight).toBe("500");
 
-      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSort.click();
       await chooseSidebarMenuOption(page, "Sort by", "Last updated");
       await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
+      expect(await pinnedLink.isVisible()).toBe(true);
 
       await filterAndSort.click();
       await chooseSidebarMenuOption(page, "Sort by", "Created");
@@ -799,139 +804,6 @@ suite.define(() => {
       await filterAndSort.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("releases a retained queued send after the canonical session list records idle", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
-    const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const activeSessions = chatSessionListResponse([
-      {
-        key: firstKey,
-        kind: "direct",
-        label: "Instant A",
-        updatedAt: 2,
-        activeRunIds: ["server-run"],
-        hasActiveRun: true,
-        status: "running",
-      },
-      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
-    ]);
-    const idleSessions = chatSessionListResponse([
-      {
-        key: firstKey,
-        kind: "direct",
-        label: "Instant A",
-        updatedAt: 3,
-        activeRunIds: [],
-        hasActiveRun: false,
-        lastRunId: "server-run",
-        status: "done",
-      },
-      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
-    ]);
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-        "sessions.list": activeSessions,
-      },
-      sessionKey: firstKey,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
-      await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant A")
-        .waitFor();
-      await page.waitForTimeout(500);
-      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("sessions.list", rosterMatch);
-
-      await page
-        .locator(
-          `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
-        )
-        .click();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant B")
-        .waitFor();
-      const emptyOutboxListRequests = (
-        await gateway.getRequests("sessions.list", rosterMatch)
-      ).slice(initialListCount);
-      expect(emptyOutboxListRequests).toHaveLength(0);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
-      const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
-
-      await page.locator('openclaw-chat-pane[aria-hidden="false"]').evaluate((pane, targetKey) => {
-        const state = (
-          pane as HTMLElement & {
-            state: {
-              settings?: { gatewayUrl?: string };
-            };
-          }
-        ).state;
-        const gatewayOwner = state.settings?.gatewayUrl?.trim() || "default";
-        const key = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`;
-        sessionStorage.setItem(
-          key,
-          JSON.stringify({
-            version: 2,
-            gatewayOwner,
-            sessions: {
-              [`${targetKey}\u0000agent:main`]: {
-                updatedAt: Date.now(),
-                queue: [
-                  {
-                    id: "queued-before-switch",
-                    text: "flush after idle reconciliation",
-                    createdAt: Date.now(),
-                    sendState: "waiting-idle",
-                    sessionKey: targetKey,
-                    agentId: "main",
-                  },
-                ],
-              },
-            },
-          }),
-        );
-        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: sessionStorage }));
-      }, firstKey);
-      await page
-        .locator(
-          `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
-        )
-        .click();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant A")
-        .waitFor();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
-        .toBe(emptyOutboxListCount + 1);
-      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
-      await queued.waitFor();
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
-      await gateway.resolveDeferred("sessions.list", idleSessions);
-      const send = await gateway.waitForRequest("chat.send");
-      expect(requireRecord(send.params)).toMatchObject({
-        message: "flush after idle reconciliation",
-        sessionKey: firstKey,
-      });
-      await queued.waitFor({ state: "detached" });
-      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -1017,13 +889,16 @@ suite.define(() => {
       await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await row.hover();
-      await row.getByRole("button", { name: "Pin session" }).click();
+      // Unread remains shared session metadata; personal pinning no longer patches or refreshes it.
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
 
-      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      const patchRequest = await gateway.waitForRequest("sessions.patch", {
+        match: { key, unread: true },
+      });
       expect(requireRecord(patchRequest.params)).toMatchObject({
         key,
-        pinned: true,
+        unread: true,
       });
       await expect
         .poll(async () => {
@@ -1033,7 +908,9 @@ suite.define(() => {
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
-      expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
+      // The retained title can match before the refresh renders Unread.
+      await expect.poll(() => link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);
+      expect(await link.getByRole("img", { name: "Unread", exact: true }).count()).toBe(1);
       await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);

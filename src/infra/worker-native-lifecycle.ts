@@ -3,17 +3,16 @@ import {
   MessageChannel,
   receiveMessageOnPort,
   SHARE_ENV,
-  type MessagePort,
   type Worker,
   type WorkerOptions,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
@@ -21,28 +20,30 @@ import {
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
   NativeWorkerRuntime,
   NativeWorkerResourceDescriptor,
   NativeWorkerResourceConnection,
+  NativeWorkerTaskPorts,
   RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
 
 type NativeRuntime = NativeWorkerRuntime & {
-  worker: Worker;
-  port: MessagePort;
   handles: Map<number, NativeWorker>;
   close(): Promise<void>;
 };
 
 export type RetainedNativeWorkerSource = {
+  readonly hasActiveWorkers: boolean;
   create(
     filename: string | URL,
     options?: WorkerOptions,
     resource?: NativeWorkerResourceDescriptor,
+    taskPorts?: NativeWorkerTaskPorts,
   ): RetainedNativeWorker;
   captureResource(
     moduleUrl: URL,
@@ -52,6 +53,8 @@ export type RetainedNativeWorkerSource = {
   ): NativeWorkerResourceDescriptor;
   /** The domain joins admitted work and its resources before shared native cleanup. */
   retain(owner: object, closeOwner: () => Promise<void>): void;
+  /** Join an idle broker without closing registered domains or their independent work. */
+  retireIdleBroker(): Promise<boolean>;
 };
 
 type NativeSource = RetainedNativeWorkerSource & {
@@ -59,6 +62,7 @@ type NativeSource = RetainedNativeWorkerSource & {
   runtimeGeneration?: RuntimeWorkerGeneration;
   runtime?: NativeRuntime;
   broker?: SpawnBrokerHost;
+  brokerClose?: Promise<void>;
   brokerModuleUrl: URL;
   closing: boolean;
   close(): Promise<void>;
@@ -74,10 +78,27 @@ const lifetime = resolveGlobalSingleton(
     nextId: 0,
     sources: new WeakMap(),
   }),
-  async (state) => {
-    await state.defaultSource?.close();
-  },
+  closeDefaultRetainedNativeWorkerSource,
 );
+
+/** Terminal process cleanup joins the existing unbound owner without starting another. */
+export async function closeDefaultRetainedNativeWorkerSource(): Promise<void> {
+  await lifetime.defaultSource?.close();
+}
+
+function forgetNativeSource(source: NativeSource): void {
+  if (source.runtimeGeneration) {
+    if (lifetime.sources.get(source.runtimeGeneration) === source) {
+      lifetime.sources.delete(source.runtimeGeneration);
+    }
+  } else if (lifetime.defaultSource === source) {
+    lifetime.defaultSource = undefined;
+  }
+}
+
+function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+}
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
   if (source.closing) {
@@ -110,21 +131,6 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
     const ownerJoined = createDeferredCore();
     void ownerJoined.promise.catch(() => undefined);
     let terminating = false;
-    let nativeOwnerJoined = false;
-    const retireSource = () => {
-      if (!nativeOwnerJoined || handles.size > 0) {
-        return;
-      }
-      source.runtime = undefined;
-      if (source.runtimeGeneration) {
-        if (lifetime.sources.get(source.runtimeGeneration) === source) {
-          lifetime.sources.delete(source.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
-      }
-      void source.broker?.close().catch(ownerJoined.reject);
-    };
     const terminateOwner = () => {
       if (terminating) {
         return;
@@ -138,20 +144,17 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         ownerJoined.reject(error);
       }
     };
-    const receive = (value: unknown) => {
-      if (!isRecord(value) || typeof value.id !== "number" || typeof value.type !== "string") {
-        return;
-      }
-      // SAFETY: The paired lifetime worker owns this envelope; child data is nested in message.value.
-      handles.get(value.id)?.receive(value as NativeWorkerReply);
+    const receive = (reply: NativeWorkerReply) => {
+      observeWorkerMessage(reply, "from_worker", "lifecycle");
+      handles.get(reply.id)?.receive(reply);
     };
     const runtime: NativeRuntime = {
-      worker,
-      port: port1,
       handles,
       service() {
         for (;;) {
-          const next = receiveMessageOnPort(port1);
+          const next = runWithMainThreadTask("worker:control-decode", () =>
+            receiveMessageOnPort(port1),
+          );
           if (!next) {
             break;
           }
@@ -160,6 +163,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         // Resource callbacks can add or retire handles during this pass.
         const resourceHandles = [...handles.values()];
         for (const handle of resourceHandles) {
+          handle.serviceTaskPort();
           handle.serviceResource();
         }
         if (runtime.failure) {
@@ -186,7 +190,9 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         if (runtime.failure) {
           throw runtime.failure;
         }
+        const bytes = workerMessagePayloadBytes(message);
         port1.postMessage(message, [...transfers]);
+        observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {
         return (source.broker ??= runInDetachedAsyncContext(() =>
@@ -194,12 +200,6 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         ));
       },
       refreshReference() {
-        retireSource();
-        if (source.closing && handles.size === 0 && !nativeOwnerJoined) {
-          // A refused owner close can finish later through its original native handle.
-          void runtime.close().catch(ownerJoined.reject);
-          return;
-        }
         if ([...handles.values()].some((handle) => handle.needsReference)) {
           worker.ref();
           port1.ref();
@@ -243,14 +243,11 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       setImmediate(() => {
         const error = runtime.failure ?? new Error("Native worker lifetime owner exited");
         runtime.failure = error;
-        nativeOwnerJoined = true;
         source.closing = true;
         for (const handle of handles.values()) {
           handle.ownerJoined(error);
         }
         port1.close();
-        // Keep capture pinned to this closing owner until its last actual resource join.
-        retireSource();
         ownerJoined.resolve();
       });
     });
@@ -280,41 +277,59 @@ export function captureRetainedNativeWorkerSource(options?: {
   if (existing) {
     return existing;
   }
-  const resources = new WeakSet<NativeWorkerResourceDescriptor>();
   const source: NativeSource = {
     ...captured,
     brokerModuleUrl: captured.runtimeGeneration
       ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
       : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
     closing: false,
+    get hasActiveWorkers() {
+      return Boolean(source.runtime?.handles.size);
+    },
+    async retireIdleBroker() {
+      await source.brokerClose;
+      if (source.hasActiveWorkers) {
+        return false;
+      }
+      const broker = source.broker;
+      source.broker = undefined;
+      await (source.brokerClose = broker?.close());
+      source.brokerClose = undefined;
+      return true;
+    },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
-        const closing = [...owners.values()].map((owner) => owner.close());
-        joinSource();
-        const results = await Promise.allSettled(closing.length ? closing : [joined.promise]);
-        const errors = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
+        const results = await Promise.allSettled([...owners.values()].map((close) => close()));
+        const errors = nativeCleanupFailures(results);
         if (errors.length) {
           throw new AggregateError(errors, "Native worker execution owner cleanup failed");
         }
+        source.closing = true;
+        await source.runtime?.close();
+        await source.brokerClose;
+        await source.broker?.close();
+        forgetNativeSource(source);
+        owners.clear();
       }));
     },
-    create(filename, workerOptions, resource) {
-      if (captured.runtimeGeneration && !owners.size) {
-        throw new Error("Native worker source has no retained execution owner");
+    create(filename, workerOptions, resource, taskPorts) {
+      try {
+        return startNativeWorker(
+          nativeRuntime(source),
+          filename,
+          workerOptions ?? {},
+          resource,
+          taskPorts,
+        );
+      } catch (error) {
+        taskPorts?.host.close();
+        taskPorts?.worker.close();
+        throw error;
       }
-      if (resource && !resources.has(resource)) {
-        throw new Error("Native worker resource belongs to a different execution source");
-      }
-      return startNativeWorker(nativeRuntime(source), filename, workerOptions ?? {}, resource);
     },
     captureResource(moduleUrl, workerDataKey, input, connect) {
-      if (source.closing) {
-        throw new Error("Native worker source is closing");
-      }
       const inContext = AsyncLocalStorage.snapshot();
-      const resource = Object.freeze({
+      return Object.freeze({
         moduleUrl: String(captured.runtimeGeneration?.resolve(moduleUrl) ?? moduleUrl),
         workerDataKey,
         input: input === undefined ? undefined : structuredClone(input),
@@ -334,69 +349,14 @@ export function captureRetainedNativeWorkerSource(options?: {
               })
           : undefined,
       });
-      resources.add(resource);
-      return resource;
     },
     retain(owner, closeOwner) {
-      if (closingOwners || source.closing) {
-        throw new Error("Native worker source is closing");
-      }
-      const close = async () => {
-        let outcome: { status: "fulfilled" } | { status: "rejected"; error: unknown };
-        try {
-          await closeOwner();
-          outcome = { status: "fulfilled" };
-        } catch (error) {
-          outcome = { status: "rejected", error };
-        } finally {
-          record.settled = true;
-          joinSource();
-        }
-        try {
-          await joined.promise;
-        } catch (error) {
-          if (outcome.status === "rejected") {
-            throw new AggregateError(
-              [outcome.error, error],
-              "Execution owner and native source cleanup failed",
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-        if (outcome.status === "rejected") {
-          throw outcome.error;
-        }
-      };
-      const record = { close, settled: false };
-      captured.runtimeGeneration?.retain(owner, close);
-      owners.set(owner, record);
+      owners.set(owner, closeOwner);
+      captured.runtimeGeneration?.retain(source, () => source.close());
     },
   };
-  const owners = new Map<object, { close: () => Promise<void>; settled: boolean }>();
-  const joined = createDeferredCore();
-  void joined.promise.catch(() => undefined);
-  let joining = false;
+  const owners = new Map<object, () => Promise<void>>();
   let closingOwners: Promise<void> | undefined;
-  const joinSource = () => {
-    if (joining || [...owners.values()].some((owner) => !owner.settled)) {
-      return;
-    }
-    joining = true;
-    source.closing = true;
-    void (async () => {
-      await source.runtime?.close();
-      await source.broker?.close();
-      if (captured.runtimeGeneration) {
-        if (lifetime.sources.get(captured.runtimeGeneration) === source) {
-          lifetime.sources.delete(captured.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
-      }
-      owners.clear();
-    })().then(joined.resolve, joined.reject);
-  };
   if (captured.runtimeGeneration) {
     lifetime.sources.set(captured.runtimeGeneration, source);
   } else {
@@ -409,12 +369,18 @@ export function captureRetainedNativeWorkerSource(options?: {
 export function createRetainedNativeWorker(
   filename: string | URL,
   options: WorkerOptions = {},
-  source: RetainedNativeWorkerSource = captureRetainedNativeWorkerSource({
-    runtimeGeneration: undefined,
-  }),
+  source?: RetainedNativeWorkerSource,
   resource?: NativeWorkerResourceDescriptor,
+  taskPorts?: NativeWorkerTaskPorts,
 ): RetainedNativeWorker {
-  return source.create(filename, options, resource);
+  try {
+    const owner = source ?? captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    return owner.create(filename, options, resource, taskPorts);
+  } catch (error) {
+    taskPorts?.host.close();
+    taskPorts?.worker.close();
+    throw error;
+  }
 }
 
 function startNativeWorker(
@@ -422,20 +388,24 @@ function startNativeWorker(
   filename: string | URL,
   options: WorkerOptions,
   resource?: NativeWorkerResourceDescriptor,
+  taskPorts?: NativeWorkerTaskPorts,
 ): RetainedNativeWorker {
   const id = ++lifetime.nextId;
-  const resourceConnection = resource?.connect?.();
-  const handle = new NativeWorker(
-    runtime,
-    id,
-    filename,
-    options.eval === true,
-    resource !== undefined,
-    resourceConnection,
-  );
-  const { env, transferList = [], ...captured } = options;
-  runtime.handles.set(id, handle);
+  let resourceConnection: NativeWorkerResourceConnection | undefined;
+  let handle: NativeWorker | undefined;
   try {
+    resourceConnection = resource?.connect?.();
+    handle = new NativeWorker(
+      runtime,
+      id,
+      filename,
+      options.eval === true,
+      resource !== undefined,
+      resourceConnection,
+      taskPorts?.host,
+    );
+    const { env, transferList = [], ...captured } = options;
+    runtime.handles.set(id, handle);
     const retainedResource = resource ? handle.attachResource(resource) : undefined;
     runtime.post(
       {
@@ -450,13 +420,20 @@ function startNativeWorker(
         },
         transferList: [...transferList],
         resource: retainedResource,
+        taskPort: taskPorts?.worker,
       },
-      transferList,
+      taskPorts ? [...transferList, taskPorts.worker] : transferList,
     );
   } catch (error) {
     runtime.handles.delete(id);
     runtime.refreshReference();
-    handle.abandonResource();
+    if (handle) {
+      handle.abandonResource();
+    } else {
+      taskPorts?.host.close();
+      resourceConnection?.dispose();
+    }
+    taskPorts?.worker.close();
     throw error;
   }
   runtime.refreshReference();

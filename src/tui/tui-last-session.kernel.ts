@@ -1,11 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   readConfigMachineStateRowInDatabase,
   type ConfigMachineStateDatabase,
 } from "../state/config-machine-state.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
@@ -13,7 +17,7 @@ import type {
 import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "./tui-last-session.contract.js";
 
 function listRetiredTuiPointersInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   retiredSessionKeys: ReadonlySet<string>,
 ): string[] {
   const rows = executeSqliteQuerySync(
@@ -32,10 +36,18 @@ function listRetiredTuiPointersInDatabase(
 }
 
 export function clearRetiredTuiPointers(
-  stateKeys: readonly string[],
   retiredSessionKeys: ReadonlySet<string>,
   options: OpenClawStateDatabaseOptions,
+  open: () => OpenClawStateDatabase,
 ): number {
+  const stateKeys = withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => listRetiredTuiPointersInDatabase(db, retiredSessionKeys),
+    options,
+  );
+  if (!stateKeys?.length) {
+    return 0;
+  }
+  const writeOptions = { ...options, database: open() };
   let cleared = 0;
   for (const stateKey of stateKeys) {
     // Recheck inside each write transaction: a replacement after the scan must survive.
@@ -48,33 +60,20 @@ export function clearRetiredTuiPointers(
         }
         return current;
       },
-      options,
+      writeOptions,
     );
   }
   return cleared;
 }
 
 export function readTuiLastSessionCommand(
-  database: DatabaseSync,
-  command: Extract<
-    OpenClawStateReadCommand,
-    { type: "tui.lastSession.read" | "tui.lastSession.retiredPointers" }
-  >,
-): Extract<
-  OpenClawStateReadReply,
-  { type: "tui.lastSession.read" | "tui.lastSession.retiredPointers" }
-> {
-  return command.type === "tui.lastSession.read"
-    ? {
-        ok: true,
-        type: command.type,
-        sourceAdmitted: true,
-        row: readConfigMachineStateRowInDatabase(database, command.stateKey),
-      }
-    : {
-        ok: true,
-        type: command.type,
-        sourceAdmitted: true,
-        stateKeys: listRetiredTuiPointersInDatabase(database, new Set(command.retiredSessionKeys)),
-      };
+  database: EngineConnection,
+  command: Extract<OpenClawStateReadCommand, { type: "tui.lastSession.read" }>,
+): Extract<OpenClawStateReadReply, { type: "tui.lastSession.read" }> {
+  return {
+    ok: true,
+    type: command.type,
+    sourceAdmitted: true,
+    row: readConfigMachineStateRowInDatabase(database, command.stateKey),
+  };
 }

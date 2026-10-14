@@ -12,11 +12,11 @@ import {
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
-  releaseSessionMcpRuntime,
   reloadSessionMcpRuntimes,
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";

@@ -5,6 +5,14 @@ import {
 } from "../agents/internal-runtime-context.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
+export function captureBackendEvents(backend: EmbeddedTuiBackend) {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  backend.onEvent = ({ event, payload }) => {
+    events.push({ event, payload });
+  };
+  return events;
+}
+
 type EmbeddedAgentResult = {
   payloads: Array<{ text: string }>;
   meta: Record<string, unknown>;
@@ -18,7 +26,6 @@ type StreamTestContext = {
   };
   prepareReply: (reply: Promise<EmbeddedAgentResult>) => void;
   emitAgentEvent: (event: unknown) => void;
-  captureBackendEvents: (backend: EmbeddedTuiBackend) => Array<{ event: string; payload: unknown }>;
   flushMicrotasks: () => Promise<void>;
   embeddedEventTimestamp: number;
 };
@@ -28,7 +35,6 @@ export function registerEmbeddedBackendStreamTests({
   createPendingReply,
   prepareReply,
   emitAgentEvent,
-  captureBackendEvents,
   flushMicrotasks,
   embeddedEventTimestamp,
 }: StreamTestContext) {

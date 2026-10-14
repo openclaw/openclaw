@@ -1,7 +1,6 @@
 import type { RouteLoadCause } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -17,34 +16,22 @@ export async function load(
     return restored;
   }
   const requestedLocation = newSessionModelLocationFromSearch(search);
-  const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
-  let groupCatalogGeneration: number | undefined;
-  let groupDefaultsStatus: NewSessionRouteData["groupDefaultsStatus"];
   if (requestedLocation.group) {
-    const startedGeneration = context.sessions.groupsGeneration();
     const settings = await context.sessions.groupsLoad();
-    groupCatalogGeneration = context.sessions.groupsGeneration();
-    groupDefaultsStatus = context.sessions.groupsStatus();
-    const currentSettings =
-      startedGeneration === groupCatalogGeneration && groupDefaultsStatus === "ready"
-        ? settings
-        : null;
-    const group = currentSettings?.find((candidate) => candidate.name === requestedLocation.group);
-    groupStatus = currentSettings === null ? "unavailable" : group ? "resolved" : "missing";
+    const group = settings?.find((candidate) => candidate.name === requestedLocation.group);
+    groupStatus = settings === null ? "unavailable" : group ? "resolved" : "missing";
     groupCwd = group?.cwd ?? "";
     groupWorktree = group?.worktree === true;
   }
   const route: NewSessionRouteData = {
     ...requestedLocation,
-    requestedAgentId,
+    requestedAgentId: requestedLocation.agentId,
     groupStatus,
     groupCwd,
     groupWorktree,
-    groupCatalogGeneration,
-    groupDefaultsStatus,
     catalogLabel: "",
     startTerminal: false,
   };
@@ -62,12 +49,8 @@ export async function load(
   ) {
     return unresolved();
   }
-  // ensureList is fail-closed: offline and request-error paths return cached
-  // data or null, allowing the unresolved catalog page to mount and retry.
-  const loadedAgentsList =
-    !initialAgentsState.agentsList || initialAgentsState.agentsListCached
-      ? await context.agents.ensureList()
-      : initialAgentsState.agentsList;
+  // Current discovery must confirm catalog targets; unavailable rosters can retry.
+  const loadedAgentsList = initialAgentsState.agentsList ?? (await context.agents.ensureList());
   const gateway = context.gateway.snapshot;
   const agentsState = context.agents.state;
   if (
@@ -76,30 +59,17 @@ export async function load(
     gateway.client !== initialGateway.client ||
     !agentsState.connected ||
     agentsState.client !== gateway.client ||
-    agentsState.agentsListCached ||
+    !loadedAgentsList ||
     agentsState.agentsList !== loadedAgentsList
   ) {
     return unresolved();
   }
-  const agentsList = loadedAgentsList;
-  const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const gatewayDefaultId = gateway.hello ? gateway.assistantAgentId : null;
-  if (
-    !agentsList &&
-    requestedAgentId &&
-    (!gatewayDefaultId || normalizeAgentId(requestedAgentId) !== normalizeAgentId(gatewayDefaultId))
-  ) {
-    return unresolved();
-  }
-  const fallbackAgentId = agentsList
-    ? availableAgents.some((agent) => agent.id === agentsList.defaultId)
-      ? agentsList.defaultId
-      : availableAgents[0]?.id
-    : gatewayDefaultId;
+  const availableAgents = listSelectableAgents(loadedAgentsList.agents);
+  const fallbackAgentId = availableAgents.some((agent) => agent.id === loadedAgentsList.defaultId)
+    ? loadedAgentsList.defaultId
+    : availableAgents[0]?.id;
   const agentId = fallbackAgentId
-    ? agentsList
-      ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)
-      : resolveAgentId(undefined, [], fallbackAgentId)
+    ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)
     : "";
   const plain = unresolved(agentId);
   if (!agentId) {

@@ -1,3 +1,4 @@
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { generateSecureHex } from "../infra/secure-random.js";
@@ -51,10 +52,12 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
           entry.description,
           entry.directVisible === true,
           entry.source === "openclaw"
-            ? entry.parameters
+            ? (getPublishedRuntimeToolInputSchema(entry.parameters)?.fingerprint ??
+              entry.parameters)
             : untrustedSchemaFingerprint(entry.parameters),
           entry.source === "openclaw"
-            ? entry.outputSchema
+            ? (getPublishedRuntimeToolInputSchema(entry.outputSchema)?.fingerprint ??
+              entry.outputSchema)
             : untrustedSchemaFingerprint(entry.outputSchema),
         ]).digest,
     )
@@ -117,13 +120,6 @@ function classifyTool(tool: CatalogTool): {
   return { source: "openclaw", sourceName: pluginId || "core" };
 }
 
-function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
-  if (!hookContext || isToolWrappedWithBeforeToolCallHook(tool)) {
-    return tool;
-  }
-  return wrapToolWithBeforeToolCallHook(tool, hookContext);
-}
-
 export function prepareToolSearchCatalogExecutionTool(
   entry: ToolSearchCatalogEntry,
   options: { prepareInput?: boolean; validateInput?: boolean },
@@ -157,8 +153,12 @@ function toCatalogEntry(
   const classified = classifyTool(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
+  // SAFETY: source classification excludes client callbacks from the native hook wrapper.
+  const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
+    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
+      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+      : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
     source,
@@ -288,16 +288,9 @@ function registerToolSearchCatalog(params: {
     disposeCodeModeResults(params.catalogRef);
   }
   delete params.catalogRef.closedTelemetry;
-  params.catalogRef.onChange?.();
 }
 
-export function clearToolSearchCatalog(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): void {
+export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
   if (params.catalogRef) {
     // Capture only aggregate facts before releasing executable state. Disposal
     // can wake an in-flight wait that still needs its final diagnostics.
@@ -315,10 +308,7 @@ export function clearToolSearchCatalog(params: {
     delete params.catalogRef.baselineDirectOnlyToolNames;
     disposeCodeModeResults(params.catalogRef);
     disposeToolSearchSchedule(params.catalogRef);
-    params.catalogRef.disposeObserver?.();
     params.catalogRef.onDispose?.forEach((dispose) => dispose());
-    delete params.catalogRef.onChange;
-    delete params.catalogRef.disposeObserver;
     delete params.catalogRef.onDispose;
   }
 }
@@ -353,7 +343,6 @@ export function restrictToolSearchCatalog(params: {
     ...metadata,
     fingerprint: catalogEntriesFingerprint(current.entries),
   });
-  params.catalogRef?.onChange?.();
   return entries.length;
 }
 
@@ -437,20 +426,14 @@ export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
 export function applyToolCatalogCompaction(
   params: ToolSearchCatalogCompactionParams,
 ): ToolSearchCatalogApplyResult {
-  if (!params.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const hasControlTool =
+    params.enabled && params.tools.some((tool) => params.isVisibleControlTool(tool));
   const catalogRef = params.catalogRef;
   if (!hasControlTool || !catalogRef) {
     return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      tools: params.enabled
+        ? params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+        : params.tools,
       compacted: false,
       catalogToolCount: 0,
       catalogRegistered: false,
@@ -462,7 +445,11 @@ export function applyToolCatalogCompaction(
   let catalog: ToolSearchCatalogEntry[] = [];
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
-      visible.push(tool);
+      visible.push(
+        params.toolHookContext && !isToolWrappedWithBeforeToolCallHook(tool)
+          ? wrapToolWithBeforeToolCallHook(tool, params.toolHookContext)
+          : tool,
+      );
       continue;
     }
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
@@ -514,10 +501,6 @@ export function applyToolCatalogCompaction(
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   const catalogRef = params.catalogRef;

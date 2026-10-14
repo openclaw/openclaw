@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -8,29 +7,7 @@ import type {
   RealtimeVoiceAudioChunkMetadata,
   RealtimeVoicePlaybackItem,
 } from "openclaw/plugin-sdk/realtime-voice";
-
-type PumpProcess = {
-  pid?: number;
-  killed?: boolean;
-  stdin?: (Writable & { writableLength?: number }) | null;
-  stdout?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  kill(signal?: NodeJS.Signals): boolean;
-  on(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-};
-
-type SpawnFn = (
-  command: string,
-  args: string[],
-  options: {
-    env: NodeJS.ProcessEnv;
-    stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
-  },
-) => PumpProcess;
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 const CAFFEINATE_COMMAND = "/usr/bin/caffeinate";
 const CAPTURE_CLOSE_SAFE_FRAME = Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]);
@@ -49,10 +26,15 @@ export const FACETIME_FEED_DEVICE_NAME = "OpenClaw-Feed";
 export const FACETIME_MIC_DEVICE_NAME = "OpenClaw-Mic";
 const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 
+type AudioProcess =
+  | { kind: "capture"; command: string }
+  | { kind: "playback" }
+  | { kind: "wake"; capturePid?: number };
+
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
-  processOutputSuppressed(): boolean;
+  processOutputSuppressed(this: void): boolean;
   writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
   getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;
@@ -63,9 +45,9 @@ type FaceTimeAudioPump = {
   stop(): Promise<void>;
 };
 
-function sanitizedAudioChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function sanitizedAudioChildEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(env).filter(
+    Object.entries(process.env).filter(
       ([key]) => !/(?:API_?KEY|AUTH|CREDENTIAL|PASSWORD|SECRET|TOKEN)/iu.test(key),
     ),
   );
@@ -79,7 +61,8 @@ class PlaybackClock {
   private retiredFrames = 0;
   private items: Array<{ itemId?: string; frames: number }> = [];
 
-  append(frames: number, itemId?: string, nowMs = Date.now()): void {
+  append(frames: number, itemId?: string): void {
+    const nowMs = Date.now();
     if (nowMs >= this.playbackUntilMs) {
       this.playedFramesBeforeSegment = this.generatedFrames;
       this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
@@ -116,7 +99,8 @@ class PlaybackClock {
     this.retiredFrames = this.generatedFrames;
   }
 
-  playedFrames(nowMs = Date.now()): number {
+  playedFrames(): number {
+    const nowMs = Date.now();
     if (nowMs <= this.playbackStartsAtMs) {
       return this.playedFramesBeforeSegment;
     }
@@ -125,12 +109,12 @@ class PlaybackClock {
     return Math.min(this.generatedFrames, this.playedFramesBeforeSegment + elapsedFrames);
   }
 
-  queuedFrames(nowMs = Date.now()): number {
-    return Math.max(0, this.generatedFrames - this.playedFrames(nowMs));
+  queuedFrames(): number {
+    return Math.max(0, this.generatedFrames - this.playedFrames());
   }
 
-  millisecondsUntilDrained(nowMs = Date.now()): number {
-    return Math.max(0, this.playbackUntilMs - nowMs);
+  millisecondsUntilDrained(): number {
+    return Math.max(0, this.playbackUntilMs - Date.now());
   }
 
   reset(): void {
@@ -165,7 +149,31 @@ function buildSoxOutputArguments(): string[] {
   ];
 }
 
-async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIGTERM") {
+function spawnAudioProcess(process: AudioProcess, env: NodeJS.ProcessEnv): ChildProcess {
+  let command: string;
+  let args: string[];
+  let stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
+  switch (process.kind) {
+    case "capture":
+      command = process.command;
+      args = [];
+      stdio = ["pipe", "pipe", "pipe"];
+      break;
+    case "playback":
+      command = SOX_COMMAND;
+      args = buildSoxOutputArguments();
+      stdio = ["pipe", "ignore", "pipe"];
+      break;
+    case "wake":
+      command = CAFFEINATE_COMMAND;
+      args = ["-d", "-i", ...(process.capturePid ? ["-w", String(process.capturePid)] : [])];
+      stdio = ["ignore", "ignore", "pipe"];
+      break;
+  }
+  return spawn(command, args, { env, stdio });
+}
+
+async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (proc.killed && signal !== "SIGKILL") {
     return;
   }
@@ -176,32 +184,48 @@ async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIG
       resolve();
     });
   });
-  try {
-    proc.kill(signal);
-  } catch {
-    return;
-  }
-  await Promise.race([
-    exitedPromise,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    }),
-  ]);
-  if (!exited && signal !== "SIGKILL") {
+  const signals: NodeJS.Signals[] = signal === "SIGKILL" ? [signal] : [signal, "SIGKILL"];
+  for (const nextSignal of signals) {
     try {
-      proc.kill("SIGKILL");
+      proc.kill(nextSignal);
     } catch {
       return;
     }
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 500);
-        timer.unref?.();
-      }),
-    ]);
+    await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
+    if (exited) {
+      return;
+    }
   }
+}
+
+function createAudioReadiness() {
+  const deferred = createDeferred<void>();
+  let settled = false;
+  let timer: NodeJS.Timeout | undefined;
+  void deferred.promise.catch(() => {});
+  return {
+    promise: deferred.promise,
+    start(timeoutMs: number, onTimeout: () => void) {
+      if (settled || timer) {
+        return;
+      }
+      timer = setTimeout(onTimeout, timeoutMs);
+      timer.unref?.();
+    },
+    settle(error?: Error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      timer = undefined;
+      if (error) {
+        deferred.reject(error);
+      } else {
+        deferred.resolve();
+      }
+    },
+  };
 }
 
 export function startFaceTimeAudioPump(params: {
@@ -211,61 +235,23 @@ export function startFaceTimeAudioPump(params: {
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
   onPlaybackDrained?: (event: { generation: number; playedFrames: number }) => void;
-  spawn?: SpawnFn;
 }): FaceTimeAudioPump {
-  const spawnFn: SpawnFn =
-    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const childEnv = sanitizedAudioChildEnv();
   const playbackClock = new PlaybackClock();
   let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
-  let outputProcess: PumpProcess;
-  const captureProcess = spawnFn(params.captureBinary, [], {
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  let outputProcess: ChildProcess;
+  const captureProcess = spawnAudioProcess(
+    { kind: "capture", command: params.captureBinary },
+    childEnv,
+  );
   let stopped = false;
   let mediaSuspended = false;
   let captureSuppressionActive = false;
   let captureFailureReported = false;
-  let captureReadySettled = false;
-  let routeReadySettled = false;
-  let routeReadyTimer: NodeJS.Timeout | undefined;
   let captureStderr = "";
-  const captureReady = createDeferred<void>();
-  const routeReady = createDeferred<void>();
-  const captureReadyPromise = captureReady.promise;
-  const routeReadyPromise = routeReady.promise;
-  void captureReadyPromise.catch(() => {});
-  void routeReadyPromise.catch(() => {});
-
-  const settleCaptureReady = (error?: Error) => {
-    if (captureReadySettled) {
-      return;
-    }
-    captureReadySettled = true;
-    clearTimeout(captureReadyTimer);
-    if (error) {
-      captureReady.reject(error);
-    } else {
-      captureReady.resolve();
-    }
-  };
-  const settleRouteReady = (error?: Error) => {
-    if (routeReadySettled) {
-      return;
-    }
-    routeReadySettled = true;
-    if (routeReadyTimer) {
-      clearTimeout(routeReadyTimer);
-      routeReadyTimer = undefined;
-    }
-    if (error) {
-      routeReady.reject(error);
-    } else {
-      routeReady.resolve();
-    }
-  };
+  const captureReady = createAudioReadiness();
+  const routeReady = createAudioReadiness();
   const reportFailure = (error: Error, suppressionLost: boolean) => {
     if (stopped) {
       return;
@@ -274,8 +260,8 @@ export function startFaceTimeAudioPump(params: {
       captureSuppressionActive = false;
       void params.onSuppressionLost?.(error);
     }
-    settleCaptureReady(error);
-    settleRouteReady(error);
+    captureReady.settle(error);
+    routeReady.settle(error);
     params.logger.warn(`[facetime] native audio bridge failed: ${formatErrorMessage(error)}`);
     void Promise.resolve(params.onError?.(error)).then((safeToStop) => {
       if (safeToStop !== false) {
@@ -292,20 +278,14 @@ export function startFaceTimeAudioPump(params: {
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can
     // rebind OpenClaw-Feed after FaceTime claims it and tear down the carrier.
-    const proc = spawnFn(SOX_COMMAND, buildSoxOutputArguments(), {
-      env: childEnv,
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    proc.on("error", (error) => {
+    const proc = spawnAudioProcess({ kind: "playback" }, childEnv);
+    const onError = (error: Error) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(error, false);
       }
-    });
-    proc.stdin?.on("error", (error) => {
-      if (!stopped && !mediaSuspended && proc === outputProcess) {
-        reportFailure(error, false);
-      }
-    });
+    };
+    proc.on("error", onError);
+    proc.stdin?.on("error", onError);
     proc.on("exit", (code, signal) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(new Error(`SoX playback exited (${code ?? signal ?? "done"})`), false);
@@ -319,19 +299,9 @@ export function startFaceTimeAudioPump(params: {
     return proc;
   };
   outputProcess = spawnOutput();
-  const captureReadyTimer = setTimeout(() => {
+  captureReady.start(10_000, () => {
     reportFailure(new Error("FaceTime process tap was not ready within 10 seconds"), true);
-  }, 10_000);
-  captureReadyTimer.unref?.();
-  const startRouteReadyTimer = () => {
-    if (routeReadySettled || routeReadyTimer) {
-      return;
-    }
-    routeReadyTimer = setTimeout(() => {
-      reportFailure(new Error("FaceTime input route was not verified within 15 seconds"), true);
-    }, 15_000);
-    routeReadyTimer.unref?.();
-  };
+  });
   const clearPlayback = () => {
     if (stopped || mediaSuspended) {
       return;
@@ -349,8 +319,8 @@ export function startFaceTimeAudioPump(params: {
     }
     mediaSuspended = true;
     captureSuppressionActive = false;
-    settleCaptureReady(new Error("FaceTime native audio bridge stopped before readiness"));
-    settleRouteReady(new Error("FaceTime input route stopped before verification"));
+    captureReady.settle(new Error("FaceTime native audio bridge stopped before readiness"));
+    routeReady.settle(new Error("FaceTime input route stopped before verification"));
     cancelDrainTimer();
     playbackClock.reset();
     try {
@@ -367,11 +337,7 @@ export function startFaceTimeAudioPump(params: {
     ]);
   };
   const wakeProcess = existsSync(CAFFEINATE_COMMAND)
-    ? spawnFn(
-        CAFFEINATE_COMMAND,
-        ["-d", "-i", ...(captureProcess.pid ? ["-w", String(captureProcess.pid)] : [])],
-        { env: childEnv, stdio: ["ignore", "ignore", "pipe"] },
-      )
+    ? spawnAudioProcess({ kind: "wake", capturePid: captureProcess.pid }, childEnv)
     : undefined;
   wakeProcess?.on("error", () => undefined);
   captureProcess.on("error", (error) => reportFailure(error, true));
@@ -387,10 +353,10 @@ export function startFaceTimeAudioPump(params: {
     for (const line of captureStderr.split(/\r?\n/u).slice(0, -1)) {
       if (line.includes("started FaceTime process tap")) {
         captureSuppressionActive = true;
-        settleCaptureReady();
+        captureReady.settle();
       }
       if (line.includes("verified OpenClaw-Mic input route")) {
-        settleRouteReady();
+        routeReady.settle();
       }
       const fatal = line.match(/facetime-audio-capture: fatal(?:-safety-retained)?:\s*(.*)$/u);
       if (!captureFailureReported && fatal) {
@@ -418,10 +384,12 @@ export function startFaceTimeAudioPump(params: {
   });
 
   return {
-    suppressionReady: async () => await captureReadyPromise,
+    suppressionReady: async () => await captureReady.promise,
     routeReady: async () => {
-      startRouteReadyTimer();
-      await routeReadyPromise;
+      routeReady.start(15_000, () => {
+        reportFailure(new Error("FaceTime input route was not verified within 15 seconds"), true);
+      });
+      await routeReady.promise;
     },
     processOutputSuppressed: () => captureSuppressionActive,
     writeOutputAudio(audio, metadata) {

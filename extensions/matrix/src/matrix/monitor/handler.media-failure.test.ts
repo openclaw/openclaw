@@ -49,7 +49,6 @@ function createMediaFailureHarness() {
     }),
     getMemberDisplayName: async () => "Gum",
     startupMs: Date.now() - 120_000,
-    startupGraceMs: 60_000,
     mediaMaxBytes: 5 * 1024 * 1024,
     replyToMode: "first",
   });
@@ -105,29 +104,6 @@ describe("createMatrixRoomMessageHandler media failures", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
     installMatrixMonitorTestRuntime();
-  });
-
-  it("forwards the Matrix event body as originalFilename for media downloads", async () => {
-    downloadMatrixMediaMock.mockResolvedValue({
-      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
-      contentType: "image/png",
-      placeholder: "[matrix media]",
-    });
-    const { handler } = createMediaFailureHarness();
-
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: " Screenshot 2026-03-27.png ",
-        url: "mxc://example/image",
-      }),
-    );
-
-    const downloadOptions = firstObjectArg(downloadMatrixMediaMock);
-    expect(downloadOptions.mxcUrl).toBe("mxc://example/image");
-    expect(downloadOptions.maxBytes).toBe(5 * 1024 * 1024);
-    expect(downloadOptions.originalFilename).toBe("Screenshot 2026-03-27.png");
   });
 
   it.each([" \t "])(

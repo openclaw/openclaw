@@ -1,8 +1,7 @@
 // Secret-target discovery must not load provider setup or resolution runtimes.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
-  createChannelSecretTargetRegistryEntries,
-  getChannelSurface,
+  createChannelSecretContract,
   hasOwnProperty,
   pushAssignment,
   pushInactiveSurfaceWarning,
@@ -19,27 +18,6 @@ function accountSecretOwner(accountId: string) {
     disposition: "isolate" as const,
   };
 }
-
-export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
-  channelKey: "googlechat",
-  account: [
-    {
-      path: "serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-      accountIdPathSegmentIndex: 3,
-    },
-  ],
-  channel: [
-    {
-      path: "serviceAccount",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-    },
-  ],
-});
 
 function collectGoogleChatAccountAssignment(params: {
   target: Record<string, unknown>;
@@ -74,50 +52,59 @@ function collectGoogleChatAccountAssignment(params: {
   }
 }
 
-export function collectRuntimeConfigAssignments(params: {
-  config: { channels?: Record<string, unknown> };
-  defaults?: SecretDefaults;
-  context: ResolverContext;
-}): void {
-  const resolved = getChannelSurface(params.config, "googlechat");
-  if (!resolved) {
-    return;
-  }
-  const { channel: googleChat, surface } = resolved;
-  const topLevelServiceAccountOwners = !surface.channelEnabled
-    ? []
-    : !surface.hasExplicitAccounts
-      ? ["default"]
-      : surface.accounts
-          .filter(({ account, enabled }) => enabled && !hasOwnProperty(account, "serviceAccount"))
-          .map(({ accountId }) => accountId);
-  collectGoogleChatAccountAssignment({
-    target: googleChat,
-    path: "channels.googlechat",
-    defaults: params.defaults,
-    context: params.context,
-    ownerAccountIds: topLevelServiceAccountOwners,
-    inactiveReason: "no enabled account inherits this top-level Google Chat serviceAccount.",
-  });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (!hasOwnProperty(account, "serviceAccount")) {
-      continue;
-    }
+export const channelSecrets = createChannelSecretContract({
+  channelKey: "googlechat",
+  account: [
+    {
+      path: "serviceAccount",
+      targetType: "channels.googlechat.serviceAccount",
+      targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
+      secretShape: "secret_input",
+      expectedResolvedValue: "string-or-object",
+      accountIdPathSegmentIndex: 3,
+    },
+  ],
+  channel: [
+    {
+      path: "serviceAccount",
+      secretShape: "secret_input",
+      expectedResolvedValue: "string-or-object",
+    },
+  ],
+  collect(params) {
+    const { channel: googleChat, surface } = params;
+    const topLevelServiceAccountOwners = !surface.channelEnabled
+      ? []
+      : !surface.hasExplicitAccounts
+        ? ["default"]
+        : surface.accounts
+            .filter(({ account, enabled }) => enabled && !hasOwnProperty(account, "serviceAccount"))
+            .map(({ accountId }) => accountId);
     collectGoogleChatAccountAssignment({
-      target: account,
-      path: `channels.googlechat.accounts.${accountId}`,
+      target: googleChat,
+      path: "channels.googlechat",
       defaults: params.defaults,
       context: params.context,
-      ownerAccountIds: enabled ? [accountId] : [],
-      inactiveReason: "Google Chat account is disabled.",
+      ownerAccountIds: topLevelServiceAccountOwners,
+      inactiveReason: "no enabled account inherits this top-level Google Chat serviceAccount.",
     });
-  }
-}
+    if (!surface.hasExplicitAccounts) {
+      return;
+    }
+    for (const { accountId, account, enabled } of surface.accounts) {
+      if (!hasOwnProperty(account, "serviceAccount")) {
+        continue;
+      }
+      collectGoogleChatAccountAssignment({
+        target: account,
+        path: `channels.googlechat.accounts.${accountId}`,
+        defaults: params.defaults,
+        context: params.context,
+        ownerAccountIds: enabled ? [accountId] : [],
+        inactiveReason: "Google Chat account is disabled.",
+      });
+    }
+  },
+});
 
-export const channelSecrets = {
-  secretTargetRegistryEntries,
-  collectRuntimeConfigAssignments,
-};
+export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;

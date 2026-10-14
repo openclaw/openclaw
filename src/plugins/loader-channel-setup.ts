@@ -1,5 +1,5 @@
 import { mergeChannelPluginSection } from "../channels/plugins/merge-plugin-section.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelPluginLoadIntent } from "./loader-types.js";

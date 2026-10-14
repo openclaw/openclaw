@@ -6,7 +6,7 @@ import {
   hintForPath,
   localizedHintForPath,
   removePathValue,
-  sanitizeRedactedFormForSubmit,
+  pruneEmptyConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
 
@@ -76,35 +76,8 @@ describe("hintForPath", () => {
   });
 });
 
-describe("sanitizeRedactedFormForSubmit", () => {
-  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
-    const form = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
-    };
-    const originalForm = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
-    };
-
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { mode: "remote" } }),
-    ).toEqual({
-      gateway: {
-        mode: "remote",
-      },
-    });
-  });
-
-  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+describe("pruneEmptyConfigForm", () => {
+  it("preserves loaded redacted placeholders from the authored original", () => {
     const form = {
       gateway: {
         mode: "remote",
@@ -115,11 +88,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        gateway: { mode: "remote", remote: { token: "__OPENCLAW_REDACTED__" } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
   it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
@@ -136,30 +105,26 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
     };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { remote: {} } })).toEqual(
-      form,
-    );
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("prunes empty object parents when they are absent from original raw config", () => {
+  it("prunes newly empty objects while retaining authored empties and array positions", () => {
     const form = {
-      gateway: {
-        remote: {
-          nested: {
-            token: "__OPENCLAW_REDACTED__",
-          },
-        },
-      },
+      gateway: { remote: { nested: {} } },
+      authored: {},
+      items: [{ nested: {} }, "second"],
       ui: { theme: "dark" },
     };
-    const originalForm = structuredClone(form);
+    const original = { authored: {}, ui: { theme: "dark" } };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
+    expect(pruneEmptyConfigForm(form, original)).toEqual({
+      authored: {},
+      items: [{}, "second"],
       ui: { theme: "dark" },
     });
   });
 
-  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+  it("does not reindex arrays containing redacted sentinels", () => {
     const form = {
       channels: {
         slack: {
@@ -169,14 +134,10 @@ describe("sanitizeRedactedFormForSubmit", () => {
     };
     const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        channels: { slack: { tokens: ["second-token"] } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("leaves the form unchanged when the original raw config has no parsed snapshot", () => {
+  it("leaves the form unchanged without an authored original", () => {
     const form = {
       gateway: {
         remote: {
@@ -184,9 +145,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = structuredClone(form);
-
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
+    expect(pruneEmptyConfigForm(form, null)).toBe(form);
   });
 });
 describe("prototype pollution prevention", () => {

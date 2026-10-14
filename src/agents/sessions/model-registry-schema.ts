@@ -43,13 +43,11 @@ const OpenRouterRoutingSchema = Type.Object({
   preferred_max_latency: Type.Optional(Type.Union([Type.Number(), PercentileCutoffsSchema])),
 });
 
-// Schema for Vercel AI Gateway routing preferences
 const VercelGatewayRoutingSchema = Type.Object({
   only: Type.Optional(Type.Array(Type.String())),
   order: Type.Optional(Type.Array(Type.String())),
 });
 
-// Schema for thinking level support and provider-specific values
 const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
 const ThinkingLevelMapSchema = Type.Object({
   off: Type.Optional(ThinkingLevelMapValueSchema),
@@ -172,6 +170,25 @@ const ModelsConfigSchema = Type.Object({
 export const validateModelsConfig = Compile(ModelsConfigSchema);
 
 export type ModelsConfig = Static<typeof ModelsConfigSchema>;
+
+/** Omit malformed pricing, retaining the rows for semantic validation before exclusion. */
+export function omitInvalidModelCosts(value: unknown): Set<unknown> {
+  const paths = new Set<string>();
+  for (const error of validateModelsConfig.Errors(value)) {
+    const match = /^(\/providers\/[^/]+\/models\/\d+)\/cost(?:\/|$)/.exec(error.instancePath);
+    if (!match?.[1]) {
+      return new Set();
+    }
+    paths.add(match[1]);
+  }
+  const models = new Set<unknown>();
+  for (const modelPath of paths) {
+    models.add(Pointer.Get(value, modelPath));
+    Pointer.Delete(value, `${modelPath}/cost`);
+  }
+  return models;
+}
+
 export function formatValidationPath(error: TLocalizedValidationError): string {
   const path = Pointer.Indices(error.instancePath).join(".").replace(/\//g, ".");
   if (error.keyword === "required") {

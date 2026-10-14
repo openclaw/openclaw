@@ -2,27 +2,31 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
 } from "./user-profile-events.js";
-import { retainUserProfileMutationPublication } from "./user-profile-list.js";
+import {
+  readResidentGatewayOwnerProfile,
+  retainUserProfileMutationPublication,
+} from "./user-profile-list.js";
 import {
   isUserProfileMutationPublication,
   type UserProfileMutationPublication,
 } from "./user-profile-mutation.js";
-import type {
-  UserProfileWriteOperations,
-  UserProfileWriteResult,
-} from "./user-profile-writes.worker.js";
+import type { UserProfileWriteResult } from "./user-profile-writes.worker.js";
 import {
   UserProfileMergeError,
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
+import type { UserProfile } from "./user-profiles.types.js";
+import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -58,7 +62,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
       {
         assertCurrent,
         createAdmission: (operation) => {
-          let inTransaction = false;
           const pending = new Map<
             number,
             {
@@ -101,6 +104,12 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 }
                 entry.published = true;
                 entry.fence.settle(true);
+                if (facts.githubConnections) {
+                  publishUserGitHubConnectionCommit(
+                    context.admission.databasePath,
+                    facts.githubConnections,
+                  );
+                }
                 onCommitted?.(facts);
               });
               if (
@@ -122,18 +131,10 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               request.facts.kind === "user-profile-write" &&
               request.facts.operation === type
             ) {
-              if (inTransaction) {
-                throw new Error("Profile mutation requested overlapping transactions");
-              }
-              inTransaction = grant();
+              grant();
               return;
             }
-            if (
-              !inTransaction ||
-              request.stage !== "commit" ||
-              !isUserProfileMutationPublication(request.facts) ||
-              pending.has(request.facts.sequence)
-            ) {
+            if (request.stage !== "commit" || !isUserProfileMutationPublication(request.facts)) {
               throw new Error(
                 "Profile mutation requires its exact transaction and commit admission",
               );
@@ -148,7 +149,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
             const entry = { facts, publication, fence, granted: false, published: false };
             pending.set(facts.sequence, entry);
             entry.granted = grant();
-            inTransaction = false;
           });
           publicationSettled = operation.settled.then((settlement) => {
             let receiptsValid = false;
@@ -201,6 +201,21 @@ export async function setCanonicalUserProfileRole(
     }),
   );
 }
+export async function setCanonicalUserProfileDisplayName(
+  profileId: string,
+  name: string | null,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.setDisplayName", { profileId, name }, options));
+}
+export async function setCanonicalUserProfileAvatar(
+  profileId: string,
+  bytes: Uint8Array,
+  mime: string,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.setAvatar", { profileId, bytes, mime }, options));
+}
 export async function linkCanonicalUserProfileEmail(
   email: string,
   targetProfileId: string,
@@ -248,8 +263,19 @@ export async function syncCanonicalGitHubIdentity(
   return unwrap(await write("userProfiles.syncGitHub", input, options));
 }
 export async function ensureCanonicalGatewayOwnerProfile(
-  displayName: string | null,
+  displayName: string | null | (() => Promise<string | null>),
   options: ProfileWriteOptions = {},
-) {
+): Promise<UserProfile> {
+  const owner = readResidentGatewayOwnerProfile(resolveDatabasePath(options));
+  if (
+    owner &&
+    (owner.displayName?.trim() || (typeof displayName !== "function" && !displayName?.trim()))
+  ) {
+    options.assertCurrent?.();
+    return owner;
+  }
+  if (typeof displayName === "function") {
+    return ensureCanonicalGatewayOwnerProfile(await displayName(), options);
+  }
   return unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
 }

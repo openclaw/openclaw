@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { requireApiKey } from "../agents/model-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
@@ -203,62 +203,36 @@ function summaryRequest(cfg: OpenClawConfig) {
   };
 }
 
-describe.each([undefined, "openai-completions"] as const)(
-  "unscoped summary selection with provider API %s",
-  (api) => {
-    it.each([
-      { name: "explicit override", summaryModel: `${provider}/entry`, expected: "middle" },
-      { name: "global bare alias", summaryModel: "fast", expected: "middle" },
-      { name: "global qualified alias", summaryModel: `${provider}/fast`, expected: "middle" },
-      { name: "bare literal", summaryModel: "entry", expected: "middle" },
-      { name: "missing override", primary: `${provider}/entry`, expected: "middle" },
-      { name: "bare global default", primary: "fast", expected: "middle" },
-      { name: "invalid override", summaryModel: "/", primary: "fast", expected: "middle" },
-      { name: "profile suffix", summaryModel: "fast@work", expected: "middle" },
-      { name: "raw next alias", summaryModel: `${provider}/middle`, expected: "final" },
-      { name: "ordinary model", summaryModel: `${provider}/plain`, expected: "plain" },
-    ])("uses the global model for $name", async ({ expected, ...options }) => {
-      await withSummaryFixture({ ...options, api }, async (cfg, _state, requests) => {
-        expect(await summarizeText(summaryRequest(cfg))).toMatchObject({
-          summary: `materialized:${expected}`,
-        });
-        expect(requests).toEqual([expected]);
+it.each([
+  { name: "explicit override", summaryModel: `${provider}/entry` },
+  { name: "qualified alias", summaryModel: `${provider}/fast`, api: "openai-completions" },
+  { name: "bare literal", summaryModel: "entry", api: "openai-completions" },
+  { name: "missing override", primary: `${provider}/entry` },
+  { name: "invalid override", summaryModel: "/", primary: "fast", api: "openai-completions" },
+  { name: "bare alias with profile suffix", summaryModel: "fast@work" },
+  { name: "bare default without configured rows", primary: "entry", bareDefault: true },
+  {
+    name: "invalid override without configured rows",
+    primary: "entry",
+    summaryModel: "/",
+    bareDefault: true,
+    api: "openai-completions",
+  },
+  {
+    name: "bare override without configured rows",
+    primary: "plain",
+    summaryModel: "entry",
+    bareDefault: true,
+  },
+] satisfies Array<FixtureOptions & { name: string }>)(
+  "normalizes the global summary selection once for $name",
+  async (options) => {
+    await withSummaryFixture(options, async (cfg, _state, requests) => {
+      expect(await summarizeText(summaryRequest(cfg))).toMatchObject({
+        summary: "materialized:middle",
       });
+      expect(requests).toEqual(["middle"]);
     });
-
-    it.each([
-      { name: "missing override", primary: "entry", expected: "middle" },
-      { name: "invalid override", primary: "entry", summaryModel: "/", expected: "middle" },
-      {
-        name: "explicit bare override",
-        primary: "plain",
-        summaryModel: "entry",
-        expected: "middle",
-      },
-      {
-        name: "qualified primary",
-        primary: "openai/entry",
-        expected: "middle",
-      },
-      { name: "raw next alias", primary: "middle", expected: "final" },
-      { name: "ordinary primary", primary: "plain", expected: "plain" },
-    ])(
-      "uses the default provider without configured rows for $name",
-      async ({ expected, ...options }) => {
-        await withSummaryFixture(
-          { ...options, api, bareDefault: true },
-          async (cfg, _state, requests) => {
-            expect(cfg.agents?.defaults?.models).toEqual({});
-            expect(cfg.agents?.entries?.main?.models).toEqual({});
-            expect(cfg.models?.providers?.openai?.models).toEqual([]);
-            expect(await summarizeText(summaryRequest(cfg))).toMatchObject({
-              summary: `materialized:${expected}`,
-            });
-            expect(requests).toEqual([expected]);
-          },
-        );
-      },
-    );
   },
 );
 

@@ -1,16 +1,22 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
+import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -62,6 +68,7 @@ afterEach(async () => {
     ...modelServers.splice(0).map((server) => server.close()),
   ]);
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  clearRuntimeConfigSnapshot();
   if (errors.length > 0) {
     throw new AggregateError(errors, "Requester fixture cleanup failed");
   }
@@ -268,7 +275,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
   );
 
   it.each([undefined, { kind: "local" } as const])(
-    "delivers a private result once when the child finishes before the parent yields (placement: %j)",
+    "resumes a yielded requester once after its private child finishes (placement: %j)",
     { timeout: TEST_TIMEOUT_MS },
     async (placement) => {
       const yieldGate = createDeferred();
@@ -348,12 +355,13 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         // The parent checks the finished child through its real tool before yielding.
         yieldGate.resolve();
         expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
-        await vi.waitFor(
+        const settledRun = await vi.waitFor(
           () => {
             const runs = [...loadSubagentRegistryFromSqlite().values()];
             expect(runs, instance.logs()).toHaveLength(1);
             expect(runs[0]?.delivery?.status, instance.logs()).toBe("delivered");
             expect(runs[0]?.requesterSettleWake).toBeUndefined();
+            return expectDefined(runs[0], "settled child run");
           },
           { interval: 50, timeout: 30_000 },
         );
@@ -370,16 +378,31 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         );
         expect(receipts.found).toBe(true);
         if (!receipts.found) {
-          throw new Error("Expected durable private completion receipts");
+          throw new Error("Expected requester database for completion verification");
         }
-        expect(receipts.value.filter((receipt) => receipt.succeeded === 1)).toHaveLength(1);
+        const settleRunId = `announce:requester-settle:${REQUESTER_AGENT_ID}:${sessionKey}:${settledRun.runId}:yield-1`;
+        expect(receipts.value).toHaveLength(1);
+        const receipt = expectDefined(receipts.value[0], "requester completion receipt");
+        expect(receipt).toMatchObject({
+          run_id: settleRunId,
+          idempotency_key: `${settleRunId}:user`,
+          succeeded: 1,
+        });
+        expect(JSON.parse(receipt.outcome_json)).toMatchObject({
+          reason: "completed",
+          status: "ok",
+        });
         expect(modelServer.completionResponseCount()).toBe(1);
         expect(chatErrors).toEqual([]);
-        const history = await client.request<{ messages: unknown[] }>("chat.history", {
-          sessionKey,
-          agentId: REQUESTER_AGENT_ID,
-          limit: 30,
-        });
+        const history = await client.request<{
+          messages: Array<{ role?: string; content?: unknown }>;
+        }>("chat.history", { sessionKey, agentId: REQUESTER_AGENT_ID, limit: 30 });
+        expect(
+          history.messages.filter(
+            (message) =>
+              message.role === "assistant" && extractFirstTextBlock(message) === CHILD_MARKER,
+          ),
+        ).toHaveLength(1);
         expect(JSON.stringify(history.messages)).not.toContain("This turn ended before a reply");
         const inputs = readInputs();
         expect(inputs.found && inputs.value.filter((input) => input.state !== "cancelled")).toEqual(
@@ -498,19 +521,21 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
     async () => {
       const modelServer = await startProofModelServer();
       modelServers.push(modelServer);
+      const config = createTestConfig(modelServer.url);
       const instance = await createOpenClawTestInstance({
         name: "requester-owner-legacy-unscoped-requester",
-        config: createTestConfig(modelServer.url),
+        config,
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
 
       instance.state.applyEnv();
+      setRuntimeConfigSnapshot(config);
       const registry =
         await import("../src/agents/subagents/registry/subagent-registry.test-helpers.js");
       await runQaGatewayFixture(
         async () => {
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           const childSessionKey = `agent:${REQUESTER_AGENT_ID}:subagent:requester-owner-legacy`;
           await writeSubagentSessionEntry({
             stateDir: instance.stateDir,
@@ -534,7 +559,11 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             requesterSessionKey: RESTORED_REQUESTER_KEY,
             requesterDisplayKey: RESTORED_REQUESTER_KEY,
             requesterAgentId: REQUESTER_AGENT_ID,
-            agentId: REQUESTER_AGENT_ID,
+            childAgentId: REQUESTER_AGENT_ID,
+            sessionEntry: loadSessionEntry({
+              agentId: REQUESTER_AGENT_ID,
+              sessionKey: childSessionKey,
+            }),
             task: "REQUESTER-OWNER legacy restored completion",
             cleanup: "keep",
             expectsCompletionMessage: true,
@@ -547,7 +576,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           expect(registered.requesterStorePath).toBeTruthy();
           expect(registered.controllerStorePath).toBe(registered.requesterStorePath);
           // Retire setup callbacks, not durable ownership, before freezing the completed fixture.
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           const endedAt = Date.now();
           const restored: SubagentRunRecord = {
             ...registered,

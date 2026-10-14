@@ -42,15 +42,15 @@ export type FeishuCardActionEvent = {
 
 const FEISHU_APPROVAL_CARD_TTL_MS = 5 * 60_000;
 const FEISHU_CARD_ACTION_TOKEN_TTL_MS = 15 * 60_000;
-function pruneProcessedCardActionTokens(now: number): void {
+function pruneExpiredCardEntries(cache: Map<string, { expiresAt: number }>, now: number): void {
   const validNow = asDateTimestampMs(now);
   if (validNow === undefined) {
-    processedCardActions.clear();
+    cache.clear();
     return;
   }
-  for (const [key, entry] of processedCardActions.entries()) {
+  for (const [key, entry] of cache) {
     if (!isFutureDateTimestampMs(entry.expiresAt, { nowMs: validNow })) {
-      processedCardActions.delete(key);
+      cache.delete(key);
     }
   }
 }
@@ -61,30 +61,20 @@ function beginFeishuCardActionToken(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
-  pruneProcessedCardActionTokens(now);
+  pruneExpiredCardEntries(processedCardActions, now);
   const normalizedToken = params.token.trim();
   if (!normalizedToken) {
     return false;
   }
   const key = `${params.accountId}:${normalizedToken}`;
-  const existing = processedCardActions.get(key);
-  if (existing && isFutureDateTimestampMs(existing.expiresAt, { nowMs: now })) {
+  if (processedCardActions.has(key)) {
     return false;
   }
-  processedCardActions.delete(key);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
-    nowMs: now,
-  });
-  if (expiresAt !== undefined) {
-    processedCardActions.set(key, {
-      status: "inflight",
-      expiresAt,
-    });
-  }
+  refreshFeishuCardActionToken(normalizedToken, params.accountId, now);
   return true;
 }
 
-function completeFeishuCardAction(actionId: string, accountId: string, now = Date.now()): void {
+function refreshFeishuCardActionToken(actionId: string, accountId: string, now = Date.now()): void {
   const normalizedActionId = actionId.trim();
   if (!normalizedActionId) {
     return;
@@ -97,10 +87,7 @@ function completeFeishuCardAction(actionId: string, accountId: string, now = Dat
     processedCardActions.delete(key);
     return;
   }
-  processedCardActions.set(key, {
-    status: "completed",
-    expiresAt,
-  });
+  processedCardActions.set(key, { expiresAt });
 }
 
 function buildSyntheticMessageEvent(
@@ -185,24 +172,8 @@ async function dispatchSyntheticCommand(
   });
 }
 
-const resolvedChatTypeCache = resolvedCardActionChatTypes;
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
 const CHAT_TYPE_CACHE_MAX_SIZE = 5_000;
-
-function pruneChatTypeCache(now: number): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    resolvedChatTypeCache.clear();
-    return;
-  }
-  for (const [key, entry] of resolvedChatTypeCache.entries()) {
-    const expiresAt = asDateTimestampMs(entry.expiresAt);
-    if (expiresAt === undefined || expiresAt <= validNow) {
-      resolvedChatTypeCache.delete(key);
-    }
-  }
-  pruneMapToMaxSize(resolvedChatTypeCache, CHAT_TYPE_CACHE_MAX_SIZE);
-}
 
 function sanitizeLogValue(v: string): string {
   return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
@@ -214,9 +185,9 @@ function cacheResolvedCardActionChatType(
   now: number,
 ): void {
   const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_TYPE_CACHE_TTL_MS, { nowMs: now });
-  resolvedChatTypeCache.delete(cacheKey);
+  resolvedCardActionChatTypes.delete(cacheKey);
   if (expiresAt !== undefined) {
-    resolvedChatTypeCache.set(cacheKey, { value, expiresAt });
+    resolvedCardActionChatTypes.set(cacheKey, { value, expiresAt });
   }
 }
 
@@ -238,8 +209,9 @@ async function resolveCardActionChatType(params: {
 
   const cacheKey = `${params.account.accountId}:${chatId}`;
   const now = Date.now();
-  pruneChatTypeCache(now);
-  const cached = resolvedChatTypeCache.get(cacheKey);
+  pruneExpiredCardEntries(resolvedCardActionChatTypes, now);
+  pruneMapToMaxSize(resolvedCardActionChatTypes, CHAT_TYPE_CACHE_MAX_SIZE);
+  const cached = resolvedCardActionChatTypes.get(cacheKey);
   if (cached) {
     return cached.value;
   }
@@ -413,6 +385,6 @@ export async function handleFeishuCardAction(params: {
       account,
     });
   } finally {
-    completeFeishuCardAction(event.token, account.accountId);
+    refreshFeishuCardActionToken(event.token, account.accountId);
   }
 }

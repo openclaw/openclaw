@@ -59,7 +59,6 @@ function formatBillingEntry(entry: ProviderUsageBilling): string {
   return `${label}: ${formatBillingAmount(entry.amount, entry.unit)}`;
 }
 
-/** Formats one provider snapshot into a short usage-window summary. */
 export function formatUsageWindowSummary(
   snapshot: ProviderUsageSnapshot,
   opts?: { now?: number; maxWindows?: number; includeResets?: boolean },

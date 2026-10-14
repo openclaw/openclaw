@@ -2,7 +2,6 @@
 export {
   archiveSessionTranscriptPaths,
   archiveSessionTranscriptsDetailed,
-  archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
   resolveSessionTranscriptCandidates,
   resolveStableSessionEndTranscript,

@@ -15,7 +15,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { telegramCaptionDeliveryMetadata } from "./caption.js";
-import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { planTelegramMediaBatches } from "./outbound-media-batches.js";
 import {
@@ -23,7 +22,6 @@ import {
   resolveTelegramOutboundMediaSenders,
 } from "./outbound-media.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
-import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
@@ -39,7 +37,7 @@ import {
   isTelegramPhotoLimitError,
   isTelegramVoiceMessagesForbiddenError,
 } from "./send-error-predicates.js";
-import { createTelegramTextSender } from "./send-message-text.js";
+import { createTelegramTextSender, type TelegramDeliveryReporter } from "./send-message-text.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
 import {
   buildTelegramProviderDeliveryResult,
@@ -60,6 +58,12 @@ export async function sendMessageTelegram(
 ): Promise<TelegramSendResult> {
   return withTelegramApiContext(opts, async (apiContext): Promise<TelegramSendResult> => {
     const { cfg, account, api, ownerAgentId } = apiContext;
+    const recordActivity = () =>
+      recordChannelActivity({
+        channel: "telegram",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
     const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
     const {
       chatId,
@@ -77,37 +81,24 @@ export async function sendMessageTelegram(
         replyQuoteText: opts.quoteText,
         useReplyIdAsQuoteSource: true,
       },
-      request: { kind: "nonIdempotent" },
     });
     const deliveryResults: TelegramSendResult[] = [];
     let finalMediaBatch = true;
-    const reportDelivery = async (
-      messageId: string | number,
-      deliveredChatId: string | number,
-      message: TelegramMessageLike,
-      meta?: TelegramSendResult["meta"],
-      kind?: "text" | "media",
-      onPrepared?: (delivery: TelegramSendResult) => void,
-    ): Promise<TelegramSendResult> => {
-      return await reportTelegramProviderDelivery({
-        message,
-        messageId,
-        fallbackChatId: deliveredChatId,
+    const reportDelivery: TelegramDeliveryReporter = (params) =>
+      reportTelegramProviderDelivery({
+        ...params,
         successfulSendThread: threadSpec,
-        ...(meta ? { meta } : {}),
-        ...(kind ? { kind } : {}),
         onPrepared: (delivery) => {
           deliveryResults.push({
             ...delivery,
             receipt:
               delivery.receipt ??
-              createMessageReceiptFromOutboundResults({ results: [delivery], kind }),
+              createMessageReceiptFromOutboundResults({ results: [delivery], kind: params.kind }),
           });
-          onPrepared?.(delivery);
+          params.onPrepared?.(delivery);
         },
         onDeliveryResult: opts.onDeliveryResult,
       });
-    };
     const recordDeliveredPromptContext = async (
       params: Omit<
         Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -167,11 +158,6 @@ export async function sendMessageTelegram(
     };
     const useRichMessages = resolveTelegramRichMessages(richMessagesParams);
     const tableMode = opts.tableMode ?? resolveTelegramTableMode(richMessagesParams);
-    const renderHtmlText = (value: string) =>
-      renderTelegramHtmlText(value, { textMode, tableMode });
-    // Resolve link preview setting from config (default: enabled).
-    const linkPreviewEnabled = account.config.linkPreview ?? true;
-    const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 
     const sender = createTelegramPreparedSender({
       api,
@@ -219,7 +205,7 @@ export async function sendMessageTelegram(
       }
       return receipt;
     };
-    const { sendChunkedText } = createTelegramTextSender({
+    const sendChunkedText = createTelegramTextSender({
       cfg,
       ownerAgentId,
       account,
@@ -234,8 +220,6 @@ export async function sendMessageTelegram(
       sender,
       textMode,
       tableMode,
-      renderHtmlText,
-      linkPreviewOptions,
       useRichMessages,
     });
 
@@ -261,9 +245,8 @@ export async function sendMessageTelegram(
           sendLogger.warn(
             `Photo dimensions (${width}x${height}) are not valid for Telegram photos. Sending as document instead.`,
           );
-          return false;
         }
-        return true;
+        return isValidPhoto;
       } catch (err) {
         sendLogger.warn(
           `Failed to validate photo dimensions: ${formatErrorMessage(err)}. Sending as document instead.`,
@@ -317,13 +300,12 @@ export async function sendMessageTelegram(
       const { htmlCaption, plainCaption, followUpText } = mediaPlan;
       // If text exceeds Telegram's caption limit, send media without caption
       // then send text as a separate follow-up message.
-      const needsSeparateText = Boolean(followUpText);
       // When splitting, put reply_markup only on the follow-up text (the "main" content),
       // not on the media message.
       const mediaThreadParams = buildThreadParams(!singleUseReplyTo || sender.parts.length === 0);
       const baseMediaParams = {
         ...mediaThreadParams,
-        ...(!needsSeparateText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
+        ...(!followUpText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
       };
       const videoDimensions =
         mediaPlan.deliveryKind === "video" && !mediaPlan.isVideoNote
@@ -389,11 +371,7 @@ export async function sendMessageTelegram(
           const textResult = await sendChunkedText(text, "voice fallback text send", {
             replyToAlreadyUsed: singleUseReplyTo && sender.parts.length > 0,
           });
-          recordChannelActivity({
-            channel: "telegram",
-            accountId: account.accountId,
-            direction: "outbound",
-          });
+          recordActivity();
           return textResult;
         }
         opts.promptContextProjectionPlan?.cursor.invalidate();
@@ -440,18 +418,18 @@ export async function sendMessageTelegram(
             accountId: account.accountId,
             agentId: ownerAgentId,
           });
-          await reportDelivery(
-            part.messageId,
-            resolvedChatId,
-            part.result,
+          await reportDelivery({
+            messageId: part.messageId,
+            fallbackChatId: resolvedChatId,
+            message: part.result,
             meta,
-            "media",
-            (delivery) => {
+            kind: "media",
+            onPrepared: (delivery) => {
               mediaDeliveryResult = delivery;
             },
-          );
+          });
           const lastPart = part.result === lastMedia.result;
-          if (!needsSeparateText || !lastPart) {
+          if (!followUpText || !lastPart) {
             await recordMediaPromptPart(part, lastPart);
           }
           logTelegramOutboundSendOk({
@@ -468,22 +446,16 @@ export async function sendMessageTelegram(
         {
           partialDeliveryResult: () => ({
             receipt: buildMediaReceipt(),
-            visibleReplySent: true,
           }),
         },
       );
       const mediaMessageId = resolveTelegramMessageIdOrThrow(lastMedia.result, "media send");
       const resolvedChatId = String(lastMedia.result.chat?.id ?? chatId);
       const acceptedMediaParams = toAcceptedThreadScopedParams(lastMedia.acceptedParams);
-      recordChannelActivity({
-        channel: "telegram",
-        accountId: account.accountId,
-        direction: "outbound",
-      });
+      recordActivity();
 
-      // If text was too long for a caption, send it as a separate follow-up message.
       // Use HTML conversion so markdown renders like captions.
-      if (needsSeparateText && followUpText) {
+      if (followUpText) {
         let textResult: TelegramSendResult;
         try {
           textResult = await sendChunkedText(followUpText, "text follow-up send", {
@@ -590,7 +562,6 @@ export async function sendMessageTelegram(
         opts.promptContextProjectionPlan?.cursor.invalidate();
         return sender.fail(error, 0, {
           receipt: buildMediaReceipt(),
-          visibleReplySent: true,
         });
       }
     }
@@ -599,11 +570,7 @@ export async function sendMessageTelegram(
       throw new Error("Message must be non-empty for Telegram sends");
     }
     const textResult = await sendChunkedText(text, "text send");
-    recordChannelActivity({
-      channel: "telegram",
-      accountId: account.accountId,
-      direction: "outbound",
-    });
+    recordActivity();
     return textResult;
   });
 }

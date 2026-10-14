@@ -1,63 +1,109 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
-import { runGit } from "../agents/worktrees/git.js";
+import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
+import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import {
   gitOutput,
+  isAncestor,
+  runPullRequestGit,
   readCheckoutHead,
+  readRemoteRevisions,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-/** File-backed Git metadata is checked in the worker, never by spawning Git. */
-export function readCheckoutGitRevision({
+/** Observe only this checkout's refs; snapshot publication does not change PR facts. */
+export async function readCheckoutGitRevision({
   root,
-  includeIndex,
-}: GitReadOperations["checkout.revision"]["input"]): string | null {
+  scope,
+  branch,
+  defaultBranch,
+}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
   try {
     const head = readGitHead(root, { maxDepth: 1 });
-    if (!head) {
+    const checkout = readCheckoutHead(root);
+    const defaultRef = readDefaultRef(checkout);
+    if (
+      !head ||
+      !checkout ||
+      checkout.branch === undefined ||
+      (scope === "context" && defaultRef === undefined)
+    ) {
       return null;
     }
     const gitDir = nodePath.dirname(head.headPath);
-    const common = resolveGitRefsBase(head.headPath);
-    if (fs.existsSync(nodePath.join(common, "reftable"))) {
-      return null;
-    }
     const paths = [
       nodePath.join(root, ".git"),
-      head.headPath,
-      nodePath.join(gitDir, "commondir"),
-      nodePath.join(common, "config"),
+      nodePath.join(checkout.refsBase, "config"),
       nodePath.join(gitDir, "config.worktree"),
-      nodePath.join(common, "packed-refs"),
     ];
-    if (includeIndex) {
+    if (scope === "worktree") {
       paths.push(nodePath.join(gitDir, "index"));
     }
-    const refs = nodePath.join(common, "refs");
-    if (fs.existsSync(refs)) {
+    const replacements = nodePath.join(checkout.refsBase, "refs/replace");
+    let packedReplacements: string[] = [];
+    if (scope !== "context") {
       paths.push(
-        ...fs
-          .readdirSync(refs, { recursive: true, encoding: "utf8" })
-          .map((name) => nodePath.join(refs, name)),
+        nodePath.join(checkout.refsBase, "shallow"),
+        nodePath.join(checkout.refsBase, "info/grafts"),
       );
+      if (fs.existsSync(replacements)) {
+        paths.push(
+          ...fs
+            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
+            .map((name) => nodePath.join(replacements, name)),
+        );
+      }
+      const packed = nodePath.join(checkout.refsBase, "packed-refs");
+      if (fs.existsSync(packed)) {
+        packedReplacements = fs
+          .readFileSync(packed, "utf8")
+          .split("\n")
+          .filter((line) => /\srefs\/replace\//u.test(line))
+          .toSorted();
+      }
     }
-    return JSON.stringify(
+    const selectedBranch = branch ?? checkout.branch;
+    const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
+    const tips =
+      scope !== "context"
+        ? await readRemoteRevisions(
+            root,
+            [
+              ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+              ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+            ],
+            checkout,
+          )
+        : [];
+    return JSON.stringify([
+      // Context exposes branch names and remote configuration, not commit IDs.
+      scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
+      defaultRef,
+      [...tips],
+      packedReplacements,
       paths.toSorted().map((file) => {
         const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-        if (stat?.isSymbolicLink()) {
+        if (
+          stat?.isSymbolicLink() ||
+          (stat?.isFile() &&
+            file.startsWith(`${replacements}${nodePath.sep}`) &&
+            readGitMetadataPrefix(file).startsWith("ref:"))
+        ) {
           throw new Error("Symbolic Git metadata requires Git discovery");
         }
-        return [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+        return stat?.isDirectory()
+          ? [file, stat.dev, stat.ino]
+          : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
       }),
-    );
+    ]);
   } catch {
     return null;
   }
@@ -110,6 +156,7 @@ function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | nul
 
 export async function readCheckoutGitContext(
   root: string,
+  githubHost = "github.com",
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
   const head = readCheckoutHead(root);
   const branch =
@@ -120,7 +167,8 @@ export async function readCheckoutGitContext(
     return null;
   }
   const remoteUrl = await gitOutput(root, ["remote", "get-url", "origin"]);
-  const remote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const publicRemote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const remote = publicRemote ?? (remoteUrl ? parseGitHubRemoteUrl(remoteUrl, githubHost) : null);
   if (!remote) {
     return null;
   }
@@ -132,6 +180,7 @@ export async function readCheckoutGitContext(
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,
+    ...(!publicRemote ? { host: githubHost } : {}),
     branch: branch === "HEAD" ? null : branch,
     root,
     ...(defaultBranch ? { defaultBranch } : {}),
@@ -174,9 +223,12 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
 }
 
 async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
-  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
-    () => null,
-  );
+  const listing = await runPullRequestGit(root, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
   // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
   const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
   let additions = 0;
@@ -195,14 +247,52 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
 async function diffStatsAgainst(
   root: string,
   base: string,
+  refreshIndex: boolean,
 ): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
   try {
-    // Checkout-configurable diff drivers must never execute in the Gateway
-    // process (same guard as sessions-diff).
-    // A read must not refresh index stat data and invalidate its own revision.
-    const result = await runGit(root, [
+    // Git's shortstat prefetch scans every promisor pack on a missing blob, even
+    // with lazy fetching disabled. Admit only locally available diff inputs.
+    const inventory = await runPullRequestGit(root, [
       "-c",
       "diff.autoRefreshIndex=false",
+      "diff",
+      "--raw",
+      "--no-abbrev",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      "-z",
+      base,
+      "--",
+    ]);
+    const objects = new Set<string>();
+    const fields = requireGitCommandOutput("git diff --raw", inventory).split("\0");
+    for (let i = 0; i < fields.length - 1; i += 2) {
+      const [oldMode, newMode, oldObject, newObject] = fields[i]!.slice(1).split(" ");
+      for (const [mode, object] of [
+        [oldMode, oldObject],
+        [newMode, newObject],
+      ]) {
+        if (mode !== "160000" && object && !/^0+$/u.test(object)) {
+          objects.add(object);
+        }
+      }
+    }
+    if (objects.size > 0) {
+      const input = `${[...objects].join("\n")}\n`;
+      const available = await runPullRequestGit(root, ["cat-file", "--batch-check=%(objectname)"], {
+        input,
+      });
+      if (requireGitCommandOutput("git cat-file", available) !== input) {
+        return null;
+      }
+    }
+    // Checkout-configurable diff drivers must never execute in the Gateway
+    // process (same guard as sessions-diff).
+    // Managed checkouts own their index; user checkouts keep read-only stat data.
+    const result = await runPullRequestGit(root, [
+      "-c",
+      `diff.autoRefreshIndex=${refreshIndex}`,
       "diff",
       "--shortstat",
       "--no-ext-diff",
@@ -220,54 +310,44 @@ async function diffStatsAgainst(
       deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
       changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GitCommandTimeoutError) {
+      throw error;
+    }
     return null;
   }
 }
 
-/**
- * GitHub's pull/new page only has something to offer once the pushed branch
- * carries commits the default branch lacks. Rename-only commits still count:
- * this gate keys on commits, not line counts.
- */
-async function branchHasCreatablePullRequest(
-  root: string,
-  defaultSha: string | null,
-  pushedSha: string | null,
-  defaultBranch: string | undefined,
-): Promise<boolean> {
-  // Fail closed when origin/HEAD is missing or the branch is not pushed.
-  if (!defaultBranch || !pushedSha) {
-    return false;
-  }
-  if (!defaultSha) {
-    return true;
-  }
-  const ahead = await gitOutput(root, ["rev-list", "--count", `${defaultSha}..${pushedSha}`]);
-  // A failed count keeps the row: rev-list errors must not hide a valid branch.
-  return ahead === null || Number(ahead) > 0;
+export async function readPullRequestBranchComparison(
+  input: GitWorkerOperations["pull-request.branch-comparison"]["input"],
+): Promise<GitWorkerOperations["pull-request.branch-comparison"]["output"]> {
+  const landing = await resolveBranchLanding(input.root, input);
+  const creatable =
+    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    Boolean(input.defaultBranch) &&
+    landing.pushedSha !== null &&
+    (!landing.defaultSha ||
+      !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha, () => {
+        landing.complete = false;
+      })));
+  return {
+    complete: landing.complete,
+    statsBase: landing.statsBase,
+    equalPushedTips:
+      landing.defaultSha !== null &&
+      landing.defaultSha === landing.pushedSha &&
+      landing.statsBase === landing.defaultSha,
+    creatable,
+  };
 }
 
 export async function readPullRequestBranchFacts(
-  input: GitReadOperations["pull-request.branch-facts"]["input"],
+  input: GitWorkerOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
-  const landing = await resolveBranchLanding(input.root, input);
-  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
-  // The diff validates equal recorded tips without a separate ancestry probe.
-  // Missing objects must still retain the unknown-comparison fallback.
-  const noPushedChanges =
-    stats !== null &&
-    landing.defaultSha !== null &&
-    landing.defaultSha === landing.pushedSha &&
-    landing.statsBase === landing.defaultSha;
-  const creatable =
-    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
-    !noPushedChanges &&
-    (await branchHasCreatablePullRequest(
-      input.root,
-      landing.defaultSha,
-      landing.pushedSha,
-      input.defaultBranch,
-    ));
+  const { comparison } = input;
+  const stats = comparison.statsBase
+    ? await diffStatsAgainst(input.root, comparison.statsBase, input.refreshIndex === true)
+    : null;
+  const creatable = comparison.creatable && !(stats !== null && comparison.equalPushedTips);
   return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
 }

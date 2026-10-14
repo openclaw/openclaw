@@ -1,7 +1,8 @@
-// Logger redaction behavior tests cover secret scrubbing before log writes.
+// File logs preserve raw values; diagnostic emission owns its redaction.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
@@ -14,6 +15,7 @@ import {
   restorePluginStateWorkerFailure,
 } from "../plugin-state/plugin-state-worker-errors.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
   getChildLogger,
@@ -47,20 +49,21 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   resetLogger();
   setLoggerOverride(null);
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   await logPathTracker.cleanup();
 });
 
-describe("file log redaction", () => {
+describe("file logs and diagnostic redaction", () => {
   it.each([
     { canonical: false, aggregate: false },
     { canonical: true, aggregate: false },
     { canonical: false, aggregate: true },
     { canonical: true, aggregate: true },
   ])(
-    "retains plugin-state failure origin and redacted causes (canonical=$canonical, aggregate=$aggregate)",
+    "retains plugin-state failure origin and raw causes (canonical=$canonical, aggregate=$aggregate)",
     async ({ canonical, aggregate }) => {
       const logPath = logPathTracker.nextPath();
       setLoggerOverride({ level: "info", file: logPath });
@@ -123,36 +126,14 @@ describe("file log redaction", () => {
             : { cause: nativeDetails }),
         },
       });
-      expect(content).not.toContain(secret);
+      expect(content).toContain(secret);
+      expect((await readConfiguredLogTail()).lines.join("\n")).not.toContain(secret);
       expect(content).not.toContain("unrelated stored value");
       expect(record["1"].error).not.toHaveProperty("stack");
     },
   );
 
-  it("redacts credential fields before writing JSONL file logs", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().info({ apiKey: secret, message: "provider configured" });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("provider configured");
-    expect(content).toContain('"apiKey"');
-    expect(content).not.toContain(secret);
-  });
-
-  it("redacts bearer tokens in file log message strings", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().warn({ message: `Authorization: Bearer ${secret}` });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("Authorization: Bearer");
-    expect(content).not.toContain(secret);
-  });
-
-  it("redacts structured authorization fields before writing JSONL file logs", async () => {
+  it("preserves raw structured authorization fields in JSONL file logs", async () => {
     const logPath = logPathTracker.nextPath();
     const digestResponse = ["runtime", "digest", "response", "1234567890abcdef"].join("-");
     const awsScopeField = ["Cred", "ential", "=test-fixture-scope"].join("");
@@ -170,10 +151,10 @@ describe("file log redaction", () => {
     expect(() => JSON.parse(content.trim())).not.toThrow();
     expect(content).toContain("Authorization: Digest");
     expect(content).toContain("Authorization: AWS4-HMAC-SHA256");
-    expect(content).not.toContain(digestResponse);
-    expect(content).not.toContain(awsProofField);
-    expect(content).not.toContain("response=");
-    expect(content).not.toContain("Signature=");
+    expect(content).toContain(digestResponse);
+    expect(content).toContain(awsProofField);
+    expect(content).toContain("response=");
+    expect(content).toContain("Signature=");
   });
 
   it("redacts sensitive structured fields before emitting diagnostic log records", async () => {
@@ -200,7 +181,7 @@ describe("file log redaction", () => {
     }
   });
 
-  it("keeps structured file log fields redacted when the retired opt-out is present", async () => {
+  it("writes raw file log fields regardless of the retired redaction switch", async () => {
     const logPath = logPathTracker.nextPath();
     const configPath = logPathTracker.nextPath();
     fs.writeFileSync(
@@ -223,10 +204,11 @@ describe("file log redaction", () => {
     });
 
     const content = await readLogFile(logPath);
-    expect(content).not.toContain("token-value-1234567890");
-    expect(content).not.toContain("ya29.fake-access-token-with-enough-length");
-    expect(content).not.toContain("abcd-efgh-ijkl-mnop");
-    expect(content).not.toContain(secret);
+    expect(content).toContain("token-value-1234567890");
+    expect(content).toContain("ya29.fake-access-token-with-enough-length");
+    expect(content).toContain("abcd-efgh-ijkl-mnop");
+    expect(content).toContain(secret);
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
   });
 
   it("uses logging.file from the active config path", async () => {
@@ -375,15 +357,16 @@ describe("file log redaction", () => {
     setLoggerOverride({ level: "info", file: logPath });
     const hostnames = ["", "lr-macbook", "changed-host"];
     const resolvedHostnames: string[] = [];
-    loggerTest.setHostnameResolverForTests(() => {
+    const logger = getLogger();
+    vi.spyOn(os, "hostname").mockImplementation(() => {
       const hostname = hostnames.shift() ?? "changed-host";
       resolvedHostnames.push(hostname);
       return hostname;
     });
 
-    getLogger().info({ route: "/api/health" }, "first request");
-    getLogger().info({ route: "/api/health" }, "second request");
-    getLogger().info({ route: "/api/health" }, "third request");
+    logger.info({ route: "/api/health" }, "first request");
+    logger.info({ route: "/api/health" }, "second request");
+    logger.info({ route: "/api/health" }, "third request");
 
     const records = (await readLogFile(logPath))
       .trim()

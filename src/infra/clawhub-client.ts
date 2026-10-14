@@ -199,15 +199,9 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-type ClawHubResponse = {
-  response: Response;
-  url: URL;
-  hasToken: boolean;
-  /** Successful archives keep only their chunk-idle timeout while streaming. */
-  releaseDeadline: () => void;
-};
+type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
-async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResponse> {
+async function requestClawHub(params: ClawHubRequestParams) {
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
@@ -230,10 +224,16 @@ async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResp
   }
   const request = async () => {
     const controller = new AbortController();
+    // Fetch rejects with the abort reason; preserve timeout classification for read retries.
+    const timeoutError = Object.assign(
+      new Error(`ClawHub request timed out after ${timeoutMs}ms`),
+      { code: "ETIMEDOUT" },
+    );
     let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
-      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      () => controller.abort(timeoutError),
       timeoutMs,
     );
+    // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
       if (timeout !== undefined) {
         clearTimeout(timeout);
@@ -422,6 +422,22 @@ export function readClawHubStringField(
     return value;
   }
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string or null.`);
+}
+
+/** Validate optional strings, omitting absent, null, and empty values. */
+export function readClawHubNonEmptyStringFields<T extends string>(
+  source: Record<string, unknown>,
+  fields: readonly T[],
+  context: string,
+): Partial<Record<T, string>> {
+  const result: Partial<Record<T, string>> = {};
+  for (const field of fields) {
+    const value = readClawHubStringField(source, field, context);
+    if (value) {
+      result[field] = value;
+    }
+  }
+  return result;
 }
 
 export function readRequiredClawHubBooleanField(

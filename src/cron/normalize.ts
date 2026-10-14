@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
@@ -47,12 +48,13 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
   const timezone = normalizeOptionalString(next.tz);
-  const commandRaw = normalizeOptionalString(next.command) ?? "";
+  const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
   const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);
@@ -141,7 +143,7 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
-  } else if (next.kind === "on-exit" || next.kind === "stream") {
+  } else if (next.kind === "on-exit" || next.kind === "stream" || next.kind === "event") {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
@@ -161,6 +163,10 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
+  if (next.kind !== "event") {
+    delete next.source;
+    delete next.options;
+  }
   return { ...next };
 }
 
@@ -179,8 +185,6 @@ function coerceDelivery(delivery: UnknownRecord) {
   const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
-  } else if ("mode" in next) {
-    delete next.mode;
   }
   for (const field of ["channel", "to", "threadId", "accountId"] as const) {
     if (next[field] === null) {

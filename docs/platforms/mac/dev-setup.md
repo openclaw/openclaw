@@ -9,7 +9,7 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
-The packaged app requires macOS 15.0 or later. The build host must also meet
+The packaged app requires macOS 26.2 or later. The build host must also meet
 the Xcode requirements below.
 
 ## Prerequisites
@@ -17,6 +17,10 @@ the Xcode requirements below.
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+  SwiftPM and Xcode generate the Gateway protocol models with the first
+  supported Node on `PATH`, then `/opt/homebrew/bin/node` or
+  `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
+  resolve to the Node binary they launch.
 
 macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
 required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a
@@ -38,24 +42,49 @@ pnpm install
 ./scripts/package-mac-app.sh
 ```
 
-Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
-default and fails if none is available. Ad-hoc signing is an explicit opt-in;
-it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
+Outputs `dist/OpenClaw.app`. By default this is a debug-configuration build
+with the development bundle identifier `ai.openclaw.mac.debug`, meant to run
+beside an installed release. To replace a release install, see
+[Replace an installed release app](#replace-an-installed-release-app).
+Packaging requires a real signing identity by default and fails if none is
+available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
+permissions. See [macOS signing](/platforms/mac/signing).
 
 Packaging builds the JavaScript runtime and Control UI, then stages the full
-canonical package with production dependencies under
+standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
-optional `sqlite-vec`; on-demand plugins excluded from that package remain
-excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+optional `sqlite-vec`. Builds at an exact release tag retain the published plugin
+layout. Other commits also stage official external plugins built with that
+commit, including their target-architecture dependencies. If their estimated
+additional size exceeds 300 MiB, packaging stages only Codex for automatic setup.
+The installer prefers these staged copies and records their bundled paths, so
+development builds do not mix a newer SDK with older registry plugins. Plugin
+updates and Doctor retain the same-build copies until the app itself is updated.
+Release automation passes `RELEASE_TAG` and its verified `RELEASE_SHA` so shallow,
+tagless checkouts retain the release layout. Staging rejects tag/version/commit
+mismatches. With only `RELEASE_TAG`, it fetches that tag when needed; without an
+explicit release identity, local builds use tags pointing at the current commit.
+The root tarball uses the repository-pinned pnpm packer; Corepack-only
 setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.
 
-The OpenClaw Bun fork is pinned in `scripts/lib/openclaw-bun-macos.json` and
-downloaded by `scripts/stage-openclaw-bun-macos.sh`. Archives are cached under
-`apps/macos/.build/openclaw-bun/<tag>/`, checked against pinned SHA-256 hashes,
-and verified against the fork revision. `scripts/build-mac-sqlite.sh` builds
+For an executable-plus-sidecar packaging input, the separate
+[standalone builder](/install/standalone) emits `openclaw`, `runtime/`, and a
+manifest with compiler provenance and mode-specific signing entitlements.
+Desktop packaging owns seeding and replacement of that complete artifact.
+
+The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
+consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
+`scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
+downloads it; Darwin accepts both architectures for a universal binary.
+Archives are cached under `.cache/openclaw-bun/<tag>/`. Staging verifies the
+release manifest against `SHA256SUMS`, its identity and artifact fields against
+the pin, each archive against both sources, then the executable checksum,
+native architecture, and runnable fork revision. The fork's package auto-install
+default stays off; OpenClaw's runtime admission still applies at launch.
+`scripts/build-mac-sqlite.sh` builds
 the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
 `apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
 SQLite extensions without relying on Apple's system SQLite or Homebrew.
@@ -91,8 +120,11 @@ Packaging executes verification for each runnable architecture. Verifying
 x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
 architecture's execution checks as skipped. Missing binary architectures or
 nonportable native dependencies fail packaging. Downloads and package
-installation need network access. The bundled full package prepares for future
-Gateway hosting; the app still uses the external CLI and launchd Gateway.
+installation need network access on the build host. A packaged app needs no
+runtime download during onboarding: it seeds that payload into the profile's
+state directory and hosts the Gateway with Bun. The stage script writes the
+package's `openclaw-install-owner.json` marker so Gateway updates remain owned
+by the app.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native
@@ -121,11 +153,97 @@ Ad-hoc signed apps may trigger security prompts. If the app crashes
 immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 </Note>
 
+### Replace an installed release app
+
+`scripts/package-mac-app.sh` defaults to `BUILD_CONFIG=debug` and
+`BUNDLE_ID=ai.openclaw.mac.debug`. Copied over `/Applications/OpenClaw.app`,
+that build is still a different app to macOS and to OpenClaw:
+
+- The debug bundle ID has its own TCC grants and, for the default profile, its
+  own `ai.openclaw.mac.debug` defaults domain. Packaging clears its Sparkle
+  feed, so it never updates.
+- Keychain items the release app created, such as `ai.openclaw.tls-pinning`,
+  trust only the release app's code signature. Reading them raises
+  login-keychain password prompts.
+- The debug Swift configuration reads saved Gateway profiles from the separate
+  `ai.openclaw.gateway-profiles.debug` Keychain service, so the release app's
+  saved Gateways are missing.
+
+To replace a release install, package the release identity from a clean
+checkout:
+
+```bash
+BUILD_CONFIG=release BUNDLE_ID=ai.openclaw.mac ./scripts/package-mac-app.sh
+```
+
+Release configuration runs `scripts/apple-release-source-check.sh`, which fails
+unless the checkout is clean at the commit being built, and it requires the MLX
+voice helper. It builds a universal app unless you set `BUILD_ARCHS` (for
+example `BUILD_ARCHS=arm64`). Before installing, check the designated
+requirement:
+
+```bash
+codesign -dr - dist/OpenClaw.app
+```
+
+The output must include `identifier "ai.openclaw.mac"`. Keychain and TCC access
+follow the whole requirement, not just the identifier: sign with a Developer ID
+Application identity from the same team as the installed app, or macOS still
+treats the build as a different app. Sparkle stays enabled in this build, so a
+newer published release can replace it.
+
+Keep the default debug identity for development builds that run beside an
+installed release.
+
+### Shared Bun pin and repin gate
+
+The JSON schema has top-level `tag`, `commit`, `revision`, and `artifacts`.
+`artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
+`windows-arm64`, and `windows-x64`; each entry contains `asset`, `sha256`,
+`executable`, and `executableSha256`. Windows entries also carry
+`authenticodeSigned: true` and `testOnly: false`. These are a projection of the
+published fork release's `manifest.json`, not independently maintained app or CI
+pins. Unsigned Windows dry-run artifacts are not shippable.
+
+Every repin requires both gates on the same published tag: CI's paired Bun-lane
+replay and Bun-only smoke, plus the macOS runtime checks and two-binary test set.
+Neither app nor CI advances when either gate fails. A Linux-only regression
+also stops the shared repin. Preserve the last tag admitted by both gates while
+investigating; a published prerelease alone is not admission. Record the exact
+tag and gate evidence in the PR. See [CI runtime selection](/ci/pipeline#test-runtime-selection).
+
+After the gates pass, download `manifest.json` and `SHA256SUMS` from that exact
+release and verify the manifest and asset checksums. Regenerate all six entries together:
+
+```sh
+jq '{tag, commit: .bun.commit, revision: .bun.revision,
+  artifacts: (.assets | map(
+    select(.target | IN("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-arm64", "windows-x64")) |
+    {key: .target, value: ({asset: .name, sha256,
+      executable: .executable.path, executableSha256: .executable.sha256} +
+      (if .os == "windows" then {authenticodeSigned: .executable.authenticodeSigned,
+        testOnly: .executable.testOnly} else {} end))}
+  ) | from_entries)}' manifest.json > scripts/lib/openclaw-bun.json
+```
+
+Repin one shared owner in one PR and run the shared stager for all four Darwin/Linux
+targets; execute native proofs on matching hosts (Rosetta can verify Darwin x64).
+The signed Windows entries are available for Windows packaging integration. Do not advance an
+individual artifact or copy the pin into an app or workflow.
+
 ## 3. Install the CLI and Gateway
 
-The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
-fresh profile, choose **This Mac** during onboarding; the app installs the
-matching user-space CLI and runtime before starting the Gateway wizard.
+On a fresh profile in a packaged app, choose **This Mac** during onboarding.
+The app prepares its bundled Bun runtime, starts the Gateway as its child,
+and creates the profile's terminal CLI shim. It does not invoke
+`scripts/install-cli.sh`, install Node, or ask for an install channel.
+Unbundled DEBUG builds retain the installer and channel chooser.
+
+Runtime copies live at `<state>/runtime/<runtimeBuildId>/`. App-hosted children
+and app-managed Bun LaunchAgents use concrete build paths; only the terminal
+shim uses `runtime/current`. Post-update setup reseeds the payload and refreshes
+app-owned Bun service pins before verifying health and collecting old builds.
+See [Gateway on macOS](/platforms/mac/bundled-gateway).
 
 For manual development recovery, install the matching CLI yourself. Read the
 version from the app: choose **About OpenClaw** in the menu bar, or run
@@ -181,6 +299,14 @@ state; named-profile preferences use a fresh domain and are also discarded with
 the runner.
 If process cleanup cannot be verified or Keychain deletion fails, the launcher
 fails and retains its files for inspection.
+The release-only bundled recovery app-host lane keeps the disposable account’s
+canonical home so the real CLI can manage its unique named-profile service. Its
+state and preferences use that profile. The app host and Security commands share
+the account’s user Keychain domain, selecting the launcher-owned empty-password
+Keychain file; temporary files also remain launcher-owned. Cleanup removes
+the profile state only after the service and its observed process group retire.
+Unverified retirement retains both the profile state and temporary resources.
+
 CI environment markers only catch accidental invocation; they do not enforce
 isolation or make an operator desktop safe.
 
@@ -228,6 +354,23 @@ and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.
 
+Swift Testing runs suites concurrently in one process, so never replace the
+global executor (for example `withMainSerialExecutor` or
+`uncheckedUseMainSerialExecutor` from ConcurrencyExtras). Its hook moves every
+other suite's global jobs, actor work, and timer wakeups onto the main thread;
+one non-yielding loop there starves the timeout that would cancel it, and the
+job hangs until CI cancels it. To assert that a late reply changed nothing,
+await the task that settles that reply, as provider wizard and manual-key
+actions return it.
+
+Work a test starts must end with the test, because the process outlives it.
+Shut down Gateway channels and connections a test opens; their watchdog
+otherwise keeps reconnecting through the test's fixture. Fake transports and
+sockets must stop waiting when their read is cancelled, as the production stream
+transports do: `AsyncTimeout` cancels and abandons the operation that loses its
+race instead of joining it, so a fake that ignores cancellation keeps polling for
+the rest of the run.
+
 ## Troubleshooting
 
 ### Build fails while freezing Peekaboo sources
@@ -258,7 +401,7 @@ If versions don't match, update macOS/Xcode and re-run the build.
 
 On a beta-only Xcode toolchain (for example Xcode 27 with the macOS 27 SDK),
 only the `openclaw-mlx-tts` helper may fail while the main app builds fine. The
-mlx-swift Metal compilation errors non-deterministically (a different `.metal`
+mlx-swift Metal compilation fails unpredictably (a different `.metal`
 file each run, `Could not read serialized diagnostics file` then a nonzero
 `metal` exit), because the beta `metal` compiler and its separately downloaded
 Metal Toolchain are still unstable. This is an upstream toolchain issue, not an

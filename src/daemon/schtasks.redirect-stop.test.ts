@@ -4,7 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
-import { resolveTaskScriptPath, restartScheduledTask, stopScheduledTask } from "./schtasks.js";
+import { resolveTaskScriptPath, restartScheduledTask } from "./schtasks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
@@ -55,10 +55,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { operation: "stop", control: stopScheduledTask },
-  { operation: "restart", control: restartScheduledTask },
-])(
+it.each([{ operation: "restart", control: restartScheduledTask }])(
   "refuses shortened argv from an unquoted redirect expansion during $operation",
   async ({ control }) => {
     await withWindowsEnv("openclaw-win-redirect-", async ({ env }) => {

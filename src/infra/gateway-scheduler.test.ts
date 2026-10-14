@@ -1,4 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -6,6 +8,12 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { GatewayScheduler } from "./gateway-scheduler.js";
+
+const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => schedulerLog,
+}));
 
 function fixture() {
   const time = createGatewaySchedulerClock(1_000);
@@ -13,7 +21,217 @@ function fixture() {
   return { time, scheduler };
 }
 
+function withNativeErrorStacks<T>(run: () => T): T {
+  const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+  try {
+    // Vite's formatter closures can retain native callsites beyond the closing call.
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    return run();
+  } finally {
+    if (prepareStackTrace) {
+      Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+    } else {
+      Reflect.deleteProperty(Error, "prepareStackTrace");
+    }
+  }
+}
+
 describe("Gateway timed work", () => {
+  it("shares maintenance slots across owners and skips slots missed by async work and sleep", async () => {
+    const { time, scheduler } = fixture();
+    const scope = scheduler.scope();
+    const gate = createDeferredCore();
+    const first = vi.fn(() => gate.promise);
+    const second = vi.fn();
+    scheduler.schedule({
+      id: "first",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: first,
+    });
+    await time.advanceBy(2_000);
+    scope.schedule({
+      id: "second",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: second,
+    });
+    expect(scheduler.nextWakeAtMs).toBe(30_000);
+    const wake = time.advanceTo(30_000);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+    await time.advanceTo(95_000);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledTimes(2);
+    gate.resolve();
+    await wake;
+    expect(scheduler.nextWakeAtMs).toBe(120_000);
+    await scope.stop();
+    await time.advanceTo(120_000);
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
+  it("leaves exact expiry and liveness cadences outside the maintenance phase", async () => {
+    const { time, scheduler } = fixture();
+    const expiry = vi.fn();
+    const keepalive = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: () => {},
+    });
+    scheduler.schedule({ id: "expiry", atMs: 31_001, run: expiry });
+    scheduler.schedule({ id: "keepalive", delayMs: 25_000, everyMs: 25_000, run: keepalive });
+    await time.advanceTo(26_000);
+    expect(keepalive).toHaveBeenCalledOnce();
+    await time.advanceTo(30_000);
+    expect(expiry).not.toHaveBeenCalled();
+    await time.advanceTo(31_001);
+    expect(expiry).toHaveBeenCalledOnce();
+    expect(scheduler.nextWakeAtMs).toBe(51_000);
+    await scheduler.stop();
+  });
+
+  it("runs a maintenance slot once when the wall clock drifts ahead of elapsed time", async () => {
+    const { time, scheduler } = fixture();
+    const run = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run,
+    });
+    time.setTime(2_001);
+    // Any later schedule re-arms the host timer on the earlier wall-clock slot.
+    scheduler.schedule({ id: "later", delayMs: 600_000, run: () => {} });
+    await time.advanceBy(27_999);
+    expect(run).toHaveBeenCalledOnce();
+    await time.advanceBy(1_001);
+    expect(run).toHaveBeenCalledOnce();
+    await time.advanceBy(28_999);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
+  it("keeps maintenance cadence after a forward wall-clock jump is corrected", async () => {
+    const { time, scheduler } = fixture();
+    const run = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run,
+    });
+    time.setTime(301_000);
+    await time.wake();
+    expect(run).toHaveBeenCalledOnce();
+    time.setTime(30_000);
+    await time.advanceBy(29_999);
+    expect(run).toHaveBeenCalledOnce();
+    await time.advanceBy(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
+  it.each(["root", "scope"] as const)(
+    "releases the retiring caller while its %s abort signal remains reachable",
+    async (kind) => {
+      class RetiredOwner {
+        close() {
+          const { scheduler } = fixture();
+          const owner = kind === "root" ? scheduler : scheduler.scope();
+          owner.beginClose();
+          return owner.signal;
+        }
+      }
+      const signals = withNativeErrorStacks(() =>
+        Array.from({ length: 12 }, () => new RetiredOwner().close()),
+      );
+      // Collect after the closing call's execution frame has unwound.
+      await nextTurn();
+      expect(queryObjects(RetiredOwner)).toBe(0);
+      for (const signal of signals) {
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toMatchObject({ name: "AbortError" });
+      }
+    },
+  );
+
+  it("releases a scope's closing caller after its parent already aborted", async () => {
+    class RetiredCaller {
+      close(scope: ReturnType<GatewayScheduler["scope"]>) {
+        scope.beginClose();
+      }
+    }
+    const scopes = withNativeErrorStacks(() =>
+      Array.from({ length: 12 }, () => {
+        const { scheduler } = fixture();
+        const scope = scheduler.scope();
+        scheduler.beginClose();
+        new RetiredCaller().close(scope);
+        return scope;
+      }),
+    );
+    await nextTurn();
+    expect(queryObjects(RetiredCaller)).toBe(0);
+    for (const scope of scopes) {
+      expect(scope.signal.aborted).toBe(true);
+      expect(scope.signal.reason).toMatchObject({ name: "AbortError" });
+    }
+  });
+
+  it("does not wake or allocate async resources before a fractional deadline", async () => {
+    const time = createGatewaySchedulerClock(1_000);
+    let wakes = 0;
+    const scheduler = new GatewayScheduler({
+      clock: {
+        ...time.clock,
+        arm: (run, delayMs) =>
+          time.clock.arm(() => {
+            wakes += 1;
+            return run();
+          }, Math.trunc(delayMs)),
+      },
+    });
+    const run = vi.fn();
+    scheduler.schedule({ id: "sample", delayMs: 20, everyMs: 20, run });
+    void time.advanceBy(0.25);
+    time.setTime(1_000);
+    // An unrelated registration rearms with 19.75ms left on the elapsed deadline.
+    scheduler.schedule({ id: "later", delayMs: 10_000, run: () => {} });
+    let allocations = 0;
+    const hook = createHook({
+      init: () => {
+        allocations += 1;
+      },
+    });
+    try {
+      hook.enable();
+      for (let tick = 0; tick < 19; tick += 1) {
+        void time.advanceBy(1);
+      }
+    } finally {
+      hook.disable();
+    }
+    try {
+      expect(wakes).toBe(0);
+      expect(allocations).toBe(0);
+      await time.advanceBy(1);
+      expect(run).toHaveBeenCalledOnce();
+      expect(wakes).toBe(1);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
   it("preserves equal-deadline dispatch order when replacing a waiting registration", async () => {
     const { time, scheduler } = fixture();
     const seen: string[] = [];
@@ -98,23 +316,6 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("arms only the earliest wake and fences canceled host wakes and replaced registrations", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    const retired = scheduler.schedule({ id: "approval:one", atMs: 2_000, run });
-    const oldWake = time.wakes[0];
-    scheduler.schedule({ id: "approval:one", atMs: 1_500, run });
-    retired.cancel();
-    expect(oldWake).toBeDefined();
-    await oldWake?.run();
-    expect(scheduler.nextWakeAtMs).toBe(1_500);
-    expect(time.armedAtMs).toBe(1_500);
-    await time.advanceTo(1_500);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { time, scheduler } = fixture();
     const periodic = vi.fn();
@@ -132,38 +333,38 @@ describe("Gateway timed work", () => {
   });
 
   it.each([
-    { mode: undefined, nextWakeAtMs: 3_000 },
-    { mode: "replace" as const, nextWakeAtMs: 3_000 },
-    { mode: "earliest" as const, nextWakeAtMs: 2_000 },
-  ])("reschedules a pending deadline in $mode mode", async ({ mode, nextWakeAtMs }) => {
-    const { time, scheduler } = fixture();
-    const retiredRun = vi.fn();
-    const run = vi.fn();
-    const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
-    scheduler.schedule({ id: "queue", atMs: 3_000, mode, run });
-    retired.cancel();
-    expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
-    await time.advanceTo(nextWakeAtMs);
-    expect(run).toHaveBeenCalledOnce();
-    expect(retiredRun).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
+    { mode: undefined, atMs: 3_000, nextWakeAtMs: 3_000 },
+    { mode: "earliest" as const, atMs: 3_000, nextWakeAtMs: 2_000 },
+    { mode: "earliest" as const, atMs: 1_500, nextWakeAtMs: 1_500 },
+  ])(
+    "reschedules a pending deadline to $atMs in $mode mode",
+    async ({ mode, atMs, nextWakeAtMs }) => {
+      const { time, scheduler } = fixture();
+      const retiredRun = vi.fn();
+      const run = vi.fn();
+      const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
+      const oldWake = time.wakes[0];
+      scheduler.schedule({ id: "queue", atMs, mode, run });
+      retired.cancel();
+      expect(oldWake).toBeDefined();
+      await oldWake?.run();
+      expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
+      expect(time.armedAtMs).toBe(nextWakeAtMs);
+      await time.advanceTo(nextWakeAtMs);
+      expect(run).toHaveBeenCalledOnce();
+      expect(retiredRun).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      await scheduler.stop();
+    },
+  );
 
-  it("brings a pending deadline forward in earliest mode", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({ id: "queue", atMs: 10_000, run });
-    scheduler.schedule({ id: "queue", atMs: 5_000, mode: "earliest", run });
-    expect(scheduler.nextWakeAtMs).toBe(5_000);
-    await time.advanceTo(5_000);
-    expect(run).toHaveBeenCalledOnce();
-    await scheduler.stop();
-  });
-
-  it.each([{ delayMs: 2_000 }, { atMs: 6_500 }])(
-    "does not postpone elapsed eligibility after a backward wall-clock correction: %j",
-    async (deadline) => {
+  it.each([
+    { deadline: { delayMs: 2_000 }, clock: "elapsed" },
+    { deadline: { atMs: 6_500 }, clock: "elapsed" },
+    { deadline: { delayMs: 2_000 }, clock: "wall" },
+  ])(
+    "retains $clock eligibility after a backward wall-clock correction: $deadline",
+    async ({ deadline, clock }) => {
       const { time, scheduler } = fixture();
       const run = vi.fn();
       time.setTime(9_000);
@@ -173,30 +374,21 @@ describe("Gateway timed work", () => {
       await time.advanceBy(500);
       scheduler.schedule({ id: "queue", ...deadline, mode: "earliest", run });
       expect(scheduler.nextWakeAtMs).toBe(5_000);
-      await time.advanceTo(5_000);
+      if (clock === "wall") {
+        time.setTime(6_499);
+        scheduler.schedule({ id: "other", atMs: 6_499, run: () => {} });
+        await time.wake();
+        expect(run).not.toHaveBeenCalled();
+        expect(scheduler.nextWakeAtMs).toBe(6_500);
+        await time.advanceBy(1);
+      } else {
+        await time.advanceTo(5_000);
+      }
       expect(run).toHaveBeenCalledOnce();
       expect(scheduler.nextWakeAtMs).toBeNull();
       await scheduler.stop();
     },
   );
-
-  it("keeps the earlier wall deadline as well as the elapsed deadline", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    time.setTime(9_000);
-    scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
-    time.setTime(4_000);
-    await time.advanceBy(500);
-    scheduler.schedule({ id: "queue", delayMs: 2_000, mode: "earliest", run });
-    time.setTime(6_499);
-    scheduler.schedule({ id: "other", atMs: 6_499, run: () => {} });
-    await time.wake();
-    expect(run).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBe(6_500);
-    await time.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    await scheduler.stop();
-  });
 
   it("retains an already elapsed wake when another due job refreshes its deadline", async () => {
     const { time, scheduler } = fixture();
@@ -328,6 +520,26 @@ describe("Gateway timed work", () => {
     gate.resolve();
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
+    await scheduler.stop();
+  });
+
+  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
+    const { time, scheduler } = fixture();
+    schedulerLog.debug.mockClear();
+    schedulerLog.trace.mockClear();
+    const sample = vi.fn();
+    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
+    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    expect(sample).toHaveBeenCalledTimes(3);
+    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
+    expect(schedulerLog.trace.mock.calls).toEqual([
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+    ]);
     await scheduler.stop();
   });
 

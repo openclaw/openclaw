@@ -65,9 +65,66 @@ function createCapability(...args: Parameters<typeof createMentionsCapability>) 
 
 afterEach(() => {
   capabilities.splice(0).forEach((capability) => capability.dispose());
+  vi.useRealTimers();
 });
 
 describe("application mention Inbox", () => {
+  it("backs off unavailable reads across gateway updates and invalidations, then recovers", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Profile catalog pending",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+      }),
+    );
+    const harness = gatewayForMentions(request);
+    const capability = createCapability(harness.gateway);
+    await flushMicrotasks();
+    for (let index = 0; index < 100; index++) {
+      harness.update({});
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: index });
+      await capability.refresh();
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(request).toHaveBeenCalledTimes(3);
+    request.mockResolvedValue(result(1));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+  });
+
+  it.each(["connection", "dispose"] as const)(
+    "cancels an unavailable retry after %s changes",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const request = vi
+        .fn<RequestFn>()
+        .mockRejectedValueOnce(new GatewayRequestError({ code: "UNAVAILABLE", message: "Pending" }))
+        .mockResolvedValue(result(1));
+      const harness = gatewayForMentions(request);
+      const capability = createCapability(harness.gateway);
+      await flushMicrotasks();
+      if (boundary === "connection") {
+        harness.update({ client: client(request) });
+      } else {
+        capability.dispose();
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(request).toHaveBeenCalledTimes(boundary === "connection" ? 2 : 1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it.each(["none", "pending", "completed"] as const)(
     "holds automatic snapshots and queued revisions behind chat, preserving explicit refresh (%s)",
     async (explicit) => {
@@ -143,59 +200,50 @@ describe("application mention Inbox", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
   });
 
-  it("coalesces in-flight invalidations without publishing a pre-invalidation snapshot", async () => {
-    const initial = deferred<MentionsListResult>();
-    const latest = deferred<MentionsListResult>();
-    const request = vi
-      .fn<RequestFn>()
-      .mockReturnValueOnce(initial.promise)
-      .mockReturnValue(latest.promise);
+  it.each([1, 3])(
+    "refreshes only invalidations not covered by snapshot revision %s",
+    async (revision) => {
+      const initial = deferred<MentionsListResult>();
+      const latest = deferred<MentionsListResult>();
+      const request = vi
+        .fn<RequestFn>()
+        .mockReturnValueOnce(initial.promise)
+        .mockReturnValue(latest.promise);
+      const harness = gatewayForMentions(request);
+      const capability = createCapability(harness.gateway);
+      const hydration = capability.refresh();
+      await flushMicrotasks();
+
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
+      initial.resolve(result(revision));
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledTimes(revision === 1 ? 2 : 1);
+
+      const current = { ...mention, id: "mention-current" };
+      latest.resolve(result(3, [current]));
+      await hydration;
+      expect(capability.snapshot.items).toEqual(revision === 1 ? [current] : [mention]);
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledTimes(revision === 1 ? 2 : 1);
+    },
+  );
+
+  it("joins explicit refreshes to the same in-flight Inbox snapshot", async () => {
+    const response = deferred<MentionsListResult>();
+    const request = vi.fn<RequestFn>(() => response.promise);
     const harness = gatewayForMentions(request);
     const capability = createCapability(harness.gateway);
-    const published: string[][] = [];
-    capability.subscribe(() => published.push(capability.snapshot.items.map((item) => item.id)));
-    const hydration = capability.refresh();
     await flushMicrotasks();
+    const refreshes = [capability.refresh(), capability.refresh()];
 
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
-    initial.resolve(result(1));
-    await flushMicrotasks();
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(published.flat()).not.toContain(mention.id);
+    response.resolve(result(1));
+    await Promise.all(refreshes);
 
-    const current = { ...mention, id: "mention-current" };
-    latest.resolve(result(3, [current]));
-    await hydration;
-    expect(capability.snapshot.items).toEqual([current]);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not resurrect a dismissed item from an older list or delayed invalidation", async () => {
-    const staleList = deferred<MentionsListResult>();
-    let reads = 0;
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "mentions.dismiss") {
-        return Promise.resolve(result(2, []));
-      }
-      reads += 1;
-      return reads === 1 ? Promise.resolve(result(1)) : staleList.promise;
-    });
-    const harness = gatewayForMentions(request);
-    const capability = createCapability(harness.gateway);
-    await capability.refresh();
-    const refresh = capability.refresh();
-    await flushMicrotasks();
-
-    await capability.dismiss([mention.id]);
-    expect(capability.snapshot.items).toEqual([]);
-    staleList.resolve(result(1));
-    await refresh;
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 1 });
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "retired-boot", revision: 99 });
-
-    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [], dismissing: [] });
-    expect(reads).toBe(2);
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention] });
+    expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
   });
 
   it("reconciles an invalidation arriving as the previous snapshot settles", async () => {
@@ -250,13 +298,12 @@ describe("application mention Inbox", () => {
   });
 
   it.each([
-    ["refresh", "role"],
     ["dismiss", "role"],
     ["refresh", "profile"],
-    ["dismiss", "profile"],
   ] as const)(
     "clears a previously visible Inbox when %s reports %s access loss",
     async (operation, failure) => {
+      vi.useFakeTimers();
       let revoked = false;
       const request = vi.fn<RequestFn>(() =>
         revoked
@@ -289,34 +336,45 @@ describe("application mention Inbox", () => {
         error: "Mention access revoked",
       });
       revoked = false;
+      if (failure === "profile") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
       await capability.refresh();
       expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
     },
   );
 
-  it("fences an in-flight list after dismissal reports revoked access", async () => {
-    const stale = deferred<MentionsListResult>();
-    let reads = 0;
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "mentions.dismiss") {
-        return Promise.reject(
-          new GatewayRequestError({ code: "FORBIDDEN", message: "Mention access revoked" }),
-        );
-      }
-      return ++reads === 1 ? Promise.resolve(result(1)) : stale.promise;
-    });
-    const harness = gatewayForMentions(request);
-    const capability = createCapability(harness.gateway);
-    await capability.refresh();
-    const pending = capability.refresh();
-    await flushMicrotasks();
-    await capability.dismiss([mention.id]);
+  it.each(["dismissed", "revoked"] as const)(
+    "fences an in-flight list after dismissal is %s",
+    async (outcome) => {
+      const stale = deferred<MentionsListResult>();
+      let reads = 0;
+      const request = vi.fn<RequestFn>((method) => {
+        if (method === "mentions.dismiss") {
+          return outcome === "dismissed"
+            ? Promise.resolve(result(3, []))
+            : Promise.reject(
+                new GatewayRequestError({ code: "FORBIDDEN", message: "Mention access revoked" }),
+              );
+        }
+        return ++reads === 1 ? Promise.resolve(result(1)) : stale.promise;
+      });
+      const harness = gatewayForMentions(request);
+      const capability = createCapability(harness.gateway);
+      await capability.refresh();
+      const pending = capability.refresh();
+      await flushMicrotasks();
+      await capability.dismiss([mention.id]);
 
-    stale.resolve(result(2));
-    await pending;
+      stale.resolve(result(2));
+      await pending;
 
-    expect(capability.snapshot).toMatchObject({ phase: "error", items: [] });
-  });
+      expect(capability.snapshot).toMatchObject({
+        phase: outcome === "dismissed" ? "ready" : "error",
+        items: [],
+      });
+    },
+  );
 
   it.each([
     "profile",

@@ -1,5 +1,5 @@
-import { mock } from "node:test";
 import { parentPort } from "node:worker_threads";
+import { mockNativeModuleExports } from "../../../test/helpers/native-module-mock.js";
 import type {
   CatalogInspection,
   CatalogInspectionTask,
@@ -10,40 +10,38 @@ let task: CatalogInspectionTask;
 let sqliteCopies = 0;
 let plans: CatalogInspection["plans"] = [];
 const sqlite = await import("../../infra/sqlite-snapshot-source.js");
-mock.module(new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url).href, {
-  namedExports: {
-    ...sqlite,
-    prepareSqliteReadOnlyLocationSync: (
-      ...args: Parameters<typeof sqlite.prepareSqliteReadOnlyLocationSync>
-    ) => {
-      sqliteCopies += 1;
-      return sqlite.prepareSqliteReadOnlyLocationSync(...args);
-    },
+// Bun updates existing namespace bindings when a module is mocked.
+const prepareSqliteReadOnlyLocationSync = sqlite.prepareSqliteReadOnlyLocationSync;
+mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url), {
+  ...sqlite,
+  prepareSqliteReadOnlyLocationSync: (
+    ...args: Parameters<typeof prepareSqliteReadOnlyLocationSync>
+  ) => {
+    sqliteCopies += 1;
+    return prepareSqliteReadOnlyLocationSync(...args);
   },
 });
 const models = await import("../models-config.js");
-mock.module(new URL("../models-config.ts", import.meta.url).href, {
-  namedExports: {
-    ...models,
-    planOpenClawModelsJsonSource: async (
-      ...args: Parameters<typeof models.planOpenClawModelsJsonSource>
-    ) => {
-      const plan = await models.planOpenClawModelsJsonSource(...args);
-      plans.push(plan);
-      return plan;
-    },
+const planOpenClawModelsJsonSource = models.planOpenClawModelsJsonSource;
+mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
+  ...models,
+  planOpenClawModelsJsonSource: async (
+    ...args: Parameters<typeof planOpenClawModelsJsonSource>
+  ) => {
+    const plan = await planOpenClawModelsJsonSource(...args);
+    plans.push(plan);
+    return plan;
   },
 });
 const catalog = await import("../prepared-model-runtime.full-catalog.js");
-mock.module(new URL("../prepared-model-runtime.full-catalog.ts", import.meta.url).href, {
-  namedExports: {
-    ...catalog,
-    prepareFullCatalogFacts: (...args: Parameters<typeof catalog.prepareFullCatalogFacts>) => {
-      if (task.inspection?.failCatalog) {
-        throw new Error("synthetic catalog construction failure");
-      }
-      return catalog.prepareFullCatalogFacts(...args);
-    },
+const prepareFullCatalogFacts = catalog.prepareFullCatalogFacts;
+mockNativeModuleExports(new URL("../prepared-model-runtime.full-catalog.ts", import.meta.url), {
+  ...catalog,
+  prepareFullCatalogFacts: (...args: Parameters<typeof prepareFullCatalogFacts>) => {
+    if (task.inspection?.failCatalog) {
+      throw new Error("synthetic catalog construction failure");
+    }
+    return prepareFullCatalogFacts(...args);
   },
 });
 const { getAuthoredConfigSecretRef, getConfigResolutionFacts, getResolvedConfigEnvSecretRef } =
@@ -54,8 +52,7 @@ const { resolveUsableCustomProviderApiKey } = await import("../model-auth-provid
 const { inspectSharedAuthLegacyRowsReadOnly } =
   await import("../auth-profiles/shared-store-bootstrap.js");
 
-// Inspect the exact received clone and completed worker result, not a reconstructed parent copy.
-port.on("message", (message: { input: CatalogInspectionTask }) => {
+function inspectInput(message: { input: CatalogInspectionTask }) {
   task = message.input;
   sqliteCopies = 0;
   plans = [];
@@ -66,7 +63,19 @@ port.on("message", (message: { input: CatalogInspectionTask }) => {
       env: task.value.input.env,
     });
   }
-});
+}
+// Observe input with the real handler so initialization cannot consume queued tasks early.
+const on = port.on.bind(port);
+port.on = (event, listener) => {
+  if (event === "message") {
+    port.on = on;
+    return on(event, (message: { input: CatalogInspectionTask }) => {
+      inspectInput(message);
+      Reflect.apply(listener, port, [message]);
+    });
+  }
+  return on(event, listener);
+};
 const post = port.postMessage.bind(port);
 port.postMessage = (message: { status: string; value?: object }, transferList) => {
   let response = message;

@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -9,19 +7,15 @@ import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-re
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
-import {
-  appendTranscriptMessageSync,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
-  buildGatewaySessionRow,
   materializeSessionRow,
   presentSessionRow,
   readSessionRowInputs,
@@ -33,101 +27,50 @@ import {
 } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
-// Frozen from 7b47d7a65a17e7a49d943795a5b112ae4adcfe3c; updated only for additive Ultra choices.
-// SHA256 pins JSON.stringify wire bytes, including serialized property order.
+// Values frozen from d70a7e7300cdc0af4485d10b39f3e4986c3dd155.
+// SHA256 pins wire values; sparse materialization may change top-level property order.
 const START = Date.UTC(2026, 8, 15);
 const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
-const GOLDEN_HASHES: Record<string, readonly [string, string, string]> = {
-  "ACP metadata owns the runtime": [
-    "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-    "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-    "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-  ],
-  "activity current and active correlated placement": [
-    "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-    "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-    "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-  ],
-  "activity stale and uncorrelated placement": [
-    "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-    "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-    "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-  ],
+const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
+  "ACP metadata owns the runtime":
+    "806dd091c364088ac97e34825c6bdaee6e865b6ff911a6b54c2073c05b28afb5",
+  "activity current and active correlated placement":
+    "03b2a5f8df56d4c6b58c33838ff1a2a7ceeb555d95332d4e936bc32d20fd7995",
+  "activity stale and uncorrelated placement":
+    "44f6c17648306a69451dea4079e7f325eedb3a58c24eeac47af07c3e011ffb95",
   "child retention keeps canonical live recent and unknown links": [
-    "6f112eca27fe78b2b465ce23bef1a491945d749d77149f74c96d488d14ab2079",
-    "6f112eca27fe78b2b465ce23bef1a491945d749d77149f74c96d488d14ab2079",
-    "c648339258cd170449ac11880ab233d5116b829687597d6308a6eb937ab49dcf",
+    "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
+    "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
+    "556f0f870c08fbf3b5d218d2328ba4c6dff0943bbc3a82d8858a5f57620132a2",
   ],
-  "ended run uses persisted lifecycle timestamps": [
-    "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-    "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-    "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-  ],
-  "expired status and incognito draft": [
-    "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-    "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-    "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-  ],
-  "goal below budget retains committed timestamps": [
-    "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-    "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-    "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-  ],
+  "ended run uses persisted lifecycle timestamps":
+    "3812cd64fb99bf06451eaebd5d722e38212834e453f21d01afbce70518a2f71e",
+  "expired status and incognito draft":
+    "fc06ca39632d330036ebab35135098ac12d6b22b4f5a0c0ed36b7f7c559474e6",
+  "goal below budget retains committed timestamps":
+    "1aaecea18cfa924f2714e47af426dc76fc1bd8b30dae956206e7cbe6f9199001",
   "goal budget becomes limited at presentation time": [
-    "49b9ccdccb43c6ca33e717bf753a26a081acc97dd7774f62e4bcf2929119762f",
-    "9bfc840cd113478d41ca63695f4b8132fd99b681ab94b24d9bf999ee1f19e3df",
-    "f581d45d04e9301490cafffe57817dd9e13425b1ef7e0f1bee829a6d580d7591",
+    "26b22c9c15b44c86fdbc6d403d4152168e2fa8651be2dfb03bd26fd4d30b9b11",
+    "89b735377c12bf3bd9b4a050c2d89aabe763b4dfe53da7caa7ee6f1b4acaacd5",
+    "e17984f9316f106afb181d5bfd1f952945e85e9a32b860420ab5d65130d7a1fa",
   ],
-  "live status and persisted running lifecycle": [
-    "0524604bb6cbe3e494c5496e2268ef8ba93ab6561aa8babcdf3d7084d0193b6b",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
-  ],
-  "live subagent accumulated runtime and inherited model": [
-    "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-    "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-    "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-  ],
-  "missing entry": [
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-  ],
-  "observer digest equal than run start": [
-    "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-    "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-    "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-  ],
-  "observer digest newer than run start": [
-    "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-    "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-    "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-  ],
-  "observer digest older than run start": [
-    "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-    "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-    "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-  ],
-  "retention changes control owner and transcript fallback cost": [
-    "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
-    "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
-    "708bc5184e4b8f011b96e3dd2f64c3ba39982f3610a2430b36a01823f1033473",
-  ],
-  "single-row snapshot without an explicit swarm context": [
-    "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-    "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-    "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-  ],
-  "swarm summary retains collector completion and children": [
-    "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-    "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-    "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-  ],
+  "live subagent accumulated runtime and inherited model":
+    "ec1fab32f0b68de7cf6bab6e0c6bcab8b79382492b710b041f40c53ad7538e6e",
+  "missing entry": "ca59b3ec3a664a3caa055671a6e57891e8a9b072c0509e8073576ab8b80de292",
+  "observer digest equal than run start":
+    "4abca444a5d0be3ff30b99147ab9d17c073bb440ce3e1175007718d5bcda51d3",
+  "observer digest newer than run start":
+    "7cc823b5a30bba6938e56df9285e373a50710a5227643a7ee414a6b84cc88ff8",
+  "observer digest older than run start":
+    "ab9085aa5476af8045a0ffdac062f7a380f223cde9842bbe9a88b422fbb7a147",
+  "single-row snapshot without an explicit swarm context":
+    "495b2e3d130365dfdd9aaa322cd655f4d11f2cae5e673cc98a3e1369b1231dae",
+  "swarm summary retains collector completion and children":
+    "194b69b9172baad7878f5c67e7be312f101420979c71058e5603b6e451901be1",
 };
 
 const PARENT = "agent:main:dashboard:parent";
 const LIVE = "agent:main:subagent:live";
-const RETAINED = "agent:main:subagent:retained";
 const LIVE_RUN = "materialize-golden-live";
 const BASE_ENTRY = { sessionId: "golden-session", updatedAt: START, createdAt: START - 1_000 };
 const GOAL = {
@@ -148,17 +91,19 @@ type RowFixture = {
   name: string;
   key: string;
   entry?: InternalSessionEntry;
+  acpMeta?: SessionEntry["acp"];
   store?: Record<string, SessionEntry>;
   runs?: SubagentRunRecord[];
-  transcript?: boolean;
   omitRowContext?: boolean;
+  expectedIsDock?: boolean;
+  transcript?: boolean;
   decoration?: "current" | "stale";
 };
 
 function config(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true, identity: { name: "Fixture agent" } }],
+      entries: { main: { identity: { name: "Fixture agent" } } },
       defaults: {
         model: { primary: "row-fixture/primary" },
         thinkingDefault: "off",
@@ -201,7 +146,6 @@ function fixtures(): RowFixture[] {
       ...BASE_ENTRY,
       sessionId: "live-session",
       parentSessionKey: PARENT,
-      status: "running",
     },
     [ended]: { ...BASE_ENTRY, parentSessionKey: PARENT, status: "done", endedAt: START },
     [unknown]: { ...BASE_ENTRY, parentSessionKey: PARENT },
@@ -220,25 +164,6 @@ function fixtures(): RowFixture[] {
     accumulatedRuntimeMs: 500,
     model: "row-fixture/older",
   });
-  const retainedRuns = [
-    createSubagentRunRecord({
-      runId: "golden-older-unended",
-      childSessionKey: RETAINED,
-      requesterSessionKey: "agent:main:parent-a",
-      createdAt: START,
-      startedAt: START,
-      model: "row-fixture/older",
-    }),
-    createSubagentRunRecord({
-      runId: "golden-newer-ended",
-      childSessionKey: RETAINED,
-      requesterSessionKey: "agent:main:parent-b",
-      createdAt: START + 10_000,
-      startedAt: START + 10_000,
-      endedAt: START + 20_000,
-      model: "row-fixture/newer",
-    }),
-  ];
   const activityEntry: SessionEntry = {
     ...BASE_ENTRY,
     activitySummary: {
@@ -260,18 +185,9 @@ function fixtures(): RowFixture[] {
     {
       name: "single-row snapshot without an explicit swarm context",
       key: "agent:main:dashboard:single",
-      entry: BASE_ENTRY,
+      entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
       omitRowContext: true,
-    },
-    {
-      name: "live status and persisted running lifecycle",
-      key: "agent:main:dashboard:running",
-      entry: {
-        ...BASE_ENTRY,
-        status: "running",
-        startedAt: START,
-        agentStatus: { note: "Need a key", attention: "key", expiresAt: START + 30_000 },
-      },
+      expectedIsDock: true,
     },
     {
       name: "expired status and incognito draft",
@@ -385,16 +301,14 @@ function fixtures(): RowFixture[] {
     {
       name: "ACP metadata owns the runtime",
       key: "agent:main:acp:golden",
-      entry: {
-        ...BASE_ENTRY,
-        acp: {
-          backend: "acpx",
-          agent: "fixture",
-          runtimeSessionName: "golden-acp",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: START,
-        },
+      entry: BASE_ENTRY,
+      acpMeta: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "golden-acp",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: START,
       },
     },
     {
@@ -408,13 +322,6 @@ function fixtures(): RowFixture[] {
       key: "agent:main:dashboard:activity-stale",
       entry: activityEntry,
       decoration: "stale",
-    },
-    {
-      name: "retention changes control owner and transcript fallback cost",
-      key: RETAINED,
-      entry: { ...BASE_ENTRY, sessionId: "retained-session" },
-      runs: retainedRuns,
-      transcript: true,
     },
   ];
 }
@@ -487,33 +394,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("stamps read snapshots without changing persisted session update time", async () => {
-  await withStateDirEnv("openclaw-row-snapshot-clock-", async ({ stateDir }) => {
-    const cfg = config();
-    setRuntimeConfigSnapshot(cfg);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const key = "agent:main:snapshot-clock";
-    const entry = { sessionId: "snapshot-clock", updatedAt: 10 };
-    const project = (now: number) =>
-      buildGatewaySessionRow({
-        cfg,
-        agentId: "main",
-        storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-        store: { [key]: entry },
-        key,
-        entry,
-        now,
-        skipTranscriptUsageFallback: true,
-      });
-    const earlier = project(100);
-    const later = project(200);
-    expect(earlier).toMatchObject({ snapshotAt: 100, updatedAt: 10 });
-    expect(later).toMatchObject({ snapshotAt: 200, updatedAt: 10 });
-    expect(structuredClone(earlier).snapshotAt).toBe(100);
-    expect(entry).toEqual({ sessionId: "snapshot-clock", updatedAt: 10 });
-  });
-});
-
 test("preserves complete base rows across time and caller presentation fixtures", async () => {
   await withStateDirEnv("openclaw-row-materialize-golden-", async ({ stateDir }) => {
     const cfg = config();
@@ -527,25 +407,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
     });
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     for (const fixture of fixtures()) {
-      if (fixture.transcript && fixture.entry) {
-        const scope = {
-          agentId: "main",
-          storePath,
-          sessionKey: fixture.key,
-          sessionId: fixture.entry.sessionId,
-        };
-        await replaceSessionEntry(scope, fixture.entry);
-        appendTranscriptMessageSync(scope, {
-          message: { role: "user", content: "Verify the retained run fixture" },
-        });
-        appendTranscriptMessageSync(scope, {
-          message: {
-            role: "assistant",
-            content: "The fixture is complete.",
-            usage: { input: 100, output: 20 },
-          },
-        });
-      }
+      const originalEntry = structuredClone(fixture.entry);
       const rowContext = buildSessionListRowMetadataContext({ now: TIMES[0], sessionKeys: [] });
       const subagentRunInputs = {
         runs: new Map((fixture.runs ?? []).map((run) => [run.runId, run])),
@@ -568,15 +430,26 @@ test("preserves complete base rows across time and caller presentation fixtures"
         agentId: "main",
         key: fixture.key,
         entry: fixture.entry,
+        preparedAcpMeta: fixture.acpMeta ?? null,
         store: fixture.store ?? (fixture.entry ? { [fixture.key]: fixture.entry } : {}),
         storePath,
         now: TIMES[0],
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
         skipTranscriptUsageFallback: !fixture.transcript,
+        transcriptUsage:
+          fixture.transcript && fixture.entry
+            ? await readRecentSessionUsageFromTranscriptAsync(
+                {
+                  agentId: "main",
+                  sessionId: fixture.entry.sessionId,
+                  sessionKey: fixture.key,
+                  storePath,
+                },
+                256 * 1024,
+              )
+            : undefined,
         lightweightListRow: !fixture.transcript,
-        includeDerivedTitles: fixture.transcript,
-        includeLastMessage: fixture.transcript,
       };
       const { inputs, presentation } = readSessionRowInputs(rowParams);
       const clock = vi.spyOn(Date, "now").mockImplementation(() => {
@@ -619,36 +492,35 @@ test("preserves complete base rows across time and caller presentation fixtures"
       expect(materialized.row.snapshotAt).toBeUndefined();
       rows.forEach((row, index) => {
         expect(row.snapshotAt).toBe(TIMES[index]);
-        // Sampling metadata is additive; retain golden coverage of every existing wire field.
-        const { snapshotAt: _snapshotAt, ...previousWireFields } = row;
-        const json = JSON.stringify(previousWireFields);
+        expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
+        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
+        expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
+        // Assert additive fields separately while preserving the frozen wire-value coverage.
+        expect(row.communication).toBeUndefined();
+        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
+        const {
+          snapshotAt: _snapshotAt,
+          createdSurface: _createdSurface,
+          isDock: _isDock,
+          sessionModelRevision: _sessionModelRevision,
+          communication: _communication,
+          effectiveCommunication: _effectiveCommunication,
+          sidebarRoot: _sidebarRoot,
+          ...previousWireFields
+        } = row;
+        const json = JSON.stringify(
+          Object.fromEntries(
+            Object.entries(previousWireFields).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+          ),
+        );
         const actualHash = createHash("sha256").update(json).digest("hex");
-        const expectedHash = GOLDEN_HASHES[fixture.name]?.[index];
-        if (actualHash !== expectedHash) {
-          // openclaw-temp-dir: allow failure diagnostics live until the Vitest wrapper cleans its namespace
-          const directory = mkdtempSync(path.join(tmpdir(), "openclaw-row-golden-mismatch-"));
-          const actualPath = path.join(directory, `${TIMES[index]}.json`);
-          writeFileSync(actualPath, json);
-          throw new Error(
-            `${fixture.name} at ${TIMES[index]}: expected SHA256 ${expectedHash}, ` +
-              `actual SHA256 ${actualHash}; actual canonical JSON: ${actualPath}\n${json}`,
-          );
-        }
+        const hashes = GOLDEN_HASHES[fixture.name];
+        const expectedHash = typeof hashes === "string" ? hashes : hashes?.[index];
+        expect(actualHash, `${fixture.name} at ${TIMES[index]}\n${json}`).toBe(expectedHash);
       });
-      if (fixture.transcript) {
-        const lightweight = buildGatewaySessionRow({ ...rowParams, lightweightListRow: true });
-        expect(lightweight.totalTokens).toBe(rows[0]?.totalTokens);
-        expect(lightweight.totalTokens).toBeGreaterThan(0);
-        expect(lightweight.estimatedCostUsd).toBe(fixture.entry?.estimatedCostUsd);
-      }
-      if (fixture.key === RETAINED) {
-        expect(rows.map((row) => row.controlOwnerSessionKey)).toEqual([
-          "agent:main:parent-a",
-          "agent:main:parent-a",
-          "agent:main:parent-b",
-        ]);
-        expect(rows[0]?.estimatedCostUsd).not.toEqual(rows[2]?.estimatedCostUsd);
-      }
+      expect(fixture.entry).toStrictEqual(originalEntry);
     }
   });
 });

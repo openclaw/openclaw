@@ -169,53 +169,32 @@ describe("managed Linux private audio", () => {
     expect(f.runs[0]?.activity.resultSettled).toBe(false);
   });
 
-  it.each(["pulseaudio", "parec"])(
-    "advertises absent %s without starting a server",
-    async (missing) => {
-      const f = fixture({ missing });
+  it.each(["missing server", "missing recorder", "server timeout"])(
+    "reaps unavailable audio setup: %s",
+    async (failure) => {
+      const missing =
+        failure === "server timeout"
+          ? undefined
+          : failure === "missing server"
+            ? "pulseaudio"
+            : "parec";
+      vi.useFakeTimers();
+      const f = fixture(missing ? { missing } : { silentServer: true });
+      if (!missing) {
+        await f.serverSpawned.promise;
+        await vi.advanceTimersByTimeAsync(101);
+      }
       const audio = await f.owner.ready;
       expect(audio.source).toBeUndefined();
       expect(audio.failed).toBeUndefined();
-      expect(audio.unavailableReason).toContain(missing + " is not installed");
-      expect(f.inputs).toHaveLength(0);
+      expect(audio.unavailableReason).toContain(
+        missing ? missing + " is not installed" : "startup timed out",
+      );
+      expect(f.inputs).toHaveLength(missing ? 0 : 1);
       expect(f.scopeCleaned).toHaveBeenCalledOnce();
+      expect(f.runs.every((run) => run.activity.resultSettled)).toBe(true);
     },
   );
-
-  it("bounds server readiness and reaps failed startup", async () => {
-    vi.useFakeTimers();
-    const f = fixture({ silentServer: true });
-    await f.serverSpawned.promise;
-    await vi.advanceTimersByTimeAsync(101);
-    expect((await f.owner.ready).unavailableReason).toContain("startup timed out");
-    expect(f.runs.every((run) => run.activity.resultSettled)).toBe(true);
-  });
-
-  it("bounds capture readiness without stopping the desktop server", async () => {
-    const f = fixture({ silentCapture: true });
-    const audio = await f.owner.ready;
-    vi.useFakeTimers();
-    const started = audio.source!.start(new AbortController().signal);
-    const rejected = expect(started).rejects.toThrow("capture startup timed out");
-    await f.captureSpawned.promise;
-    await vi.advanceTimersByTimeAsync(101);
-    await rejected;
-    expect(f.runs[1]?.activity.resultSettled).toBe(true);
-    expect(f.runs[0]?.activity.resultSettled).toBe(false);
-  });
-
-  it("joins abort cleanup during pending native admission", async () => {
-    const f = fixture({ deferCapture: true });
-    const audio = await f.owner.ready;
-    const controller = new AbortController();
-    const started = audio.source!.start(controller.signal);
-    const rejected = expect(started).rejects.toThrow("aborted");
-    await f.captureSpawned.promise;
-    controller.abort();
-    f.captureAdmission.resolve();
-    await rejected;
-    expect(f.runs[1]?.activity.resultSettled).toBe(true);
-  });
 
   it.each([true, false])(
     "revalidates live authority at native admission without an abort (%s)",
@@ -247,36 +226,63 @@ describe("managed Linux private audio", () => {
     },
   );
 
-  it("rechecks live authority after native startup settles and joins cleanup", async () => {
-    let current = true;
-    const f = fixture({
-      beforeCaptureReturn: () => {
-        current = false;
-      },
-    });
-    const audio = await f.owner.ready;
-    await expect(
-      audio.source!.start(new AbortController().signal, () => {
-        if (!current) {
-          throw new Error("viewer retired");
+  it.each([
+    ["timeout", "capture startup timed out"],
+    ["abort", "aborted"],
+    ["authority", "viewer retired"],
+    ["spawn", "parec spawn failed"],
+  ] as const)(
+    "joins failed capture admission without stopping the server: %s",
+    async (failure, message) => {
+      let current = true;
+      const f = fixture({
+        silentCapture: failure === "timeout",
+        deferCapture: failure === "abort",
+        captureFailure: failure === "spawn",
+        beforeCaptureReturn:
+          failure === "authority"
+            ? () => {
+                current = false;
+              }
+            : undefined,
+      });
+      const audio = await f.owner.ready;
+      if (failure === "spawn") {
+        await expect(audio.source!.start(AbortSignal.abort())).rejects.toThrow();
+        expect(f.inputs).toHaveLength(1);
+      }
+      if (failure === "timeout") {
+        vi.useFakeTimers();
+      }
+      const controller = new AbortController();
+      const started = audio.source!.start(
+        controller.signal,
+        failure === "authority"
+          ? () => {
+              if (!current) {
+                throw new Error("viewer retired");
+              }
+            }
+          : undefined,
+      );
+      const rejected = expect(started).rejects.toThrow(message);
+      if (failure === "timeout" || failure === "abort") {
+        await f.captureSpawned.promise;
+        if (failure === "timeout") {
+          await vi.advanceTimersByTimeAsync(101);
+        } else {
+          controller.abort();
+          f.captureAdmission.resolve();
         }
-      }),
-    ).rejects.toThrow("viewer retired");
-    expect(f.captureAdmitted).toHaveBeenCalledOnce();
-    expect(f.runs[1]?.activity.resultSettled).toBe(true);
-    expect(f.runs[0]?.activity.resultSettled).toBe(false);
-  });
-
-  it("reaps capture startup errors and rejects pre-aborted requests", async () => {
-    const f = fixture({ captureFailure: true });
-    const audio = await f.owner.ready;
-    await expect(audio.source!.start(AbortSignal.abort())).rejects.toThrow();
-    expect(f.inputs).toHaveLength(1);
-    await expect(audio.source!.start(new AbortController().signal)).rejects.toThrow(
-      "parec spawn failed",
-    );
-    expect(f.runs[1]?.activity.resultSettled).toBe(true);
-  });
+      }
+      await rejected;
+      if (failure === "authority") {
+        expect(f.captureAdmitted).toHaveBeenCalledOnce();
+      }
+      expect(f.runs[1]?.activity.resultSettled).toBe(true);
+      expect(f.runs[0]?.activity.resultSettled).toBe(false);
+    },
+  );
 
   it("bounds unread PCM and terminates a stalled viewer", async () => {
     const f = fixture();

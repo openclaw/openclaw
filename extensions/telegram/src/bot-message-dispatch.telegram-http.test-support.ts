@@ -228,6 +228,9 @@ export function createTelegramDispatchHttpFixture() {
   });
 
   beforeEach(async () => {
+    // The fixture owns a loopback Bot API; inherited host proxies must not intercept it.
+    vi.stubEnv("NO_PROXY", "127.0.0.1,localhost,::1");
+    vi.stubEnv("no_proxy", "127.0.0.1,localhost,::1");
     state = await createOpenClawTestState({ label: "telegram-dispatch-http" });
     const append = transcriptRuntime.appendAssistantMirrorMessageByIdentity;
     const observer = vi
@@ -320,6 +323,7 @@ export function createTelegramDispatchHttpFixture() {
     botApiCallWaiters.clear();
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
     await state.cleanup();
   });
 
@@ -393,7 +397,6 @@ export function createTelegramDispatchHttpFixture() {
       sendRecordVoice: async () => undefined,
       sendChatActionHandler: { sendChatAction: async () => undefined },
       ackReactionPromise: null,
-      reactionApi: null,
       statusReactionController: null,
       accountId: "default",
       turn: {

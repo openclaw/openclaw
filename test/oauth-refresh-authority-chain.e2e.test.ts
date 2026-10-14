@@ -328,7 +328,9 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
       slots: { memory: "none" },
     },
     agents: {
+      ownership: "explicit",
       defaults: {
+        systemAgent: { agentId: "owner" },
         model: { primary: OWNER_MODEL_REF, fallbacks: [] },
         models: {
           [OWNER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
@@ -340,10 +342,10 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
         sandbox: { mode: "off" },
         timeoutSeconds: 60,
       },
-      list: [
-        { id: "owner", default: true, model: OWNER_MODEL_REF },
-        { id: "peer", model: PEER_MODEL_REF },
-      ],
+      entries: {
+        owner: { model: OWNER_MODEL_REF },
+        peer: { model: PEER_MODEL_REF },
+      },
     },
     tools: { profile: "minimal" },
     models: {
@@ -458,10 +460,13 @@ function expiredAccountA(): OAuthCredential {
   });
 }
 
-function expectAuthError(result: AgentResult, message: string): void {
+function expectAuthError(result: AgentResult, message: string | RegExp): void {
   expect(result).toMatchObject({
     status: "error",
-    error: expect.stringContaining(message),
+    error:
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
   });
 }
 
@@ -789,7 +794,12 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-logout-followup",
       });
       const followupTerminal = await followup.terminal;
-      expectAuthError(followupTerminal, `No API key found for provider "${PROVIDER_ID}".`);
+      expectAuthError(
+        followupTerminal,
+        new RegExp(
+          `^(?:No API key found for provider "${PROVIDER_ID}"|No credentials found for profile "${PROFILE_ID}")\\.`,
+        ),
+      );
       expect(scenario.provider.modelRequests).toHaveLength(0);
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();

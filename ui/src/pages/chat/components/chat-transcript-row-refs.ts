@@ -1,50 +1,42 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
-import { measureTranscriptRowRefs } from "./chat-transcript-geometry.ts";
 
 /** Stable row refs own connection fences and deferred observer pruning. */
 export class TranscriptRowRefs {
   private readonly refs = new Map<string, (element?: Element) => void>();
   private pruneQueued = false;
-  private pendingRows = new Map<HTMLElement, string>();
-  private measureQueued = false;
+  private pendingRows: Map<HTMLElement, string> | null = null;
 
   constructor(
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     private readonly callbacks: {
-      canMeasureVisibleRows: () => boolean;
       isCurrentRow: (element: HTMLElement, key: string) => boolean;
       onMount: (key: string) => void;
     },
   ) {}
 
   private queueMountedRow(element: HTMLElement, key: string): void {
-    this.pendingRows.set(element, key);
-    if (this.measureQueued) {
+    if (this.pendingRows) {
+      this.pendingRows.set(element, key);
       return;
     }
-    this.measureQueued = true;
-    // Nested message refs finish their preview clamps in a microtask. Capture
-    // this batch at the first checkpoint so later mounts get their own wait.
+    const pendingRows = new Map([[element, key]]);
+    this.pendingRows = pendingRows;
+    // Lit refs run before connection. Register only the committed, current rows;
+    // TanStack's ResizeObserver owns their first post-layout measurement.
     queueMicrotask(() => {
-      const pendingRows = this.pendingRows;
-      this.pendingRows = new Map();
-      this.measureQueued = false;
-      queueMicrotask(() => {
-        const elements = [...pendingRows].flatMap(([row, rowKey]) =>
+      this.pendingRows = null;
+      for (const [row, rowKey] of pendingRows) {
+        if (
           row.isConnected &&
           row.dataset.virtualRowKey === rowKey &&
           this.callbacks.isCurrentRow(row, rowKey)
-            ? [row]
-            : [],
-        );
-        measureTranscriptRowRefs(
-          elements,
-          this.virtualizer,
-          this.callbacks.canMeasureVisibleRows(),
-        );
-      });
+        ) {
+          this.virtualizer.measureElement(row);
+        }
+      }
     });
   }
+
   forKey(key: string): (element?: Element) => void {
     let callback = this.refs.get(key);
     if (!callback) {
@@ -84,6 +76,6 @@ export class TranscriptRowRefs {
 
   clear(): void {
     this.refs.clear();
-    this.pendingRows.clear();
+    this.pendingRows?.clear();
   }
 }

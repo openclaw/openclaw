@@ -195,37 +195,28 @@ describe("memory scenario completed reply", () => {
     return await result;
   }
 
-  it("reads the edited final only after the originating turn completes", async () => {
-    expect(await runRecall("lemon pepper wings with blue cheese")).toMatchObject({
-      status: "pass",
-    });
+  const preference = "lemon pepper wings with blue cheese";
+  it.each<
+    [text: string | undefined, leak: "group" | "anchor" | undefined, failure: string | undefined]
+  >([
+    [preference, undefined, undefined],
+    [undefined, undefined, "completed without a retained reply"],
+    ...[
+      "lemon pepper wings with ranch",
+      `${preference}; GROUP-ONLY loaded nachos with black olives`,
+      `${preference}; ANCHOR-ONLY pretzel bites test marker`,
+    ].map<[string, undefined, string]>((text) => [
+      text,
+      undefined,
+      "private target missed recalled preference",
+    ]),
+    [preference, "group", "group transcript"],
+    [preference, "anchor", "anchor transcript"],
+  ])("validates final=%s, helper leakage=%s only after completion", async (text, leak, failure) => {
+    expect(await runRecall(text, leak)).toMatchObject(
+      failure === undefined
+        ? { status: "pass" }
+        : { status: "fail", details: expect.stringContaining(failure) },
+    );
   });
-
-  it("rejects an acknowledged turn whose preview was removed without a retained reply", async () => {
-    expect(await runRecall()).toMatchObject({
-      status: "fail",
-      details: expect.stringContaining("completed without a retained reply"),
-    });
-  });
-
-  it.each([
-    "lemon pepper wings with ranch",
-    "lemon pepper wings with blue cheese; GROUP-ONLY loaded nachos with black olives",
-    "lemon pepper wings with blue cheese; ANCHOR-ONLY pretzel bites test marker",
-  ])("rejects the completed wrong or leaking preference: %s", async (text) => {
-    expect(await runRecall(text)).toMatchObject({
-      status: "fail",
-      details: expect.stringContaining("private target missed recalled preference"),
-    });
-  });
-
-  it.each(["group", "anchor"] as const)(
-    "rejects completed recall with %s helper leakage",
-    async (leak) => {
-      expect(await runRecall("lemon pepper wings with blue cheese", leak)).toMatchObject({
-        status: "fail",
-        details: expect.stringContaining(`${leak} transcript`),
-      });
-    },
-  );
 });

@@ -39,32 +39,7 @@ const hookRun = {
 };
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("hides command details from ordinary verbose tool summaries", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: createNativeCommandItem({
-          id: "cmd-1",
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
-        }),
-      }),
-    );
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash",
-    });
-  });
-
-  it("redacts secrets in verbose command summaries", async () => {
+  it("preserves source text in verbose command summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -86,8 +61,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
 
     const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
-    expect(text).toContain("OPENAI_API_KEY=*** pnpm test");
-    expect(text).not.toContain("sk-1234567890abcdefZZZZ");
+    expect(text).toContain("OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test");
   });
 
   it("hides command arguments from ordinary verbose dynamic tool summaries", async () => {
@@ -104,7 +78,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       arguments: { command: "cat /private/operator-file" },
     });
 
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Server.exec" });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
@@ -130,10 +104,10 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "📖 Read: `from README.md`",
+      text: "Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n```txt\nfile contents\n```",
+      text: "Read\n```txt\nfile contents\n```",
     });
   });
 

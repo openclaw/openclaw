@@ -1,7 +1,7 @@
 import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerProvisioningDispatchPlacement } from "./worker-environments/placement-dispatch-failure.js";
-import { matchesWorkerPlacementTarget } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 export function createWorkerPlacementInitialRecovery(params: {
@@ -40,20 +40,10 @@ export function installWorkerPlacementReconcileGuard(params: {
       if (params.isStopping()) {
         return;
       }
-      const sessionIds = (await params.placements.readChangeSnapshot()).map(
-        ({ sessionId }) => sessionId,
-      );
-      const facts = await params.placements.readProjection(sessionIds, { current: true });
+      const owner = await params.placements.readEnvironmentOwner(environmentId);
       if (params.isStopping()) {
         return;
       }
-      const references = [...facts.placements.values()].filter(
-        (placement) => placement.environmentId === environmentId,
-      );
-      if (references.length > 1) {
-        throw new Error(`Worker environment ${environmentId} has multiple placement owners`);
-      }
-      const owner = references[0];
       if (owner && params.dispatch.hasPendingPlacementLifecycleOperation(owner.sessionId)) {
         // The live lifecycle operation owns provisioning. Registering recovery here would
         // supersede its initial-placement waiters; retained recovery still uses its dedupe path.

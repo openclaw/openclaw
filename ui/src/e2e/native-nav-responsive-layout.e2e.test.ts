@@ -53,7 +53,7 @@ suite.define(() => {
     });
     const response = await page.goto(suite.server.baseUrl);
     expect(response?.status()).toBe(200);
-    await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+    await page.locator(".sidebar-rail").waitFor({ state: "attached" });
     return page;
   }
 
@@ -119,153 +119,6 @@ suite.define(() => {
     await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
-  it("keeps browser sidebar header geometry aligned in LTR and RTL", async () => {
-    const page = await openPage({ width: 1440 });
-    const sidebarBrand = page.locator(".sidebar-brand");
-    const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
-    await expect.poll(() => agentName.textContent()).toBe("OpenClaw");
-
-    await expect
-      .poll(() =>
-        sidebarBrand
-          .locator(".sidebar-brand__collapse, .sidebar-brand__search")
-          .evaluateAll((buttons) =>
-            buttons.map((button) => {
-              const icon = button.querySelector("svg");
-              if (!icon) {
-                return null;
-              }
-              const buttonBox = button.getBoundingClientRect();
-              const iconBox = icon.getBoundingClientRect();
-              return Math.round(
-                buttonBox.left + buttonBox.width / 2 - (iconBox.left + iconBox.width / 2),
-              );
-            }),
-          ),
-      )
-      .toEqual([0, 0]);
-    await expect
-      .poll(() =>
-        sidebarBrand.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
-          const style = getComputedStyle(avatar);
-          return [style.width, style.height];
-        }),
-      )
-      .toEqual(["28px", "28px"]);
-    await expect
-      .poll(() =>
-        sidebarBrand.locator(".sidebar-brand__new-thread").evaluate((button) => {
-          const style = getComputedStyle(button);
-          return [style.width, style.height, style.boxShadow];
-        }),
-      )
-      .toEqual(["28px", "28px", "none"]);
-    const actionStyles = await sidebarBrand
-      .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
-      .evaluateAll((actions) =>
-        actions.map((action) => {
-          const icon = action.querySelector("svg");
-          const actionStyle = getComputedStyle(action);
-          const iconStyle = icon ? getComputedStyle(icon) : null;
-          return {
-            backgroundColor: actionStyle.backgroundColor,
-            borderStyle: actionStyle.borderTopStyle,
-            borderWidth: actionStyle.borderTopWidth,
-            boxShadow: actionStyle.boxShadow,
-            color: actionStyle.color,
-            iconOpacity: iconStyle?.opacity,
-            iconStrokeWidth: iconStyle?.strokeWidth,
-          };
-        }),
-      );
-    expect(actionStyles).toHaveLength(3);
-    expect(actionStyles[1]).toEqual(actionStyles[0]);
-    expect(actionStyles[2]).toEqual(actionStyles[0]);
-    await expect
-      .poll(() =>
-        sidebarBrand
-          .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
-          .evaluateAll((actions) =>
-            actions.map((action) => {
-              const icon = action.querySelector("svg");
-              if (!icon) {
-                return null;
-              }
-              const shapes = Array.from(
-                icon.querySelectorAll<SVGGraphicsElement>(
-                  "circle, ellipse, line, path, polygon, polyline, rect",
-                ),
-              );
-              const bounds = shapes.map((shape) => shape.getBBox());
-              const left = Math.min(...bounds.map((box) => box.x));
-              const right = Math.max(...bounds.map((box) => box.x + box.width));
-              return Math.round((right - left) * (icon.getBoundingClientRect().width / 24));
-            }),
-          ),
-      )
-      .toEqual([12, 12, 12]);
-
-    // One rail, one gap: adjacent controls touch in both directions, so no
-    // button carries a private optical offset left over from a bordered box.
-    const controlGaps = () =>
-      sidebarBrand
-        .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
-        .evaluateAll((actions) => {
-          const [first, ...rest] = actions.map((action) => action.getBoundingClientRect());
-          if (!first) {
-            return [];
-          }
-          let previous = first;
-          return rest.map((box) => {
-            const gap = Math.round(Math.max(box.left - previous.right, previous.left - box.right));
-            previous = box;
-            return gap;
-          });
-        });
-
-    await expect.poll(controlGaps).toEqual([0, 0]);
-
-    const actionInset = async (direction: "ltr" | "rtl") => {
-      const [brandBox, actionsBox] = await Promise.all([
-        sidebarBrand.boundingBox(),
-        sidebarBrand.locator(".sidebar-brand__actions").boundingBox(),
-      ]);
-      if (!brandBox || !actionsBox) {
-        return null;
-      }
-      return direction === "rtl"
-        ? Math.round(actionsBox.x - brandBox.x)
-        : Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
-    };
-    const nameFade = () =>
-      agentName.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return [style.paddingLeft, style.paddingRight, style.maskImage];
-      });
-
-    await expect.poll(() => actionInset("ltr")).toBe(2);
-    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
-    await page.evaluate(() => {
-      document.documentElement.dir = "rtl";
-    });
-    await expect.poll(() => actionInset("rtl")).toBe(0);
-    await expect.poll(controlGaps).toEqual([0, 0]);
-    // The fitting Latin name keeps its own direction in RTL page chrome.
-    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
-  });
-
-  it("keeps the native sidebar avatar larger", async () => {
-    const page = await openPage({ webChrome: true, width: 1440 });
-    await expect
-      .poll(() =>
-        page.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
-          const style = getComputedStyle(avatar);
-          return [style.width, style.height];
-        }),
-      )
-      .toEqual(["32px", "32px"]);
-  });
-
   it("opens search from the phone drawer while keeping the chat header compact", async () => {
     const page = await openPage({ hasTouch: true, height: 852, phone: true, width: 393 });
     const shell = page.locator(".shell");
@@ -288,14 +141,11 @@ suite.define(() => {
     await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
     const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
     await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-    await expect
-      .poll(() => page.locator(".shell-nav .sidebar-brand__collapse").isVisible())
-      .toBe(false);
 
     if (captureProof) {
       await writeFile(
         path.join(suite.artifactDir, "02-sidebar-drawer.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".sidebar-brand").first(), [
+        await takeControlUiElementScreenshot(page, page.locator(".sidebar-rail").first(), [
           drawerSearch,
         ]),
       );
@@ -380,11 +230,65 @@ suite.define(() => {
       await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
       await expect.poll(() => drawer.evaluate((element) => element.style.transform)).toBe("");
       await expect.poll(() => drawer.locator("openclaw-toast-host").count()).toBe(1);
-      await page.locator(".shell-nav-backdrop").click({ position: { x: width - 10, y: 100 } });
+      const backdrop = page.locator(".shell-nav-backdrop");
+      // Safari extends fixed/sticky background colors into its native chrome,
+      // then fades that tint independently of our closing scrim.
+      expect(
+        await backdrop.evaluate((element) => {
+          const positions: string[] = [];
+          for (
+            let ancestor: Element | null = element;
+            ancestor;
+            ancestor = ancestor.parentElement
+          ) {
+            positions.push(getComputedStyle(ancestor).position);
+          }
+          return positions.filter((position) => position === "fixed" || position === "sticky");
+        }),
+      ).toEqual([]);
+
+      // Synthetic safe areas exercise the real app canvas, not native Safari
+      // chrome. The scrim must cover the padding as well as the shell content.
+      await page.evaluate(() => {
+        const style = document.documentElement.style;
+        style.setProperty("--safe-area-top", "48px");
+        style.setProperty("--safe-area-bottom", "30px");
+        style.setProperty("--safe-area-left", "20px");
+        style.setProperty("--safe-area-right", "20px");
+      });
+      for (const canvasHeight of [height, height - 100]) {
+        await page.setViewportSize({ width, height: canvasHeight });
+        await expect
+          .poll(async () => {
+            return backdrop.evaluate((element) => {
+              const canvas = document.querySelector("openclaw-app")!.getBoundingClientRect();
+              const scrim = element.getBoundingClientRect();
+              const corners: [number, number][] = [
+                [canvas.left + 1, canvas.top + 1],
+                [canvas.right - 1, canvas.top + 1],
+                [canvas.left + 1, canvas.bottom - 1],
+                [canvas.right - 1, canvas.bottom - 1],
+              ];
+              return {
+                bounds: [scrim.x, scrim.y, scrim.width, scrim.height],
+                canvas: [canvas.x, canvas.y, canvas.width, canvas.height],
+                coversCorners: corners.every(
+                  ([x, y]) => document.elementFromPoint(x, y) === element,
+                ),
+              };
+            });
+          })
+          .toEqual({
+            bounds: [0, 0, width, canvasHeight],
+            canvas: [0, 0, width, canvasHeight],
+            coversCorners: true,
+          });
+      }
+      await backdrop.click({ position: { x: width - 10, y: 100 } });
       await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
       await expect.poll(() => shell.locator(":scope > openclaw-toast-host").count()).toBe(1);
       await page.getByRole("button", { name: "Expand sidebar" }).click();
-      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(20);
       expect(errors).toEqual([]);
     },
   );

@@ -25,7 +25,8 @@ import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-
 import { withInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { dispatchGatewayMethodInProcessRaw } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { loadSessionEntry, resolveGatewayModelSupportsImages } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import { resolveGatewayModelSupportsImages } from "./session-utils.js";
 import {
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
@@ -296,7 +297,7 @@ export function installAgentAuthorityProofFixture() {
       agentId: "main",
       sessionKey,
       sessionId,
-      storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+      storePath: (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
     };
     await sessionAccessor.appendTranscriptMessage(scope, {
       message: { role: "user", content: "prior transcript sentinel", timestamp: Date.now() },
@@ -373,9 +374,9 @@ export function installAgentAuthorityProofFixture() {
         void pending.catch(() => {});
         return pending;
       },
-      effects: (): ProofObservation => ({
+      effects: async (): Promise<ProofObservation> => ({
         ...owner.observation(),
-        pendingCount: listSessionPendingInputs(scope).total,
+        pendingCount: (await listSessionPendingInputs(scope)).total,
         transcriptChanged: !isDeepStrictEqual(
           sessionAccessor.loadTranscriptEventsSync(scope),
           before,

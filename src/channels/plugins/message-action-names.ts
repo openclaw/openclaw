@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
 /**
  * Deliberately closed, core-owned vocabulary so every transport can render every action.
  * Plugins add names through a core PR; runtime registration is intentionally unsupported.
@@ -66,3 +68,17 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
  * Message action name union derived from the canonical action list.
  */
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];
+
+const MESSAGE_TOOL_SEND_ACTIONS = new Set([
+  "send",
+  "thread-reply",
+  "sendWithEffect",
+  "sendAttachment",
+  "upload-file",
+]);
+
+/** Return true when a message action sends or uploads user-visible content. */
+export function isMessageToolSendActionName(action: unknown): boolean {
+  const normalized = normalizeOptionalString(action) ?? "";
+  return MESSAGE_TOOL_SEND_ACTIONS.has(normalized);
+}

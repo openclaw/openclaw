@@ -90,7 +90,12 @@ describe("Claw committed plugin requirement handoff", () => {
           },
           deps: {
             ...packageDeps(root, async () => ({})),
-            acquirePackageLease: () => ({ heartbeat: () => {}, release: () => {} }),
+            withPackageLease: async (_artifact, operation) =>
+              operation({
+                signal: new AbortController().signal,
+                assertOwned() {},
+                assertOwnedInTransaction() {},
+              }),
           },
         },
       ).catch((error: unknown) => error);
@@ -143,14 +148,17 @@ describe("Claw committed plugin requirement handoff", () => {
           reloadPlugins,
           deps: {
             ...packageDeps(root, async () => records),
-            acquirePackageLease: () => {
+            withPackageLease: async (_artifact, operation) => {
               heldPackages++;
-              return {
-                heartbeat: () => true,
-                release: () => {
-                  heldPackages--;
-                },
-              };
+              try {
+                return await operation({
+                  signal: new AbortController().signal,
+                  assertOwned() {},
+                  assertOwnedInTransaction() {},
+                });
+              } finally {
+                heldPackages--;
+              }
             },
             installPlugin: async (params) => {
               if (params.request.source !== "clawhub" || !params.request.expectedPluginId) {

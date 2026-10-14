@@ -1,6 +1,7 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
+    "agent.identity.changed": "Native identities refresh through native catalog loading; this event retires the Control UI connection-scoped identity cache.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",
@@ -24,7 +25,6 @@
     "presence": "Presence roster is a control-UI (web/desktop) surface; iOS does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
-    "session.reaction": "Transcript reactions are a Control UI collaboration surface; iOS does not render them.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; iOS reads visibility/sharingRole from session rows and has no sharing editor.",
     "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; iOS refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; iOS does not render or resolve session suggestions.",
@@ -41,6 +41,7 @@
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
+    "agent.identity.changed": "Native identities refresh through native catalog loading; this event retires the Control UI connection-scoped identity cache.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the Android app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; Android does not render the Gateway Devices page.",
@@ -66,7 +67,6 @@
     "presence": "Presence roster is a control-UI (web/desktop) surface; Android does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
-    "session.reaction": "Transcript reactions are a Control UI collaboration surface; Android does not render them.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; Android reads visibility/sharingRole from session rows and has no sharing editor.",
     "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; Android refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; Android does not render or resolve session suggestions.",

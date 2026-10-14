@@ -2,14 +2,9 @@ import type { Message, User } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramCallbackButton } from "./button-types.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
-
-export type TelegramCallbackButton = {
-  text: string;
-  callback_data: string;
-  style?: "danger" | "success" | "primary";
-};
 
 type TelegramCallbackReplyParams = Omit<
   NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
@@ -42,14 +37,6 @@ export function createTelegramCallbackMessageActions(params: {
       callbackMessage.message_id,
       text,
       editParams ? withCallbackBusinessParams(editParams) : callbackBusinessParams,
-    );
-  };
-
-  const clearCallbackButtons = async () => {
-    return await bot.api.editMessageReplyMarkup(
-      callbackMessage.chat.id,
-      callbackMessage.message_id,
-      withCallbackBusinessParams({ reply_markup: { inline_keyboard: [] } }),
     );
   };
 
@@ -94,8 +81,10 @@ export function createTelegramCallbackMessageActions(params: {
       if (errStr.includes("no text in the message")) {
         try {
           await deleteCallbackMessage();
-        } catch {}
-        await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard, ...extra } : extra);
+        } catch {
+          await editCallbackButtons([]).catch(() => {});
+        }
+        await replyToCallbackChat(text, editParams);
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;
       }
@@ -104,7 +93,7 @@ export function createTelegramCallbackMessageActions(params: {
 
   return {
     editCallbackMessage,
-    clearCallbackButtons,
+    clearCallbackButtons: () => editCallbackButtons([]),
     editCallbackButtons,
     editCallbackMessageWithButtons,
     deleteCallbackMessage,
@@ -174,11 +163,11 @@ export async function handleTelegramQuestionCallback(params: {
       clientDisplayName: "Telegram question",
     });
     if (params.callback.intent === "custom-input") {
-      if (result.status === "already-terminal") {
-        await params.feedback("This question was already answered.", "terminal");
-        return;
-      }
-      await params.feedback("Reply with your own answer.", "custom-input");
+      const terminal = result.status === "already-terminal";
+      await params.feedback(
+        terminal ? "This question was already answered." : "Reply with your own answer.",
+        terminal ? "terminal" : "custom-input",
+      );
       return;
     }
     await params

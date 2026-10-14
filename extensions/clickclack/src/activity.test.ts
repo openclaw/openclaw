@@ -45,39 +45,6 @@ describe("createClickClackActivityPublisher", () => {
     vi.useRealTimers();
   });
 
-  it("coalesces cumulative commentary snapshots into one POST per segment", async () => {
-    const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client);
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at" });
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at the repo" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage).toHaveBeenCalledWith({
-      channelId: "chn_1",
-      conversationId: undefined,
-      body: "Looking at the repo",
-      kind: "agent_commentary",
-      turnId: "msg_turn",
-    });
-    expect(updateMessageBody).not.toHaveBeenCalled();
-  });
-
-  it("PATCHes the commentary row when the snapshot grows after a debounce flush", async () => {
-    const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
-    await vi.advanceTimersByTimeAsync(20);
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", "First and second");
-  });
-
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client, { flushMs: 10 });
@@ -103,23 +70,6 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).toHaveBeenLastCalledWith("msg_1", "");
   });
 
-  it("opens a new durable row for each commentary segment (item id)", async () => {
-    const { client, createActivityMessage } = createClientMock();
-    const publisher = createPublisher(client, {
-      target: { conversationId: "dcn_1" },
-    });
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "before tool" });
-    publisher.onItemEvent({ itemId: "c2", kind: "preamble", progressText: "after tool" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(2);
-    const bodies = createActivityMessage.mock.calls.map(
-      (call) => (call[0] as { body: string }).body,
-    );
-    expect(bodies).toEqual(["before tool", "after tool"]);
-  });
-
   it("consumes canonical item ownership without rendering suppressed diagnostic siblings", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client);
@@ -131,6 +81,8 @@ describe("createClickClackActivityPublisher", () => {
       toolCallId: "toolu_1",
       kind: "tool",
       name: "exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
     });
     await publisher.finalize();
     publisher.onItemEvent({
@@ -153,9 +105,10 @@ describe("createClickClackActivityPublisher", () => {
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_tool",
-      body: "🛠️ Exec",
+      body: "Exec",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
+    expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
 
   it("updates a durable row when only the outcome changes to failed", async () => {
@@ -181,26 +134,6 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).toHaveBeenCalledWith("msg_1", expect.stringContaining("Read sample"));
   });
 
-  it("hides command metadata from item-only durable activity", async () => {
-    const { client, createActivityMessage } = createClientMock();
-    const publisher = createPublisher(client);
-
-    publisher.onItemEvent({
-      itemId: "tool:toolu_1",
-      toolCallId: "toolu_1",
-      kind: "tool",
-      name: "server.exec",
-      meta: "echo private-sentinel",
-      commandBearing: true,
-    });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "🧩 Server.exec", kind: "agent_tool" }),
-    );
-    expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
-  });
-
   it("posts the upgraded body directly when frames land before the first POST runs", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client);
@@ -217,7 +150,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_tool",
-      body: "📖 Read: Done",
+      body: "Read: Done",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
   });

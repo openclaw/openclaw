@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
+  noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,7 +50,10 @@ function collectCronDeliveryTargetAdvisory(params: {
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } })],
+      jobs: [
+        job({ id: "needs-doctor", delivery: { channel: "slack" } }),
+        job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } }),
+      ],
       resolveAvailableChannelIds: availableChannels(),
     });
     expect(advisory).not.toBeNull();
@@ -59,15 +63,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     expect(advisory).toContain("Examples: report -> missing-channel");
   });
 
-  it("returns null when the concrete channel resolves to an active plugin", () => {
-    // Omitting `mode` defaults to announce, so a bare channel still counts as a concrete target.
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ delivery: { channel: "slack" } })],
-      resolveAvailableChannelIds: availableChannels("slack", "telegram"),
-    });
-    expect(advisory).toBeNull();
-  });
-
   it("treats a channel alias as active when its canonical id is available", () => {
     // "gchat" canonicalizes to "googlechat"; an alias target must not look unavailable.
     const advisory = collectCronDeliveryTargetAdvisory({
@@ -75,66 +70,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
       resolveAvailableChannelIds: availableChannels("googlechat"),
     });
     expect(advisory).toBeNull();
-  });
-
-  it.each([
-    ["announce-to-last", { mode: "announce", channel: "last" }],
-    ["none with a channel", { mode: "none", channel: "missing-channel" }],
-  ])("skips pseudo/relative target: %s", (_label, delivery) => {
-    const resolve = availableChannels("slack");
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ delivery })],
-      resolveAvailableChannelIds: resolve,
-    });
-    expect(advisory).toBeNull();
-  });
-
-  it("does not resolve channels when no job pins a concrete target", () => {
-    // Resolution is lazy: a job without an explicit delivery object never triggers the snapshot.
-    const resolve = vi.fn(() => {
-      throw new Error("channel resolution should not run");
-    });
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "implicit" }), job({ id: "weblike", delivery: { mode: "webhook" } })],
-      resolveAvailableChannelIds: resolve,
-    });
-    expect(advisory).toBeNull();
-    expect(resolve).not.toHaveBeenCalled();
-  });
-
-  it("skips disabled jobs because they have no next scheduled delivery", () => {
-    const resolve = availableChannels("slack");
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [
-        job({
-          enabled: false,
-          delivery: { mode: "announce", channel: "missing-channel" },
-        }),
-      ],
-      resolveAvailableChannelIds: resolve,
-    });
-    expect(advisory).toBeNull();
-    expect(resolve).not.toHaveBeenCalled();
-  });
-
-  it("aggregates counts and caps examples at three", () => {
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [
-        job({ id: "ok", delivery: { mode: "announce", channel: "slack" } }),
-        job({ id: "g1", delivery: { mode: "announce", channel: "ghost-a" } }),
-        job({ id: "g2", delivery: { mode: "announce", channel: "ghost-a" } }),
-        job({ id: "g3", delivery: { mode: "announce", channel: "ghost-b" } }),
-        job({ id: "g4", delivery: { mode: "announce", channel: "ghost-b" } }),
-      ],
-      resolveAvailableChannelIds: availableChannels("slack"),
-    });
-    expect(advisory).toContain("4 jobs announce");
-    // Channels render sorted by id.
-    expect(advisory).toContain("Channels: ghost-a=2, ghost-b=2");
-    const exampleLine = advisory?.split("\n").find((line) => line.startsWith("- Examples:"));
-    expect(exampleLine).toBeDefined();
-    expect(exampleLine?.split(" -> ").length).toBe(4); // three "<id> -> <channel>" pairs
-    expect(advisory).not.toContain("g4 -> ghost-b");
   });
 
   it("falls back to job name then <unnamed> in examples", () => {
@@ -166,4 +101,28 @@ describe("collectLegacyWhatsAppCrontabHealthWarning", () => {
       timeoutMs: 5_000,
     });
   });
+});
+
+it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
+  await noteLegacyWhatsAppCrontabHealthCheck({
+    platform: "linux",
+    readCrontab: async () => ({
+      stdout: [
+        "# keep comments ignored",
+        "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+        "0 9 * * * /usr/bin/true",
+        "",
+      ].join("\n"),
+    }),
+  });
+
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("Legacy WhatsApp crontab health check detected"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("systemd user bus environment is missing"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
 });

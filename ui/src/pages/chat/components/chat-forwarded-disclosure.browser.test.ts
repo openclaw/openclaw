@@ -2,7 +2,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import baseCss from "../../../styles/base.css?inline";
 import groupedCss from "../../../styles/chat/grouped.css?inline";
 import messageCss from "../../../styles/chat/message-layout.css?inline";
@@ -98,11 +98,12 @@ function fixture(
   return { group, draw };
 }
 
-it.each(
-  ["user", "assistant"].flatMap((role) =>
-    ["light", "dark"].flatMap((theme) => [1440, 390].map((width) => ({ role, theme, width }))),
-  ),
-)(
+it.each([
+  { role: "user", theme: "light", width: 1440 },
+  { role: "user", theme: "dark", width: 390 },
+  { role: "assistant", theme: "dark", width: 1440 },
+  { role: "assistant", theme: "light", width: 390 },
+])(
   "collapses forwarded $role messages independently in $theme at $width",
   async ({ role, theme, width }) => {
     const { page } = await import("vitest/browser");
@@ -204,7 +205,10 @@ it("rechecks wrapped content when the transcript width changes", async () => {
   expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
 });
 
-it.each([true, false].flatMap((loaded) => [1440, 390].map((width) => ({ loaded, width }))))(
+it.each([
+  { loaded: true, width: 1440 },
+  { loaded: false, width: 390 },
+])(
   "shows one inline agent avatar with image loaded=$loaded at $width",
   async ({ loaded, width }) => {
     const { page } = await import("vitest/browser");

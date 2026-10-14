@@ -2,6 +2,7 @@ import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
@@ -15,7 +16,6 @@ import { getFeishuRuntime } from "./runtime.js";
 import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
-type FeishuDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type FeishuGroupPolicy = "open" | "allowlist" | "disabled" | "allowall";
 type NormalizedFeishuGroupPolicy = Exclude<FeishuGroupPolicy, "allowall">;
 
@@ -81,15 +81,6 @@ export function normalizeFeishuAllowEntry(raw: string): string {
   return "";
 }
 
-function normalizeFeishuDmPolicy(policy: string | null | undefined): FeishuDmPolicy {
-  return policy === "open" ||
-    policy === "pairing" ||
-    policy === "allowlist" ||
-    policy === "disabled"
-    ? policy
-    : "pairing";
-}
-
 function normalizeFeishuGroupPolicy(policy: FeishuGroupPolicy): NormalizedFeishuGroupPolicy {
   return policy === "allowall" ? "open" : policy;
 }
@@ -149,7 +140,7 @@ export async function resolveFeishuDmIngressAccess(params: {
     event: {
       mayPair: params.mayPair,
     },
-    dmPolicy: normalizeFeishuDmPolicy(params.dmPolicy),
+    dmPolicy: normalizeChannelDmPolicy(params.dmPolicy ?? undefined) ?? "pairing",
     groupPolicy: "disabled",
     allowFrom: params.allowFrom ?? [],
     ...(params.command ? { command: params.command } : {}),

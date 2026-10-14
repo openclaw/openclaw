@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { tsImport } from "tsx/esm/api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importToolingTypeScript } from "../../../scripts/lib/import-tooling-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -21,8 +21,13 @@ import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 // Generate the wire script through the source runtime loader, which preserves
 // function names. Vitest's own transform does not exercise that closure boundary.
-const { REMOTE_WORKSPACE_MANIFEST_JS }: typeof import("./workspace-sync-scripts.js") =
-  await tsImport("./workspace-sync-scripts.ts", import.meta.url);
+const { REMOTE_WORKSPACE_MANIFEST_JS } = await importToolingTypeScript(
+  new URL("./workspace-sync-scripts.ts", import.meta.url).href,
+  import.meta.url,
+);
+if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
+  throw new Error("Source workspace sync module did not export its manifest script");
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

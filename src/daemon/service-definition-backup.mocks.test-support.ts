@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 
 const native = vi.hoisted(() => ({
+  taskState: 3,
   command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
   task: vi.fn(),
   identity: vi.fn<typeof import("./exec-file.js").execFileUtf8>(),
@@ -67,13 +68,30 @@ vi.mock("../infra/ports-probe.js", async (original) => ({
   probePortUsage: async () => "free",
 }));
 vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+vi.mock("./schtasks-state-probe.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-state-probe.js")>()),
+  probeScheduledTaskExists: () => true,
+  probeScheduledTaskState: () => ({ status: "found", state: native.taskState }),
+}));
+vi.mock("./schtasks-process-snapshot.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-process-snapshot.js")>()),
+  readWindowsProcessSnapshot: () => [
+    { ProcessId: 9999, CommandLine: "powershell.exe", Name: "powershell.exe" },
+  ],
+}));
+vi.mock("../infra/windows-port-pids.js", async (original) => ({
+  ...(await original<typeof import("../infra/windows-port-pids.js")>()),
+  readWindowsPortUsageSync: () => "free",
+}));
 vi.mock("./exec-file.js", async (original) => ({
   ...(await original<typeof import("./exec-file.js")>()),
   execFileUtf8: native.identity,
 }));
 vi.mock("./schtasks-runtime.js", async (original) => ({
   ...(await original<typeof import("./schtasks-runtime.js")>()),
-  readScheduledTaskRuntime: async () => ({ status: "running" }),
+  readScheduledTaskRuntime: async () => ({
+    status: native.taskState === 4 ? "running" : "stopped",
+  }),
 }));
 vi.mock("../infra/ports-inspect.js", async (original) => ({
   ...(await original<typeof import("../infra/ports-inspect.js")>()),

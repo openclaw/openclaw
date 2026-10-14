@@ -1,4 +1,3 @@
-// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +12,10 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -26,7 +29,6 @@ const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
   ".wasm",
   ".webmanifest",
 ]);
-const CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS = new Set([".br", ".gz"]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -50,10 +52,6 @@ const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
 export function isControlUiStaticAssetExtension(extension: string): boolean {
   // Missing .html paths can be client-side routes; the other known types stay 404.
   return extension !== ".html" && Object.hasOwn(CONTROL_UI_CONTENT_TYPES, extension);
-}
-
-export function isControlUiPrecompressedAssetExtension(extension: string): boolean {
-  return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
 }
 
 type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";
@@ -192,12 +190,6 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return encoding === "br"
-    ? compressBrotli(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
-    : compressGzip(body, { level: 6 });
-}
-
 export function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
@@ -226,7 +218,10 @@ function cachedCompressedControlUiHtml(
   const compression = getOrCreatePromise(
     controlUiHtmlCompressionCache,
     key,
-    () => compressControlUiBody(Buffer.from(body), encoding),
+    () =>
+      encoding === "br"
+        ? compressBrotli(Buffer.from(body), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+        : compressGzip(Buffer.from(body), { level: 6 }),
     { cacheRejections: false },
   );
   pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
@@ -243,6 +238,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -250,5 +246,19 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("Content-Security-Policy");
+    res.removeHeader("X-OpenClaw-Session-Entry");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation or log in again.");
+    return;
+  }
+  res.end(encoded);
 }

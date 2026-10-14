@@ -139,19 +139,6 @@ export type BasicAllowlistResolutionEntry = {
   note?: string;
 };
 
-/** Clone allowlist resolution entries into a plain serializable shape for UI and docs output. */
-export function mapBasicAllowlistResolutionEntries(
-  entries: BasicAllowlistResolutionEntry[],
-): BasicAllowlistResolutionEntry[] {
-  return entries.map((entry) => ({
-    input: entry.input,
-    resolved: entry.resolved,
-    id: entry.id,
-    name: entry.name,
-    note: entry.note,
-  }));
-}
-
 /** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
 export async function mapAllowlistResolutionInputs<T>(params: {
   /** Ordered allowlist inputs to resolve. */

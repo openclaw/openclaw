@@ -1,7 +1,6 @@
 // Filesystem session transcript helpers.
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,6 +13,7 @@ import {
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
+  resolveSessionArtifactDirectory,
   resolveSessionFilePathCore,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -21,11 +21,9 @@ import {
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
-type ArchiveFileReason = SessionArchiveReason;
 type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
@@ -44,17 +42,6 @@ const resetArchiveDiscoveryCache = new Map<
   }
 >();
 
-function classifySessionTranscriptCandidate(
-  sessionId: string,
-  sessionFile?: string,
-): "current" | "stale" | "custom" {
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  if (!transcriptSessionId) {
-    return "custom";
-  }
-  return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -62,7 +49,8 @@ export function resolveSessionTranscriptCandidates(
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
-  const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -72,21 +60,21 @@ export function resolveSessionTranscriptCandidates(
   };
 
   if (storePath) {
-    const sessionsDir = path.dirname(storePath);
-    if (sessionFile && sessionFileState !== "stale") {
+    const sessionsDir = resolveSessionArtifactDirectory(storePath);
+    if (sessionFile && !staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
   } else if (sessionFile) {
     if (agentId) {
-      if (sessionFileState !== "stale") {
+      if (!staleSessionFile) {
         pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
       }
     } else {
@@ -99,16 +87,10 @@ export function resolveSessionTranscriptCandidates(
 
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
-
-  // Keep the legacy global sessions directory as a final candidate so tagged
-  // upgrades can still find transcripts created before per-agent paths.
-  const home = resolveRequiredHomeDir(process.env, os.homedir);
-  const legacyDir = path.join(home, ".openclaw", "sessions");
-  pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
   return uniqueStrings(candidates);
 }
@@ -209,17 +191,6 @@ async function resolveLatestResetArchiveForTranscriptAsync(
   return undefined;
 }
 
-function transcriptArchiveIdentity(
-  sessionId: string,
-  transcriptPath: string,
-): { key: string; requireSessionHeader: boolean } {
-  const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
-  return {
-    key: path.basename(transcriptPath),
-    requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
-  };
-}
-
 export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -236,11 +207,14 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     sessionFile,
     agentId,
   )) {
-    const identity = transcriptArchiveIdentity(sessionId, candidate);
-    candidatesByIdentity.set(identity.key, [
-      ...(candidatesByIdentity.get(identity.key) ?? []),
-      { path: candidate, requireSessionHeader: identity.requireSessionHeader },
-    ]);
+    const key = path.basename(candidate);
+    const generatedSessionId = extractGeneratedTranscriptSessionId(candidate);
+    const candidates = candidatesByIdentity.get(key) ?? [];
+    candidates.push({
+      path: candidate,
+      requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
+    });
+    candidatesByIdentity.set(key, candidates);
   }
   const archives = (
     await Promise.all(
@@ -265,7 +239,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function archiveFileOnDisk(filePath: string, reason: SessionArchiveReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -277,7 +251,7 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
 
 export function archiveSessionTranscriptPaths(opts: {
   paths: Iterable<string>;
-  reason: ArchiveFileReason;
+  reason: SessionArchiveReason;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
@@ -298,12 +272,6 @@ export function archiveSessionTranscriptPaths(opts: {
     }
   }
   return archived;
-}
-
-export function archiveSessionTranscripts(
-  opts: Parameters<typeof archiveSessionTranscriptsDetailed>[0],
-): string[] {
-  return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 
 export function archiveSessionTranscriptsDetailed(opts: {
@@ -390,7 +358,7 @@ export function resolveStableSessionEndTranscript(params: {
 }
 
 type SessionArchiveCleanupRule = {
-  reason: ArchiveFileReason;
+  reason: SessionArchiveReason;
   olderThanMs: number;
 };
 

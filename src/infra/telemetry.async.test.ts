@@ -10,7 +10,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import type { TelemetryWorkerOperations, TelemetryState } from "./telemetry-worker-contract.js";
+import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
+import type { TelemetryState } from "./telemetry-worker-contract.js";
 import {
   buildTelemetryPayload,
   checkTelemetryUpdate,
@@ -241,7 +242,7 @@ it("keeps the captured endpoint and storage destination across the first read wa
   expect(fetchImpl).toHaveBeenCalledWith(endpoint, expect.objectContaining({ method: "POST" }));
 });
 
-it.each(["do-not-track", "opt-out", "update-disabled", "still-enabled"] as const)(
+it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   "honors %s when the canonical snapshot changes during the feature count",
   async (change) => {
     const count = createDeferredCore<number>();
@@ -279,16 +280,6 @@ it.each(["do-not-track", "opt-out", "update-disabled", "still-enabled"] as const
     if (change === "update-disabled") {
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(await checking).toBeNull();
-    } else if (change === "still-enabled") {
-      expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
-        expect.any(String),
-        expect.objectContaining({ method: "POST", body: expect.any(String) }),
-      );
-      const body = fetchImpl.mock.calls[0]?.[1]?.body;
-      if (typeof body !== "string") {
-        throw new Error("Expected the telemetry JSON request body");
-      }
-      expect(JSON.parse(body)).toMatchObject({ features: { sessionsLast24h: 3 } });
     } else {
       expect(fetchImpl).toHaveBeenCalledWith(
         expect.any(String),

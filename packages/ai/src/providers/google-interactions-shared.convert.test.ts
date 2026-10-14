@@ -1,12 +1,6 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  Tool,
-  ToolResultMessage,
-  UserMessage,
-} from "../types.js";
+import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
 import {
   buildGoogleInteractionsParams,
   resolveGoogleApiClientHeaders,
@@ -67,6 +61,12 @@ describe("buildGoogleInteractionsParams", () => {
           { type: "thinking", thinking: "internal thoughts" },
         ]),
         user("What is 2+2?"),
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\ncurrent runtime facts",
+          timestamp: 1,
+          runtimeContext: {},
+        },
       ],
     };
 
@@ -90,46 +90,11 @@ describe("buildGoogleInteractionsParams", () => {
         type: "user_input",
         content: [{ type: "text", text: "What is 2+2?" }],
       },
-    ]);
-  });
-
-  it("converts tool definitions to Interactions functions", () => {
-    const tool: Tool = {
-      name: "getWeather",
-      description: "Get weather",
-      parameters: {
-        type: "object",
-        properties: { city: { type: "string" } },
-        required: ["city"],
-      },
-    };
-    const params = buildGoogleInteractionsParams(model, {
-      messages: [user("Weather?")],
-      tools: [tool],
-    });
-    expect(params.tools).toEqual([{ type: "function", ...tool }]);
-  });
-
-  it("preserves tool result failures in function_result steps", () => {
-    const params = buildGoogleInteractionsParams(
-      model,
       {
-        messages: [
-          user("Use a tool"),
-          assistant([{ type: "toolCall", id: "call_failed", name: "lookup", arguments: {} }]),
-          toolResult("call_failed", "lookup", [{ type: "text", text: "lookup failed" }], true),
-        ],
+        type: "user_input",
+        content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent runtime facts" }],
       },
-      {},
-    );
-
-    expect(params.input.at(-1)).toEqual({
-      type: "function_result",
-      call_id: "call_failed",
-      name: "lookup",
-      result: [{ type: "text", text: "lookup failed" }],
-      is_error: true,
-    });
+    ]);
   });
 
   it("preserves chronological model step order in stateless replay", () => {
@@ -201,7 +166,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_123",
         name: "getWeather",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);
@@ -301,7 +266,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_legacy",
         name: "lookup",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);

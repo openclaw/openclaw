@@ -102,13 +102,10 @@ export function isRecoverableTeamsMeetingTab(
   if (normalizeTeamsMeetingUrlForReuse(tab.url)) {
     return true;
   }
-  try {
-    const hostname = new URL(tab.url ?? "").hostname.toLowerCase();
-    return (
-      (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
-      /sign in|microsoft|teams/i.test(tab.title ?? "")
-    );
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(tab.url ?? "")?.hostname.toLowerCase();
+  return Boolean(
+    hostname &&
+    (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
+    /sign in|microsoft|teams/i.test(tab.title ?? ""),
+  );
 }

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   buildSessionCreationStamp,
@@ -13,7 +17,6 @@ import {
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import * as userProfileList from "../../state/user-profile-list.js";
-import * as userProfiles from "../../state/user-profiles.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
@@ -81,18 +84,20 @@ function provider(id: string, sessionKey: string): SessionCatalogProvider {
 describe("session catalog entry snapshots", () => {
   afterEach(() => {
     projection.dispose();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    vi.spyOn(userProfileList, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(false);
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
+    setRuntimeConfigSnapshot({});
     projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
 
   it("resolves catalog senders against current profiles without attributing unknown turns", async () => {
-    vi.spyOn(userProfiles, "hasMultipleSessionSharingIdentities").mockReturnValue(false);
-    vi.spyOn(userProfileList, "getUserProfileDisplay").mockImplementation((id) => {
+    vi.spyOn(userProfileList, "getResidentUserProfileDisplay").mockImplementation((id) => {
       if (id !== "merged-profile") {
         throw new Error("unknown profile");
       }
@@ -176,184 +181,6 @@ describe("session catalog entry snapshots", () => {
     expect(host.sessions[0]?.color).toBe(expected);
   });
 
-  it("shares resolved and missing human profiles across hosts without retaining them across requests", () => {
-    let label = "Before rename";
-    const display = vi.spyOn(userProfileList, "getUserProfileDisplay").mockImplementation((id) => {
-      if (id !== "person") {
-        throw new Error("Missing fixture profile");
-      }
-      return { id: "current-person", displayName: label, avatarRevision: "1", hasAvatar: true };
-    });
-    const hosts = ["alpha", "beta"].map((id) => ({
-      hostId: `gateway:${id}`,
-      label: id,
-      kind: "gateway" as const,
-      connected: true,
-      sessions: ["person", "missing"].map((actorId) => ({
-        threadId: `${id}-${actorId}`,
-        sessionKey: `agent:main:${id}-${actorId}`,
-        status: "stored" as const,
-        archived: false,
-        canContinue: true,
-        canArchive: false,
-      })),
-    }));
-    setEntries(
-      hosts.flatMap((host) =>
-        host.sessions.map((session, index) => ({
-          sessionKey: session.sessionKey,
-          entry: {
-            createdVia: "operator",
-            createdActor: {
-              type: "human" as const,
-              source: "profile" as const,
-              id: index === 0 ? "person" : "missing",
-            },
-          },
-        })),
-      ),
-    );
-    display.mockClear();
-    const project = () => {
-      const snapshot = createSessionCatalogRequestEntrySnapshot({
-        cfg: {},
-        fallbackAgentId: "main",
-        projection,
-      });
-      return hosts.map((host) => {
-        const instances = new Map();
-        snapshot.captureHostInstances(host, instances);
-        return snapshot
-          .projectHostSessions(host, instances)
-          .sessions.map((session) => session.createdActor);
-      });
-    };
-    const expectedActors = () => [
-      {
-        type: "human",
-        id: "person",
-        identity: { type: "profile", id: "current-person" },
-        label,
-        avatarUrl: "/api/users/current-person/avatar?v=1",
-      },
-      { type: "human", id: "missing", identity: { type: "profile", id: "missing" } },
-    ];
-
-    expect(project()).toEqual([expectedActors(), expectedActors()]);
-    expect(display).toHaveBeenCalledTimes(2);
-
-    label = "After rename";
-    expect(project()).toEqual([expectedActors(), expectedActors()]);
-    expect(display).toHaveBeenCalledTimes(4);
-  });
-
-  it("shares provider planning entries while projecting all final catalogs from a fresh index", async () => {
-    setEntries([
-      {
-        sessionKey: "agent:main:alpha-adopted",
-        entry: { createdActor: { type: "agent", id: "worker-alpha" }, updatedAt: 2 },
-      },
-      {
-        sessionKey: "agent:main:zeta-adopted",
-        entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
-      },
-    ]);
-    const flattenedEntries: unknown[] = [];
-    for (const catalog of [
-      provider("zeta", "agent:main:zeta-adopted"),
-      provider("alpha", "agent:main:alpha-adopted"),
-    ]) {
-      const list = catalog.list;
-      catalog.list = vi.fn(async (params) => {
-        const result = await list(params);
-        flattenedEntries.push(
-          listSessionCatalogEntries({
-            config: {},
-            runtime: createPluginRuntime(),
-            sessionEntries: params.sessionEntries,
-          }),
-        );
-        return result;
-      });
-      hoisted.activeRegistry.sessionCatalogs.push({ provider: catalog });
-    }
-
-    const respond = vi.fn();
-    await sessionCatalogHandlers["sessions.catalog.list"]?.({
-      params: {},
-      respond,
-      context: bindSessionRowProjection({ getRuntimeConfig: () => ({}) }, () => projection),
-    } as never);
-
-    expect(flattenedEntries).toHaveLength(2);
-    expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:alpha",
-              label: "alpha host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "alpha-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:alpha-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: {
-                    type: "agent",
-                    id: "worker-alpha",
-                    identity: { type: "agent", id: "worker-alpha" },
-                  },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:zeta",
-              label: "zeta host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "zeta-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:zeta-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: {
-                    type: "system",
-                    id: "scheduler",
-                    identity: {
-                      type: "legacy",
-                      actorType: "system",
-                      id: "scheduler",
-                      source: null,
-                    },
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-  });
-
   it("reuses planning revisions until entries or configuration change", async () => {
     const key = "agent:main:alpha-adopted";
     setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
@@ -388,13 +215,14 @@ describe("session catalog entry snapshots", () => {
     await poll();
     expect(revisions[3]).toBe(revisions[2]);
     cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     await poll();
     expect(revisions[4]).not.toBe(revisions[3]);
     expect(labels).toEqual(["Before", "Before", "After", "After", "After"]);
   });
 
   it("projects inherited profile creators from stored provenance, not provider metadata", () => {
-    const display = vi.spyOn(userProfileList, "getUserProfileDisplay").mockReturnValue({
+    const display = vi.spyOn(userProfileList, "getResidentUserProfileDisplay").mockReturnValue({
       id: "current",
       displayName: "Current",
       avatarRevision: "1",

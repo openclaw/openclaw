@@ -1,5 +1,8 @@
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createProcessPollDeliveryContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  createProcessPollDeliveryContract,
+  createRequiredExecRuntimeContract,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -47,6 +50,52 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("retains a required command as one native pending call until terminal collection", async () => {
+    const command = createRequiredExecRuntimeContract();
+    const harness = createStartedThreadHarness();
+    const params = createTestParams();
+    setCodexTestToolFactory(params, () => [{ ...command.tool, name: "sandbox_exec" }]);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    // Keep fixture I/O from spending the attempt clock before the command starts.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    let response: ReturnType<typeof callTool> | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+      let collected = false;
+      response = callTool(harness, "sandbox_exec", "required-command", {
+        command: "verify-required",
+        awaitResults: true,
+        yieldMs: 10,
+      }).then((value) => {
+        collected = true;
+        return value;
+      });
+      await command.started;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(collected).toBe(false);
+      expect(command.spawn).toHaveBeenCalledOnce();
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+      command.finish();
+      await expect(response).resolves.toMatchObject({
+        success: true,
+        contentItems: [
+          { type: "inputText", text: expect.stringContaining("REQUIRED_NATIVE_RESULT") },
+        ],
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+    } finally {
+      vi.useRealTimers();
+      command.finish();
+      await response;
+      closeHost();
+      command.close();
+    }
+  });
+
   it("acknowledges a terminal sandbox process poll only after Codex accepts its exact result", async () => {
     const process = createProcessPollDeliveryContract("codex-result-delivery");
     const turnStarted = createDeferred<void>();
@@ -291,7 +340,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       name: "lookup",
       toolCallId: "call-1",
       commandBearing: true,
-      args: { action: "search", token: "plain-…2345", text: "hello" },
+      args: { action: "search", token: "plain-secret-value-12345", text: "hello" },
     });
     const resultEvent = agentEvents.find(
       (event) =>
@@ -306,7 +355,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
-    expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
+    expect(JSON.stringify(agentEvents)).toContain("plain-secret-value-12345");
     expect(
       globalAgentEvents.find((event) => event.stream === "tool" && event.data.phase === "start"),
     ).toMatchObject({

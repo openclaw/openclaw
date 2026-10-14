@@ -27,15 +27,17 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Advisor          | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
+| Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
 
 Open **Settings → Labs** to manage experiments that have a
-Control UI switch. Enabling or disabling a lab patches the canonical Gateway
+Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Decision assistance, Code Mode, Tool Search for all models, Custom
+Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models, Custom
 plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -60,9 +62,12 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This opt-in enables experimental conversational tool filtering in the built-in
+OpenClaw runtime. Before an eligible user turn, the configured Decision provider
+judges whether the request needs tools. A conversational result can omit optional
+tools for that turn. Other harnesses keep their normal tools and perform no
+automatic prefilter inference. The switch does not select a provider, provision
+credentials, download models, or enable unrelated consumer modes.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +87,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -101,11 +106,11 @@ Core implementations can import
 from `src/agents/decision-assistance.ts`. Supply prepared config and the trusted
 owning agent ID, not a model-provided ID. The helper returns exactly
 `decisionAssistance === true && resolveDecisionModelSetting(config, agentId) !== undefined`.
-It performs no provider probes, secret resolution, file reads, network requests,
+It performs no provider checks, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
-For example, at a future automatic consumer boundary:
+For example, at an automatic consumer boundary:
 
 ```ts
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
@@ -117,15 +122,201 @@ if (!isDecisionAssistanceEligible(preparedConfig, owningAgentId)) {
 // before loading its optional implementation or preparing evaluation evidence.
 ```
 
-Use the existing config publication/refresh lifecycle, not file polling. Future
-consumers must stop admitting automatic work after opt-out takes effect and
-revalidate current config, model selection, and live authority before applying
-awaited results. This helper is not an authority token or a cancellation owner.
+Use the existing config publication/refresh lifecycle, not file polling.
+Consumers check opt-in again at Decision provider dispatch, after awaited
+preparation. Disabling assistance stops subsequent evaluations from starting;
+already-dispatched evaluations may finish, including provider preparation and
+network I/O, and their results may still be used. Model selection, live authority,
+cancellation, deadlines, and provider/credential validity remain independently
+checked. This helper is not an authority token or a cancellation owner.
 
-Any future consumer must document its evidence transfer, costs, latency, and
-failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
-performance or quality claims.
+### Conversational tool filtering
+
+**Upgrade behavior:** the existing saved `decisionAssistance: true` is opt-in
+intent for future automatic Decision experiments. When this consumer is installed,
+it can run on eligible turns for an agent with an effective Decision model; the
+preference does not select a new provider or grant tool authority. Operators who
+do not want automatic evaluation can turn the preference off or clear that
+agent’s Decision model. The transferred evidence and costs are described below.
+
+The prefilter sends the complete current request and a rule-based, bounded
+projection of recent conversation to the owning agent’s configured Decision
+provider. It retains the nearest complete user/assistant exchange and, when it
+fits, one additional exchange in chronological order. Resolved output from
+ordinary `before_prompt_build` hooks is also sent verbatim in labeled fields when
+present: `prependContext`, `appendContext`, `systemPrompt`,
+`prependSystemContext`, and `appendSystemContext`. Two internal text bounds apply:
+
+- The latest request plus retained user/assistant exchange text is limited to
+  **6,000 UTF-16 code units**. Only whole older exchanges may be omitted.
+- That conversation text plus all five verbatim hook-field values must fit
+  **8,000 UTF-16 code units** in total. Oversized hook fields are not truncated.
+
+These are JavaScript string-length bounds on the evidence text, not a bound on
+serialized JSON, UTF-8 wire bytes, or tokens. Field names, JSON escaping, omission
+facts, tool-result counts, and the fixed rubric add serialization overhead.
+The current request and essential context are never cut to force classification;
+oversized, malformed, missing, or otherwise unsuitable essential context retains
+normal tools. A genuinely fresh session is
+evaluated using the current request alone. Existing incomplete history is not
+treated as a fresh session; missing referents and uncertainty must retain tools.
+
+Only user-visible text, counts of returned/failed tool calls, and the listed
+resolved ordinary hook fields are secondary evidence. Other system/developer
+instructions, hidden reasoning, raw tool arguments or results, internal-event
+envelopes, and media are not sent. Tool return counts do not assert that an
+action succeeded. Hosted providers receive this bounded evidence and can incur
+charges; local providers keep inference local.
+Classification adds work before the primary model request and is not a guaranteed
+latency improvement.
+
+The current internal budget is 500 ms, not a configuration option. One existing
+Decision batch asks two independent Boolean questions: whether the latest request
+has an unresolved contextual reference, and whether fulfilling it requires tools
+in the next response. Both probabilities must be below 0.35 to omit optional tools.
+Missing, affirmative, or uncertain answers preserve tools. These are probabilities
+of yes, not degrees of tool use or separate confidence values.
+
+The structured state names the latest request, chronological recent exchanges,
+and facts about omitted older conversation and raw tool payloads. Each question
+references those fields explicitly. Earlier mentions of tools do not by themselves
+request new actions, and omitted older history alone does not veto filtering.
+This follows [TypeSafe atomic Noul guidance](https://docs.typesafe.ai/primitives/noul)
+while using the provider-neutral Decision contract; it makes no provider-specific
+requests or calibrated-correctness guarantees. There is
+no model-aware input estimator, automatic trimming retry, or second provider.
+Ordinary unavailable results, including a deadline or actual provider input
+rejection, keep the normal tool surface. A caller-budget deadline does not count
+as a provider outage or open the shared health circuit, so repeated optional
+prefilter timeouts do not disable explicit `decision_evaluate` requests. Genuine
+provider transport, authentication, and rate-limit failures retain their shared
+health handling; in-flight work still owns its concurrency slot until it settles.
+Cancellation, closed authority, and contract errors
+remain errors rather than starting fallback work. Cold model loading may exceed
+the budget. Classifier estimates are not guarantees that every action request
+will retain its optional tools.
+
+Filtering skips raw checks, continuations, internal events, queued steering,
+orphan repair, pending tool work, hook-set `toolsAllow` restrictions, and
+authority-dependent prompt-build hooks that require finalized tools. Ordinary
+prompt-build hooks run normally and their resolved fields can inform the Decision
+evaluation without changing the public hook contract. It no longer rejects a
+turn merely because prior assistant or tool messages exist. Complete contextual
+approvals remain action requests, while a conversational acknowledgment can omit
+optional tools on later turns. It uses the existing host tool policy, preserves
+already-required tools without granting denied tools, and keeps submitted schemas,
+discovery, and callability aligned.
+Each subsequent turn starts from its own normal tool baseline. Opt-out does not
+withdraw a restriction from an already-dispatched Decision evaluation. Changed
+model selection still prevents applying an awaited restriction and is rechecked
+at foreground primary-model dispatch after awaited preparation. That change
+withdraws only the optional restriction and restores the current permitted tool
+surface while retaining independent hook caps and required tools. No historical
+transcript is rewritten and no native thread is recreated.
+
+With DEBUG logging enabled for the embedded runner, a safe record at the first
+foreground primary dispatch reports decision status/reason, decision latency,
+context counts and omission flags, visible tool counts, required tools retained,
+and the before/after normalized tool-definition JSON UTF-16 character difference
+(`name`, `description`, and `parameters`). Tool Search and Code Mode count only
+the actually exposed controls/direct tools, including their descriptions—not
+every hidden catalog schema. This schema-only metric is not provider wire bytes,
+full prompt savings, tokens, cost, or proof that a provider accepted the request.
+Tool-related prompt guidance is reported as unmeasured. Unknown measurements
+remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
+No conversation, tool payloads, full schemas, or credentials are logged by this
+record; existing logging and trace-correlation controls apply.
+
+## Advisor
+
+Advisor is an experimental bundled plugin that is off by default. During
+user-directed work, it reviews a fork of the conversation on the session's own
+model and looks for the most costly avoidable problem: work drifting beyond
+what you asked, an earlier correction being ignored, repeated or stalled tool
+calls, or claims that the tool results do not support. When it finds one, it
+steers the active run with one short correction. If the run cannot accept
+steering, the correction becomes hidden context on the next turn. When it finds
+nothing, nothing happens.
+
+Reviews judge waste against your request. User-requested repetition, waiting,
+polling, verification, ordering, and timing are not waste. A correction must offer
+a cheaper next step that still satisfies the whole request, fixing the cause and
+resuming work when possible rather than reporting a recoverable blocker. When
+uncertain, the advisor leaves the agent's approach unchanged.
+
+Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
+button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
+you set the options below. Or use config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      advisor: {
+        enabled: true,
+        config: { everyToolCalls: 10, everyMinutes: 20 },
+      },
+    },
+  },
+}
+```
+
+- `everyToolCalls` (default `10`, range `0`–`1000`): mark a review due after this
+  many tool calls start in a conversation, including commands still running in
+  the background.
+- `everyMinutes` (default `20`, range `0`–`1440`): mark a review due after this
+  many minutes of accumulated agent run time from the lifecycle start event,
+  checked as tools start or finish and when a run ends. Time before that start
+  does not count.
+
+Reviews always use the session's own model; there is no separate model setting.
+
+A due review waits until all started tool calls have authoritative completion
+events, or the run ends or errors. Built-in runs settle on tool results; Codex
+runs settle on native item completion and recorded raw tool outputs, including
+outer function/custom-code calls. Completed child commands do not settle an
+enclosing call. Early dynamic tool results are not a safe boundary. Verification
+checks the same condition again before its fork.
+A stalled call never forces a review: Advisor waits for completion or run end,
+without a timer bypass. A call without a result may still be running; the fixed
+review contract forbids treating it as failed or aborted. Run end/error clears
+pending tool IDs and allows one due review even when no next model call occurs.
+
+Both counters restart after each review completes, including a failed review.
+Set a trigger to `0` to turn it off. With both at `0`, no reviews run. Changes apply
+without restarting the Gateway.
+
+Behavior and limits:
+
+- Reviews run in the background without delaying the triggering hook. They
+  never ask for approval or grant the agent new permissions.
+- Only user-triggered runs count. Manual compaction, heartbeat, cron, memory-flush,
+  overflow, side-question, and missing or unrecognized triggers are ignored.
+  Admission uses the history-free `before_agent_reply` hook without claiming the
+  reply; tool and time accounting begins at the lifecycle start.
+- Each conversation has at most one review in flight. A failed review is logged
+  and the next review waits a full interval. Session reset, plugin disable, and
+  service stop cancel pending reviews.
+- Review replies use a first-line `NO_CHANGE` or `CORRECTION` decision.
+  `NO_CHANGE` never starts verification or steering, even with commentary.
+  Draft corrections receive a second same-session review: only an `APPROVE`
+  response with a valid final body reaches the agent. `REJECT`, malformed
+  replies, verification errors, and timeouts never steer. Failures log one
+  bounded warning. Each reply is limited to 2,000 characters and each correction
+  to 120 words. The two stages share a 120-second deadline.
+- A correction first attempts active-run steering. If steering is unavailable,
+  it is queued for the next turn and expires after 24 hours. It is labeled as
+  advice that the agent must check before acting.
+- Each review uses the session's context, model, and credentials for one draft
+  call and, only when it proposes a correction, one verification call. Neither
+  fork can execute tools, persist conversation messages, or send replies.
+  On Codex, the forks preserve the session's prompt and tool definitions for
+  prompt-cache reuse.
+- Advisor needs conversation access and prompt injection permission through
+  `plugins.entries.advisor.hooks`, which trusted plugins have by default.
+- Gateway info logs record each stage's input, cache-read, cache-write, and output
+  tokens and elapsed time, plus whether its correction was steered or queued.
+- Counters live in memory, so they restart when the Gateway restarts.
 
 ## Local model lean mode
 

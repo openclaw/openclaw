@@ -11,9 +11,10 @@ import { normalizeProviderCatalogModelsForConfig } from "./models-config.provide
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.js", () => ({
-  normalizeProviderSpecificConfig: (_provider: string, config: object) => config,
-  resolveProviderConfigApiKeyResolver: () => undefined,
+// mock-isolation: normalization consumes hook results without loading the plugin runtime.
+vi.mock("../plugins/provider-runtime.js", () => ({
+  normalizeProviderConfigWithPlugin: () => undefined,
+  resolveProviderConfigApiKeyWithPlugin: () => undefined,
 }));
 
 describe("normalizeProviders", () => {
@@ -34,7 +35,7 @@ describe("normalizeProviders", () => {
     ...overrides,
   });
 
-  it("keeps the latest provider config when duplicate keys only differ by whitespace", () => {
+  it("keeps the latest provider config when duplicate keys only differ by whitespace", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
     const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
       openai: {
@@ -51,14 +52,14 @@ describe("normalizeProviders", () => {
       },
     };
 
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = await normalizeProviders({ providers, agentDir });
     expect(Object.keys(normalized ?? {})).toEqual(["openai"]);
     expect(normalized?.openai?.baseUrl).toBe("https://example.com/v1");
     expect(normalized?.openai?.apiKey).toBe("CUSTOM_OPENAI_API_KEY");
     expect(normalized?.openai?.models?.[0]?.id).toBe("gpt-4.1-mini");
   });
 
-  it("deduplicates model rows and keeps repeated publication stable with secret ownership", () => {
+  it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
     const providers = {
       google: {
@@ -84,7 +85,7 @@ describe("normalizeProviders", () => {
       custom: { baseUrl: "https://models.example/v1", models: [] },
     } satisfies NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
-    const normalized = normalizeProviders({ providers, agentDir, env: {} });
+    const normalized = await normalizeProviders({ providers, agentDir, env: {} });
     expect(normalized?.google?.models).toBe(providers.google.models);
     const published = normalizeProviderCatalogModelsForConfig(normalized);
 
@@ -100,7 +101,7 @@ describe("normalizeProviders", () => {
 
     expect(normalizeProviderCatalogModelsForConfig(published)).toBe(published);
     const secretRefManagedProviders = new Set<string>();
-    const repeated = normalizeProviders({
+    const repeated = await normalizeProviders({
       providers: published,
       agentDir,
       env: {},
@@ -112,7 +113,7 @@ describe("normalizeProviders", () => {
     expect(secretRefManagedProviders.has("google")).toBe(true);
   });
 
-  it("replaces resolved env var value with env var name to prevent plaintext persistence", () => {
+  it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
     const env = {
       ...process.env,
@@ -131,7 +132,7 @@ describe("normalizeProviders", () => {
         models: [createModel({ id: "gpt-4.1" })],
       },
     };
-    const normalized = normalizeProviders({
+    const normalized = await normalizeProviders({
       providers,
       agentDir,
       env,
@@ -141,7 +142,7 @@ describe("normalizeProviders", () => {
     expect(secretRefManagedProviders.has("openai")).toBe(true);
   });
 
-  it("normalizes SecretRef-backed provider headers to non-secret marker values", () => {
+  it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
     const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
       openai: {
@@ -155,7 +156,7 @@ describe("normalizeProviders", () => {
       },
     };
 
-    const normalized = normalizeProviders({
+    const normalized = await normalizeProviders({
       providers,
       agentDir,
     });
@@ -213,7 +214,7 @@ describe("normalizeProviders", () => {
             providers: snapshot.config.models?.providers,
             sourceConfigForSecrets: snapshot.sourceConfig,
           };
-          const normalized = normalizeProviders({
+          const normalized = await normalizeProviders({
             ...params,
             agentDir: state.agentDir(),
             env: state.env,

@@ -160,7 +160,7 @@ describe("agents add command", () => {
     hasTerminal.mockReset().mockReturnValue(true);
     prepareAuth.mockReset();
     persistAuth.mockReset().mockImplementation(persistAuthProfileBatch);
-    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    setConfigSnapshot({ agents: { entries: { main: {} } } });
   });
 
   async function withState(
@@ -317,7 +317,7 @@ describe("agents add command", () => {
   });
 
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
-    const config = { agents: { entries: { work: { id: "work" } } } };
+    const config = { agents: { entries: { work: {} } } };
     setConfigSnapshot(config);
     useWizard(["/tmp/workspace-work"], [true, false]);
     setupChannels.mockImplementationOnce(async (nextConfig, wizardRuntime, _prompter, options) => {
@@ -359,7 +359,7 @@ describe("agents add command", () => {
   });
 
   it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
-    setConfigSnapshot({ agents: { entries: { robby: { id: "robby" } } } });
+    setConfigSnapshot({ agents: { entries: { robby: {} } } });
     const prompter = useWizard();
     creationGate.mockResolvedValueOnce({
       status: "error",
@@ -409,10 +409,7 @@ describe("agents add command", () => {
     });
   });
 
-  it.each([
-    { source: "__skip__", copy: false },
-    { source: "ops", copy: true },
-  ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
+  it("copies auth from a selected agent in an explicit fleet", async () => {
     await withState("explicit", async ({ root, workspaceDir, agentDir }) => {
       const sourceAgentDir = await seedAuth(root, "ops", {
         "openai:portable": apiKey("fixture-only-key"),
@@ -423,17 +420,13 @@ describe("agents add command", () => {
           entries: { main: {}, ops: { agentDir: sourceAgentDir } },
         },
       });
-      const wizard = useWizard(
-        ["work", workspaceDir],
-        testCase.source === "__skip__" ? [false] : [testCase.copy, false],
-        [testCase.source],
-      );
+      const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
 
       await agentsAddCommand({}, runtime);
 
       expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
       const copied = loadPersistedAuthProfileStore(agentDir);
-      expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);
+      expect(copied?.profiles["openai:portable"]).toBeDefined();
       expect(setupChannels).toHaveBeenCalledWith(
         expect.any(Object),
         runtime,
@@ -555,7 +548,7 @@ describe("agents add command", () => {
     async (failurePoint) => {
       await withState("auth-existing", async ({ workspaceDir, agentDir }) => {
         setConfigSnapshot({
-          agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+          agents: { entries: { work: { workspace: workspaceDir, agentDir } } },
         });
         const wizard = useWizard([workspaceDir], [true, true]);
         stageGuidedAuth();
@@ -580,7 +573,7 @@ describe("agents add command", () => {
 
   it("passes canonical created config to fresh-agent post-write hooks", async () => {
     const persistedConfig = {
-      agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
+      agents: { entries: { work: { workspace: "/tmp/canonical-workspace" } } },
       plugins: { installs: {} },
     };
     const hook = vi.fn(async () => {});
@@ -622,7 +615,7 @@ describe("agents add command", () => {
   });
 
   it("does not commit an existing-agent update when workspace provisioning fails", async () => {
-    const config = { agents: { entries: { work: { id: "work" } } } };
+    const config = { agents: { entries: { work: {} } } };
     setConfigSnapshot(config);
     useWizard(["/tmp/workspace-work"], [true, false]);
     ensureWorkspace.mockRejectedValueOnce(new Error("controlled mkdir failure"));
@@ -645,50 +638,36 @@ describe("agents add command", () => {
         { hasAutomationFlags: false },
       );
 
-      expect(createAgent).toHaveBeenCalledWith({
-        name: "Work",
-        workspace: "/tmp/work",
-        transformConfig,
-      });
+      expect(createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Work",
+          workspace: "/tmp/work",
+          transformConfig,
+        }),
+      );
       expect(transformConfig).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
       expect(hasTerminal).not.toHaveBeenCalled();
     });
 
-    it.each([
-      {
-        name: "a duplicate agent",
-        result: {
-          status: "error" as const,
-          reason: "already-exists",
-          agentId: "work",
-          message: 'agent "work" already exists',
-        },
-        message: 'Agent "work" already exists.',
-      },
-      {
-        name: "a rejected binding",
-        result: {
-          status: "error" as const,
-          reason: "invalid-bindings",
-          agentId: "work",
-          message: 'Invalid binding "telegram:". Account id is empty.',
-        },
-        message: 'Invalid binding "telegram:". Account id is empty.',
-      },
-    ])("reports $name through the root failure owner", async (testCase) => {
-      createAgent.mockResolvedValueOnce(testCase.result);
+    it("reports a duplicate agent through the root failure owner", async () => {
+      createAgent.mockResolvedValueOnce({
+        status: "error",
+        reason: "already-exists",
+        agentId: "work",
+        message: 'agent "work" already exists',
+      });
 
       await expectRootFailure(
         agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
           hasAutomationFlags: true,
         }),
-        testCase.message,
+        'Agent "work" already exists.',
       );
     });
 
-    it("renders binding conflicts returned by agent creation", async () => {
+    it("renders binding conflicts returned by agent creation and fails the command", async () => {
       await agentsAddCommand(
         { name: "Work", workspace: "/tmp/work", bind: ["telegram"], json: true },
         runtime,
@@ -700,6 +679,7 @@ describe("agents add command", () => {
       };
       expect(payload.bindings.added).toEqual([]);
       expect(payload.bindings.conflicts).toEqual(["telegram (agent=other-agent)"]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
     });
   });
 });

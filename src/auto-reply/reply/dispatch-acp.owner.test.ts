@@ -104,6 +104,7 @@ it.each(scenarios)(
       let turns = 0;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
+      let sourceCommittedBeforeStart = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const binding: SessionBindingRecord = {
@@ -200,7 +201,7 @@ it.each(scenarios)(
         expect(
           await recorder.stageApproved?.({ runId: "acp-input", assertCurrent: () => {} }),
         ).toBe(true);
-        expect(listSessionPendingInputs(target).items).toHaveLength(1);
+        expect((await listSessionPendingInputs(target)).items).toHaveLength(1);
         const sourceOwner = fallbackAgentId ?? (sessionKey === "global" ? "work" : "main");
         const sourcePersistence = recorder.persistApproved.bind(recorder);
         const persistApproved = vi
@@ -256,11 +257,14 @@ it.each(scenarios)(
           }),
           dispatcher,
           inboundAudio: false,
-          shouldSendToolSummaries: false,
-          shouldSendFullToolDetails: false,
+          shouldSendToolSummaries: async () => false,
+          shouldSendFullToolDetails: async () => false,
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onAgentRunStart: () => {
+            sourceCommittedBeforeStart = recorder?.hasPersisted() === true;
+          },
           recordProcessed,
           markIdle,
         });
@@ -269,10 +273,13 @@ it.each(scenarios)(
         expect(result).not.toBeNull();
         expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
         expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
+        if (!pendingQuestion) {
+          expect(sourceCommittedBeforeStart).toBe(true);
+        }
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
-        expect(listSessionPendingInputs(target).items).toEqual([]);
+        expect((await listSessionPendingInputs(target)).items).toEqual([]);
         const transcript = await loadTranscriptEvents(target);
         expect(
           transcript.filter((event) => {

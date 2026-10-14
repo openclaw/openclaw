@@ -20,15 +20,20 @@ vi.mock("../../web-search/runtime-execution.js", () => ({}));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: mocks.snapshot,
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource: mocks.persistedAuth,
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.persistedAuth,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: mocks.persistedAuth,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     listProfilesForProvider(store, provider),
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
 }));
 vi.mock("./model-auth-agent-scope.js", () => ({
   resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
@@ -40,8 +45,14 @@ vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks
 vi.mock("../../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.providers,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: () => ({ byPluginId: new Map() }),
+// mock-isolation: Prepared-auth status uses fixed metadata without loading the discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
+}));
+// mock-isolation: Use fixed discovery policy without opening machine state for status projection.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: () => ({ allowed: true }),
@@ -50,9 +61,10 @@ vi.mock("../../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurface: () => undefined,
 }));
 vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
+// mock-isolation: Keep catalog initialization outside this prepared-auth boundary test.
 vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  createModelCatalogDecisions: () => ({
-    evaluateEntry: async () => ({}),
+  prepareModelCatalogDecisions: async () => ({
+    evaluateEntry: () => ({}),
     evaluateNative: () => ({}),
   }),
   resolveCatalogDecisionRuntime: () => ({ id: "openclaw" }),
@@ -110,7 +122,8 @@ it.each([false, true])(
         credentialSource: published ? "auth-profile" : "missing",
       },
     ]);
-    expect(result.status?.route.kind).toBe(published ? "native" : "unavailable");
+    // Native search follows the selected transport; the model request admits credentials.
+    expect(result.status?.route.kind).toBe("native");
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(result.status)).not.toContain("synthetic-fixture-token");
   },

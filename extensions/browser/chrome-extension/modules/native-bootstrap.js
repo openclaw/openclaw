@@ -1,5 +1,6 @@
 import { randomRelayBase64Url } from "./relay-auth-v2-crypto.js";
 import { ACCESS_MODE_ALL, parsePairingString } from "./relay-core.js";
+import { hasExactKeys } from "./strict-json.js";
 
 const NATIVE_HOST_NAME = "ai.openclaw.browser_bootstrap";
 const DISABLED_KEY = "nativeBootstrapDisabled";
@@ -22,16 +23,6 @@ const FAILURE_CODES = new Set([
   "manual_required",
   "pairing_unavailable",
 ]);
-
-function hasExactKeys(value, expected) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === expected.length &&
-    expected.every((key) => Object.hasOwn(value, key))
-  );
-}
 
 function nativeResponse(value, nonce) {
   if (
@@ -124,13 +115,9 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
     disabledNow ||= stored[DISABLED_KEY] === true;
     return {
       disabled: disabledNow,
-      state:
-        stored[STATE_KEY] === "ready" ||
-        stored[STATE_KEY] === "retrying" ||
-        stored[STATE_KEY] === "manual_required" ||
-        stored[STATE_KEY] === "disabled"
-          ? stored[STATE_KEY]
-          : "waiting",
+      state: ["ready", "retrying", "manual_required", "disabled"].includes(stored[STATE_KEY])
+        ? stored[STATE_KEY]
+        : "waiting",
       failureCode: typeof stored[FAILURE_KEY] === "string" ? stored[FAILURE_KEY] : "",
     };
   }
@@ -304,7 +291,10 @@ export async function prepareRetiredCopilotState(chromeApi = chrome) {
     return { blocked: true };
   }
   try {
-    await discardRetiredCopilotState(chromeApi);
+    // No custody remains, so partial cleanup is safe to retry on the next worker.
+    // Reserve the durable marker for explicit discard of potentially live custody.
+    await chromeApi.storage.session.remove(COPILOT_SESSION_KEYS);
+    await chromeApi.storage.local.remove(COPILOT_LOCAL_KEYS);
   } catch {
     return { blocked: true };
   }

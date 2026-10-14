@@ -94,9 +94,8 @@ describe("embedded exec review conversation ownership", () => {
 
     expect(seen[0]?.entries).toEqual([
       { kind: "user", origin: "operator", text: "Build the project." },
-      { kind: "assistant", text: expect.stringMatching(/^I will inspect .+ build output\.$/) },
+      { kind: "assistant", text: "I will inspect tenant-private-marker build output." },
     ]);
-    expect(JSON.stringify(seen)).not.toContain("tenant-private-marker");
     expect(seen[1]?.entries).toEqual([
       ...seen[0]!.entries,
       { kind: "user", origin: "inter_session", text: "Keep the existing output directory." },

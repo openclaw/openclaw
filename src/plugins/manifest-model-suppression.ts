@@ -98,15 +98,7 @@ function buildManifestSuppressionError(params: {
 }
 
 function normalizeBaseUrlHost(baseUrl: string | null | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    return normalizeSuppressionHost(new URL(trimmed).hostname);
-  } catch {
-    return "";
-  }
+  return normalizeSuppressionHost(URL.parse(baseUrl?.trim() ?? "")?.hostname ?? "");
 }
 
 function normalizeSuppressionHost(host: string): string {

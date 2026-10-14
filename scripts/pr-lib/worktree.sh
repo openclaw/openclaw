@@ -136,13 +136,15 @@ write_review_transition_journal() {
   local target="$3"
   local mode="$4"
   local branch="$5"
+  local binding="${6:-}"
   mkdir -p .local
   local journal=.local/review-transition.json
   local pending
   pending=$(mktemp "$journal.XXXXXX") || return 1
   if jq -cn --argjson pr "$pr" --arg source "$source" --arg target "$target" \
-    --arg mode "$mode" --arg branch "$branch" \
-    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" then $branch else null end)}' \
+    --arg mode "$mode" --arg branch "$branch" --arg binding "$binding" \
+    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" or $mode == "prep" then $branch else null end)} +
+      (if $mode == "prep" then {binding:$binding} else {} end)' \
     >"$pending" && mv "$pending" "$journal"
   then
     return 0
@@ -151,17 +153,54 @@ write_review_transition_journal() {
   return 1
 }
 
+validate_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5"
+  local root observation archive helper
+  helper="$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs"
+  root=$(repo_root) || return 1
+  # Replay once before observing live authority. The private facts stay in this
+  # recovery invocation; retry must reconstruct them from the admitted journal.
+  PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  validate_review_transition_state "$pr" "$source" "$target" || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
+  revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
+  if [ "$command" = install-transition ]; then
+    PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
+      "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  else
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
+}
+
+check_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5" root
+  root=$(repo_root) || return 1
+  printf '%s' "$PREP_TRANSITION_FACTS" | node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
+    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+}
+
 recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
   [ -e "$journal" ] || return 0
 
-  local fields source target mode branch
+  # A correction continuation retires metadata only. It must not enter the
+  # baseline transition's source/index restoration or branch movement path.
+  if [ "$(jq -r .mode "$journal")" = correction ]; then
+    recover_correction_continuation "$pr"
+    return $?
+  fi
+
+  local fields source target mode branch PREP_TRANSITION_FACTS
   fields=$(jq -er --argjson pr "$pr" '
-    select(type == "object" and (keys | sort) == ["branch","mode","pr","source","target","version"])
+    select(type == "object" and
+      (if .mode == "prep" then (keys | sort) == ["binding","branch","mode","pr","source","target","version"] and (.binding | type == "string")
+       else (keys | sort) == ["branch","mode","pr","source","target","version"] end))
     | select(.version == 1 and .pr == $pr)
     | select((.source | type == "string" and test("^[0-9a-f]{40}$")) and (.target | type == "string" and test("^[0-9a-f]{40}$")))
-    | select((.mode == "detached" and .branch == null) or (.mode == "branch" and (.branch | type == "string")))
+    | select((.mode == "detached" and .branch == null) or ((.mode == "branch" or .mode == "prep") and (.branch | type == "string")))
     | [.source,.target,.mode,(.branch // "")] | @tsv
   ' "$journal" 2>/dev/null) || {
     refuse_review_transition "$pr" "the transition journal is invalid."
@@ -170,16 +209,26 @@ recover_review_transition() {
   IFS=$'\t' read -r source target mode branch <<<"$fields"
   if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$source^{commit}" 2>/dev/null ||
     ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$target^{commit}" 2>/dev/null ||
-    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
+    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$branch" != "pr-$pr-prep" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
     return 1
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   pr_git read-tree "$source" || return 1
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition restore-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   if ! pr_git diff --quiet "$source" "$target"; then
     pr_git diff --name-only --no-renames -z "$source" "$target" |
       pr_git --literal-pathspecs restore --source="$target" --staged --worktree \
@@ -189,7 +238,12 @@ recover_review_transition() {
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
     return 1
   fi
-  if [ "$mode" = "branch" ]; then
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition finalize-transition "$pr" "$source" "$target" "$branch" || return 1
+    if [ "$(pr_git rev-parse "refs/heads/$branch")" = "$source" ]; then
+      pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
+    fi
+  elif [ "$mode" = "branch" ]; then
     pr_git checkout -B "$branch" "$target" || return 1
   else
     pr_git checkout --detach "$target" || return 1
@@ -199,6 +253,7 @@ recover_review_transition() {
   actual_branch=$(pr_git branch --show-current)
   if [ "$(pr_git rev-parse HEAD)" != "$target" ] || ! pr_git diff --quiet || ! pr_git diff --cached --quiet ||
     { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$actual_branch" != "$branch" ]; } ||
     { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
     ! require_no_foreign_untracked "$pr"
   then
@@ -583,14 +638,18 @@ list_pr_worktrees() {
 }
 
 gc_pr_worktrees() {
-  local dry_run="${1:-false}"
+  local dry_run="${1:-false}" selected_pr="${2:-}"
+  [ -z "$selected_pr" ] || is_canonical_pr_number "$selected_pr" || return 2
   local root
   root=$(repo_root)
   cd "$root"
 
   local dir
   local removed=0
-  for dir in .worktrees/pr-*; do
+  # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
+  local directories=(".worktrees/pr-$selected_pr")
+  [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
+  for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then

@@ -494,7 +494,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
           }
         } else if (loss === "placement") {
           const placement = f.startup.placementStore.get(f.binding.sessionId)!;
-          f.startup.placementStore.transition({
+          await f.startup.placementStore.transition({
             sessionId: f.binding.sessionId,
             from: "syncing",
             to: "starting",

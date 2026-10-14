@@ -76,7 +76,7 @@ private func withControlUIConnection(
     await connection.shutdown()
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct GatewayConnectionControlUIAuthTests {
     @Test(arguments: ["token", "password", "device-token"])
     @MainActor
@@ -135,13 +135,20 @@ struct GatewayConnectionControlUIAuthTests {
                 // request owner, which also makes a fresh native route ready.
                 #expect(session.snapshotMakeCount() == 0)
                 let configuration = try await manager.dashboardConfiguration(
-                    endpoint: endpoint, mode: .remote, target: .profile("reconnect"), token: nil)
+                    endpoint: endpoint, mode: .remote, target: .profile("reconnect"), token: nil).configuration
                 let expectedLegacy = switch method {
                 case "token": ["token": "accepted-token"]
                 case "password": ["password": "accepted-password"]
                 default: [String: String]()
                 }
-                #expect(configuration.auth.legacyCredentials == expectedLegacy)
+                let credentials: [String: String]? = if case let .nativeDevice(_, _, _, credentials) = configuration
+                    .auth
+                {
+                    credentials
+                } else {
+                    nil
+                }
+                #expect(credentials == expectedLegacy)
                 let provider = try #require(configuration.nativeAuthProvider)
                 let originalLease = try #require(await connection.captureServerLease())
                 let original = try await provider("original-challenge", 123)
@@ -150,15 +157,11 @@ struct GatewayConnectionControlUIAuthTests {
                 let deliveries = await connection.subscribe()
                 let socket = try #require(session.latestTask())
                 socket.emitReceiveFailure()
-                try await AsyncTimeout.withTimeout(
-                    seconds: 5,
-                    onTimeout: { URLError(.timedOut) },
-                    operation: {
-                        for await _ in reconnectChallenges.stream {
-                            return
-                        }
-                        throw CancellationError()
-                    })
+                var challenge = reconnectChallenges.stream.makeAsyncIterator()
+                guard await challenge.next() != nil, !Task.isCancelled else {
+                    Issue.record("Still waiting for reconnect challenge")
+                    throw CancellationError()
+                }
                 // The replacement physical socket is waiting for its challenge,
                 // so no old hello or prepared reply can authorize the web view.
                 #expect(!original.isCurrent())
@@ -169,16 +172,19 @@ struct GatewayConnectionControlUIAuthTests {
                 // The replacement hello issues the renewed grant through the
                 // channel's normal persistence path, not a test-side store write.
                 await reconnectGate.open()
-                let replacementLease = try await AsyncTimeout.withTimeout(
-                    seconds: 5,
-                    onTimeout: { URLError(.timedOut) },
-                    operation: {
-                        for await delivery in deliveries {
-                            if case .snapshot = delivery.push, delivery.isCurrent,
-                               delivery.serverLease != originalLease { return delivery.serverLease }
-                        }
-                        throw CancellationError()
-                    })
+                var successor: GatewayConnection.ServerLease?
+                for await delivery in deliveries {
+                    if case .snapshot = delivery.push, delivery.isCurrent,
+                       delivery.serverLease != originalLease
+                    {
+                        successor = delivery.serverLease
+                        break
+                    }
+                }
+                guard let replacementLease = successor, !Task.isCancelled else {
+                    Issue.record("Still waiting for native reconnect lease")
+                    throw CancellationError()
+                }
                 #expect(replacementLease.socketGeneration != originalLease.socketGeneration)
                 let reconnected = try await provider("replacement-challenge", 125)
                 let value = try #require(JSONSerialization.jsonObject(with: reconnected.json) as? [String: Any])

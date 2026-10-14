@@ -1,7 +1,10 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { callGoogleMeetRuntime, type GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import {
-  callGoogleMeetGateway,
+  callGoogleMeetRuntime,
+  resolveCliMeetingInput as resolveMeetingInput,
+  type GoogleMeetCliCommandContext,
+} from "./cli-command-context.js";
+import {
   parseGoogleMeetBrowserTransport,
   parseGoogleMeetMode,
   parseGoogleMeetTransport,
@@ -18,7 +21,7 @@ import {
 } from "./cli-shared.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
-  const { root, callGateway, operationTimeoutMs, resolveMeetingInput } = context;
+  const { root, operationTimeoutMs } = context;
 
   root
     .command("join")
@@ -31,20 +34,14 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.join",
+      const result = await callGoogleMeetRuntime(
+        context,
+        "googlemeet.join",
         payload,
-        timeoutMs: operationTimeoutMs,
-      });
-      if (delegated.ok) {
-        const result = delegated.payload as { session?: unknown };
-        writeStdoutJson(result.session ?? delegated.payload);
-        return;
-      }
-      const rt = await context.ensureRuntime();
-      const result = await rt.join(payload);
-      writeStdoutJson(result.session);
+        (rt) => rt.join(payload),
+        operationTimeoutMs,
+      );
+      writeStdoutJson(result.session ?? result);
     });
 
   root

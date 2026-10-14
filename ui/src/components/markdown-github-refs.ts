@@ -1,4 +1,5 @@
 import type { MarkdownIt, Token } from "markdown-it";
+import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import {
   markdownGitHubAliases,
   type MarkdownGitHubAliases,
@@ -102,6 +103,33 @@ function referenceTextContexts(children: readonly Token[]) {
   return contexts;
 }
 
+function linkedItemRepositories(children: readonly Token[]) {
+  const repositories = new Map<string, MarkdownGitHubRepository | null>();
+  // Only explicit links in this inline block lend context. Do not carry a
+  // repository across paragraphs, quoted examples, or streamed block boundaries.
+  for (const token of children) {
+    if (token.type !== "link_open") {
+      continue;
+    }
+    const href = token.attrGet("href");
+    const target = typeof href === "string" ? parseGitHubLinkTarget(href) : null;
+    if (!target) {
+      continue;
+    }
+    const key = `${target.kind}:${target.number}`;
+    const repository = { owner: target.owner.toLowerCase(), repo: target.repo.toLowerCase() };
+    const previous = repositories.get(key);
+    repositories.set(
+      key,
+      previous === undefined ||
+        (previous?.owner === repository.owner && previous.repo === repository.repo)
+        ? repository
+        : null,
+    );
+  }
+  return repositories;
+}
+
 export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
   markdownParser.core.ruler.before("web-link-classes", "github-item-refs", (state) => {
     // SAFETY: markdown.ts supplies normalized render options as markdown-it's untyped env.
@@ -119,6 +147,7 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
         continue;
       }
       const contexts = referenceTextContexts(children);
+      const linkedRepositories = linkedItemRepositories(children);
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -161,20 +190,21 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
               ) {
                 return null;
               }
+              const kind = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issue";
+              const linkedKey = `${kind}:${number}`;
+              const fallback = linkedRepositories.has(linkedKey)
+                ? linkedRepositories.get(linkedKey)
+                : env?.githubRepo;
               const repository =
                 direct?.repository ??
                 (keyword
-                  ? referenceRepository(
-                      preceding.slice(0, -prefix![0].length),
-                      aliases,
-                      env?.githubRepo,
-                    )
-                  : env?.githubRepo);
+                  ? referenceRepository(preceding.slice(0, -prefix![0].length), aliases, fallback)
+                  : fallback);
               if (!repository) {
                 return null;
               }
               const base = `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
-              const path = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issues";
+              const path = kind === "pull" ? "pull" : "issues";
               const open = new state.Token("link_open", "a", 1);
               open.attrSet("href", `${base}/${path}/${number}`);
               const label = new state.Token("text", "", 0);

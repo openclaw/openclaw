@@ -1,24 +1,13 @@
 import crypto from "node:crypto";
 
-export type OneTimeTicketStore<T> = {
-  mint(
-    payload: T,
-    opts?: { ttlMs?: number; nowMs?: number; revokeSignal?: AbortSignal },
-  ): { token: string; expiresAtMs: number };
-  /** Single use; a rejected owner check leaves an unexpired ticket available to its owner. */
-  consume(token: string, nowMs?: number, accept?: (payload: T) => boolean): T | undefined;
-  /** Drops a ticket without redeeming or expiring it (no `onExpire`). */
-  delete(token: string): boolean;
-  clear(): void;
-  readonly size: number;
-};
+export type OneTimeTicketStore<T> = ReturnType<typeof createOneTimeTicketStore<T>>;
 
 export function createOneTimeTicketStore<T>(opts: {
   ttlMs: number;
   now?: () => number;
   /** Called when an unconsumed ticket expires through its timer, consume() or clear(). */
   onExpire?: (payload: T, token: string) => void;
-}): OneTimeTicketStore<T> {
+}) {
   const now = opts.now ?? (() => Date.now());
   const entries = new Map<
     string,
@@ -46,7 +35,7 @@ export function createOneTimeTicketStore<T>(opts: {
     }
   };
   return {
-    mint(payload, options = {}) {
+    mint(payload: T, options: { ttlMs?: number; nowMs?: number; revokeSignal?: AbortSignal } = {}) {
       const token = crypto.randomBytes(24).toString("hex");
       const ttlMs = options.ttlMs ?? opts.ttlMs;
       const expiresAtMs = (options.nowMs ?? now()) + ttlMs;
@@ -63,7 +52,8 @@ export function createOneTimeTicketStore<T>(opts: {
       }
       return { token, expiresAtMs };
     },
-    consume(token, nowMs, accept) {
+    /** Single use; a rejected owner check leaves an unexpired ticket available to its owner. */
+    consume(token: string, nowMs?: number, accept?: (payload: T) => boolean) {
       const currentTimeMs = nowMs ?? now();
       const normalized = token.trim();
       if (!/^[a-f0-9]{48}$/u.test(normalized)) {
@@ -86,7 +76,8 @@ export function createOneTimeTicketStore<T>(opts: {
       }
       return entry?.payload;
     },
-    delete(token) {
+    /** Drops a ticket without redeeming or expiring it (no `onExpire`). */
+    delete(token: string) {
       return remove(token) !== undefined;
     },
     clear() {

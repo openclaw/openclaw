@@ -1,32 +1,26 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
-import { getNodeSqliteKysely, prepareSqliteQueryIterator } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryIterator,
+} from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
-const readersByDatabase = new WeakMap<DatabaseSync, ReturnType<typeof createAgeReaders>>();
-
-function createAgeReaders(database: DatabaseSync) {
+export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database) => {
   const db =
     getNodeSqliteKysely<Pick<DB, "session_nodes" | "session_canonical_validation_pending">>(
       database,
     );
   const projection = db
     .selectFrom("session_nodes")
-    .select(["session_key", "updated_at", "archived_at", "last_activity_at", "last_interaction_at"])
-    .select((eb) =>
-      eb
-        .case()
-        .when(eb.fn<number>("json_valid", ["entry_json"]), "=", 1)
-        .then(
-          eb.cast<number>(
-            eb.fn("json_extract", [eb.ref("entry_json"), eb.val("$.sessionStartedAt")]),
-            "integer",
-          ),
-        )
-        .else(null)
-        .end()
-        .as("session_started_at"),
-    );
+    .select([
+      "session_key",
+      "updated_at",
+      "archived_at",
+      "last_activity_at",
+      "last_interaction_at",
+      "session_started_at",
+    ]);
   const ordered = db
     .selectFrom(
       projection
@@ -111,13 +105,4 @@ function createAgeReaders(database: DatabaseSync) {
     // Raw edits remain marked until the canonical owner validates their key/row shape.
     uncertified: prepareSqliteQueryIterator(database, () => uncertified),
   };
-}
-
-export function readSessionMaintenanceAgeQueries(database: DatabaseSync) {
-  let readers = readersByDatabase.get(database);
-  if (!readers) {
-    readers = createAgeReaders(database);
-    readersByDatabase.set(database, readers);
-  }
-  return readers;
-}
+});

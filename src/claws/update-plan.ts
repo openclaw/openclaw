@@ -20,6 +20,7 @@ import { digestClawValue as digest } from "./digest.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
+import { normalizeWorkspaceConfig, resolveMigrationAgentSettings } from "./migrate-validation.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { readClawPackageRefs } from "./provenance.js";
@@ -88,18 +89,11 @@ export async function buildClawUpdatePlan(params: {
   const ownsDatabase = !params.stateOptions?.database;
   const database =
     params.stateOptions?.database ??
-    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
+    (await openExistingOpenClawStateDatabaseReadOnly({
+      ...params.stateOptions,
+      requireCanonicalSchema: true,
+    }));
   if (!database) {
-    return notFound();
-  }
-  if (
-    !database.db /* sqlite-allow-raw: read-only Claw install table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get()
-  ) {
-    if (ownsDatabase) {
-      database.walMaintenance.close();
-    }
     return notFound();
   }
   const readOnlyStateOptions: OpenClawStateDatabaseOptions & {
@@ -185,9 +179,22 @@ export async function buildClawUpdatePlan(params: {
     const actions: ClawUpdateAction[] = [];
     const capabilityChanges: ClawUpdateCapabilityChange[] = [];
 
-    const desiredAgentDigest = digest(targetPlan.agent.config);
+    let desiredAgentDigest = digest(targetPlan.agent.config);
+    let adoptedSettingsUnsupported = false;
+    if (record.install.agentOrigin === "adopted") {
+      try {
+        desiredAgentDigest = digest(
+          normalizeWorkspaceConfig(
+            resolveMigrationAgentSettings(params.config, targetPlan.agent.config),
+            record.install.workspace,
+          ),
+        );
+      } catch {
+        adoptedSettingsUnsupported = true;
+      }
+    }
     const agentAction =
-      record.agentState === "modified"
+      record.agentState === "modified" || adoptedSettingsUnsupported
         ? "manual"
         : record.agentState === "missing"
           ? "change"
@@ -202,7 +209,9 @@ export async function buildClawUpdatePlan(params: {
       blocked: agentAction === "manual",
       reason:
         agentAction === "manual"
-          ? "Live agent config changed after installation and must be reconciled manually."
+          ? adoptedSettingsUnsupported
+            ? "Current inherited agent defaults cannot be represented by the installed Claw v1 package. Reconcile those settings manually."
+            : "Live agent config changed after installation and must be reconciled manually."
           : record.agentState === "missing"
             ? "Owned agent config is missing and would be restored from the target manifest."
             : agentAction === "unchanged"

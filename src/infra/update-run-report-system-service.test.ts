@@ -30,6 +30,7 @@ it.each(["ok", "skipped"] as const)(
     );
     expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
       `Warning: ${warning}`,
+      "Warning: Doctor repair 1 is deferred.",
       "Warning: Doctor repair 2 is deferred.",
       "Warning: Doctor repair 3 is deferred.",
     ]);

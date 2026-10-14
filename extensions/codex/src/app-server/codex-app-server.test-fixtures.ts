@@ -207,3 +207,51 @@ export function createFakeCodexAppServerClient(
     },
   };
 }
+
+export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  };
+}
+
+export function nativeCommandItem(
+  id: string,
+  status: "inProgress" | "completed",
+  durationMs: number | null,
+) {
+  return {
+    type: "commandExecution",
+    id,
+    command: "git status --short",
+    cwd: "/tmp/workspace",
+    processId: null,
+    source: "agent",
+    status,
+    commandActions: [],
+    aggregatedOutput: status === "completed" ? "" : null,
+    exitCode: status === "completed" ? 0 : null,
+    durationMs,
+  };
+}
+
+export function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
+}

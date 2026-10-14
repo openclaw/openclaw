@@ -1,7 +1,7 @@
 import { toInboundMediaFactsWithMetadata } from "openclaw/plugin-sdk/channel-inbound";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { mimeTypeFromFilePath, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { shouldIncludeSupplementalContext } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -137,11 +137,10 @@ export async function resolveSlackRoomHistory(params: {
 }
 
 function isSlackImageFileCandidate(file: SlackFile): boolean {
-  const mime = file.mimetype?.split(";")[0]?.trim().toLowerCase();
-  if (mime?.startsWith("image/")) {
-    return true;
-  }
-  return Boolean(mimeTypeFromFilePath(file.name)?.startsWith("image/"));
+  return Boolean(
+    normalizeMimeType(file.mimetype)?.startsWith("image/") ||
+    mimeTypeFromFilePath(file.name)?.startsWith("image/"),
+  );
 }
 
 function sliceSlackImageFileCandidates(files: SlackFile[] | undefined, limit: number): SlackFile[] {

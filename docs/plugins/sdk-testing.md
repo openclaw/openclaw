@@ -64,6 +64,12 @@ runners and registries. These helpers reuse their core owners; register the
 session fixture lifecycle explicitly. Use published runtime subpaths when
 they already expose the needed operation.
 
+After closing retained plugin runtime handles, call `resetPluginRuntimeStateForTest()`
+and await `waitForPluginCacheRetirement(true)` from `plugin-test-runtime` to include
+borrowed cache generations. Assert that
+its `failures` array is empty before deleting fixture files or restoring the
+environment. A rejected or failed retirement must leave the fixture intact.
+
 Await `listChannelIngressQueueAccountIdsForTests` from
 `channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
 read-only worker and leaves missing state uncreated. Join asynchronous database
@@ -72,6 +78,12 @@ cleanup before removing a fixture's state directory.
 For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
 with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
 built workers on the runtime owner's startup arguments.
+
+When a test or hook lazily loads a compiled-subprocess declaration, preload it
+at collection with `import "openclaw/plugin-sdk/compiled-subprocess-testing";`.
+This repo-local, non-production subpath has no exports and keeps worker
+preparation outside test deadlines without binding the subject before its mocks
+or module resets. Use it only in tests that already load a declaration.
 
 ### Available exports
 
@@ -89,7 +101,7 @@ built workers on the runtime owner's startup arguments.
 | `installChannelSetupContractSuite`                                        | Install generic channel setup contract cases. Import from `plugin-sdk/channel-test-helpers`                                                 |
 | `installChannelStatusContractSuite`                                       | Install generic channel status contract cases. Import from `plugin-sdk/channel-test-helpers`                                                |
 | `expectDirectoryIds`                                                      | Assert channel directory ids from a directory-list function. Import from `plugin-sdk/channel-test-helpers`                                  |
-| `formatEnvelopeTimestamp`                                                 | Format deterministic envelope timestamps. Import from `plugin-sdk/channel-test-helpers`                                                     |
+| `formatEnvelopeTimestamp`                                                 | Format envelope timestamps consistently. Import from `plugin-sdk/channel-test-helpers`                                                      |
 | `expectPairingReplyText`                                                  | Assert channel pairing reply text and extract its code. Import from `plugin-sdk/channel-test-helpers`                                       |
 | `describePluginRegistrationContract`                                      | Install plugin registration contract checks. Import from `plugin-sdk/plugin-test-contracts`                                                 |
 | `registerSingleProviderPlugin`                                            | Register one provider plugin in loader smoke tests. Import from `plugin-sdk/plugin-test-runtime`                                            |

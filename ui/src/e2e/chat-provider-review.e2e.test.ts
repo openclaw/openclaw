@@ -56,13 +56,19 @@ suite.define(() => {
         errorMessage:
           "This request was blocked by our safety systems. Reason: Potentially unintended activity.",
       });
-      await page
-        .getByText(
+      const failure = page.locator(".chat-error").filter({
+        hasText:
           "This request was blocked by our safety systems. Reason: Potentially unintended activity.",
-          { exact: false },
-        )
-        .first()
+      });
+      await failure
+        .locator("summary strong")
+        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
         .waitFor();
+      await failure.locator("summary").click();
+      await failure.getByLabel("Error details", { exact: true }).waitFor();
+      expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
+        "This request was blocked by our safety systems. Reason: Potentially unintended activity.",
+      );
       await captureUiProof(suite, page, "provider-review", "before-generic-error.png");
 
       const providerReview = {

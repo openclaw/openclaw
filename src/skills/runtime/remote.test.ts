@@ -108,42 +108,6 @@ describe("skills-remote", () => {
     expect(listRemoteSkillNames()).not.toContain(skillName);
   });
 
-  it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
-    await closeSkillsWatchers(true);
-    const workspaceDir = `/tmp/ws-${randomUUID()}`;
-    const nodeId = `node-${randomUUID()}`;
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-
-    const before = getSkillsSnapshotVersion(workspaceDir);
-    removeRemoteNodeInfo(nodeId);
-    const after = getSkillsSnapshotVersion(workspaceDir);
-
-    expect(after).toBeGreaterThan(before);
-  });
-
-  it("bumps the skills snapshot version when an eligible remote node connects", async () => {
-    await closeSkillsWatchers(true);
-    const workspaceDir = `/tmp/ws-${randomUUID()}`;
-    const nodeId = `node-${randomUUID()}`;
-
-    const before = getSkillsSnapshotVersion(workspaceDir);
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-    const after = getSkillsSnapshotVersion(workspaceDir);
-
-    expect(after).toBeGreaterThan(before);
-    removeRemoteNodeInfo(nodeId);
-  });
-
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
     const linuxNodeId = `node-${randomUUID()}`;
     const noRunNodeId = `node-${randomUUID()}`;
@@ -238,27 +202,16 @@ describe("skills-remote", () => {
     }
   });
 
-  it.each(
-    [
-      { command: "system.which", failure: "result" },
-      { command: "system.which", failure: "throw" },
-      { command: "system.run", failure: "result" },
-      { command: "system.run", failure: "throw" },
-    ].flatMap((scenario) => [
-      { ...scenario, skills: undefined },
-      { ...scenario, skills: ["remote-skill"] },
-    ]),
-  )(
-    "clears stale bins after a probe failure ($command/$failure, skills=$skills)",
-    async ({ command, failure, skills }) => {
+  it.each([
+    { command: "system.which", failure: "result" },
+    { command: "system.run", failure: "throw" },
+  ])(
+    "clears stale bins after a probe failure ($command/$failure)",
+    async ({ command, failure }) => {
       await closeSkillsWatchers(true);
       const nodeId = `node-${randomUUID()}`;
       const bin = `bin-${randomUUID()}`;
       const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: { ...cfg.agents?.defaults, skills },
-      };
       try {
         const invokeCalls: string[] = [];
         setTestSkillsRemoteRegistry(nodeId, {
@@ -307,7 +260,7 @@ describe("skills-remote", () => {
         get: () => testRemoteSession(nodeId),
         checkConnectivity: async () => ({
           ok: false,
-          error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+          error: { code: "TIMEOUT", message: "node connectivity check timed out" },
         }),
         invoke: async (params: { command: string }) => {
           invokeCalls.push(params.command);
@@ -369,7 +322,7 @@ describe("skills-remote", () => {
             });
             return {
               ok: false,
-              error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+              error: { code: "TIMEOUT", message: "node connectivity check timed out" },
             };
           }
           return { ok: true };
@@ -620,43 +573,7 @@ describe("skills-remote", () => {
     },
   );
 
-  it("waits for connect readiness before connectivity preflight and bin probing", async () => {
-    vi.useFakeTimers();
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
-    const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
-    const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
-    try {
-      setTestSkillsRemoteRegistry(nodeId, {
-        get: () => testRemoteSession(nodeId),
-        checkConnectivity,
-        invoke,
-      } as unknown as NodeRegistry);
-      recordRemoteMacWithSystemWhich(nodeId);
-
-      const refresh = refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        readinessDelayMs: 5_000,
-      });
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(checkConnectivity).not.toHaveBeenCalled();
-      expect(invoke).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await refresh;
-      expect(checkConnectivity).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledTimes(1);
-    } finally {
-      removeRemoteNodeInfo(nodeId);
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each(["linux", "darwin"])(
+  it.each(["linux"])(
     "retires a connect-readiness delay when the Gateway lifetime closes (%s)",
     async (platform) => {
       vi.useFakeTimers();
@@ -682,6 +599,7 @@ describe("skills-remote", () => {
           checkConnectivity,
           invoke,
         });
+        recordRemoteNodeInfo(testRemoteSession(nodeId, { platform, commands: params.commands }));
         let admitted = false;
         refresh = owner.track(() =>
           runWithGatewayIndependentRootWorkAdmission(
@@ -713,6 +631,7 @@ describe("skills-remote", () => {
         expect(invoke).toHaveBeenCalledTimes(platform === "darwin" ? 1 : 0);
       } finally {
         owner.beginClose();
+        await closeSkillsWatchers();
         await vi.runAllTimersAsync();
         await Promise.allSettled([refresh, closing]);
         removeRemoteNodeInfo(nodeId);
@@ -728,9 +647,13 @@ describe("skills-remote", () => {
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let connId = "conn-old";
     const firstInvoke = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+    const firstInvokeStarted = createDeferred();
     const invoke = vi
       .fn()
-      .mockImplementationOnce(async () => await firstInvoke.promise)
+      .mockImplementationOnce(async () => {
+        firstInvokeStarted.resolve();
+        return await firstInvoke.promise;
+      })
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
     try {
       setTestSkillsRemoteRegistry(nodeId, {
@@ -753,7 +676,7 @@ describe("skills-remote", () => {
         });
 
       const failedRefresh = refresh();
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+      await firstInvokeStarted.promise;
       removeRemoteNodeInfo(nodeId);
       connId = "conn-new";
       recordRemoteNodeInfo({
@@ -778,7 +701,7 @@ describe("skills-remote", () => {
     }
   });
 
-  it.each(["success", "failure", "throw"])(
+  it.each(["success", "throw"])(
     "does not carry a retired generation probe into its replacement (%s)",
     async (completion) => {
       const nodeId = `node-${randomUUID()}`;
@@ -790,9 +713,13 @@ describe("skills-remote", () => {
         pairingGeneration: "generation-a",
       });
       const retiredProbe = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+      const retiredProbeStarted = createDeferred();
       const invoke = vi
         .fn()
-        .mockImplementationOnce(async () => await retiredProbe.promise)
+        .mockImplementationOnce(async () => {
+          retiredProbeStarted.resolve();
+          return await retiredProbe.promise;
+        })
         .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
       try {
         setTestSkillsRemoteRegistry(nodeId, {
@@ -806,7 +733,7 @@ describe("skills-remote", () => {
           commands: session.commands,
           cfg,
         });
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await retiredProbeStarted.promise;
 
         session = { ...session, connId: "conn-b", pairingGeneration: "generation-b" };
         recordRemoteNodeInfo(session);

@@ -106,26 +106,30 @@ describe("Z.AI video generation", () => {
   });
 
   it.each([
-    ["https://open.bigmodel.cn/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4"],
     ["https://open.bigmodel.cn/api/coding/paas/v4/", "https://open.bigmodel.cn/api/paas/v4"],
     ["https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/paas/v4"],
     ["https://proxy.example/zai/", "https://proxy.example/zai"],
   ])("reuses %s for regional image-to-video", async (baseUrl, videoBaseUrl) => {
     mockSubmit();
     mockSuccess();
+    const remoteImage = baseUrl === "https://proxy.example/zai/";
+    const image = remoteImage
+      ? { url: "https://example.com/frame.jpg" }
+      : { buffer: Buffer.from("png-bytes"), mimeType: "image/png" };
     await generateVideo({
       cfg: { models: { providers: { zai: { baseUrl, models: [] } } } },
-      durationSeconds: 6,
-      aspectRatio: "9:16",
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      ...(remoteImage ? {} : { durationSeconds: 6, aspectRatio: "9:16" }),
+      inputImages: [image],
     });
     expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         url: `${videoBaseUrl}/videos/generations`,
         body: expect.objectContaining({
-          image_url: "data:image/png;base64,cG5nLWJ5dGVz",
+          image_url: remoteImage
+            ? "https://example.com/frame.jpg"
+            : "data:image/png;base64,cG5nLWJ5dGVz",
           duration: 5,
-          size: "720x1280",
+          size: remoteImage ? "1280x720" : "720x1280",
           with_audio: false,
         }),
       }),
@@ -142,17 +146,6 @@ describe("Z.AI video generation", () => {
       }),
       expect.any(Number),
       fetch,
-    );
-  });
-
-  it("passes a remote image URL unchanged", async () => {
-    mockSubmit();
-    mockSuccess();
-    await generateVideo({ inputImages: [{ url: "https://example.com/frame.jpg" }] });
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({ image_url: "https://example.com/frame.jpg" }),
-      }),
     );
   });
 

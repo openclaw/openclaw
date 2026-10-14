@@ -1,16 +1,14 @@
 // Internal client metadata for trusted in-process plugin runtime calls.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -18,47 +16,37 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import type {
-  GatewayAgentRunTaskOwner,
-  GatewayNodeInvokeStream,
-  GatewayRequestOptions,
-  TrustedAgentToolCaller,
-} from "./server-methods/types.js";
+import type { GatewayNodeInvokeStream, GatewayRequestOptions } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type RuntimeClient = NonNullable<GatewayRequestOptions["client"]> &
   Pick<GatewayWsClient, "preparedRecipientProfileId">;
 
-export function createSyntheticPluginRuntimeClient(params?: {
-  authenticatedUserProfile?: NonNullable<
-    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
-  >;
-  allowModelOverride?: boolean;
-  agentToolCaller?: TrustedAgentToolCaller;
-  agentRunTracking?: GatewayAgentRunTaskOwner;
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  operatorRunAuthority?: AdmittedRunOperatorAuthority;
-  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
-  cronRunContinuation?: boolean;
-  internalDeliveryMediaUrls?: string[];
-  runtimeContextFragments?: RuntimeContextFragment[];
-  internalDeliverySuppressText?: boolean;
-  pluginRuntimeOwnerId?: string;
-  nodeInvokeApprovalSessionKey?: string;
-  pluginSubagentRequester?: PluginSubagentRequesterContext;
-  runtimePluginToolGrant?: RuntimePluginToolGrant;
-  pluginSubagentToolsAllow?: string[];
-  delegatedToolPolicyHandoffId?: string;
-  sessionCreation?: TrustedSessionCreation;
-  scopes?: string[];
-}): NonNullable<GatewayRequestOptions["client"]> {
-  const pluginRuntimeOwnerId =
-    typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
-      ? params.pluginRuntimeOwnerId.trim()
-      : undefined;
+export function createSyntheticPluginRuntimeClient(
+  params?: Pick<RuntimeClient, "authenticatedUserProfile"> &
+    Pick<
+      NonNullable<RuntimeClient["internal"]>,
+      | "allowModelOverride"
+      | "agentToolCaller"
+      | "agentRunTracking"
+      | "operatorRoleActor"
+      | "operatorRunAuthority"
+      | "operatorAccessAuthority"
+      | "cronRunContinuation"
+      | "internalDeliveryMediaUrls"
+      | "runtimeContextFragments"
+      | "internalDeliverySuppressText"
+      | "internalDeliverySuppressErrors"
+      | "pluginRuntimeOwnerId"
+      | "nodeInvokeApprovalSessionKey"
+      | "pluginSubagentRequester"
+      | "runtimePluginToolGrant"
+      | "pluginSubagentToolsAllow"
+      | "delegatedToolPolicyHandoffId"
+      | "sessionCreation"
+    > & { scopes?: string[] },
+): NonNullable<GatewayRequestOptions["client"]> {
+  const pluginRuntimeOwnerId = normalizeOptionalString(params?.pluginRuntimeOwnerId);
   return {
     ...(params?.authenticatedUserProfile
       ? { authenticatedUserProfile: params.authenticatedUserProfile }
@@ -97,6 +85,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.internalDeliverySuppressText === true
         ? { internalDeliverySuppressText: true }
+        : {}),
+      ...(params?.internalDeliverySuppressErrors === true
+        ? { internalDeliverySuppressErrors: true }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),

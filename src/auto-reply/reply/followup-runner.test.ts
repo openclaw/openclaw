@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  resolveSessionTranscriptReadFence,
+  runWithSessionTranscriptReadFence,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -161,6 +165,42 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
+    const turn = createTurn();
+    const admission = {
+      agentId: "agent",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath: "/tmp/store",
+      generation: "generation",
+      entryId: "interrupted-user-message",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 1,
+      logicalTurnId: "interrupted-turn",
+      role: "user" as const,
+    };
+    state.admit.mockImplementation(async () => {
+      expect(resolveSessionTranscriptReadFence(admission)).toBeUndefined();
+      return { kind: "admitted", turn };
+    });
+    state.execute.mockImplementation(async () => {
+      await Promise.resolve();
+      expect(resolveSessionTranscriptReadFence(admission)).toBeUndefined();
+      return createSettledExecution();
+    });
+    state.account.mockResolvedValue(undefined);
+    await runWithSessionTranscriptReadFence(admission, async () => {
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      })(turn.queued);
+      expect(resolveSessionTranscriptReadFence(admission)).toBe(admission);
+    });
+    expect(state.execute).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])(
     "publishes admission notices only for consumed execution (admission succeeds=%s)",
     async (succeeds) => {
@@ -668,7 +708,7 @@ describe("createFollowupRunner", () => {
       let continuationOpen = true;
       let openAtCleanup: boolean | undefined;
       const adoptionResults: Array<boolean | undefined> = [];
-      const adopt = vi.fn(async () => continuationOpen);
+      const adopt = vi.fn(() => continuationOpen);
       const statusPayload = setReplyPayloadMetadata(
         { text: "The worker is continuing." },
         {
@@ -682,19 +722,13 @@ describe("createFollowupRunner", () => {
         },
       );
       const decision = { kind: "deliver", payloads: [statusPayload] };
-      const receipt = {
-        channel: "discord",
-        to: "user:1",
-        messageId: "existing-card",
-        text: "The worker is continuing.",
-        snapshot: { lines: ["The worker is continuing."] },
-      };
+      const draft = { push: () => undefined, retire: () => undefined };
       turn.queued.queuedFollowupReplyDisposition = {
         kind: "deliver",
         deliver: async (batch) => {
           for (const payload of batch.payloads) {
             adoptionResults.push(
-              await getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(receipt),
+              getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
             );
           }
           if (outcome === "completion-failed") {
@@ -727,7 +761,7 @@ describe("createFollowupRunner", () => {
         },
       })(turn.queued);
 
-      await expect(adopt()).resolves.toBe(false);
+      expect(adopt()).toBe(false);
       expect(openAtCleanup).toBe(true);
       expect(adoptionResults).toEqual(
         outcome === "delivered" || outcome === "completion-failed" ? [true] : [],

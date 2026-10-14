@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import {
   SessionFollowupCompletion,
   withFollowupRequest,
@@ -13,6 +14,7 @@ import type { AgentTurnPrincipal } from "./types.js";
 const mocks = vi.hoisted(() => ({
   registerSubagentRun: vi.fn(),
   adoptPausedSubagentRunForFollowUp: vi.fn(),
+  adoptPausedSubagentRunIntoSuccessor: vi.fn(),
   getLatestLiveSubagentRunByChildSessionKey: vi.fn(),
   prepareParentSubagentResume: vi.fn(),
 }));
@@ -22,6 +24,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: mocks.registerSubagentRun,
   adoptPausedSubagentRunForFollowUp: mocks.adoptPausedSubagentRunForFollowUp,
+  adoptPausedSubagentRunIntoSuccessor: mocks.adoptPausedSubagentRunIntoSuccessor,
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
@@ -48,6 +51,7 @@ function parameters(
 ): Parameters<typeof prepareGatewaySubagentRun>[0] {
   return {
     cfg: {},
+    activeSessionAgentId: "main",
     client: null,
     resolvedSessionKey: childSessionKey,
     request: { message: "Continue the child" },
@@ -78,55 +82,56 @@ function followupRequest(): FollowupRequest {
 }
 
 describe("Gateway native subagent admission", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.adoptPausedSubagentRunForFollowUp.mockReturnValue(false);
+    mocks.adoptPausedSubagentRunForFollowUp.mockResolvedValue(false);
+    mocks.adoptPausedSubagentRunIntoSuccessor.mockResolvedValue(false);
   });
 
-  it("registers plugin work with its execution owner before accepting it", async () => {
-    const sessionEntry = {
-      sessionId: "admitted-child",
-      lifecycleRevision: "admitted",
-      updatedAt: 1,
-    };
-    const params = parameters({
-      client: pluginClient(),
-      assertResumeAdmissionCurrent: () => sessionEntry,
-    });
-    await expect(prepareGatewaySubagentRun(params)).resolves.toEqual({
-      pluginSubagent: true,
-      reactivateSubagent: false,
-    });
-    expect(mocks.registerSubagentRun).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId,
-        childSessionKey,
-        sessionEntry,
-        task: "Continue the child",
-        requesterSessionKey: "agent:main:main",
-      }),
-      { assertCurrent: params.assertResumeAdmissionCurrent },
-    );
-  });
-
-  it("does not register work after its admission closes during runtime loading", async () => {
-    let admitted = true;
-    const preparation = prepareGatewaySubagentRun(
-      parameters({
+  it.each([true, false])(
+    "registers plugin work only while admission is current: %s",
+    async (current) => {
+      const sessionEntry = {
+        sessionId: "admitted-child",
+        lifecycleRevision: "admitted",
+        updatedAt: 1,
+      };
+      let admitted = true;
+      const params = parameters({
         client: pluginClient(),
         assertResumeAdmissionCurrent: () => {
           if (!admitted) {
             throw new Error("admission retired");
           }
-          return undefined;
+          return sessionEntry;
         },
-      }),
-    );
-    admitted = false;
-    await expect(preparation).rejects.toThrow("admission retired");
-    expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
-    expect(mocks.adoptPausedSubagentRunForFollowUp).not.toHaveBeenCalled();
-  });
+      });
+      const preparation = prepareGatewaySubagentRun(params);
+      admitted = current;
+      if (current) {
+        await expect(preparation).resolves.toEqual({
+          pluginSubagent: true,
+          reactivateSubagent: false,
+        });
+        expect(mocks.registerSubagentRun).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            runId,
+            childSessionKey,
+            sessionEntry,
+            task: "Continue the child",
+            requesterSessionKey: "agent:main:main",
+          }),
+          { assertCurrent: params.assertResumeAdmissionCurrent },
+        );
+      } else {
+        await expect(preparation).rejects.toThrow("admission retired");
+        expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
+        expect(mocks.adoptPausedSubagentRunForFollowUp).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves an explicit parent resume without creating a sibling owner", async () => {
     const client = pluginClient();
@@ -140,7 +145,7 @@ describe("Gateway native subagent admission", () => {
       createdAt: 1,
     };
     client.internal = bindInProcessSubagentResume({}, resume);
-    const adoptParentResume = vi.fn(() => "previous-run");
+    const adoptParentResume = vi.fn(async () => "previous-run");
     mocks.prepareParentSubagentResume.mockResolvedValue(adoptParentResume);
     await expect(prepareGatewaySubagentRun(parameters({ client }))).resolves.toEqual({
       pluginSubagent: false,
@@ -152,6 +157,7 @@ describe("Gateway native subagent admission", () => {
   });
 
   it("does not let inter-session delivery reactivate a completed child", async () => {
+    const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
     const result = await prepareGatewaySubagentRun(
       parameters({
         inputProvenance: {
@@ -167,6 +173,7 @@ describe("Gateway native subagent admission", () => {
       pluginSubagent: false,
       reactivateSubagent: true,
     });
+    expect(readMetadata).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(

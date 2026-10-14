@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
-// Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
@@ -96,7 +95,11 @@ function compareEntries(left: PluginSdkViolation, right: PluginSdkViolation): nu
 }
 
 async function collectViolations(): Promise<PluginSdkViolation[]> {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  using parser: { api?: API; [Symbol.dispose](): void } = {
+    [Symbol.dispose]() {
+      this.api?.close();
+    },
+  };
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
@@ -117,7 +120,10 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
     // Workspace packages resolve private facades through TS paths; core runtime stays relative.
     const isCoreRuntimeFile =
       repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
-    const sourceFile = parser.parseSourceFile(filePath, sourceText);
+    const sourceFile = (parser.api ??= new API({ cwd: repoRoot })).createSourceFile(
+      filePath,
+      sourceText,
+    );
 
     visitModuleSpecifiers(
       sourceFile,

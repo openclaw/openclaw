@@ -42,7 +42,7 @@ describe("createLaneTextDeliverer", () => {
     answer.update(HELLO_FINAL);
     answer.update.mockClear();
     const harness = createHarness({ answerStream: answer });
-    harness.stopDraftLane.mockImplementationOnce(async () => {
+    answer.stop.mockImplementationOnce(async () => {
       events.push("finalize");
       throw new Error("injected finalization crash");
     });

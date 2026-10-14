@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -81,7 +81,7 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
       const items = record["_items"];
       return Array.isArray(items) ? items : [record];
     });
-    const devices = deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
+    return deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
       const record = asRecord(entry);
       const name = record["_name"];
       return typeof name === "string"
@@ -93,21 +93,9 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
           ]
         : [];
     });
-    if (devices.length > 0) {
-      return devices;
-    }
   } catch {
-    // Older test fixtures and unusual system_profiler failures can still
-    // provide the human-readable device list without transport metadata.
+    return [];
   }
-  const devices: CoreAudioDeviceProfile[] = [];
-  for (const line of systemProfilerOutput.split(/\r?\n/u)) {
-    const match = line.match(/^\s{8}(.+):\s*$/u);
-    if (match?.[1]) {
-      devices.push({ name: match[1].trim(), virtual: false });
-    }
-  }
-  return [...new Map(devices.map((device) => [device.name, device])).values()];
 }
 
 function findPhysicalOutputProblem(
@@ -156,7 +144,6 @@ export async function runFaceTimePreflight(params: {
   config: FaceTimeConfig;
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
-  logger?: RuntimeLogger;
   helperConnected: boolean;
   captureBinary: string;
 }): Promise<FaceTimePreflightResult> {

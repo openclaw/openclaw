@@ -224,20 +224,21 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
         await self.gateway.shutdown()
     }
 
-    func sendEvent(name: String, payload: String) async throws {
-        let socket = try await readySocket()
+    func sendEvent(
+        name: String,
+        payload: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
+        let socket = try await readySocket(sourceLocation: sourceLocation)
         let sequence = await requestLog.nextEventSequence()
         let event = #"{"type":"event","event":"\#(name)","seq":\#(sequence),"payload":\#(payload)}"#
         socket.emitReceiveSuccess(.data(Data(event.utf8)))
     }
 
-    private func readySocket() async throws -> GatewayTestWebSocketTask {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline {
-            if let socket = session.latestTask(), socket.hasPendingReceiveHandler() {
-                return socket
-            }
-            try await Task.sleep(for: .milliseconds(2))
+    private func readySocket(sourceLocation: SourceLocation = #_sourceLocation) async throws
+    -> GatewayTestWebSocketTask {
+        try await TestWait.state("approval socket receive handler", sourceLocation: sourceLocation) {
+            self.session.latestTask()?.hasPendingReceiveHandler() == true
         }
         return try #require(self.session.latestTask())
     }
@@ -267,7 +268,7 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct ExecApprovalQueueStoreTests {
     @Test(arguments: [false, true])
@@ -390,12 +391,14 @@ struct ExecApprovalQueueStoreTests {
 
             let request = ApprovalFixtureRequest(id: "live", sessionKey: "agent:main:work")
             try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.map(\.id) == ["live"] })
+            try await TestWait.observed("live approval") { store.requests.map(\.id) == ["live"] }
+            try #require(store.requests.map(\.id) == ["live"])
             #expect(store.requests.first?.sessionKey == "agent:main:work")
             #expect(chatWindowQueue.requests.map(\.id) == ["live"])
 
             try await fixture.sendEvent(name: "exec.approval.resolved", payload: #"{"id":"live"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
             #expect(chatWindowQueue.requests.isEmpty)
         }
     }
@@ -409,7 +412,10 @@ struct ExecApprovalQueueStoreTests {
         }
     }
 
-    private static func checkDelayedExpiry(listResponseDelayMs: Int) async throws {
+    private static func checkDelayedExpiry(
+        listResponseDelayMs: Int,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
         let fixture = ApprovalGatewayFixture(initialRequests: {
             [ApprovalFixtureRequest(id: "delayed-expiry-task", expiresOffsetMs: 3000)]
         }, listResponseDelay: .milliseconds(listResponseDelayMs))
@@ -421,9 +427,9 @@ struct ExecApprovalQueueStoreTests {
             let request = try #require(store.requests.first)
             // Hold the actor past the published deadline before the queued expiry task can start.
             Self.blockUntilExpiry(request.expiresAtMs)
-            try #require(
-                await Self().waitUntil { store.requests.isEmpty },
-                "list response delay: \(listResponseDelayMs) ms")
+            try await TestWait
+                .observed("expired delayed approval", sourceLocation: sourceLocation) { store.requests.isEmpty }
+            try #require(store.requests.isEmpty, "list response delay: \(listResponseDelayMs) ms")
         }
     }
 
@@ -468,7 +474,8 @@ struct ExecApprovalQueueStoreTests {
 
             let request = ApprovalFixtureRequest(id: "system", allowedDecisions: ["allow-once", "deny"])
             try await fixture.sendEvent(name: "openclaw.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.first?.id == "system" })
+            try await TestWait.observed("system approval") { store.requests.first?.id == "system" }
+            try #require(store.requests.first?.id == "system")
             let queued = try #require(store.requests.first)
 
             await store.resolve(request: queued, decision: .allowOnce)
@@ -492,18 +499,22 @@ struct ExecApprovalQueueStoreTests {
             store.start()
             let initialLease = try await fixture.gateway.acquireServerLease()
             // Startup may finish before the menu opens; its refresh need not coalesce.
-            try #require(await self.waitUntil {
+            try await TestWait.observed("initial advertised approval lists") {
                 Set(store.requests.map(\.id)) ==
                     (supportsSystemList ? ["exec-pending", "system-pending"] : ["exec-pending"])
-            })
+            }
+            try #require(
+                Set(store.requests.map(\.id)) ==
+                    (supportsSystemList ? ["exec-pending", "system-pending"] : ["exec-pending"]))
             await store.refresh()
             var captured: ExecApprovalQueueItem?
             if supportsSystemList {
                 let event = ApprovalFixtureRequest(id: "system-pending", command: "echo before-reconnect")
                 try await fixture.sendEvent(name: "openclaw.approval.requested", payload: event.json)
-                try #require(await self.waitUntil {
+                try await TestWait.observed("approval before reconnect") {
                     store.requests.contains { $0.preview == "echo before-reconnect" }
-                })
+                }
+                try #require(store.requests.contains { $0.preview == "echo before-reconnect" })
                 await store.refresh()
                 captured = try #require(store.requests.first { $0.kind == .systemAgent })
             }
@@ -561,21 +572,24 @@ struct ExecApprovalQueueStoreTests {
             await fixture.gateway.shutdown()
             _ = try await fixture.gateway.acquireServerLease()
 
-            try #require(await self.waitUntil {
+            try await TestWait.observed("replacement approval lists") {
                 Set(store.requests.map(\.preview)) == ["exec-after", "system-after"]
-            })
+            }
+            try #require(Set(store.requests.map(\.preview)) == ["exec-after", "system-after"])
         }
     }
 
     @Test func `overlapping refreshes cannot replace a newer approval event`() async throws {
         let holdResponse = LockIsolated(false)
         let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
         let releaseResponse = AsyncTestGate()
         let fixture = ApprovalGatewayFixture(
             initialRequests: { [ApprovalFixtureRequest(id: "resolved-during-list")] },
             beforeListResponse: {
                 guard holdResponse.value else { return }
                 responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
                 await releaseResponse.wait()
             })
         try await fixture.withStore { store in
@@ -590,13 +604,15 @@ struct ExecApprovalQueueStoreTests {
                 second.cancel()
                 releaseResponse.open()
             }
-            try #require(await self.waitUntil { responseCaptured.value })
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
 
             await fixture.requestLog.setListedRequests { [] }
             try await fixture.sendEvent(
                 name: "exec.approval.resolved",
                 payload: #"{"id":"resolved-during-list"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
             releaseResponse.open()
             await first.value
             await second.value
@@ -606,6 +622,7 @@ struct ExecApprovalQueueStoreTests {
 
     @Test func `initial reconciliation converges after a newer approval event`() async throws {
         let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
         let releaseResponse = AsyncTestGate()
         let fixture = ApprovalGatewayFixture(
             initialRequests: {
@@ -613,23 +630,28 @@ struct ExecApprovalQueueStoreTests {
             },
             beforeListResponse: {
                 responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
                 await releaseResponse.wait()
             })
-        defer { releaseResponse.open() }
         try await fixture.withStore { store in
+            defer { releaseResponse.open() }
             store.start()
             _ = try await fixture.gateway.acquireServerLease()
-            try #require(await self.waitUntil { responseCaptured.value })
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
 
             let request = ApprovalFixtureRequest(id: "resolved-during-list")
             try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.map(\.id) == [request.id] })
+            try await TestWait.observed("requested approval") { store.requests.map(\.id) == [request.id] }
+            try #require(store.requests.map(\.id) == [request.id])
             await fixture.requestLog.setListedRequests { [ApprovalFixtureRequest(id: "still-pending")] }
             try await fixture.sendEvent(name: "exec.approval.resolved", payload: #"{"id":"resolved-during-list"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
 
             releaseResponse.open()
-            try #require(await self.waitUntil { store.requests.map(\.id) == ["still-pending"] })
+            try await TestWait.observed("reconciled pending approval") { store.requests.map(\.id) == ["still-pending"] }
+            try #require(store.requests.map(\.id) == ["still-pending"])
         }
     }
 
@@ -651,17 +673,20 @@ struct ExecApprovalQueueStoreTests {
                 for request in makeRequests() {
                     try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
                 }
-                try #require(await self.waitUntil { store.requests.count == 2 })
+                try await TestWait.observed("two Unicode approvals") { store.requests.count == 2 }
+                try #require(store.requests.count == 2)
             }
             #expect(store.requests.map(\.idKey) == [Data(decomposed.utf8), Data(composed.utf8)])
             let resolved = try JSONEncoder().encode(["id": composed])
             try await fixture.sendEvent(
                 name: "exec.approval.resolved",
                 payload: #require(String(data: resolved, encoding: .utf8)))
-            try #require(await self.waitUntil {
+            try await TestWait.observed("remaining Unicode approval") {
                 store.requests.map(\.idKey) == [Data(decomposed.utf8)]
-            })
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            }
+            try #require(store.requests.map(\.idKey) == [Data(decomposed.utf8)])
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
         }
     }
 
@@ -754,6 +779,7 @@ struct ExecApprovalQueueStoreTests {
     @Test func `plugin events clear attention on resolution and cannot be revived by an older list`() async throws {
         let holdResponse = LockIsolated(false)
         let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
         let releaseResponse = AsyncTestGate()
         let source = ApprovalFixtureRequest(id: "plugin-live", command: nil, title: "Approve preview")
         let fixture = ApprovalGatewayFixture(
@@ -762,6 +788,7 @@ struct ExecApprovalQueueStoreTests {
             beforeListResponse: {
                 guard holdResponse.value else { return }
                 responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
                 await releaseResponse.wait()
             })
         try await fixture.withStore { store in
@@ -774,30 +801,19 @@ struct ExecApprovalQueueStoreTests {
                 refresh.cancel()
                 releaseResponse.open()
             }
-            try #require(await self.waitUntil { responseCaptured.value })
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
             await fixture.requestLog.setListedPluginRequests { [] }
             try await fixture.sendEvent(name: "plugin.approval.resolved", payload: #"{"id":"plugin-live"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
             releaseResponse.open()
             await refresh.value
             #expect(store.requests.isEmpty)
             try await fixture.sendEvent(name: "plugin.approval.requested", payload: source.json)
-            try #require(await self.waitUntil { store.requests.first?.kind == .plugin })
+            try await TestWait.observed("plugin approval") { store.requests.first?.kind == .plugin }
+            try #require(store.requests.first?.kind == .plugin)
             #expect(store.requests.first?.allowedDecisions.isEmpty == true)
         }
-    }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        _ predicate: @escaping @MainActor () -> Bool) async -> Bool
-    {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if predicate() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        return predicate()
     }
 }

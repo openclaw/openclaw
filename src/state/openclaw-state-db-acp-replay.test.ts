@@ -4,7 +4,9 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectAcpReplayUtf8Accounting } from "../acp/event-ledger.test-support.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -12,7 +14,7 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
-function seedLegacyReplay(db: DatabaseSync) {
+function seedLegacyReplay(db: EngineConnection) {
   const session = db.prepare(`INSERT INTO acp_replay_sessions
     (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
     VALUES (?, ?, ?, 1, 123, 456, 5, ?)`);
@@ -40,7 +42,7 @@ function seedLegacyReplay(db: DatabaseSync) {
   );
 }
 
-function canonicalReplay(db: DatabaseSync) {
+function canonicalReplay(db: EngineConnection) {
   return {
     sessions: db
       .prepare(
@@ -55,7 +57,7 @@ function canonicalReplay(db: DatabaseSync) {
   };
 }
 
-function estimates(db: DatabaseSync) {
+function estimates(db: EngineConnection) {
   return {
     sessions: db
       .prepare("SELECT estimated_bytes FROM acp_replay_sessions ORDER BY session_id")
@@ -136,7 +138,7 @@ describe("ACP replay accounting repair", () => {
           expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
         }
         const upgraded = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(upgraded);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(upgraded));
         expect(canonicalReplay(upgraded)).toEqual(before);
         closeOpenClawStateDatabaseForTest();
 
@@ -146,7 +148,7 @@ describe("ACP replay accounting repair", () => {
           )
         ).db;
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
-        expectAcpReplayUtf8Accounting(reopened);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(reopened));
         expect(canonicalReplay(reopened)).toEqual(before);
       });
     },
@@ -231,7 +233,7 @@ describe("ACP replay accounting repair", () => {
 
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
         const repaired = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(repaired);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
         expect(canonicalReplay(repaired)).toEqual(before);
         const repairedEstimates = estimates(repaired);
         closeOpenClawStateDatabaseForTest();
@@ -269,7 +271,7 @@ describe("ACP replay accounting repair", () => {
       }
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       const repaired = openOpenClawStateDatabase(options).db;
-      expectAcpReplayUtf8Accounting(repaired);
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
       expect(canonicalReplay(repaired)).toEqual(before);
     });
   });

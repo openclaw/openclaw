@@ -86,7 +86,6 @@ describe("Telegram inbound admission authorization", () => {
       isGroup: true,
       isForum: true,
       senderId: participantId,
-      senderUsername: "",
       requireConfiguredGroup: false,
       dmAccess: "silent",
     });

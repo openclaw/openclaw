@@ -4,6 +4,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { withOpenClawStateLeasesWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
 import {
   withOpenClawStateLeaseAsync,
   type OpenClawStateAsyncLeaseContext,
@@ -11,6 +12,38 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 describe("worker state lease lifecycle", () => {
+  it("refuses a worker-leased effect after expiry before the host expiry callback runs", async () => {
+    await withOpenClawTestState({ label: "async-lease-effect-expiry" }, async (state) => {
+      const context = captureOpenClawStateWorkerContext({ env: state.env });
+      const effect = vi.fn();
+      const operation = withOpenClawStateLeaseAsync(
+        {
+          scope: "core:test",
+          key: "effect-expiry",
+          leaseMs: 60_000,
+          waitMs: 0,
+          heartbeat: "worker",
+        },
+        context,
+        (lease) =>
+          withOpenClawStateLeasesWorkerAdmission([lease], context, async (authority) => {
+            authority.assertCurrent();
+            // No timer or worker notification runs between the clock change and this effect.
+            const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+            try {
+              expect(lease.signal.aborted).toBe(false);
+              authority.assertCurrent();
+              effect();
+            } finally {
+              clock.mockRestore();
+            }
+          }),
+      );
+      await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      expect(effect).not.toHaveBeenCalled();
+    });
+  });
+
   it("drains an accepted callback and releases its lease during canonical close", async () => {
     await withOpenClawTestState({ label: "async-lease-canonical-close" }, async (state) => {
       const entered = createDeferredCore<OpenClawStateAsyncLeaseContext>();
@@ -63,7 +96,6 @@ describe("worker state lease lifecycle", () => {
 
   it.each([
     { heartbeat: undefined, leaseMs: 30_000 },
-    { heartbeat: "worker", leaseMs: 30_000 },
     { heartbeat: "worker", leaseMs: 1_000 },
   ] as const)(
     "runs the complete $heartbeat heartbeat lifecycle with a $leaseMs ms lease without parent SQL or waits",

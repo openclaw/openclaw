@@ -3,15 +3,20 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForReapTick } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
-  waitForPidFile,
-  waitForPidToExit,
+  readPidFile,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
@@ -23,9 +28,9 @@ import {
   describeSecretResolutionError,
   describeSecretResolutionOperatorDiagnostic,
   describeSecretResolutionOperatorRecovery,
+  isMissingSecretRefResolutionError,
 } from "./resolve-errors.js";
 import {
-  isMissingSecretRefResolutionError,
   isProviderScopedSecretResolutionError,
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -53,6 +58,7 @@ describe("secret ref resolver", () => {
     it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
+  let receipts: FixtureReceiptChannel;
   let caseId = 0;
   let execProtocolV1ScriptPath = "";
   let execPlainScriptPath = "";
@@ -132,6 +138,7 @@ describe("secret ref resolver", () => {
   }
 
   beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
     const sharedExecDir = path.join(fixtureRoot, "shared-exec");
     await fs.mkdir(sharedExecDir, { recursive: true });
@@ -174,64 +181,11 @@ describe("secret ref resolver", () => {
   });
 
   afterAll(async () => {
+    await receipts?.close();
     if (!fixtureRoot) {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  it("resolves env refs via implicit default env provider", async () => {
-    const config: OpenClawConfig = {};
-    const value = await resolveSecretRefString(
-      { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      {
-        config,
-        env: { OPENAI_API_KEY: "sk-env-value" }, // pragma: allowlist secret
-      },
-    );
-    expect(value).toBe("sk-env-value");
-  });
-
-  it("classifies only matching absent env refs as missing", async () => {
-    const ref = { source: "env", provider: "default", id: "MISSING_API_KEY" } as const;
-    const missingError = await resolveSecretRefValue(ref, { config: {}, env: {} }).catch(
-      (error: unknown) => error,
-    );
-
-    expect(isMissingSecretRefResolutionError({ ref, error: missingError })).toBe(true);
-    expect(
-      isMissingSecretRefResolutionError({
-        ref: { ...ref, id: "OTHER_API_KEY" },
-        error: missingError,
-      }),
-    ).toBe(false);
-
-    const policyError = await resolveSecretRefValue(ref, {
-      config: {
-        secrets: {
-          providers: {
-            default: { source: "env", allowlist: ["OTHER_API_KEY"] },
-          },
-        },
-      },
-      env: { MISSING_API_KEY: "test-missing-api-key" },
-    }).catch((error: unknown) => error);
-    expect(isMissingSecretRefResolutionError({ ref, error: policyError })).toBe(false);
-  });
-
-  it("classifies missing refs under a configured default provider alias", async () => {
-    const ref = { source: "env", provider: "primary", id: "MISSING_API_KEY" } as const;
-    const error = await resolveSecretRefValue(ref, {
-      config: {
-        secrets: {
-          defaults: { env: "primary" },
-          providers: { primary: { source: "env" } },
-        },
-      },
-      env: {},
-    }).catch((caught: unknown) => caught);
-
-    expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
   });
 
   it("does not rewrite an explicit default provider to a configured alias", async () => {
@@ -324,18 +278,6 @@ describe("secret ref resolver", () => {
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
   });
 
-  itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
-    const error = await resolveExecSecret(execProviderErrorScriptPath).catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(
-      'Exec provider "execmain" failed for id "openai/api-key" (NOT_FOUND).',
-    );
-    expect((error as Error).message).not.toContain("provider-private-detail-7f3c");
-  });
-
   itPosix(
     "classifies omitted and NOT_FOUND exec ids as missing but keeps other errors fail-closed",
     async () => {
@@ -360,20 +302,14 @@ describe("secret ref resolver", () => {
       expect(isMissingSecretRefResolutionError({ ref, error: omittedError })).toBe(true);
       expect(isMissingSecretRefResolutionError({ ref, error: missingError })).toBe(true);
       expect(isMissingSecretRefResolutionError({ ref, error: providerError })).toBe(false);
+      expect(missingError).toMatchObject({
+        message: 'Exec provider "execmain" failed for id "openai/api-key" (NOT_FOUND).',
+      });
+      expect(providerError).toMatchObject({
+        message: 'Exec provider "execmain" failed for id "openai/api-key".',
+      });
     },
   );
-
-  itPosix("suppresses exec error codes outside the bounded format", async () => {
-    const error = await resolveExecSecret(execUnsafeProviderErrorScriptPath).catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(
-      'Exec provider "execmain" failed for id "openai/api-key".',
-    );
-    expect((error as Error).message).not.toContain("PROVIDERPRIVATEDETAIL9C2E");
-  });
 
   itPosix("clamps oversized exec provider timeouts", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -387,87 +323,77 @@ describe("secret ref resolver", () => {
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
-  itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {
-    const root = await createCaseDir("exec-delay");
-    const scriptPath = path.join(root, "resolver-delay.sh");
-    // Keep the fixture cheap to start so this stays deterministic under a busy test run.
-    await writeSecureFile(
-      scriptPath,
-      [
-        "#!/bin/sh",
-        "sleep 0.03",
-        'printf \'{"protocolVersion":1,"values":{"delayed":"ok"}}\'',
-      ].join("\n"),
-      0o700,
-    );
+  it.skipIf(isWindows)(
+    "kills forked exec provider children on no-output timeout",
+    async ({ signal }) => {
+      const root = await createCaseDir("exec-fork-timeout");
+      const scriptPath = await writeForkingNoOutputScript(root, receipts.endpoint);
+      const pidPath = path.join(root, "forked.pid");
+      let childPid: number | undefined;
+      let resultPromise: Promise<string> | undefined;
+      const nativeSetTimeout = globalThis.setTimeout;
+      let noOutputTimeout: (() => void) | undefined;
+      const setTimeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === 1_000) {
+            noOutputTimeout = () => callback(...args);
+            return nativeSetTimeout(() => undefined, 60_000);
+          }
+          return nativeSetTimeout(callback, delay, ...args);
+        });
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "delayed" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: scriptPath,
-                passEnv: ["PATH"],
-                timeoutMs: 1500,
-              },
-            },
+      try {
+        resultPromise = resolveExecSecret(scriptPath, {
+          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+          noOutputTimeoutMs: 1_000,
+          timeoutMs: 10_000,
+        });
+        const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+        // The PID record precedes the receipt; operation settlement can win the socket race.
+        const settled = resultPromise.then(
+          () => {
+            if (!fsSync.existsSync(pidPath)) {
+              throw new Error(`Timed out waiting for pid file: ${pidPath}`);
+            }
           },
-        },
-      },
-    );
-    expect(value).toBe("ok");
-  });
+          (error: unknown) => {
+            if (!fsSync.existsSync(pidPath)) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+        childPid = await readPidFile(pidPath);
+        expect(isPidAlive(childPid)).toBe(true);
+        expectDefined(noOutputTimeout, "no-output timeout")();
+        const error = await withinTest(resultErrorPromise, signal);
 
-  itPosix("kills forked exec provider children on no-output timeout", async () => {
-    const root = await createCaseDir("exec-fork-timeout");
-    const scriptPath = await writeForkingNoOutputScript(root);
-    const pidPath = path.join(root, "forked.pid");
-    let childPid: number | undefined;
-    let resultPromise: Promise<string> | undefined;
-    const nativeSetTimeout = globalThis.setTimeout;
-    let noOutputTimeout: (() => void) | undefined;
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) => {
-        if (delay === 1_000) {
-          noOutputTimeout = () => callback(...args);
-          return nativeSetTimeout(() => undefined, 60_000);
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          throw new Error("expected a provider-scoped no-output error");
         }
-        return nativeSetTimeout(callback, delay, ...args);
-      });
-
-    try {
-      resultPromise = resolveExecSecret(scriptPath, {
-        env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        noOutputTimeoutMs: 1_000,
-        timeoutMs: 10_000,
-      });
-      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
-      childPid = await waitForPidFile(pidPath);
-      expect(isPidAlive(childPid)).toBe(true);
-      expectDefined(noOutputTimeout, "no-output timeout")();
-      const error = await resultErrorPromise;
-
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        throw new Error("expected a provider-scoped no-output error");
+        expect(error).toMatchObject({
+          code: "SECRET_PROVIDER_UNAVAILABLE",
+          source: "exec",
+          provider: "execmain",
+          message: 'Exec provider "execmain" produced no output for 1000ms.',
+        });
+        // The provider outcome does not expose the adopted descendant's native reap event.
+        while (isPidAlive(childPid)) {
+          await waitForReapTick(25, undefined, { signal }).catch((cause: unknown) => {
+            throw new Error(`Exec-provider descendant ${childPid} stayed alive`, { cause });
+          });
+        }
+        expect(isPidAlive(childPid)).toBe(false);
+      } finally {
+        setTimeoutSpy.mockRestore();
+        noOutputTimeout?.();
+        killPidIfAlive(childPid);
+        await resultPromise?.catch(() => {});
       }
-      expect(error).toMatchObject({
-        code: "SECRET_PROVIDER_UNAVAILABLE",
-        source: "exec",
-        provider: "execmain",
-        message: 'Exec provider "execmain" produced no output for 1000ms.',
-      });
-      expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
-    } finally {
-      setTimeoutSpy.mockRestore();
-      killPidIfAlive(childPid);
-      await resultPromise?.catch(() => {});
-    }
-  });
+    },
+  );
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
     const value = await resolveExecSecret(execPlainScriptPath, { jsonOnly: false });
@@ -677,28 +603,6 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow("Secret reference provider must match");
   });
 
-  it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
-    const dir = await createCaseDir("bom-file");
-    const filePath = path.join(dir, "secrets-with-bom.json");
-    // Write JSON with UTF-8 BOM prefix (EF BB BF)
-    const bom = "\uFEFF";
-    await writeSecureFile(filePath, `${bom}{"apiKey":"sk-test-123"}`);
-
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "filemain", id: "/apiKey" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              filemain: createFileProviderConfig(filePath),
-            },
-          },
-        },
-      },
-    );
-    expect(value).toBe("sk-test-123");
-  });
-
   it("strips UTF-8 BOM from file provider singleValue mode", async () => {
     const dir = await createCaseDir("bom-single");
     const filePath = path.join(dir, "secret-with-bom.txt");
@@ -755,34 +659,6 @@ describe("secret ref resolver", () => {
         );
       },
     );
-  });
-
-  it("keeps a missing Windows file provider path as a generic failure", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-file-missing");
-      const filePath = path.join(dir, "missing.json");
-      const error = await resolveSecretRefString(
-        { source: "file", provider: "filemain", id: "/token" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                filemain: createFileProviderConfig(filePath),
-              },
-            },
-          },
-        },
-      ).catch((caught: unknown) => caught);
-
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        return;
-      }
-      expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
-      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-      expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
-      expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
-    });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {

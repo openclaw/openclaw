@@ -98,6 +98,7 @@ suite.define(() => {
       ).toBe(0);
 
       await page.getByRole("button", { name: "Close Files" }).click();
+      await page.locator(".chat-workspace-rail").waitFor({ state: "detached" });
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
@@ -136,7 +137,7 @@ suite.define(() => {
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
         timeout: 10_000,
       });
-      await page.locator("wa-tab").filter({ hasText: "Review" }).click();
+      await page.locator(".tabstrip-tab").filter({ hasText: "Review" }).click();
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
           {
@@ -153,7 +154,7 @@ suite.define(() => {
       await page.getByText("Workspace stayed inactive.").first().waitFor();
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
 
-      await page.locator("wa-tab").filter({ hasText: "Files" }).click();
+      await page.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(4);

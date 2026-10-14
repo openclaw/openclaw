@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  coerceSecretRef,
+  parseSecretRef,
   normalizeSecretInputString,
   type SecretInput,
 } from "../config/types.secrets.js";
@@ -18,7 +18,7 @@ export type NodeHostCloudflareAccessConfig = {
 };
 
 function normalizeCloudflareAccessSecretInput(value: unknown, path: string): SecretInput {
-  const ref = coerceSecretRef(value);
+  const ref = parseSecretRef(value);
   if (ref) {
     return ref;
   }
@@ -85,18 +85,11 @@ export async function resolveNodeHostCloudflareAccess(params: {
   if (!params.value) {
     return undefined;
   }
-  const [clientId, clientSecret] = await Promise.all([
-    materializeSecretInput({
-      config: params.config,
-      value: params.value.clientId,
-      env: params.env,
-    }),
-    materializeSecretInput({
-      config: params.config,
-      value: params.value.clientSecret,
-      env: params.env,
-    }),
-  ]);
+  const [clientId, clientSecret] = await Promise.all(
+    [params.value.clientId, params.value.clientSecret].map((value) =>
+      materializeSecretInput({ config: params.config, value, env: params.env }),
+    ),
+  );
   if (!clientId || !clientSecret) {
     throw new Error("node-host Cloudflare Access credentials resolved empty");
   }

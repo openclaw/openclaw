@@ -13,6 +13,7 @@ import { killProcessTree } from "../../process/kill-tree.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const LEAF_CLEANUP_GUARD_MS = 5_000;
 
 it.skipIf(process.platform === "win32").each([
   { managed: false, generation: false, lifetime: "live" },
@@ -310,7 +311,11 @@ it.skipIf(process.platform === "win32").each([
       await closed.finally(() => termination?.force());
       const leafPidFile = path.join(root, "leaf-pid");
       if (fs.existsSync(leafPidFile)) {
-        await waitForDead(Number(fs.readFileSync(leafPidFile, "utf8")), 5_000);
+        // Cleanup hang guard after the owner released/killed the group, not a readiness race.
+        await waitForDead(
+          Number(fs.readFileSync(leafPidFile, "utf8")),
+          AbortSignal.timeout(LEAF_CLEANUP_GUARD_MS),
+        );
       }
     }
   },

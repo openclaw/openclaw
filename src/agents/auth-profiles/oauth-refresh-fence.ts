@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worker";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { retainCurrentWorkerNativeSection } from "../../infra/worker-task-native-sections.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -12,11 +12,11 @@ import {
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import { isSafeOAuthOwnerRefreshResult, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
-import type { OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
 export function isExactOAuthCredential(
-  current: OAuthCredential | undefined,
+  current: AuthProfileCredential | undefined,
   expected: OAuthCredential,
 ): boolean {
   return current?.type === "oauth" && isDeepStrictEqual(current, expected);
@@ -134,7 +134,7 @@ type SerializedOAuthRefreshParams<TData> = {
   ) => Promise<SerializedOAuthRefreshResult | null>;
   resolve: (credential: OAuthCredential) => Promise<SerializedOAuthRefreshResult | null>;
   /** Publish only after the caller validates the snapshot against its current owner. */
-  commit: (data: TData) => void;
+  commit: (data: TData) => void | Promise<void>;
 };
 
 /**
@@ -151,6 +151,22 @@ export function refreshSerializedOAuthCredential<TData>(
 async function runSerializedOAuthRefresh<TData>(
   params: SerializedOAuthRefreshParams<TData>,
 ): Promise<SerializedOAuthRefreshResult | null> {
+  const selectCandidate = (
+    data: TData,
+    credential: OAuthCredential | undefined,
+  ): SerializedOAuthRefreshCandidate<TData> => {
+    if (!credential || credential.provider !== params.provider) {
+      return { kind: "unavailable" };
+    }
+    if (isOAuthRefreshFence(credential)) {
+      return isPendingOAuthRefreshFence(credential)
+        ? { kind: "observe", generation: credential }
+        : { kind: "unavailable" };
+    }
+    return hasUnexpiredOAuthCredential(credential)
+      ? { kind: "use", credential, data }
+      : { kind: "claimable", credential };
+  };
   const observeFence = async (generation: OAuthCredential) =>
     await observeOAuthRefreshFenceSettlement({
       label: params.label,
@@ -166,7 +182,7 @@ async function runSerializedOAuthRefresh<TData>(
         if (!isSafeOAuthPostClaimSettlement(generation, credential)) {
           return null;
         }
-        params.commit(data);
+        await params.commit(data);
         return await params.resolve(credential);
       },
     });
@@ -174,20 +190,7 @@ async function runSerializedOAuthRefresh<TData>(
   const candidate = await params.backend.withLock<SerializedOAuthRefreshCandidate<TData>>(
     (current) => {
       const data = params.parse(current);
-      const credential = params.readCredential(data);
-      if (!credential || credential.provider !== params.provider) {
-        return { result: { kind: "unavailable" } };
-      }
-      if (isPendingOAuthRefreshFence(credential)) {
-        return { result: { kind: "observe", generation: credential } };
-      }
-      if (isOAuthRefreshFence(credential)) {
-        return { result: { kind: "unavailable" } };
-      }
-      if (hasUnexpiredOAuthCredential(credential)) {
-        return { result: { kind: "use", credential, data } };
-      }
-      return { result: { kind: "claimable", credential } };
+      return { result: selectCandidate(data, params.readCredential(data)) };
     },
   );
   if (candidate.kind === "unavailable") {
@@ -197,7 +200,7 @@ async function runSerializedOAuthRefresh<TData>(
     return await observeFence(candidate.generation);
   }
   if (candidate.kind === "use") {
-    params.commit(candidate.data);
+    await params.commit(candidate.data);
     return await params.resolve(candidate.credential);
   }
   if (!(await params.canRefresh(candidate.credential))) {
@@ -214,15 +217,11 @@ async function runSerializedOAuthRefresh<TData>(
         return { result: { kind: "unavailable" } };
       }
       if (!isExactOAuthCredential(credential, candidate.credential)) {
-        if (isPendingOAuthRefreshFence(credential)) {
-          return { result: { kind: "observe", generation: credential } };
-        }
-        if (isOAuthRefreshFence(credential)) {
-          return { result: { kind: "unavailable" } };
-        }
-        return hasUnexpiredOAuthCredential(credential)
-          ? { result: { kind: "use", credential, data } }
-          : { result: { kind: "unavailable" } };
+        const currentCandidate = selectCandidate(data, credential);
+        return {
+          result:
+            currentCandidate.kind === "claimable" ? { kind: "unavailable" } : currentCandidate,
+        };
       }
       const fence = createOAuthRefreshFence({ profileId: params.profileId, credential });
       // Acquire before returning a write: cancellation closes native admission atomically.
@@ -240,7 +239,7 @@ async function runSerializedOAuthRefresh<TData>(
       return await observeFence(claim.generation);
     }
     if (claim.kind === "use") {
-      params.commit(claim.data);
+      await params.commit(claim.data);
       return await params.resolve(claim.credential);
     }
     const markFailed = async () => {
@@ -254,7 +253,7 @@ async function runSerializedOAuthRefresh<TData>(
         return { result: nextData, next: params.serialize(nextData) };
       });
       if (failed) {
-        params.commit(failed);
+        await params.commit(failed);
       }
     };
 
@@ -286,7 +285,7 @@ async function runSerializedOAuthRefresh<TData>(
     };
 
     try {
-      params.commit(claim.nextData);
+      await params.commit(claim.nextData);
     } catch (error) {
       return await settleFailure({ error });
     }
@@ -331,7 +330,7 @@ async function runSerializedOAuthRefresh<TData>(
         if (!settled) {
           throw new Error("OAuth credential owner changed before refresh completed");
         }
-        params.commit(settled.data);
+        await params.commit(settled.data);
         return settled.persisted ? refreshed : await params.resolve(settled.credential);
       } catch (error) {
         return settleFailure({ error });

@@ -3,8 +3,10 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -37,7 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -61,11 +62,7 @@ internal fun ProvidersModelsScreen(
   val errorText by viewModel.providerModelCatalogErrorText.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshProviderModels()
-    }
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshProviderModels() }
 
   ClawScaffold(
     contentPadding =
@@ -77,69 +74,67 @@ internal fun ProvidersModelsScreen(
       ),
     contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-        contentPadding = PaddingValues(bottom = ClawTheme.spacing.xxxs),
-      ) {
-        item {
-          Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
+    LazyColumn(
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+      contentPadding = PaddingValues(bottom = ClawTheme.spacing.xxxs),
+    ) {
+      item {
+        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Surface(
+              onClick = onBack,
+              modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+              shape = CircleShape,
+              color = Color.Transparent,
+              contentColor = ClawTheme.colors.text,
+              border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
             ) {
-              Surface(
-                onClick = onBack,
-                modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-                shape = CircleShape,
-                color = Color.Transparent,
-                contentColor = ClawTheme.colors.text,
-                border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(17.dp))
-                }
+              Box(contentAlignment = Alignment.Center) {
+                Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(17.dp))
               }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
-              Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display, color = ClawTheme.colors.text)
-              Text(
-                text = nativeString("Review provider readiness\nand configured models."),
-                style = ClawTheme.type.caption,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
+            Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display, color = ClawTheme.colors.text)
+            Text(
+              text = nativeString("Review provider readiness\nand configured models."),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
           }
         }
+      }
 
+      item {
+        ProviderOverviewPanel(
+          isConnected = isConnected,
+          providerRows = providerRows,
+          modelCount = models.size,
+          onRefresh = { viewModel.refreshProviderModels(refresh = true) },
+          refreshing = refreshing,
+        )
+      }
+
+      item {
+        UppercaseSectionLabel(title = nativeString("Providers and configured models"))
+      }
+
+      if (!isConnected && providerRows.isEmpty()) {
         item {
-          ProviderOverviewPanel(
-            isConnected = isConnected,
-            providerRows = providerRows,
-            modelCount = models.size,
-            onRefresh = { viewModel.refreshProviderModels(refresh = true) },
-            refreshing = refreshing,
-          )
+          ClawEmptyState(title = nativeString("Gateway offline"), body = nativeString("Connect your Gateway to load provider readiness."))
         }
+      } else {
+        providerListItems(rows = providerRows, refreshing = refreshing)
+      }
 
+      errorText?.let { message ->
         item {
-          ProviderSectionLabel(title = nativeString("Providers and configured models"))
-        }
-
-        if (!isConnected && providerRows.isEmpty()) {
-          item {
-            ClawEmptyState(title = nativeString("Gateway offline"), body = nativeString("Connect your Gateway to load provider readiness."))
-          }
-        } else {
-          providerListItems(rows = providerRows, refreshing = refreshing)
-        }
-
-        errorText?.let { message ->
-          item {
-            SettingsMessagePanel(text = message)
-          }
+          SettingsMessagePanel(text = message)
         }
       }
     }
@@ -151,17 +146,21 @@ internal data class ProviderRow(
   val name: String,
   val status: String,
   val availability: ProviderAvailability,
-  val modelCount: Int,
   val models: List<GatewayModelSummary> = emptyList(),
 ) {
+  val modelCount: Int get() = models.size
+
   val ready: Boolean
     get() = availability == ProviderAvailability.Available
 }
 
-internal enum class ProviderAvailability {
-  Available,
-  Unavailable,
-  Unknown,
+internal enum class ProviderAvailability(
+  val label: NativeText,
+  val modelLabel: NativeText,
+) {
+  Available(nativeText("Ready"), nativeText("Available")),
+  Unavailable(nativeText("Needs attention"), nativeText("Unavailable")),
+  Unknown(nativeText("Unknown"), nativeText("Unknown")),
 }
 
 /** Combines gateway auth-provider readiness with configured model providers. */
@@ -184,21 +183,12 @@ internal fun providerRows(
       ProviderRow(
         id = displayId,
         name = authProvider?.displayName ?: providerDisplayName(displayId),
-        status = availability.label,
+        status = availability.label.resolveNativeText(),
         availability = availability,
-        modelCount = providerModels.size,
         models = providerModels,
       )
     }.sortedWith(compareBy({ providerPriority(it.id) }, { it.name.lowercase() }))
 }
-
-private val ProviderAvailability.label: String
-  get() =
-    when (this) {
-      ProviderAvailability.Available -> nativeString("Ready")
-      ProviderAvailability.Unavailable -> nativeString("Needs attention")
-      ProviderAvailability.Unknown -> nativeString("Unknown")
-    }
 
 private fun providerAvailability(
   authProvider: GatewayModelProviderSummary?,
@@ -218,14 +208,11 @@ private fun providerAvailability(
 private fun String.normalizedProviderId(): String = trim().lowercase()
 
 /** Normalizes gateway provider status strings into a ready/not-ready boolean. */
-internal fun modelProviderReady(status: String): Boolean {
-  val normalized = status.trim().lowercase()
-  return normalized == "ok" ||
-    normalized == "ready" ||
-    normalized == "healthy" ||
-    normalized == "configured" ||
-    normalized == "static"
-}
+internal fun modelProviderReady(status: String): Boolean =
+  when (status.trim().lowercase()) {
+    "ok", "ready", "healthy", "configured", "static" -> true
+    else -> false
+  }
 
 private val modelComparator = compareBy<GatewayModelSummary>({ it.name.lowercase() }, { it.id.lowercase() })
 
@@ -253,7 +240,6 @@ private fun LazyListScope.providerListItems(
             name = nativeString("Provider catalog"),
             status = if (refreshing) nativeString("Loading") else nativeString("No providers"),
             availability = ProviderAvailability.Unknown,
-            modelCount = 0,
           ),
       )
     }
@@ -360,7 +346,7 @@ private fun ProviderModelRow(model: GatewayModelSummary) {
           Text(text = model.id, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         val availability = model.available.toProviderAvailability()
-        AvailabilityPill(availability = availability, label = availability.modelLabel)
+        AvailabilityPill(availability = availability, label = availability.modelLabel.resolveNativeText())
       }
       modelCapabilities(model).takeIf { it.isNotEmpty() }?.let { capabilities ->
         Text(text = capabilities, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -388,14 +374,6 @@ private fun ProviderAvailability.color(): Color =
     ProviderAvailability.Unknown -> ClawTheme.colors.textSubtle
   }
 
-private val ProviderAvailability.modelLabel: String
-  get() =
-    when (this) {
-      ProviderAvailability.Available -> nativeString("Available")
-      ProviderAvailability.Unavailable -> nativeString("Unavailable")
-      ProviderAvailability.Unknown -> nativeString("Unknown")
-    }
-
 private fun Boolean?.toProviderAvailability(): ProviderAvailability =
   when (this) {
     true -> ProviderAvailability.Available
@@ -421,16 +399,5 @@ private fun ProviderBadge(text: String) {
     Box(contentAlignment = Alignment.Center) {
       Text(text = badgeInitials(text, fallback = "AI"), style = ClawTheme.type.label, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
     }
-  }
-}
-
-@Composable
-private fun ProviderSectionLabel(title: String) {
-  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-    Text(
-      text = localizedUppercase(title, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
   }
 }

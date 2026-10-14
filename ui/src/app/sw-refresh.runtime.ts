@@ -14,7 +14,6 @@ function waitForReplacementWorker(worker: ServiceWorker): Promise<void> {
       resolve();
     };
     worker.addEventListener("statechange", onStateChange);
-    onStateChange();
   });
 }
 
@@ -38,26 +37,19 @@ async function readWorkerBuild(worker: ServiceWorker): Promise<unknown> {
 }
 
 async function reconcileActiveWorker(registration: ServiceWorkerRegistration): Promise<boolean> {
-  while (registration.active) {
-    const worker = registration.active;
-    const message = await readWorkerBuild(worker);
-    // Activation can replace the worker during either the query or the document
-    // probe. Reconcile that new owner rather than declaring the document fresh.
-    if (registration.active !== worker) {
-      continue;
-    }
-    if (!controlUiWorkerActivationRetires(message)) {
-      return false;
-    }
-    // A worker must not supersede a target established by the Gateway handshake.
-    const reloaded = await scheduleStaleChunkReload({
-      canReload: () => registration.active === worker,
-    });
-    if (reloaded || registration.active === worker) {
-      return reloaded;
-    }
+  const worker = registration.active;
+  if (!worker) {
+    return false;
   }
-  return false;
+  const message = await readWorkerBuild(worker);
+  // Activation or foreground recovery picks up a replacement after this query.
+  if (registration.active !== worker || !controlUiWorkerActivationRetires(message)) {
+    return false;
+  }
+  // A worker must not supersede a target established by the Gateway handshake.
+  return scheduleStaleChunkReload({
+    canReload: () => registration.active === worker,
+  });
 }
 
 /** Returns true only when recovery actually admitted a document reload. */

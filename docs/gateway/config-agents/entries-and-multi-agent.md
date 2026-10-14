@@ -88,6 +88,7 @@ for provider examples and precedence.
 - Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked against the local file-size limit.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of configured agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed. Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up, or add a minimal `agents.entries.*` entry if that target should remain spawnable while inheriting defaults.
+- `tools.agentToAgent.send`: optional outgoing target agent IDs or `*` patterns for `sessions_send`. Omit to keep global policy and visibility checks; `[]` denies ordinary cross-agent sends. Matches permit send-only access under narrow visibility without granting history, search, list, status, or session controls. Global agent-to-agent policy and sandbox clamps still apply; same-agent and requester-owned child rules are unchanged. See [send-only configuration](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 - `subagents.maxConcurrent`: max concurrent child-agent runs per immediate spawning/controller session. Default: `8`; independent sessions have independent budgets. Codex-native subagents use Codex's separate scheduler and limits.
@@ -129,14 +130,14 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 - `session` (optional; route bindings only): `{ dmScope, groupScope }` overrides session routing for matched peers
 - `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
-**Deterministic match order:**
+**Fixed match order:**
 
 1. `match.peer`
 2. `match.guildId`
 3. `match.teamId`
 4. `match.accountId` (exact, no peer/guild/team)
 5. `match.accountId: "*"` (channel-wide)
-6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding fail closed)
+6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding reject the request)
 
 Within each tier, the first matching `bindings` entry wins.
 

@@ -19,6 +19,7 @@ import {
   isRunningAsRoot,
   isSystemctlAvailable,
   reloadSystemdUserManager,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
   assertNoSystemGatewayOwnershipForActivation,
@@ -42,63 +43,69 @@ async function runSystemdServiceAction(
     reportMutation(`systemctl-${action}`);
     params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
   };
-  if (params.systemdIdentity && action !== "stop") {
-    if (params.systemdIdentity.scope === "user") {
-      const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
-      await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
-    }
-    if (params.systemdIdentity.scope === "system" && !isRunningAsRoot()) {
-      throw new Error(
-        `${params.systemdIdentity.unitName} is a system-scope unit (${params.systemdIdentity.unitPath}); run \`sudo systemctl ${action} ${params.systemdIdentity.unitName}\` to ${action} it`,
-      );
-    }
-    await activateSystemdServiceIdentity({
-      identity: params.systemdIdentity,
-      action,
-      assertCurrent: params.assertCurrent,
-      warn:
-        params.warn ??
-        ((message) => {
-          params.stdout.write(`${formatLine("Warning", message)}\n`);
-        }),
-    });
-    report(params.systemdIdentity.unitName);
-    return;
-  }
-  const installed = await findInstalledSystemdGatewayScope(env);
+  const warn =
+    params.warn ??
+    ((message: string) => params.stdout.write(`${formatLine("Warning", message)}\n`));
+  const installed = params.systemdIdentity ?? (await findInstalledSystemdGatewayScope(env));
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
-  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     if (!isRunningAsRoot()) {
       throw new Error(
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${action} ${unitName}\` to ${action} it`,
       );
     }
+  } else if (action !== "stop") {
+    if (!params.systemdIdentity) {
+      await assertSystemdAvailable(env);
+    }
+    await assertNoSystemGatewayOwnershipForActivation({ ...env, OPENCLAW_SYSTEMD_UNIT: unitName });
+  }
+  if (params.systemdIdentity) {
+    await activateSystemdServiceIdentity({
+      identity: params.systemdIdentity,
+      action,
+      assertCurrent: params.assertCurrent,
+      beforeMutation: params.beforeMutation,
+      beforeEffect: params.beforeEffect,
+      prepareEffect: params.prepareEffect,
+      warn,
+    });
+    report(params.systemdIdentity.unitName);
+    return;
+  }
+  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
+  if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
       return execSystemctl(args, env);
     };
   } else {
-    await assertSystemdAvailable(env);
-    if (action !== "stop") {
-      const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: unitName };
-      await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
-    }
-    runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
+    runSystemctl = (args) =>
+      execSystemctlUser(
+        env,
+        args,
+        undefined,
+        params.assertCurrent,
+        action === "stop" ? { warn } : undefined,
+      );
   }
   if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
+    params.assertCurrent?.();
   }
-  params.assertCurrent?.();
   if (action === "restart") {
     params.onRestartAttempted?.();
   }
   const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${action} failed: ${res.stderr || res.stdout}`.trim());
+    throw systemdInspectionError(
+      res,
+      `systemctl ${action} failed: ${res.stderr || res.stdout}`.trim(),
+      installed?.scope,
+    );
   }
   report(unitName);
 }
@@ -241,14 +248,9 @@ export async function uninstallUserSystemdGatewayUnit({
       );
     }
   }
-  const unitName =
-    target?.unitName ??
-    (installed?.scope === "user"
-      ? installed.unitName
-      : `${resolveSystemdServiceName(env)}.service`);
-  const unitPath =
-    target?.unitPath ??
-    (installed?.scope === "user" ? installed.unitPath : resolveSystemdUnitPath(env));
+  const userUnit = target ?? (installed?.scope === "user" ? installed : undefined);
+  const unitName = userUnit?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  const unitPath = userUnit?.unitPath ?? resolveSystemdUnitPath(env);
   let disabled = false;
   if (await isSystemctlAvailable(env)) {
     await disableSystemdUserUnitForRemoval(env, unitName);

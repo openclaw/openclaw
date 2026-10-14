@@ -22,27 +22,21 @@ export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): voi
   }
 }
 
-/** Runs the fast status scan, resolves optional deep fields, and writes JSON through the runtime. */
 export async function runStatusJsonCommand(params: {
   opts: StatusJsonCommandOptions & StatusGatewayProbeBudget;
   runtime: RuntimeEnv;
-  includeSecurityAudit: boolean;
-  includePluginCompatibility?: boolean;
-  suppressHealthErrors?: boolean;
-  scanStatusJsonFast: (
-    opts: StatusGatewayProbeBudget & { all?: boolean },
-    runtime: RuntimeEnv,
-  ) => Promise<Parameters<typeof resolveStatusJsonOutput>[0]["scan"]>;
 }) {
   assertStatusUsageAgentScope(params.opts);
-  const scan = await params
-    .scanStatusJsonFast(
-      {
-        timeoutMs: params.opts.timeoutMs,
-        gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
-        all: params.opts.all,
-      },
-      params.runtime,
+  const scan = await import("./status.scan.fast-json.js")
+    .then(({ scanStatusJsonFast }) =>
+      scanStatusJsonFast(
+        {
+          timeoutMs: params.opts.timeoutMs,
+          gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
+          all: params.opts.all,
+        },
+        params.runtime,
+      ),
     )
     .catch((error: unknown) =>
       reportStatusScanFailure(error, params.runtime, params.opts.timeoutMs),
@@ -52,9 +46,9 @@ export async function runStatusJsonCommand(params: {
     ...(await resolveStatusJsonOutput({
       scan,
       opts: params.opts,
-      includeSecurityAudit: params.includeSecurityAudit,
-      includePluginCompatibility: params.includePluginCompatibility,
-      suppressHealthErrors: params.suppressHealthErrors,
+      includeSecurityAudit: params.opts.all === true || params.opts.deep === true,
+      includePluginCompatibility: params.opts.all === true,
+      suppressHealthErrors: true,
     })),
     ...(Object.keys(updateRunStatus).length ? { updateRunStatus } : {}),
   });

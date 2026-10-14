@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Observation
+import enum OpenClawKit.GatewayPayloadDecoding
 import OpenClawProtocol
 import SwiftUI
 
@@ -181,8 +182,8 @@ public final class OpenClawChatSidebarPeople {
         self.refreshActivity()
         let identified = entries.compactMap { entry -> (PresenceEntry, User)? in
             guard entry.reason != "disconnect", let value = entry.user,
-                  let data = try? JSONEncoder().encode(value),
-                  let user = try? JSONDecoder().decode(User.self, from: data), !user.id.isEmpty else { return nil }
+                  let user = try? GatewayPayloadDecoding.decode(AnyCodable(value), as: User.self),
+                  !user.id.isEmpty else { return nil }
             return (entry, user)
         }
         let selfKey = self.connectionID.flatMap { id in identified.first { $0.0.connectionid == id }?.1.key }
@@ -212,7 +213,7 @@ public final class OpenClawChatSidebarPeople {
     }
 
     private static func firstText(_ values: [String?]) -> String? {
-        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.min()
+        values.compactMap(ChatPayloadDecoding.trimmedNonEmptyString).min()
     }
 
     public func refreshCounts(load: () async throws -> [SessionOwnerSessionCount]?) async {
@@ -277,8 +278,11 @@ public final class OpenClawChatSidebarPeople {
 
     func cardSessions(
         for person: Person,
-        sessions: [OpenClawChatSessionEntry])
-        -> (viewing: [OpenClawChatSessionEntry], recent: [OpenClawChatSessionEntry])
+        sessions: [OpenClawChatSessionEntry],
+        recentKeys: [String]? = nil)
+        -> (
+            viewing: [OpenClawChatSessionEntry], viewingKeys: [String],
+            recent: [OpenClawChatSessionEntry], recentKeys: [String])
     {
         func identity(_ key: String, _ owner: String?) -> String {
             let parsedAgent = OpenClawChatSessionKey.agentID(from: key.lowercased())
@@ -289,20 +293,23 @@ public final class OpenClawChatSidebarPeople {
             let canonical: String = if tail == "main" || tail == self.mainKey {
                 self.globalScope ? "global" : "agent:\(scope):\(self.mainKey)"
             } else {
-                Self.comparisonKey(parsedAgent != nil || raw.lowercased() == "global"
+                OpenClawChatSessionKey.comparisonKey(parsedAgent != nil || raw.lowercased() == "global"
                     ? raw : "agent:\(scope):\(raw)")
             }
             return "\(scope)\0\(canonical)"
         }
         let watched = Set(person.watchedSessions.map { identity($0, nil) })
         var seen = Set<String>()
-        // ui/src/components/person-activity-card.ts:265: watched keys are hints, never permission to reveal a title.
+        // ui/src/components/person-activity-card.ts:243: watched keys are hints, never permission to reveal a title.
         let rows = sessions.filter { seen.insert(identity($0.key, $0.agentId)).inserted }.sorted {
             if ($0.updatedAt ?? 0) != ($1.updatedAt ?? 0) { return ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
             return identity($0.key, $0.agentId).localizedCompare(identity($1.key, $1.agentId)) == .orderedAscending
         }
         let viewing = rows.filter { watched.contains(identity($0.key, $0.agentId)) }
-        let recent = rows.filter { row in
+        let candidates = recentKeys.map { keys in
+            keys.compactMap { key in rows.first { identity($0.key, $0.agentId) == key } }
+        } ?? rows
+        let recent = candidates.filter { row in
             !watched.contains(identity(row.key, row.agentId)) && [row.owner?.actor, row.createdActor]
                 .contains { actor in
                     guard let identity = actor?.identity?.value as? [String: AnyCodable] else { return false }
@@ -310,41 +317,12 @@ public final class OpenClawChatSidebarPeople {
                         person.profileID != nil && identity["id"]?.value as? String == person.profileID
                 }
         }
-        return (Array(viewing.prefix(3)), Array(recent.prefix(3)))
-    }
-
-    // ui/src/lib/sessions/session-key.ts:90: catalog, Matrix and Signal IDs have opaque, case-sensitive tails.
-    private static func comparisonKey(_ raw: String) -> String {
-        var parts = raw.components(separatedBy: ":")
-        var start = 0
-        while parts.count - start >= 3, parts[start].lowercased() == "agent" {
-            parts[start] = "agent"
-            parts[start + 1] = parts[start + 1].lowercased()
-            start += 2
-        }
-        while start < parts.count, parts[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            start += 1
-        }
-        guard start < parts.count else { return raw.lowercased() }
-        let channel = parts[start].lowercased()
-        if channel == "catalog" { return parts.joined(separator: ":") }
-        guard start + 1 < parts.count else { return raw.lowercased() }
-        let peer = parts[start + 1].lowercased()
-        let matrix = channel == "matrix" && ["channel", "group"].contains(peer)
-        guard matrix || (channel == "signal" && peer == "group") else { return raw.lowercased() }
-        parts[start] = channel
-        parts[start + 1] = peer
-        if matrix {
-            if let index = parts.indices.reversed().first(where: {
-                $0 >= start + 2 && $0 < parts.count - 1 && parts[$0].lowercased() == "thread"
-            }) { parts[index] = "thread" }
-        } else if start + 2 < parts.count {
-            parts[start + 2] = parts[start + 2].trimmingCharacters(in: .whitespacesAndNewlines)
-            for index in (start + 3)..<parts.count {
-                parts[index] = parts[index].lowercased()
-            }
-        }
-        return parts.joined(separator: ":")
+        // person-activity-card.ts:262: an open card retires ineligible recent links without reordering or backfilling.
+        let visible = Array(viewing.prefix(3))
+        let selected = Array(recent.prefix(3))
+        return (
+            visible, visible.map { identity($0.key, $0.agentId) },
+            selected, selected.map { identity($0.key, $0.agentId) })
     }
 }
 

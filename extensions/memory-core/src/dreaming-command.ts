@@ -6,27 +6,10 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function resolveDreamingPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asNullableRecord(entry?.config) ?? {};
-}
-
-function formatEnabled(value: boolean): string {
-  return value ? "on" : "off";
-}
-
-function formatPhaseGuide(): string {
-  return [
-    "- implementation detail: each sweep runs light -> REM -> deep.",
-    "- deep is the only stage that writes durable entries to MEMORY.md.",
-    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
-  ].join("\n");
-}
-
 function formatStatus(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveDreamingPluginConfig(cfg);
+  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
   const dreaming = resolveMemoryDreamingConfig({
-    pluginConfig,
+    pluginConfig: asNullableRecord(entry?.config) ?? {},
     cfg,
   });
   const deep = dreaming.phases.deep;
@@ -34,7 +17,7 @@ function formatStatus(cfg: OpenClawConfig): string {
 
   return [
     "Dreaming status:",
-    `- enabled: ${formatEnabled(dreaming.enabled)}${timezone}`,
+    `- enabled: ${dreaming.enabled ? "on" : "off"}${timezone}`,
     `- sweep cadence: ${dreaming.frequency}`,
     `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
   ].join("\n");
@@ -48,7 +31,9 @@ function formatUsage(includeStatus: string): string {
     includeStatus,
     "",
     "Phases:",
-    formatPhaseGuide(),
+    "- implementation detail: each sweep runs light -> REM -> deep.",
+    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
   ].join("\n");
 }
 
@@ -79,12 +64,7 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
   }
 
   if (firstToken === "on" || firstToken === "off") {
-    if (
-      lacksAdminOrOwnerForDreamingMutation({
-        gatewayClientScopes: ctx.gatewayClientScopes,
-        senderIsOwner: ctx.senderIsOwner,
-      })
-    ) {
+    if (lacksAdminOrOwnerForDreamingMutation(ctx)) {
       return {
         text: "⚠️ /dreaming on|off requires owner status for channel callers or operator.admin for gateway clients.",
       };

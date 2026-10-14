@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
+import {
+  initializeSessionReadContext,
+  identifiedClient as preparedClient,
+} from "./sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -24,16 +27,10 @@ export function identifiedClient(
   profileId: string,
   displayName: string | null = null,
 ): GatewayClient {
-  return {
-    ...soloClient(),
-    authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
+  const client = preparedClient(profileId);
+  client.authenticatedUserId = `${profileId}@example.com`;
+  client.authenticatedUserProfile!.displayName = displayName;
+  return client;
 }
 
 export function sessionSharingTestContext(
@@ -61,13 +58,7 @@ export async function callSessionSharingHandler(
   requestClient: GatewayClient = soloClient(),
 ) {
   const responses: Parameters<RespondFn>[] = [];
-  if (
-    method === "session.members.list" ||
-    method === "session.members.listEvidence" ||
-    method === "session.members.add"
-  ) {
-    await initializeSessionReadContext(requestContext);
-  }
+  await initializeSessionReadContext(requestContext);
   await sessionSharingHandlers[method]?.({
     params,
     client: requestClient,

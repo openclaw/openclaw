@@ -112,17 +112,14 @@ export async function ensureExtensionRelayForProfile(
     const promise =
       pending?.promise ?? ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
     if (!pending) {
-      const owned = {
+      pendingRelayEnsures.set(runtime, {
         port: desiredProfile.cdpPort,
         token,
         allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
         promise,
-      };
-      pendingRelayEnsures.set(runtime, owned);
+      });
       const settlePending = () => {
-        if (pendingRelayEnsures.get(runtime) === owned) {
-          pendingRelayEnsures.delete(runtime);
-        }
+        pendingRelayEnsures.delete(runtime);
       };
       void promise.then(settlePending, settlePending);
     }
@@ -145,7 +142,6 @@ async function ensureDesiredRelay(params: {
   return await withProfileOperationLease({
     state,
     runtime,
-    configRevision: getProfileLifecycle(runtime).configRevision,
     ownership: "lifecycle",
     run: async (signal) => {
       const map = (state.extensionRelays ??= new Map());

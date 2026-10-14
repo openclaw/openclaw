@@ -41,7 +41,7 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   historyLimit:
     "Channel-specific history limit. Consult channel guidance for observed-message windows and session user-turn trimming; zero has different meanings for those consumers.",
   legacyWebhook:
-    "Legacy webhook listener settings. Omit to retain the channel's default port, or set false after moving callbacks to the Gateway to close the old port.",
+    "Explicit legacy webhook listener endpoint. Doctor pins existing installations once. After moving callbacks to the Gateway, remove the pin or set false to disable inherited forwarding.",
   markdown: "Markdown rendering overrides for this channel.",
   mediaMaxMb: "Per-attachment media limit in MiB. Channel transport limits still apply.",
   mentionPatterns: "Extra patterns that count as mentioning the agent in group chats.",

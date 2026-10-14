@@ -15,9 +15,7 @@ export function createDiscordMessageHandler(
   const dispatcher = createDiscordMessageDispatcher(params);
   const createIngressMonitor = params.testing?.createIngressMonitor ?? createDiscordIngressMonitor;
   const ingress = createIngressMonitor({
-    accountId: params.accountId,
-    client: params.client,
-    runtime: params.runtime,
+    ...params,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {
         abortSignal: lifecycle.abortSignal,

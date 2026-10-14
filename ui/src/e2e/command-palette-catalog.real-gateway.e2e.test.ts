@@ -12,8 +12,11 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { ApplicationContext } from "../app/context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiInitialRoster,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -74,10 +77,10 @@ const suite = createControlUiE2eSuite({
               model: "fixture/anchor",
               modelPolicy: { allow: ["fixture/*", "ollama/*"] },
             },
-            list: [
-              { id: "main", identity: { name: "Main fixture" } },
-              { id: "reviewer", identity: { name: "Reviewer fixture" } },
-            ],
+            entries: {
+              main: { identity: { name: "Main fixture" } },
+              reviewer: { identity: { name: "Reviewer fixture" } },
+            },
           },
           models: {
             catalogRefresh: { enabled: false },
@@ -502,37 +505,39 @@ suite.define(() => {
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     const publish = async (page: Page, id: string) => {
-      const publication = await page.evaluateHandle(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          context: ApplicationContext;
-        };
-        const observed = { committed: false };
-        const stop = app.context.gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            observed.committed = true;
-          }
-        });
-        return { observed, stop };
-      });
-      const args = [
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(models(id)),
-        "--strict-json",
-        "--replace",
-      ];
+      const applicationHandle = await getControlUiContextHandle(page);
       try {
-        const result = await instance.cli(args);
-        commands.push({ args, ...result });
-        expect(result.code, result.stderr).toBe(0);
-        // Runtime rows can arrive before this accepted-config event retires them.
-        await expect
-          .poll(() => publication.evaluate(({ observed }) => observed.committed))
-          .toBe(true);
+        const publication = await applicationHandle.evaluateHandle((application) => {
+          const observed = { committed: false };
+          const stop = application.gateway.subscribeEvents((event) => {
+            if (event.event === "config.changed") {
+              observed.committed = true;
+            }
+          });
+          return { observed, stop };
+        });
+        const args = [
+          "config",
+          "set",
+          "models.providers.fixture.models",
+          JSON.stringify(models(id)),
+          "--strict-json",
+          "--replace",
+        ];
+        try {
+          const result = await instance.cli(args);
+          commands.push({ args, ...result });
+          expect(result.code, result.stderr).toBe(0);
+          // Runtime rows can arrive before this accepted-config event retires them.
+          await expect
+            .poll(() => publication.evaluate(({ observed }) => observed.committed))
+            .toBe(true);
+        } finally {
+          await publication.evaluate(({ stop }) => stop());
+          await publication.dispose();
+        }
       } finally {
-        await publication.evaluate(({ stop }) => stop());
-        await publication.dispose();
+        await applicationHandle.dispose();
       }
     };
     try {
@@ -582,6 +587,8 @@ suite.define(() => {
           });
           await page.goto(browserUrl);
           await waitForControlUiGatewayReady(page);
+          // The handshake can precede the lazy shell and its shortcut listener.
+          await waitForControlUiInitialRoster(page);
           await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
           await input.fill("palette-");
@@ -640,9 +647,7 @@ suite.define(() => {
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar
-            .getByRole("menuitemradio", { name: "Reviewer fixture", exact: true })
-            .click();
+          await sidebar.getByRole("menuitem", { name: "Reviewer fixture", exact: true }).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
           await page.keyboard.press("ControlOrMeta+K");

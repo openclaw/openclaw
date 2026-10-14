@@ -4,6 +4,7 @@ import * as nodePty from "@lydell/node-pty";
 import type { IPty } from "@lydell/node-pty";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { toErrorObject } from "../infra/errors.js";
 import { signalProcessTree, signalPtySessionTree } from "../process/kill-tree.js";
 import { spawnTerminalPty, type TerminalPtyHandle } from "../process/terminal-pty.js";
@@ -15,6 +16,8 @@ type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 /** Handle returned by PTY tests for input, output waits, and cleanup. */
 export type PtyRun = {
   cols: number;
+  exited: Promise<PtyExitEvent>;
+  onOutput: (listener: () => void) => () => void;
   output: () => string;
   pid: number;
   rows: number;
@@ -352,6 +355,8 @@ function createPtyRun(
   let visibleOutput = "";
   let exitEvent: PtyExitEvent | null = null;
   const ansiStripper = new AnsiSequenceStripper();
+  const exited = createDeferred<PtyExitEvent>();
+  const outputListeners = new Set<() => void>();
 
   const dataSubscription = asSubscription(
     pty.onData((data) => {
@@ -363,11 +368,15 @@ function createPtyRun(
           ? visibleChunk.slice(1)
           : visibleChunk;
       mirrorPtyOutput(data);
+      for (const listener of outputListeners) {
+        listener();
+      }
     }),
   );
   const exitSubscription = asSubscription(
     pty.onExit((event) => {
       exitEvent = event;
+      exited.resolve(event);
     }),
   );
 
@@ -407,6 +416,7 @@ function createPtyRun(
       return;
     }
     subscriptionsDisposed = true;
+    outputListeners.clear();
     dataSubscription.dispose();
     exitSubscription.dispose();
   };
@@ -418,11 +428,19 @@ function createPtyRun(
       // Native PTY backends do not consistently emit onExit after a forced tree kill.
       await sleep(PTY_EXIT_SETTLE_MS);
       exitEvent ??= { exitCode: 137, signal: 9 };
+      exited.resolve(exitEvent);
     }
   };
 
   const run: PtyRun = {
     cols,
+    exited: exited.promise,
+    onOutput: (listener) => {
+      outputListeners.add(listener);
+      return () => {
+        outputListeners.delete(listener);
+      };
+    },
     output: () => output,
     pid: pty.pid,
     rows,

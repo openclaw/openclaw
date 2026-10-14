@@ -2,7 +2,26 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const SESSION_LIST_SOURCES = [
+  "sidebar",
+  "dashboard",
+  "activity",
+  "sessions-page",
+  "chat-pane",
+  "agent-roster",
+  "command-palette",
+  "skill-workshop",
+] as const;
+
 export const SessionsListParamsSchema = closedObject({
+  /** Bounded caller attribution for response diagnostics; does not affect selection. */
+  source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
+  /** Omit an unchanged sidebar row vector after current selection and authorization. */
+  ifRowsRevision: Type.Optional(Type.String({ maxLength: 64 })),
+  /** Compact omits capabilities; sidebar/dashboard retain their view and membership facts. */
+  rowMode: Type.Optional(
+    Type.Union([Type.Literal("compact"), Type.Literal("dashboard"), Type.Literal("sidebar")]),
+  ),
   /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -31,6 +50,8 @@ export const SessionsListParamsSchema = closedObject({
   excludeCron: Type.Optional(Type.Boolean()),
   /** Exclude machine-created probe/system sessions using recorded provenance. */
   excludeSystem: Type.Optional(Type.Boolean()),
+  /** Exclude plugin dock conversations before facets and pagination. */
+  excludeDock: Type.Optional(Type.Boolean()),
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**

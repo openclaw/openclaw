@@ -34,21 +34,17 @@ describe("worker computer observation persistence", () => {
                 base64,
                 displayFrameId: "display-frame",
                 mimeType: "image/png",
-                width: 512,
-                height: 512,
               },
               noteLines: [],
               target,
               action: "screenshot",
               referenceWidth: 1280,
-              modelHasVision: true,
             })
           : await projectComputerActResult({
               result: providerResult,
               target,
               action: "get_window_state",
               referenceWidth: 1280,
-              modelHasVision: true,
             });
       const commit = vi.fn(async () => {});
       const transcript = createWorkerTranscriptRuntime({ commit });

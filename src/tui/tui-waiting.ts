@@ -4,7 +4,6 @@ type MinimalTheme = {
   accentSoft: (s: string) => string;
 };
 
-/** Default phrase cycle for animated waiting status. */
 export const defaultWaitingPhrases = [
   "flibbertigibbeting",
   "kerfuffling",
@@ -35,7 +34,6 @@ function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   return out;
 }
 
-/** Builds the single-line waiting status shown while a TUI run is active. */
 export function buildWaitingStatusMessage(params: {
   theme: MinimalTheme;
   tick: number;

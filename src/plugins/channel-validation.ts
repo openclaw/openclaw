@@ -4,7 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -62,9 +62,9 @@ const CHANNEL_CAPABILITY_CHAT_TYPES = new Set(["direct", "group", "channel", "th
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
   source: string;
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   pushDiagnostic: (diag: PluginDiagnostic) => void;
-}): ChannelPlugin | null {
+}): AnyChannelPlugin | null {
   const diagnose = (level: PluginDiagnostic["level"], message: string) =>
     params.pushDiagnostic({ level, pluginId: params.pluginId, source: params.source, message });
   const id =

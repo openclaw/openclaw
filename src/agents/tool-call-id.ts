@@ -224,19 +224,10 @@ function createOccurrenceAwareResolver(
 
   const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
     if (
-      duplicateToolCallIdStyle === "openai" &&
       occurrence === 1 &&
-      OPENAI_TOOL_CALL_ID_RE.test(id) &&
-      !used.has(id)
-    ) {
-      used.add(id);
-      return id;
-    }
-    if (
-      preserveNativeAnthropicToolUseIds &&
-      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
-      occurrence === 1 &&
-      !used.has(id)
+      !used.has(id) &&
+      ((duplicateToolCallIdStyle === "openai" && OPENAI_TOOL_CALL_ID_RE.test(id)) ||
+        (preserveNativeAnthropicToolUseIds && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)))
     ) {
       used.add(id);
       return id;
@@ -397,8 +388,6 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     allowedToolNames?: Iterable<string>;
   },
 ): AgentMessage[] {
-  // Strict mode: only [a-zA-Z0-9]
-  // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
   // Sanitization can introduce collisions, and some providers also reject raw
   // duplicate tool-call IDs. Track assistant occurrences in-order so repeated
   // raw IDs receive distinct rewritten IDs, while matching tool results consume
@@ -421,6 +410,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       return msg;
     }
     const role = (msg as { role?: unknown }).role;
+    let next = msg;
     if (role === "assistant") {
       const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
       if (replaySafeThinking?.preservedIndexes.has(index)) {
@@ -429,26 +419,18 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
         }
         return msg;
       }
-      const next = rewriteAssistantToolCallIds({
+      next = rewriteAssistantToolCallIds({
         message: assistant,
         resolveId: resolveAssistantId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      return next;
-    }
-    if (role === "toolResult") {
-      const next = rewriteToolResultIds({
+    } else if (role === "toolResult") {
+      next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
         resolveId: resolveToolResultId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      return next;
     }
-    return msg;
+    changed ||= next !== msg;
+    return next;
   });
 
   return changed ? out : messages;

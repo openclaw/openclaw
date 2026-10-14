@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render, nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {
@@ -34,32 +35,44 @@ it.each(["owner", "tile"] as const)(
     );
     const textareaController = new NewSessionComposerTextareaController();
     const modelControl = new NewSessionModelControl(() => {});
-    const redraw = () =>
-      render(
-        renderNewSessionDraftComposer({
-          agentId: "main",
-          attachmentDraft,
-          canSubmit: attachmentDraft.pendingReads === 0,
-          context: undefined,
-          draftOwnerKey: "attachments",
-          isCatalogTarget: true,
-          message: "Keep this draft",
-          modelControl,
-          requiresModifier: false,
-          requestUpdate: redraw,
-          submitting: false,
-          textareaController,
-          onInput: () => {},
-          onSubmit: () => {},
-        }),
-        container,
-      );
-    onTestFinished(() => {
-      attachmentDraft.reset({ release: true });
-      textareaController.disconnect();
-      render(nothing, container);
+    const currentOptions = (): NewSessionComposerOptions => ({
+      agentId: "main",
+      attachmentDraft,
+      canSubmit: attachmentDraft.reads.pendingReads === 0,
+      context: undefined,
+      draftOwnerKey: "attachments",
+      isCatalogTarget: true,
+      message: "Keep this draft",
+      modelControl,
+      requiresModifier: false,
+      requestUpdate: redraw,
+      submitting: false,
+      textareaController,
+      onInput: () => {},
+      onSubmit: () => {},
     });
-    redraw();
+    let update: (options: NewSessionComposerOptions) => void;
+    const redraw = () => {
+      update(currentOptions());
+      flush();
+    };
+    const mounted = mountSolid(
+      () => {
+        const [options, setOptions] = createSignal(currentOptions());
+        update = setOptions;
+        return createComponent(NewSessionComposer, {
+          get options() {
+            return options();
+          },
+        });
+      },
+      { container },
+    );
+    onTestFinished(() => {
+      attachmentDraft.reset();
+      textareaController.disconnect();
+      mounted.unmount();
+    });
     const composer = expectDefined(
       container.querySelector(".new-session-page__composer"),
       "new-session composer",
@@ -69,7 +82,7 @@ it.each(["owner", "tile"] as const)(
       createDragEvent("drop", [new File(["first"], "first.txt"), new File(["bad"], "bad.txt")]),
     );
     composer.dispatchEvent(createDragEvent("drop", [new File(["second"], "second.txt")]));
-    expect(attachmentDraft.pendingReads).toBe(3);
+    expect(attachmentDraft.reads.pendingReads).toBe(3);
     expect(
       container.querySelector(".new-session-page__start-submit")?.getAttribute("aria-busy"),
     ).toBe("true");
@@ -107,7 +120,7 @@ it.each(["owner", "tile"] as const)(
     );
     expect(status()?.textContent).toContain("Preparing 1 attachment");
     readers[1]?.dispatchEvent(new ProgressEvent("error"));
-    await waitForFast(() => expect(attachmentDraft.pendingReads).toBe(0));
+    await waitForFast(() => expect(attachmentDraft.reads.pendingReads).toBe(0));
     tiles.forEach((tile, index) =>
       expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
     );
@@ -117,9 +130,9 @@ it.each(["owner", "tile"] as const)(
     expect(status()?.textContent?.trim()).toBe("");
 
     composer.dispatchEvent(createDragEvent("drop", [new File(["held"], "held.txt")]));
-    expect(attachmentDraft.pendingReads).toBe(1);
+    expect(attachmentDraft.reads.pendingReads).toBe(1);
     if (cancellation === "owner") {
-      attachmentDraft.abortReads();
+      attachmentDraft.reads.abortReads();
     } else {
       container.querySelector<HTMLButtonElement>('button[aria-label="Remove held.txt"]')?.click();
     }
@@ -130,7 +143,7 @@ it.each(["owner", "tile"] as const)(
     Object.defineProperty(readers[3], "result", { value: "data:text/plain;base64,aGVsZA==" });
     readers[3]?.dispatchEvent(new ProgressEvent("load"));
     await Promise.resolve();
-    expect(attachmentDraft.pendingReads).toBe(0);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
     expect(attachmentDraft.attachments.map(({ fileName }) => fileName)).toEqual([
       "first.txt",
       "second.txt",

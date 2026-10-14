@@ -3,10 +3,13 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import type { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -19,7 +22,9 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-const operatorRunCaptures = vi.hoisted(() => new Map<string, unknown>());
+const operatorRunCaptures = vi.hoisted(
+  () => new Map<string, Awaited<ReturnType<typeof retainGatewayOperatorRun>>>(),
+);
 
 vi.mock("./operator-run-cancellation.js", async () => {
   const actual = await vi.importActual<typeof import("./operator-run-cancellation.js")>(
@@ -51,19 +56,6 @@ function isRecoverPayload(value: unknown): value is RecoverPayload {
     (!("sessionId" in value) || typeof value.sessionId === "string") &&
     (!("continuation" in value) ||
       (typeof value.continuation === "object" && value.continuation !== null))
-  );
-}
-
-function isRetainedOperatorRun(
-  value: unknown,
-): value is { armCancellation: () => void; release: () => void } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "armCancellation" in value &&
-    typeof value.armCancellation === "function" &&
-    "release" in value &&
-    typeof value.release === "function"
   );
 }
 
@@ -163,6 +155,9 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   sourceOwner.connect.scopes = ["operator.sessions.write"];
   const broadWriter = roleClient("write", "linked-recovery-writer");
   broadWriter.connect.scopes = ["operator.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const cfg = recoveryConfig(storePath);
   const revokedRole = rolePolicyConfig().gateway!.roles!;
   const writeRole = revokedRole.definitions.write;
@@ -247,7 +242,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     id: "linked-recovery-explicit-member",
     key: sourceKey,
   });
-  expect(granted).toMatchObject({
+  expect(granted, JSON.stringify(granted)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -266,6 +261,8 @@ test("sessions.recover retains source revocation for its accepted own successor"
   const sourceSessionId = "narrow-own-recovery-source";
   const owner = roleClient("view", "narrow-recovery-owner");
   owner.connect.scopes = ["operator.sessions.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   await seedRecoverableSession({
     sourceKey,
     sourceSessionId,
@@ -286,7 +283,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     hasCurrentClientAuthority: requestAuthority.isCurrent,
   });
 
-  expect(recovered).toMatchObject({
+  expect(recovered, JSON.stringify(recovered)).toMatchObject({
     ok: true,
     payload: { key: expect.any(String), continuation: { status: "started" } },
   });
@@ -299,7 +296,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     throw new Error("recovery did not register its active run");
   }
   const retainedRun = operatorRunCaptures.get(runId);
-  if (!isRetainedOperatorRun(retainedRun)) {
+  if (!retainedRun) {
     throw new Error("recovery did not retain its operator run authority");
   }
   const cancellationWork: Promise<unknown>[] = [];

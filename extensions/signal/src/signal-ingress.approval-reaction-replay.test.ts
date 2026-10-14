@@ -98,7 +98,6 @@ describe("Signal approval reaction durable replay", () => {
           allowedDecisions: ["allow-once"],
           targetAuthorKeys: ["+15550001111"],
           route: { deliveryMode: "session" },
-          routeAllowed: true,
         });
 
         const handler = createSignalEventHandler(

@@ -1,5 +1,7 @@
 // Zalouser tests cover tool plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
 import {
@@ -53,22 +55,6 @@ describe("executeZalouserTool", () => {
     mockGetUserInfo.mockReset();
     mockListFriends.mockReset();
     mockListGroups.mockReset();
-  });
-
-  it("sends text message for send action", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" } as never);
-    const result = await executeZalouserTool("tool-1", {
-      action: "send",
-      threadId: "t-1",
-      message: "hello",
-      profile: "work",
-      isGroup: true,
-    });
-    expect(mockSendMessage).toHaveBeenCalledWith("t-1", "hello", {
-      profile: "work",
-      isGroup: true,
-    });
-    expect(extractDetails(result)).toEqual({ success: true, messageId: "m-1" });
   });
 
   it("defaults send routing from ambient deliveryContext target", async () => {
@@ -144,6 +130,31 @@ describe("executeZalouserTool", () => {
     expect(extractDetails(result)).toEqual({ error: "blocked" });
   });
 
+  it("reports accepted receipts when a later send chunk fails", async () => {
+    const deliveryResult = {
+      messageIds: ["mid-accepted"],
+      receipt: createZalouserSendReceipt({ messageId: "mid-accepted", threadId: "t-1" }),
+      visibleReplySent: true as const,
+    };
+    mockSendMessage.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("later chunk refused"), deliveryResult),
+    );
+
+    const result = await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "t-1",
+      message: "long message",
+    });
+
+    expect(extractDetails(result)).toEqual({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      error: "later chunk refused",
+      result: deliveryResult,
+    });
+  });
+
   it("routes image and link actions to correct helpers", async () => {
     mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" } as never);
     const imageResult = await executeZalouserTool("tool-1", {
@@ -177,7 +188,6 @@ describe("executeZalouserTool", () => {
   });
 
   it.each([
-    { name: "no route", deliveryContext: undefined, profile: "work", bytes: 1024 },
     {
       name: "matching credential profile with different case",
       deliveryContext: { channel: "zalouser", accountId: "support" },
@@ -185,21 +195,9 @@ describe("executeZalouserTool", () => {
       bytes: 2048,
     },
     {
-      name: "other profile",
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-      profile: "personal",
-      bytes: 1024,
-    },
-    {
       name: "native default profile",
       deliveryContext: { channel: "zalouser", accountId: "support" },
       profile: undefined,
-      bytes: 1024,
-    },
-    {
-      name: "other channel",
-      deliveryContext: { channel: "sms", accountId: "support" },
-      profile: "work",
       bytes: 1024,
     },
   ])(

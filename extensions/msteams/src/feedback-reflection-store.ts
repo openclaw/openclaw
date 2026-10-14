@@ -14,17 +14,6 @@ function learningStoreKey(storePath: string, sessionKey: string): string {
   return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }
 
-function appendFeedbackLearning(
-  current: FeedbackLearningEntry | undefined,
-  prepared: { sessionKey: string; learning: string; updatedAt: number },
-): FeedbackLearningEntry {
-  return {
-    sessionKey: prepared.sessionKey,
-    learnings: [...(current?.learnings ?? []), prepared.learning].slice(-10),
-    updatedAt: prepared.updatedAt,
-  };
-}
-
 export async function storeSessionLearning(params: {
   storePath: string;
   sessionKey: string;
@@ -48,7 +37,11 @@ export async function storeSessionLearning(params: {
     const result = await store.compareAndApply(key, observed.comparison, {
       operation: "update",
       action: "set",
-      value: appendFeedbackLearning(observed.value, prepared),
+      value: {
+        sessionKey: prepared.sessionKey,
+        learnings: [...(observed.value?.learnings ?? []), prepared.learning].slice(-10),
+        updatedAt: prepared.updatedAt,
+      },
     });
     if (result.status !== "conflict") {
       return;

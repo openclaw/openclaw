@@ -1,44 +1,42 @@
-import { html, nothing } from "lit";
-import type { ThemeMascot } from "../../../../../packages/gateway-protocol/src/theme.ts";
-import "../../../components/elapsed-time.ts";
-import "../../../components/working-phrase.ts";
+import { html, nothing, type TemplateResult } from "lit";
+import type {
+  ThemeMascot,
+  ThemeWorkingIndicator,
+} from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/elapsed-time.tsx";
+import "../../../components/working-phrase.ts";
+import "./chat-retry-status.tsx";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
-import { i18n, t } from "../../../i18n/index.ts";
+import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
+import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
-const TURN_RECAP_DURATION_UNITS = [
-  { seconds: 86_400, unit: "day" },
-  { seconds: 3_600, unit: "hour" },
-  { seconds: 60, unit: "minute" },
-  { seconds: 1, unit: "second" },
-] as const;
+function renderChatBubbleDots(working = false) {
+  return html`<span
+    class="chat-bubble-dots ${working ? "chat-bubble-dots--working" : ""}"
+    aria-hidden="true"
+    ><span></span><span></span><span></span
+  ></span>`;
+}
 
-function formatTurnRecapDuration(ms: number): string {
-  let remainingSeconds = Math.max(1, Math.round(ms / 1_000));
-  const locale = i18n.getLocale();
-  const parts: string[] = [];
-  for (const { seconds, unit } of TURN_RECAP_DURATION_UNITS) {
-    const value = Math.floor(remainingSeconds / seconds);
-    if (value === 0) {
-      continue;
-    }
-    parts.push(
-      new Intl.NumberFormat(locale, {
-        style: "unit",
-        unit,
-        unitDisplay: "long",
-      }).format(value),
-    );
-    remainingSeconds -= value * seconds;
-    if (parts.length === 2) {
-      break;
-    }
-  }
-  return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
+/** Local disclosure state stays on the native element while status text streams. */
+function renderChatBubbleActivity(content: unknown, label: string, working = false) {
+  return html`<details class="chat-bubble-activity chat-bubble-activity--working">
+    <summary
+      class="chat-bubble-activity__summary"
+      aria-label=${label}
+      title=${t("chat.view.activityDetails")}
+    >
+      ${renderChatBubbleDots(working)}
+    </summary>
+    <div class="chat-bubble-activity__details">${content}</div>
+  </details>`;
 }
 
 // 0 is valid; only null/undefined means "unknown".
@@ -51,56 +49,99 @@ function outputTokensLabel(outputTokens: number): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    bubbleMode?: boolean;
     mascot?: ThemeMascot;
+    workingIndicator?: ThemeWorkingIndicator;
     workingPhrases?: readonly string[];
     waitingApproval?: boolean;
+    waitingSubagents?: ChatSubagentWait;
+    /** Unfinished subagents to mention while the session itself is still working. */
+    runningSubagents?: number;
+    subagentActivity?: TemplateResult;
+    /** Shows the session's subagents; without it their count is plain text. */
+    onOpenSubagents?: () => void;
     startupLabel?: string;
+    retryAt?: number;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
+  // Keep the transcript indicator until roster hydration supplies live child activity.
+  if (options.waitingSubagents && options.subagentActivity !== undefined) {
+    return options.subagentActivity;
+  }
   const waitingApproval = options.waitingApproval === true;
-  const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
+  const runningSubagents = options.runningSubagents ?? 0;
+  const indicator =
+    options.workingIndicator ??
+    (options.mascot !== undefined
+      ? options.mascot === "none"
+        ? "dots"
+        : "claw"
+      : currentThemeBranding().workingIndicator);
+  const neutral = indicator === "dots";
   const continuation = options.presentation === "continuation";
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
     : options.startupLabel || t("common.working");
+  const runningLabel =
+    runningSubagents === 1
+      ? t("chat.subagentsRunningOne")
+      : t("chat.subagentsRunning", { count: String(runningSubagents) });
+  const renderSubagentsButton = (label: string) => html`<button
+    class="chat-working-indicator__subagents"
+    type="button"
+    @click=${() => options.onOpenSubagents?.()}
+  >
+    ${label}
+  </button>`;
   const working = !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
   const outputTokens = options.outputTokens;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
-  return html`
+  const status = html`
     <div
       class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""}"
       role="status"
       aria-live="off"
     >
       ${
-        continuation
+        continuation || indicator === "none"
           ? nothing
           : html`
               <div
                 class="chat-bubble chat-reading-indicator ${
                   neutral
                     ? "chat-reading-indicator--neutral"
-                    : selectWorkingClawSurprise(part.key, {
-                        eligible: !waitingApproval,
-                      })
+                    : indicator === "brand"
+                      ? "chat-reading-indicator--brand"
+                      : selectWorkingClawSurprise(part.key, {
+                          eligible: !waitingApproval && !options.startupLabel,
+                        })
                 }"
                 aria-hidden="true"
               >
-                ${neutral ? html`<span></span><span></span><span></span>` : icons.claw}
+                ${neutral ? html`<span></span><span></span><span></span>` : indicator === "brand" ? renderThemeBrandIcon() : icons.claw}
               </div>
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
+        <span class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
+          >${
+            !waitingApproval && options.retryAt !== undefined
+              ? html`<openclaw-chat-retry-status
+                  .retryAt=${options.retryAt}
+                ></openclaw-chat-retry-status>`
+              : statusLabel
+          }</span
+        >
         ${
           waitingApproval
             ? nothing
             : html`
+                ${options.startupLabel ? html`<span aria-hidden="true">·</span>` : nothing}
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
@@ -126,9 +167,26 @@ export function renderChatWorkingIndicator(
                 `
               : nothing
         }
+        ${
+          runningSubagents > 0
+            ? html`
+                <span aria-hidden="true">·</span>
+                ${
+                  options.onOpenSubagents
+                    ? renderSubagentsButton(runningLabel)
+                    : html`<span class="chat-working-indicator__subagents">${runningLabel}</span>`
+                }
+              `
+            : nothing
+        }
       </span>
     </div>
   `;
+  const content = html`${status}${options.subagentActivity ?? nothing}`;
+  // Human-action and child-wait states keep their existing visible controls.
+  return options.bubbleMode && working && runningSubagents === 0
+    ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)
+    : content;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how
@@ -140,7 +198,8 @@ export function renderTurnRecapRow(
 ) {
   const continuation = options.presentation === "continuation";
   // Sub-second turns still read as one second; terminal recaps favor full words.
-  const duration = formatTurnRecapDuration(recap.runtimeMs);
+  const duration =
+    formatDurationLong(Math.max(1, Math.round(recap.runtimeMs / 1_000)) * 1_000) ?? "";
   const tokens =
     typeof recap.outputTokens === "number" ? outputTokensLabel(recap.outputTokens) : null;
   return html`
@@ -152,7 +211,7 @@ export function renderTurnRecapRow(
         continuation
           ? nothing
           : html`<span class="chat-turn-recap__claw" aria-hidden="true"
-              >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+              >${renderThemeBrandIcon(icons.claw)}</span
             >`
       }
       <span>${t("chat.turnRecap.doneIn", { duration })}</span>

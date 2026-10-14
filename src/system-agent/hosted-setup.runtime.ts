@@ -1,9 +1,10 @@
 import { stat } from "node:fs/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
   MemoryImportProviderOutcome,
@@ -11,7 +12,7 @@ import type {
 } from "../wizard/setup.memory-import.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 
-const loadSetupShared = createLazyRuntimeModule(() => import("../wizard/setup.shared.js"));
+const log = createSubsystemLogger("system-agent/chat-wizard-host");
 
 export const GATEWAY_WRITE_POLICY = {
   mode: "none",
@@ -58,7 +59,8 @@ export async function runHostedSetup(params: {
   await using cache = createPluginCache();
   return await runOutsidePluginRuntimeGenerationScope(() =>
     withPluginCache(cache, async (): Promise<HostedSetupCompletion> => {
-      const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
+      const { readSetupConfigFileSnapshot, writeWizardConfigFile } =
+        await import("../wizard/setup.shared.js");
       const snapshot = await readSetupConfigFileSnapshot();
       if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
         throw new Error(
@@ -184,30 +186,23 @@ export async function runHostedGatewaySetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [
-    { resolveGatewayPort },
-    { configureGatewayForSetup },
-    { resolveQuickstartGatewayDefaults },
-  ] = await Promise.all([
-    import("../config/config.js"),
+  const [{ configureGatewayForSetup }, { resolveQuickstartGatewayDefaults }] = await Promise.all([
     import("../wizard/setup.gateway-config.js"),
-    loadSetupShared(),
+    import("../wizard/setup.shared.js"),
   ]);
   return await runHostedSetup({
     label: "Gateway setup",
     runtime,
     beforePersistentApply,
     afterWrite: GATEWAY_WRITE_POLICY,
-    run: async ({ baseConfig, runtime: setupRuntime }) => {
+    run: async ({ baseConfig }) => {
       requireLocalGateway(baseConfig);
       const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig,
         nextConfig: baseConfig,
-        localPort: resolveGatewayPort(baseConfig),
         quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
         prompter,
-        runtime: setupRuntime,
       });
       return { nextConfig: result.nextConfig };
     },
@@ -220,14 +215,16 @@ export async function runHostedMemoryImport(
   onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
 ): Promise<HostedMemoryImportOutcome> {
   const [{ readSetupConfigFileSnapshot }, { resolveSystemAgentOnboardingTarget }] =
-    await Promise.all([loadSetupShared(), import("../commands/onboard-agent-target.js")]);
+    await Promise.all([
+      import("../wizard/setup.shared.js"),
+      import("../commands/onboard-agent-target.js"),
+    ]);
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(
       "Memory import requires a valid saved config. Run `openclaw doctor --fix`, then retry.",
     );
   }
-  const baseHash = snapshot.hash;
   const config = snapshot.config;
   const { agentId, workspaceDir: workspace } = resolveSystemAgentOnboardingTarget(config);
   try {
@@ -249,15 +246,7 @@ export async function runHostedMemoryImport(
     agentId,
     prompter,
     runtime,
-    beforeApply: async () => {
-      await beforePersistentApply(runtime);
-      const currentSnapshot = await readSetupConfigFileSnapshot();
-      if (!currentSnapshot.exists || !currentSnapshot.valid || currentSnapshot.hash !== baseHash) {
-        throw new Error(
-          "configuration changed during memory import; nothing further was copied — retry to import against the current setup",
-        );
-      }
-    },
+    beforeApply: async () => await beforePersistentApply(runtime),
     onProviderOutcome,
   });
 }
@@ -309,24 +298,28 @@ export async function auditMemoryImport(
           .filter(Boolean)
           .join("; ")}`
       : `Imported memory via chat: ${providerSummary}`;
-  await appendAuditEntry({
-    operation: "memory.import",
-    summary,
-    details: {
-      ...(indeterminateProviders.length > 0
-        ? { confirmedItems: importedItems, copiesIndeterminate: true }
-        : { totalItems: importedItems }),
-      providers: providers.map((provider) =>
-        provider.copiesIndeterminate === true
-          ? { providerId: provider.providerId, copiesIndeterminate: true }
-          : {
-              providerId: provider.providerId,
-              items: provider.migrated,
-              ...(provider.failure ? { partial: true } : {}),
-            },
-      ),
-    },
-  });
+  try {
+    await appendAuditEntry({
+      operation: "memory.import",
+      summary,
+      details: {
+        ...(indeterminateProviders.length > 0
+          ? { confirmedItems: importedItems, copiesIndeterminate: true }
+          : { totalItems: importedItems }),
+        providers: providers.map((provider) =>
+          provider.copiesIndeterminate === true
+            ? { providerId: provider.providerId, copiesIndeterminate: true }
+            : {
+                providerId: provider.providerId,
+                items: provider.migrated,
+                ...(provider.failure ? { partial: true } : {}),
+              },
+        ),
+      },
+    });
+  } catch (error) {
+    log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
+  }
 }
 
 export async function renderMemoryImport(

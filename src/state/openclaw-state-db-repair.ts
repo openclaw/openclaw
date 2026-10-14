@@ -1,6 +1,7 @@
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -18,6 +19,7 @@ import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
 } from "./openclaw-quarantine-store.js";
+import { publishStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
@@ -53,19 +55,17 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
 import {
+  assertCanonicalAgentDatabasesPrimaryKey,
   assertCanonicalStateSchemaShape,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
-  repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-} from "./openclaw-state-db-schema-version.js";
+import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
@@ -90,11 +90,20 @@ export function repairStateSchema(
   let indexChanges: string[] = [];
   let ownershipRefused = false;
   try {
+    if (scope !== "automatic") {
+      revokeSqliteDatabaseAdmissions(db);
+    }
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     const closeReadAdmission =
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: scope === "automatic" ? undefined : true,
+      });
+      assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
     }
@@ -112,7 +121,12 @@ export function repairStateSchema(
       scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
     const assertIndexRepairCurrent = () => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: true,
+      });
     };
     indexChanges = canInspectIndexes
       ? repairDoctorSqliteIndexCorruption(db, pathname, {
@@ -125,7 +139,7 @@ export function repairStateSchema(
         canInspectIndexes &&
         (indexChanges.length > 0 ||
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
-          readOpenClawDatabaseQuarantineFailure("state", pathname, { env }))
+          readOpenClawDatabaseQuarantineFailure("state", pathname, { env, fresh: true }))
       ) {
         runSqliteImmediateTransactionSync(
           db,
@@ -173,7 +187,12 @@ export function repairStateSchema(
         ...runSqliteImmediateTransactionSync(
           db,
           () => {
-            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            assertOpenClawStateWriteAllowed({
+              database: db,
+              databasePath: pathname,
+              env,
+              inspectOwnership: true,
+            });
             return recoverOrphanTaskDeliveryRows(db, pathname);
           },
           {
@@ -191,7 +210,7 @@ export function repairStateSchema(
       pathname,
       () => {
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
-        const previousVersion = readStateSchemaMigrationVersion(db);
+        const previousVersion = readStateSchemaContentVersion(db);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
@@ -227,9 +246,6 @@ export function repairStateSchema(
         applied.push(
           ...describeAgentPathMigration(migrateAgentPaths(db, previousVersion, pathname)),
         );
-        if (repairAgentDatabasesCompositePrimaryKey(db)) {
-          applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
-        }
         if (repairAuditEventsSchema(db)) {
           applied.push(
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,
@@ -248,6 +264,12 @@ export function repairStateSchema(
         // Recognized schema-1 stores predate audit; Doctor must finish their schema
         // before its later read-only workspace and agent readers can consume it.
         if (preAuditSchema || tableExists(db, "audit_events")) {
+          // Historical delivery repair below already writes and reads the promoted columns.
+          if (migratePredicateColumnsV21(db, previousVersion)) {
+            applied.push(
+              "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
+            );
+          }
           ensureAdditiveStateColumns(db, "repair");
           for (const migration of versionedStateMigrations) {
             if (migration.migrate(db, previousVersion)) {
@@ -305,6 +327,9 @@ export function repairStateSchema(
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
+    if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      publishStateRuntimeSchemaAdmission(db, true);
+    }
     return {
       changes,
       warnings: quarantineCleared

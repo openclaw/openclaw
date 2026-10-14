@@ -53,65 +53,46 @@ describe("run-node live Gateway dist fence", () => {
     await expect(fs.access(output)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each([
-    { label: "profile-prefixed gateway status", args: ["--profile", "ops", "gateway", "status"] },
-    { label: "gateway stop", args: ["gateway", "stop"] },
-    { label: "gateway restart", args: ["gateway", "restart"] },
-    { label: "profile-prefixed gateway stop", args: ["--profile", "ops", "gateway", "stop"] },
-  ])("does not rebuild for $label calls against an existing dirty dist", async ({ args }) => {
-    await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+  it.for([
+    {
+      label: "profile-prefixed gateway status",
+      args: ["--profile", "ops", "gateway", "status"],
+      stale: false,
+    },
+    { label: "gateway stop", args: ["gateway", "stop"], stale: false },
+    { label: "gateway restart", args: ["gateway", "restart"], stale: false },
+    {
+      label: "profile-prefixed gateway stop",
+      args: ["--profile", "ops", "gateway", "stop"],
+      stale: false,
+    },
+    { label: "gateway stop with stale stamps", args: ["gateway", "stop"], stale: true },
+  ])(
+    "dispatches $label against dirty dist without rebuilding",
+    async ({ args, stale }, { tmp }) => {
       await setupStampedProject(tmp, {
         files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
         trackConfig: true,
       });
-
+      if (stale) {
+        await fs.rm(resolvePath(tmp, BUILD_STAMP));
+      }
+      const fence = vi
+        .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
+        .mockResolvedValue({
+          refuse: true,
+          message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
+        });
       const runRuntimePostBuild = vi.fn();
       const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
         gitStatus: ` M ${ROOT_SRC}\0`,
       });
-      const exitCode = await runStatusCommand({
-        tmp,
-        args,
-        spawn,
-        spawnSync,
-        runRuntimePostBuild,
-      });
-
-      expect(exitCode).toBe(0);
+      expect(await runStatusCommand({ tmp, args, spawn, spawnSync, runRuntimePostBuild })).toBe(0);
       expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", ...args]]);
+      expect(fence).not.toHaveBeenCalled();
       expect(runRuntimePostBuild).not.toHaveBeenCalled();
-    });
-  });
-
-  it("dispatches gateway stop from existing dist when stamps are stale and the fence would refuse", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
-      trackConfig: true,
-    });
-    await fs.rm(resolvePath(tmp, BUILD_STAMP));
-    const resolveLiveGatewayDistFence = vi
-      .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-      .mockResolvedValue({
-        refuse: true,
-        message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
-      });
-    const runRuntimePostBuild = vi.fn();
-    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${ROOT_SRC}\0`,
-    });
-    const exitCode = await runNodeCommand(tmp, {
-      args: ["gateway", "stop"],
-      spawn,
-      spawnSync,
-      runRuntimePostBuild,
-    });
-    expect(exitCode).toBe(0);
-    expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "gateway", "stop"]]);
-    expect(resolveLiveGatewayDistFence).not.toHaveBeenCalled();
-    expect(runRuntimePostBuild).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it("applies --profile to fence inspection and the rebuild child", async ({ tmp }) => {
     const fenceEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
@@ -187,7 +168,7 @@ describe("run-node live Gateway dist fence", () => {
       ],
     },
   ])(
-    "dispatches source-only QA $command before the live dist fence",
+    "keeps source-only QA $command on Node before the live dist fence when Bun is selected",
     async ({ command, reportScript, reportArgs }) => {
       await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
         await setupTrackedProject(tmp, {
@@ -208,6 +189,7 @@ describe("run-node live Gateway dist fence", () => {
         };
         const exitCode = await runNodeCommand(tmp, {
           args: ["qa", command, ...reportArgs],
+          env: { OPENCLAW_VITEST_RUNTIME: "bun" },
           spawn,
         });
         expect(exitCode).toBe(0);

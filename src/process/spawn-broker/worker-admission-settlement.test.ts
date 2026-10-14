@@ -75,14 +75,14 @@ it.each(["spawn", "spawn-execa"] as const)(
     const exit = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("This worker admission fixture cannot exit the test process");
     });
-    // Failed bootstrap must not leave a native shutdown timer after the spies restore.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     Object.defineProperty(process, "connected", { configurable: true, value: true });
     try {
       await import("./worker.js");
       if (!receive) {
         throw new Error("The worker did not register its message entrypoint");
       }
+      // Keep loader scheduling real; bootstrap and admission own the clock checked below.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       receive({ type: "bootstrap" });
       await setImmediate();
       expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);

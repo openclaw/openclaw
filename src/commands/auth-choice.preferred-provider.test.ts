@@ -1,4 +1,5 @@
 // Preferred provider tests cover auth-choice provider selection and runtime provider discovery.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { resolvePluginProvidersCore as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
 

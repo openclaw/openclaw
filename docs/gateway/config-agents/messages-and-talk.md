@@ -73,7 +73,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - `mode`: queue strategy for inbound messages that arrive while a session run is active. Default: `"steer"`.
   - `steer`: inject the new prompt into the active run.
   - `followup`: run the new prompt after the active run finishes.
-  - `collect`: batch compatible messages and run them together later.
+  - `collect`: batch compatible messages and run them together later. Messages with separate durable ingress admission (including Discord and Telegram) stay in separate followup turns; compatible Gateway `chat.send` inputs can still combine. See [Queue modes](/concepts/queue#queue-modes).
   - `interrupt`: abort the active run before starting the newest prompt.
 - The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
@@ -95,7 +95,7 @@ Batching is a bounded timing heuristic, not a guarantee that every part of a lon
 
 ### Other message keys
 
-- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this canonical value is unset.
+- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this current value is unset.
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.

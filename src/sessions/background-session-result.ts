@@ -4,15 +4,14 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,6 +53,8 @@ export async function commitBackgroundResultToSession(params: {
   provenance: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
+  /** Revalidate the producer after preparation and inside the transcript commit. */
+  assertCurrent?: () => void;
 }): Promise<BackgroundSessionResultCommit> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const text = normalizeOptionalString(params.text);
@@ -74,7 +75,8 @@ export async function commitBackgroundResultToSession(params: {
   );
   const identities = [sessionKey, expectedSessionId];
 
-  return await runExclusiveSessionLifecycleMutation({
+  params.assertCurrent?.();
+  return await runExclusiveSessionLifecycleMutation("background-result", {
     scope: storePath,
     identities,
     signal: params.signal,
@@ -85,7 +87,8 @@ export async function commitBackgroundResultToSession(params: {
       }
     },
     run: async () => {
-      const current = loadSessionEntryReadOnly({
+      params.assertCurrent?.();
+      const current = await readSessionEntryReadOnlyInWorker({
         agentId: params.agentId,
         sessionKey,
         storePath,
@@ -137,24 +140,31 @@ export async function commitBackgroundResultToSession(params: {
         idempotencyKey: string;
         openclawAutomation: BackgroundSessionResultProvenance;
       };
+      params.assertCurrent?.();
       const committed = await persistSessionTranscriptTurn(scope, {
         cwd: current.spawnedCwd,
         expectedSessionId,
         expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+        assertCurrent: () => {
+          params.assertCurrent?.();
+          params.signal?.throwIfAborted();
+        },
         messages: [
           {
             message: priorMessage
               ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
               : message,
             idempotencyLookup: "scan",
-            ...(priorId ? { eventId: priorId } : {}),
-            shouldAppendInTransaction: () => {
-              params.signal?.throwIfAborted();
-              if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
-                throw new Error("background result no longer owns the active transcript");
-              }
-              return true;
-            },
+            ...(priorId
+              ? {
+                  eventId: priorId,
+                  predicate: {
+                    kind: "active-entry" as const,
+                    entryId: priorId,
+                    errorMessage: "background result no longer owns the active transcript",
+                  },
+                }
+              : {}),
           },
         ],
         touchSessionEntry: true,

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
 import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
-import { PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "../failover/assistant-request-failure-copy.js";
 import { classifyFailoverSignal, isContextOverflowError } from "../failover/classify.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
@@ -36,7 +35,7 @@ describe("assistant diagnostic provider ownership", () => {
         makeAssistantMessageFixture({ errorMessage: "provider rejected this payload" }),
         { providerOwner: { id: "synthetic-owner", classifyFailoverReason } },
       ),
-    ).toBe(PROVIDER_SCHEMA_REJECTION_USER_TEXT);
+    ).toBe("LLM request rejected: provider rejected this payload");
     expect(
       buildApiErrorObservationFields("provider rejected this payload", {
         provider: "custom-route",

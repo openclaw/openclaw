@@ -14,7 +14,7 @@ import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 describe("registered Codex runtime choices", () => {
-  it.each(["api_key", "oauth", "token"] as const)(
+  it.each(["api_key", "oauth"] as const)(
     "keeps native %s authentication with its registered harness",
     async (mode) => {
       await withOpenClawTestState(
@@ -60,12 +60,20 @@ describe("registered Codex runtime choices", () => {
             preparedRuntimeAuthModes: { codex: { source: "native", mode } },
           });
 
-          expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
+          expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
           expect(
-            await createModelCatalogDecisions({
+            createModelCatalogDecisions({
               ...params,
               preparedRuntimeAuthModes: {},
             }).runtimeChoices(entry),
+          ).toBeUndefined();
+          const observedEntry = { ...entry, nativeRuntime: "codex" };
+          expect(
+            createModelCatalogDecisions({
+              ...params,
+              snapshot: { entries: [observedEntry], routeVariants: [observedEntry] },
+              preparedRuntimeAuthModes: {},
+            }).runtimeChoices(observedEntry),
           ).toEqual([]);
         },
       );

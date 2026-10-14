@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { SessionManagerCore } from "../sessions/session-manager-core.js";
 
 export function createBackgroundMaintenanceEngine(
   maintain: NonNullable<ContextEngine["maintain"]>,
@@ -54,19 +55,19 @@ export async function loadContextEngineMaintenanceModuleForTest() {
 }
 
 export function createMaintenanceSessionManagerOpenFixture() {
-  let current: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
-  const open = vi.fn((target: SessionTranscriptRuntimeTarget) => {
-    current = { getSessionTarget: () => target };
+  let current: Pick<SessionManagerCore, "getSessionTarget" | "getSessionId"> | undefined;
+  const openAsync = vi.fn(async (target: SessionTranscriptRuntimeTarget) => {
+    current = { getSessionTarget: () => target, getSessionId: () => target.sessionId };
     return current;
   });
   return {
-    open,
+    openAsync,
     get current() {
       return current;
     },
     reset() {
       current = undefined;
-      open.mockClear();
+      openAsync.mockClear();
     },
   };
 }

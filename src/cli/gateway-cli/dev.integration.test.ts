@@ -47,7 +47,6 @@ describe("ensureDevGatewayConfig integration", () => {
     });
     expect(config.agents?.entries).toEqual({
       dev: {
-        default: true,
         workspace: `${workspace}-dev`,
         identity: { name: "C3-PO", theme: "protocol droid", emoji: "🤖" },
       },
@@ -113,7 +112,7 @@ describe("ensureDevGatewayConfig integration", () => {
         const agents = await fs.readFile(path.join(devWorkspace, "AGENTS.md"), "utf8");
         expect(agents).toContain("gateway --dev");
         expect(agents).not.toBe("# PARTIAL\n");
-        await expect(fs.access(configPath)).resolves.toBeUndefined();
+        await fs.access(configPath);
       },
     );
   });

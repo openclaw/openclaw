@@ -2,14 +2,14 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
-import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -73,9 +73,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      const registration = registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -85,9 +88,6 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
-      if (registration) {
-        await registration;
-      }
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
       registerAgentRunContext(runId, {
@@ -104,12 +104,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         data: { phase: "end", endedAt: Date.now() },
       });
       await fixture.settle();
-      expect(ended.execution.status).toBe("terminal");
+      expect(subagentRuns.get("ended")?.execution.status).toBe("terminal");
       clearAgentRunContext("ended");
       await fixture.settle();
-      expect(ended.endedReason).toBe("subagent-complete");
+      expect(subagentRuns.get("ended")?.endedReason).toBe("subagent-complete");
     }
-    expect(subagentRuns.get("ended")).toBe(ended);
+    expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
     const entered = createDeferred();
     const resume = createDeferred();
     const endedMutationEntered = createDeferred();
@@ -117,6 +117,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const admission = await sessionLifecycle.beginSessionWorkAdmission({
       scope: storePath,
       identities: [activeKey, "active-session"],
+      run: {
+        runId: "active",
+        sessionKey: activeKey,
+        sessionId: "active-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
@@ -124,7 +130,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     let holdEndedMutation = !completed;
     const mutation = vi
       .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-      .mockImplementation(async (params) => {
+      .mockImplementation(async (operation, params) => {
         if (
           holdEndedMutation &&
           "scope" in params &&
@@ -137,7 +143,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
-        return await mutateSession(params);
+        return await mutateSession(operation, params);
       });
     const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
       if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
@@ -185,7 +191,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       const session = loadExactSessionEntryReadOnly({ storePath, sessionKey: endedKey })?.entry;
       expect(session?.sessionId).toBe("ended-session");
       expect(session?.lifecycleRevision === "original").toBe(!reset);
-      expect(subagentRuns.get("ended")).toBe(ended);
+      expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
       if (!completed) {
         newAdmission = await sessionLifecycle.beginSessionWorkAdmission({
           scope: storePath,
@@ -197,9 +203,18 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: grandchildKey,
+        defaultSessionId: "grandchild-session",
+      });
       await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: grandchildKey })
+          ?.entry,
         requesterSessionKey: endedKey,
         requesterAgentId: "main",
         requesterDisplayKey: endedKey,
@@ -226,7 +241,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       expect(subagentRuns.get("grandchild")?.execution.status).toBe(reset ? "queued" : "terminal");
       if (!completed) {
         expect(interrupted).toHaveBeenCalledTimes(reset ? 0 : 1);
-        expect(ended.execution.status).toBe(reset ? "running" : "terminal");
+        expect(subagentRuns.get("ended")?.execution.status).toBe(reset ? "running" : "terminal");
       }
       releaseSwarmRun("capacity");
       if (reset) {
@@ -253,22 +268,28 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
 );
 
 it.each(["child", "ancestor"])(
-  "retained durable intent prevents queued dispatch when the %s identity read fails",
+  "retained durable intent prevents queued dispatch when the %s identity owner closes",
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
     const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
-      await writeSubagentSessionEntry({
+      const ancestorStore = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "broken",
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
+        lifecycleRevision: "original-ancestor",
       });
       await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
+        childAgentId: "broken",
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: ancestorStore,
+          sessionKey: ancestorKey,
+        })?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -285,14 +306,28 @@ it.each(["child", "ancestor"])(
       agentId: childAgent,
       sessionKey: badKey,
       defaultSessionId: "bad-session",
+      lifecycleRevision: "original-child",
     });
     for (const [runId, childSessionKey] of [
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" ? childAgent : "main";
+      const childStore = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: childStore,
+          sessionKey: childSessionKey,
+        })?.entry,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
         requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterDisplayKey: parentKey,
@@ -308,17 +343,17 @@ it.each(["child", "ancestor"])(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
     expect(database).toBeDefined();
-    let original: Buffer | undefined;
+    let closed = false;
     let fault: unknown;
-    const unsubscribe = onSubagentRegistryPersisted(() => {
-      if (original || !subagentRuns.get("bad")?.killIntent) {
+    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+      if (closed || !subagentRuns.get("bad")?.killIntent) {
         return;
       }
       try {
         expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toBeDefined();
+        // Closure revokes the prepared identity synchronously; worker teardown may still run.
         expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        original = readFileSync(database.path);
-        writeFileSync(database.path, "not a SQLite database");
+        closed = true;
       } catch (error) {
         fault = error;
       }
@@ -326,6 +361,7 @@ it.each(["child", "ancestor"])(
     const badDispatch = vi.fn(async () => {});
     const healthyDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
+    const capacityOwner = "read-failure-capacity";
     for (const [runId, start] of [
       ["bad", badDispatch],
       ["healthy", healthyDispatch],
@@ -335,7 +371,8 @@ it.each(["child", "ancestor"])(
         groupId: "read-failure",
         runId,
         maxConcurrent: 1,
-        activeRunIds: [],
+        // Keep these reservations queued while Stop prepares its session snapshot.
+        activeRunIds: [capacityOwner],
         start,
         onStartFailure: () => true,
       });
@@ -344,7 +381,7 @@ it.each(["child", "ancestor"])(
       const { parent, pending } = abortParent();
       const respond = await pending;
       expect(fault).toBeUndefined();
-      expect(original).toBeDefined();
+      expect(closed).toBe(true);
       expect(parent.controller.signal.aborted).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
@@ -354,11 +391,6 @@ it.each(["child", "ancestor"])(
           message: expect.stringContaining("descendant cancellation was incomplete"),
         }),
       );
-      expect(() =>
-        loadExactSessionEntryReadOnly({
-          sessionKey: faultOwner === "ancestor" ? ancestorKey : badKey,
-        }),
-      ).toThrow();
       if (faultOwner === "ancestor") {
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
@@ -368,17 +400,16 @@ it.each(["child", "ancestor"])(
         reason: "killed",
       });
       expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
+      expect(releaseSwarmRun(capacityOwner)).toBe(true);
+      await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(
         badDispatch,
         "retained durable intent must withdraw its exact never-started reservation",
       ).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
     } finally {
       unsubscribe();
-      if (original) {
-        writeFileSync(database.path, original);
-      }
+      releaseSwarmRun(capacityOwner);
       releaseSwarmRun("bad");
       releaseSwarmRun("survivor");
     }

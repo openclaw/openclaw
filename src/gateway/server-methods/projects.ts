@@ -14,9 +14,20 @@ import {
   validateProjectsRemoveParams,
   validateProjectsSearchRemoteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
+import {
+  resolveConfiguredGitHubApiBaseUrl,
+  resolveConfiguredGitHubHost,
+} from "../../agents/github-host.js";
+import { readCachedNativeGitHubToken } from "../../agents/github-read-identity.js";
+import { readRegistryWorktrees } from "../../agents/worktrees/registry-read.js";
+import {
+  captureWorktreeRegistryAuthority,
+  captureWorktreeRunEndContext,
+} from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -33,27 +44,38 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { prepareCurrentUserProfileAliases } from "../../state/user-profile-reads.js";
+import { configuredDefaultRepository } from "../configured-default-repository.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
   gitHubPublicApi,
   githubApiToken,
 } from "../github-public-api.js";
-import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import {
+  WRITE_SCOPE,
+  authorizeOperatorScopesForMethod,
+  authorizeOperatorScopesForRequiredScope,
+} from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
+import {
+  assertMemoryProjectStoresCurrent,
+  loadProjectSessionStore,
+  readMemoryProjectStores,
+  type MemoryProjectStores,
+} from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
-  "listRegistryRecords" | "resolveRepositoryIdentity"
+  "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
 
 type ProjectCandidate = {
@@ -64,13 +86,14 @@ type ProjectCandidate = {
 };
 
 type RawProjectCandidate =
-  | { kind: "session"; checkoutPath: string; lastUsedAt: number }
+  | { kind: "session"; checkoutPath: string; lastUsedAt: number; sessionKey: string }
   | {
       kind: "worktree";
       checkoutPath: string;
       fingerprint: string;
       lastUsedAt: number;
       repoRoot: string;
+      sessionKey?: string;
     };
 
 type ProjectGroup = {
@@ -109,13 +132,10 @@ function retainNewestRawProjectCandidate(
   const insertionIndex = candidates.findIndex(
     (existing) => compareRawProjectCandidates(candidate, existing) < 0,
   );
-  if (insertionIndex < 0) {
-    if (candidates.length < PROJECTS_LIST_MAX_RAW_CANDIDATES) {
-      candidates.push(candidate);
-    }
+  if (insertionIndex < 0 && candidates.length >= PROJECTS_LIST_MAX_RAW_CANDIDATES) {
     return;
   }
-  candidates.splice(insertionIndex, 0, candidate);
+  candidates.splice(insertionIndex < 0 ? candidates.length : insertionIndex, 0, candidate);
   if (candidates.length > PROJECTS_LIST_MAX_RAW_CANDIDATES) {
     candidates.pop();
   }
@@ -150,6 +170,13 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
     ...record,
     ...(sanitizedOriginUrl ? { originUrl: sanitizedOriginUrl } : {}),
   };
+}
+
+function projectCheckoutError(error: unknown) {
+  return errorShape(
+    error instanceof ProjectCheckoutError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
 }
 
 function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): ProjectSummary[] {
@@ -209,9 +236,9 @@ async function listObservedProjects(
   service: ProjectWorktreeService,
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
-  store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"],
+  store: Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>>["store"],
   diagnostics?: ReturnType<typeof startProjectsListDiagnostics>,
-): Promise<ProjectSummary[]> {
+) {
   diagnostics?.mark("worktreeRegistry");
   const worktrees = await service.listRegistryRecords();
   diagnostics?.mark("sessionCandidates");
@@ -229,6 +256,7 @@ async function listObservedProjects(
         kind: "session",
         checkoutPath,
         lastUsedAt: entry.updatedAt,
+        sessionKey,
       });
     }
   }
@@ -252,86 +280,114 @@ async function listObservedProjects(
       fingerprint: worktree.repoFingerprint,
       lastUsedAt: worktree.lastActiveAt,
       repoRoot: worktree.repoRoot,
+      sessionKey: worktree.ownerKind === "session" ? worktree.ownerId?.trim() : undefined,
     });
   }
 
-  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
-  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  // Admit newest-first paths before canonicalizing the shared discovery pass's key.
   diagnostics?.mark("identityProbes");
   const probePaths = [
     ...new Set(
       rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
     ),
-  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
-  const { results } = await runTasksWithConcurrency({
-    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
-    limit: 4,
-  });
+  ]
+    .slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES)
+    .toSorted();
+  const results = probePaths.length ? await service.resolveRepositoryIdentities(probePaths) : [];
   const identities = new Map(
     probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
   );
 
   diagnostics?.mark("candidateProcessing");
   const candidates: ProjectCandidate[] = [];
+  const usedSessions = new Set<string>();
   for (const raw of rawCandidates) {
     const identity = identities.get(raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath);
-    if (raw.kind === "worktree") {
-      // Registry facts survive a missing source checkout or exhausted probe budget.
-      candidates.push({
-        checkoutPath: raw.checkoutPath,
-        fingerprint: raw.fingerprint,
-        lastUsedAt: raw.lastUsedAt,
-        ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
-      });
+    const checkout =
+      raw.kind === "worktree"
+        ? { checkoutPath: raw.checkoutPath, fingerprint: raw.fingerprint }
+        : identity && { checkoutPath: identity.checkoutRoot, fingerprint: identity.fingerprint };
+    if (!checkout) {
       continue;
     }
-    if (identity) {
-      candidates.push({
-        checkoutPath: identity.checkoutRoot,
-        fingerprint: identity.fingerprint,
-        lastUsedAt: raw.lastUsedAt,
-        ...(identity.originUrl ? { originUrl: identity.originUrl } : {}),
-      });
+    if (raw.kind === "session" || !canSeeAll) {
+      usedSessions.add(raw.sessionKey!);
     }
+    // Registry facts survive a missing source checkout or exhausted probe budget.
+    candidates.push({
+      ...checkout,
+      lastUsedAt: raw.lastUsedAt,
+      ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
+    });
   }
 
   // M5: merge operator-enabled device checkout advertisements at this seam.
-  return projectCandidatesToSummaries(candidates);
+  return {
+    projects: projectCandidatesToSummaries(candidates),
+    usedSessions,
+    assertCurrent() {
+      const currentFilter = createSessionListEntryFilter({ client, cfg });
+      if (
+        currentFilter &&
+        (canSeeAll || [...usedSessions].some((key) => !currentFilter(key, store[key]!)))
+      ) {
+        throw new Error("Project access changed while preparing the listing. Retry the request.");
+      }
+    },
+  };
 }
 
-function findProjectCheckoutReference(
+function findSessionCheckoutReference(
+  repoRoot: string,
+  entries: Iterable<readonly [string, SessionEntry]>,
+): string | undefined {
+  const normalizedRoot = path.resolve(repoRoot);
+  for (const [key, entry] of entries) {
+    if (entry.archivedAt) {
+      continue;
+    }
+    const sessionRoot = entry.worktree?.repoRoot;
+    const cwd = entry.spawnedCwd;
+    if (
+      (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) ||
+      (cwd &&
+        (path.resolve(cwd) === normalizedRoot || isPathInside(normalizedRoot, path.resolve(cwd))))
+    ) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
+async function findProjectCheckoutReference(
   cfg: Parameters<typeof listProjectRegistry>[0],
   repoRoot: string,
-): string | undefined {
+  worktrees: readonly ManagedWorktreeRecord[],
+): Promise<string | undefined> {
   const normalizedRoot = path.resolve(repoRoot);
   const workspaceReference = listWorkspaceProjects(cfg).find(
     (candidate) => path.resolve(candidate.repoRoot) === normalizedRoot,
   );
-  const worktreeReference = listRegistryWorktrees(process.env).find(
+  const worktreeReference = worktrees.find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
   );
-  const sessionReference = Object.entries(
-    loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store,
-  ).find(([, entry]) => {
-    if (entry.archivedAt) {
-      return false;
-    }
-    const sessionRoot = entry.worktree?.repoRoot;
-    if (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) {
-      return true;
-    }
-    const cwd = entry.spawnedCwd;
-    return Boolean(
-      cwd &&
-      (path.resolve(cwd) === normalizedRoot || isPathInside(normalizedRoot, path.resolve(cwd))),
-    );
-  });
+  const sessionReference = findSessionCheckoutReference(
+    normalizedRoot,
+    Object.entries(
+      (
+        await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+          projection: "list",
+          includeIncognito: false,
+        })
+      ).store,
+    ),
+  );
   return workspaceReference
     ? `agent workspace ${workspaceReference.displayName}`
     : worktreeReference
       ? `managed worktree ${worktreeReference.name}`
       : sessionReference
-        ? `session ${sessionReference[0]}`
+        ? `session ${sessionReference}`
         : undefined;
 }
 
@@ -342,132 +398,133 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         return;
       }
       const diagnostics = startProjectsListDiagnostics(context);
-      try {
-        const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
+      const cfg = context.getRuntimeConfig();
+      const defaultRepository = configuredDefaultRepository(cfg);
+      const requesterProfileId = client?.authenticatedUserProfile?.profileId;
+      const requesterUserId = client?.authenticatedUserId;
+      const assertCurrent = () => {
+        if (
+          client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
+          client?.authenticatedUserId !== requesterUserId ||
+          context.getRuntimeConfig() !== cfg
+        ) {
+          throw new Error("Project access changed while preparing the listing. Retry the request.");
+        }
+      };
+      const list = async (
+        memoryStores: MemoryProjectStores,
+        assertMemoryCurrent: (keys: ReadonlySet<string>) => void,
+      ) => {
+        const registryProjects = await listProjectRegistry(cfg);
         diagnostics?.mark("sessions");
         const projects = registryProjects.map(sanitizeProjectRecord);
-        const cfg = context.getRuntimeConfig();
-        const requesterProfileId = client?.authenticatedUserProfile?.profileId;
-        const requesterUserId = client?.authenticatedUserId;
-        const accessRevision = readGatewayAccessRevision();
-        const assertCurrent = () => {
-          if (
-            client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
-            client?.authenticatedUserId !== requesterUserId ||
-            readGatewayAccessRevision() !== accessRevision ||
-            context.getRuntimeConfig() !== cfg
-          ) {
-            throw new Error(
-              "Project access changed while preparing the listing. Retry the request.",
-            );
-          }
-        };
         const canWrite = () =>
-          authorizeOperatorScopesForRequiredScope(
-            WRITE_SCOPE,
-            Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-          ).allowed;
-        let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
-        let observedProjects: ProjectSummary[] | undefined;
-        try {
-          if (
-            client?.authenticatedUserProfile?.profileId ||
-            (params.includeObserved && canWrite())
-          ) {
-            if (params.includeObserved) {
-              store = (
-                await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" })
-              ).store;
-            } else {
-              const projection = getSessionRowProjection(context);
-              if (!projection) {
-                throw new Error(
-                  "Session projection is unavailable before Gateway startup completes",
-                );
-              }
-              do {
-                await projection.ensureMaterialized();
-              } while (projection.needsMaterialization);
-              assertCurrent();
-              if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
-                throw new Error(
-                  "Session projection changed while preparing the listing. Retry the request.",
-                );
-              }
-              store = loadCombinedSessionStoreForGatewayCore(cfg, {
-                projection: "list",
-                // Federation and process-local incognito stores retain the existing loader.
-                loadEntries: (target) =>
-                  projection
-                    .selectEntries({ storePath: target.storePath, sortBy: null })
-                    .map((row) => ({
-                      sessionKey: row.key,
-                      entry: row.storedEntry ?? row.entry,
-                      keyBytes: Buffer.from(row.key),
-                    }))
-                    // SQLite's binary key order breaks locale-equal recency ties.
-                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
-              }).store;
-            }
-            assertCurrent();
-          }
-          if (params.includeObserved && canWrite()) {
-            observedProjects = await listObservedProjects(
-              service,
-              context,
-              client,
-              store,
-              diagnostics,
+          authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, client?.connect.scopes ?? [])
+            .allowed;
+        let store: Record<string, SessionEntry> = {};
+        let projection: ReturnType<typeof getSessionRowProjection>;
+        let sessions: ReturnType<typeof loadProjectSessionStore> | undefined;
+        let observedProjects: Awaited<ReturnType<typeof listObservedProjects>> | undefined;
+        if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
+          projection = requireSessionRowProjection(context);
+          do {
+            await projection.prepareSelection({ metadataOnly: true });
+          } while (projection.needsSelectionPreparation({ metadataOnly: true }));
+          if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
+            throw new Error(
+              "Session projection changed while preparing the listing. Retry the request.",
             );
-            assertCurrent();
           }
-        } catch (error) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-          return;
+          sessions = loadProjectSessionStore(projection, memoryStores);
+          store = sessions.store;
+        }
+        if (params.includeObserved && canWrite()) {
+          observedProjects = await listObservedProjects(
+            service,
+            context,
+            client,
+            store,
+            diagnostics,
+          );
         }
         diagnostics?.mark("recents");
         const profileId = client?.authenticatedUserProfile?.profileId;
-        const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
-        const recents = recentProfileIds
-          ? await listProjectRecents(store, recentProfileIds, registryProjects)
+        const recentProfile = profileId
+          ? await prepareCurrentUserProfileAliases(profileId)
           : undefined;
-        assertCurrent();
+        const recentSessions = new Set<string>();
+        const recents =
+          recentProfile && sessions
+            ? await listProjectRecents(
+                store,
+                sessions.agentId,
+                recentProfile.aliases,
+                registryProjects,
+                recentSessions,
+              )
+            : undefined;
+        recentProfile?.assertCurrent();
         diagnostics?.mark("response");
-        if (canWrite()) {
-          respond(
-            true,
-            {
-              projects,
-              ...(recents ? { recents } : {}),
-              ...(observedProjects ? { observedProjects } : {}),
-            },
-            undefined,
+        const writable = canWrite();
+        const canCreate = authorizeOperatorScopesForMethod(
+          "sessions.create",
+          client?.connect.scopes ?? [],
+        ).allowed;
+        if (projection && getSessionRowProjection(context) !== projection) {
+          throw new Error(
+            "Session projection changed while preparing the listing. Retry the request.",
           );
-          return;
         }
+        sessions?.assertCurrent(recentSessions);
+        if (writable && observedProjects) {
+          sessions?.assertCurrent(observedProjects.usedSessions);
+          observedProjects.assertCurrent();
+        }
+        assertMemoryCurrent(
+          new Set([
+            ...recentSessions,
+            ...(writable && observedProjects ? observedProjects.usedSessions : []),
+          ]),
+        );
         // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
         // placement details reserved for clients that can create sessions.
         respond(
           true,
           {
-            projects: projects.map(({ id, displayName, source, agentId }) =>
-              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
-            ),
-            ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
+            projects: writable
+              ? projects
+              : projects.map(({ id, displayName, source, agentId }) =>
+                  agentId ? { id, displayName, source, agentId } : { id, displayName, source },
+                ),
+            ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
+            ...(defaultRepository && (writable || canCreate) ? { defaultRepository } : {}),
+            ...(recents
+              ? {
+                  recents: writable
+                    ? recents
+                    : recents.filter((recent) => recent.kind === "project"),
+                }
+              : {}),
+            ...(writable && observedProjects
+              ? { observedProjects: observedProjects.projects }
+              : {}),
           },
           undefined,
         );
+      };
+      try {
+        const stores = readMemoryProjectStores(assertCurrent);
+        await list(stores, (keys) => assertMemoryProjectStoresCurrent(stores, keys, assertCurrent));
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       } finally {
         diagnostics?.finish();
       }
     },
-    "projects.register": async ({ params, respond }) => {
-      if (
-        !assertValidParams(params, validateProjectsRegisterParams, "projects.register", respond)
-      ) {
-        return;
-      }
-      try {
+    "projects.register": defineValidatedGatewayHandler(
+      "projects.register",
+      validateProjectsRegisterParams,
+      async ({ params, respond }) => {
         respond(
           true,
           sanitizeProjectRecord(
@@ -475,94 +532,96 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            error instanceof ProjectCheckoutError
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE,
-            formatErrorMessage(error),
-          ),
-        );
-      }
-    },
-    "projects.add": async ({ params, respond, context, signal }) => {
-      if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
-        return;
-      }
-      try {
+      },
+      projectCheckoutError,
+    ),
+    "projects.add": defineValidatedGatewayHandler(
+      "projects.add",
+      validateProjectsAddParams,
+      async ({ params, respond, context, signal }) => {
+        const cfg = context.getRuntimeConfig();
         respond(
           true,
           await materializeProjectClone(
-            { cfg: context.getRuntimeConfig(), gitUrl: params.gitUrl, name: params.name },
-            { signal, token: githubApiToken() },
+            { cfg, gitUrl: params.gitUrl, name: params.name },
+            { signal, token: githubApiToken(process.env, cfg) },
           ),
           undefined,
         );
-      } catch (error) {
-        if (isTrustedSecretSurfaceUnavailableError(error)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
-              details: {
-                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                cause: "auth_required",
-              },
-              retryable: false,
-            }),
-          );
-          return;
-        }
-        if (error instanceof ProjectCloneError) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error.failure === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-              error.message,
+      },
+      (error) => {
+        const failure = isTrustedSecretSurfaceUnavailableError(error)
+          ? { cause: "auth_required", message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE }
+          : error instanceof ProjectCloneError
+            ? { cause: error.failure, message: error.message }
+            : undefined;
+        return failure
+          ? errorShape(
+              failure.cause === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+              failure.message,
               {
                 details: {
                   code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                  cause: error.failure,
+                  cause: failure.cause,
                 },
-                retryable: error.failure === "network" || error.failure === "clone_failed",
+                retryable: failure.cause === "network" || failure.cause === "clone_failed",
               },
-            ),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-      }
-    },
-    "projects.searchRemote": async ({ params, respond }) => {
-      if (
-        !assertValidParams(
-          params,
-          validateProjectsSearchRemoteParams,
-          "projects.searchRemote",
-          respond,
-        )
-      ) {
-        return;
-      }
-      try {
-        respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch (error) {
+            )
+          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+      },
+    ),
+    "projects.searchRemote": defineValidatedGatewayHandler(
+      "projects.searchRemote",
+      validateProjectsSearchRemoteParams,
+      async ({ params, respond, context, signal, hasCurrentClientAuthority }) => {
+        const cfg = context.getRuntimeConfig();
+        const host = resolveConfiguredGitHubHost(cfg);
+        const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Project requester authority changed during search");
+          }
+          if (context.getRuntimeConfig() !== cfg) {
+            throw new gitHubPublicApi.ControlUiGitHubError(
+              502,
+              "GitHub host changed during project search",
+            );
+          }
+        };
+        assertCurrent();
+        const nativeToken =
+          cfg.gateway?.projects?.nativeGitHubSearch === true
+            ? await readCachedNativeGitHubToken(process.env)
+            : undefined;
+        assertCurrent();
+        const result = await searchRemoteProjects(params.query, {
+          assertCurrent,
+          trackExecution: (run) => context.trackExecution(run),
+          signal,
+          host,
+          apiBaseUrl,
+          ...(cfg.gateway?.projects?.nativeGitHubSearch === true
+            ? { token: nativeToken ?? "" }
+            : {}),
+        });
+        assertCurrent();
+        respond(true, result, undefined);
+      },
+      (error) => {
         const { message, ...details } =
           error instanceof gitHubPublicApi.ControlUiGitHubError ||
           isTrustedSecretSurfaceUnavailableError(error)
             ? gitHubPublicApi.formatControlUiGitHubPreviewError(error)
             : { message: "GitHub project search is unavailable. Retry shortly.", retryable: true };
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
-      }
-    },
+        return errorShape(ErrorCodes.UNAVAILABLE, message, details);
+      },
+    ),
     "projects.remove": async ({ params, respond, context }) => {
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
       }
+      const worktreeContext = captureWorktreeRunEndContext(process.env);
       const respondUnknownProject = () => {
         respond(
           false,
@@ -589,28 +648,51 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           return;
         }
         try {
-          removed = await removeClonedProjectCheckout(project, () => {
-            const reference = findProjectCheckoutReference(
-              context.getRuntimeConfig(),
-              project.repoRoot,
-            );
-            if (reference) {
-              throw new ProjectCheckoutError(
-                `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+          const assertWorktreesCurrent = captureWorktreeRegistryAuthority(worktreeContext, [
+            { id: "*", fields: ["identity", "removal"] },
+          ]);
+          const worktrees = await readRegistryWorktrees(process.env, {}, worktreeContext);
+          worktreeContext.admission.assertCurrent();
+          assertWorktreesCurrent();
+          const remove = () => {
+            const assertCurrent = () => {
+              worktreeContext.admission.assertCurrent();
+              assertWorktreesCurrent();
+              const reference = findSessionCheckoutReference(
+                project.repoRoot,
+                readMemoryProjectStores(() => worktreeContext.admission.assertCurrent()).flatMap(
+                  (store) =>
+                    store.entries.map(({ sessionKey, entry }) => [sessionKey, entry] as const),
+                ),
               );
-            }
-          });
+              if (reference) {
+                throw new ProjectCheckoutError(
+                  `Project checkout is still referenced by session ${reference}. Remove that reference before deleting the checkout.`,
+                );
+              }
+            };
+            return removeClonedProjectCheckout(
+              project,
+              async () => {
+                assertCurrent();
+                const reference = await findProjectCheckoutReference(
+                  context.getRuntimeConfig(),
+                  project.repoRoot,
+                  worktrees,
+                );
+                assertCurrent();
+                if (reference) {
+                  throw new ProjectCheckoutError(
+                    `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+                  );
+                }
+              },
+              { assertCurrent },
+            );
+          };
+          removed = await remove();
         } catch (error) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error instanceof ProjectCheckoutError
-                ? ErrorCodes.INVALID_REQUEST
-                : ErrorCodes.UNAVAILABLE,
-              formatErrorMessage(error),
-            ),
-          );
+          respond(false, undefined, projectCheckoutError(error));
           return;
         }
       } else {

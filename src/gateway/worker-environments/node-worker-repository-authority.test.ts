@@ -143,37 +143,35 @@ async function repositoryFixture(closeAt?: ClosingBoundary) {
   };
 }
 
-it.each(["seed", "fetch", "author", "setup", "checkpoint"] as const)(
-  "fences repository preparation when its initiating turn closes during %s",
+it.each(["seed", "fetch", "author", "setup", "checkpoint", "completion"] as const)(
+  "binds repository preparation to its initiating turn until %s",
   async (boundary) => {
-    const fixture = await repositoryFixture(boundary);
+    const fixture = await repositoryFixture(boundary === "completion" ? undefined : boundary);
     try {
-      await expect(fixture.sync(boundary === "checkpoint")).rejects.toThrow(
-        /authority closed|turn closed/u,
-      );
-      expect(fixture.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
-      if (boundary === "checkpoint") {
-        expect(fixture.observed().downloadStatus).toBe(404);
+      if (boundary === "completion") {
+        const result = await fixture.sync(true);
+        expect(fixture.observed().downloadStatus).toBe(200);
+        fixture.closeInvocation();
+        const token = fixture.transfer.prepareUpload("environment-1", result.manifestRef);
+        expect(token).toBeTruthy();
+        await fixture.transfer.revoke("environment-1", token);
+      } else {
+        await expect(fixture.sync(boundary === "checkpoint")).rejects.toThrow(
+          /authority closed|turn closed/u,
+        );
+        expect(fixture.observed()).toMatchObject({
+          closedAtBoundary: true,
+          effectsAfterClosure: 0,
+        });
+        if (boundary === "checkpoint") {
+          expect(fixture.observed().downloadStatus).toBe(404);
+        }
       }
     } finally {
       await fixture.transfer.closeAll();
     }
   },
 );
-
-it("retains repository workspace custody after a successful initiating turn closes", async () => {
-  const fixture = await repositoryFixture();
-  try {
-    const result = await fixture.sync(true);
-    expect(fixture.observed().downloadStatus).toBe(200);
-    fixture.closeInvocation();
-    const token = fixture.transfer.prepareUpload("environment-1", result.manifestRef);
-    expect(token).toBeTruthy();
-    await fixture.transfer.revoke("environment-1", token);
-  } finally {
-    await fixture.transfer.closeAll();
-  }
-});
 
 it("fences the initial repository checkpoint when dispatch authority closes during node lookup", async () => {
   const fixture = await repositoryFixture("upload");
@@ -199,73 +197,55 @@ it("fences the initial repository checkpoint when dispatch authority closes duri
   }
 });
 
-it("rejects a retained initial-checkpoint upload token before reading its HTTP body", async () => {
-  const fixture = await repositoryFixture();
-  const server = await startNodeWorkspaceTransferTestServer(fixture.transfer);
-  try {
-    await fixture.sync();
-    const token = fixture.transfer.prepareUpload(
-      "environment-1",
-      baseManifestRef,
-      fixture.authorize,
-    );
-    fixture.closeInvocation();
-    const response = await fetch(
-      server.gatewayUrl.replace("ws:", "http:") +
-        nodeWorkspaceTransferReconcilePath("environment-1", baseManifestRef),
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}` },
-        body: "unread stale upload",
-      },
-    );
-    await response.arrayBuffer();
-    expect(response.status).toBe(404);
-  } finally {
-    await server.close();
-    await fixture.transfer.closeAll();
-  }
-});
-
-it("releases a completed upload rejected after caller closure so a fresh checkpoint can proceed", async () => {
-  const fixture = await repositoryFixture();
-  const server = await startNodeWorkspaceTransferTestServer(fixture.transfer);
-  try {
-    await fixture.sync();
-    const token = fixture.transfer.prepareUpload(
-      "environment-1",
-      baseManifestRef,
-      fixture.authorize,
-    );
-    const manifest = Buffer.from(baseManifestRaw);
-    const header = Buffer.alloc(4);
-    header.writeUInt32BE(manifest.length);
-    const response = await fetch(
-      server.gatewayUrl.replace("ws:", "http:") +
-        nodeWorkspaceTransferReconcilePath("environment-1", baseManifestRef),
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}` },
-        body: Buffer.concat([header, manifest, header, manifest]),
-      },
-    );
-    await response.arrayBuffer();
-    expect(response.status).toBe(200);
-    const staged = (await fs.readdir(fixture.temporaryRoot, { recursive: true })).filter((entry) =>
-      path.basename(entry).startsWith("upload-"),
-    );
-    expect(staged).toHaveLength(1);
-    fixture.closeInvocation();
-    expect(() => fixture.transfer.takeUpload("environment-1", baseManifestRef)).toThrow();
-    await fixture.transfer.revoke("environment-1", token);
-    const fresh = fixture.transfer.prepareUpload("environment-1", baseManifestRef, () => {});
-    expect(fresh).not.toBe(token);
-    await expect(fs.stat(path.join(fixture.temporaryRoot, staged[0]!))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await fixture.transfer.revoke("environment-1", fresh);
-  } finally {
-    await server.close();
-    await fixture.transfer.closeAll();
-  }
-});
+it.each(["before upload", "after upload"])(
+  "rejects checkpoint custody closed %s",
+  async (closure) => {
+    const fixture = await repositoryFixture();
+    const server = await startNodeWorkspaceTransferTestServer(fixture.transfer);
+    try {
+      await fixture.sync();
+      const token = fixture.transfer.prepareUpload(
+        "environment-1",
+        baseManifestRef,
+        fixture.authorize,
+      );
+      const stale = closure === "before upload";
+      if (stale) {
+        fixture.closeInvocation();
+      }
+      const manifest = Buffer.from(baseManifestRaw);
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(manifest.length);
+      const response = await fetch(
+        server.gatewayUrl.replace("ws:", "http:") +
+          nodeWorkspaceTransferReconcilePath("environment-1", baseManifestRef),
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+          body: stale ? "unread stale upload" : Buffer.concat([header, manifest, header, manifest]),
+        },
+      );
+      await response.arrayBuffer();
+      expect(response.status).toBe(stale ? 404 : 200);
+      if (stale) {
+        return;
+      }
+      const staged = (await fs.readdir(fixture.temporaryRoot, { recursive: true })).filter(
+        (entry) => path.basename(entry).startsWith("upload-"),
+      );
+      expect(staged).toHaveLength(1);
+      fixture.closeInvocation();
+      expect(() => fixture.transfer.takeUpload("environment-1", baseManifestRef)).toThrow();
+      await fixture.transfer.revoke("environment-1", token);
+      const fresh = fixture.transfer.prepareUpload("environment-1", baseManifestRef, () => {});
+      expect(fresh).not.toBe(token);
+      await expect(fs.stat(path.join(fixture.temporaryRoot, staged[0]!))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await fixture.transfer.revoke("environment-1", fresh);
+    } finally {
+      await server.close();
+      await fixture.transfer.closeAll();
+    }
+  },
+);

@@ -3,8 +3,8 @@ import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
@@ -93,7 +93,11 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     ],
   ]);
   const observedDynamicOwners = new Set<string>();
-  using parser = createNativeTypeScriptParser({ cwd: root });
+  using parser: { api?: API; [Symbol.dispose](): void } = {
+    [Symbol.dispose]() {
+      this.api?.close();
+    },
+  };
   const entryFiles = [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"];
   const explicitSources = [...dynamicOwners.values()]
     .flatMap((owner) => owner.targets)
@@ -123,7 +127,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    const sourceFile = parser.parseSourceFile(absolute, source);
+    const sourceFile = (parser.api ??= new API({ cwd: root })).createSourceFile(absolute, source);
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (
@@ -152,6 +156,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
             [
               "../../src/shared/freebsd-process-identity.ts",
               "../../src/infra/update-managed-service-handoff-native-loader.ts",
+              "../../src/infra/package-update-activation-native-loader.ts",
             ].includes(reference.specifier);
           visit(target, targetIsCompilerSource);
         }

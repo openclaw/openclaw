@@ -2,14 +2,34 @@ import { writeSync } from "node:fs";
 import type { BackupProgressInfo } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
-import { formatErrorMessageWithCode } from "./errors.js";
+import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessageWithCode,
+} from "./errors.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 
 export const UPDATE_STATE_INSPECTION_PROGRESS_PREFIX = "State schema progress: ";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
 
+export function formatUpdateStateInspectionError(error: unknown): string {
+  const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
+  const code = causes
+    .map(extractErrorCode)
+    .findLast((value) => value && isPublicUpdateFailureCode(value));
+  // Put the recognized cause before message paths, whose private suffixes are discarded.
+  const detail = `${code ? `${code}\n` : ""}${formatErrorMessageWithCode(error)}`;
+  // The update ledger retains the final diagnostic line within its existing bound.
+  return causes.length > 1
+    ? `${detail}\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`
+    : detail;
+}
+
 const ProgressSchema = z.object({
   phase: z.string(),
   path: z.string().optional(),
+  completedIo: z.number().int().positive().optional(),
   snapshot: z
     .object({
       status: z.enum(["copying", "completed"]),
@@ -21,6 +41,25 @@ const ProgressSchema = z.object({
     .optional(),
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
+
+/** Report completed filesystem work, not timer heartbeats or distinct file counts. */
+export function createUpdateStateIoReporter(
+  path: string,
+  phase: string,
+  onProgress?: (progress: UpdateStateInspectionProgress) => void,
+) {
+  let completedIo = 0;
+  let emittedAt = -Infinity;
+  return () => {
+    completedIo++;
+    const now = performance.now();
+    if (!onProgress || now - emittedAt < 500) {
+      return;
+    }
+    emittedAt = now;
+    onProgress({ phase, path, completedIo });
+  };
+}
 
 export function createUpdateStateSnapshotReporter(
   path: string,
@@ -59,10 +98,14 @@ export function createUpdateStateSnapshotReporter(
 }
 
 /** Stderr leaves the released worker's stdout JSON contract unchanged. */
-export function createUpdateStateInspectionReporter(legacy = false) {
+export function createUpdateStateInspectionReporter(legacy = false, entryProgress = false) {
   let emittedBytes = 0;
   let exhausted = false;
   return (progress: UpdateStateInspectionProgress) => {
+    // Released parents did not opt into potentially long entry-progress streams.
+    if (progress.completedIo !== undefined && !entryProgress) {
+      return;
+    }
     if (exhausted) {
       return;
     }
@@ -74,7 +117,15 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
     emittedBytes += Buffer.byteLength(line);
-    writeSync(2, line);
+    try {
+      writeSync(2, line);
+    } catch (error) {
+      // Advisory progress must not fail inspection when the nonblocking pipe is full.
+      const code = extractErrorCode(error);
+      if (code !== "EAGAIN" && code !== "EWOULDBLOCK") {
+        throw error;
+      }
+    }
   };
 }
 
@@ -85,6 +136,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
   paths: readonly string[];
   onProgress?: (progress: UpdateStateInspectionProgress) => void;
   stderrLimit?: { bytes: number; onExceeded: () => void };
+  retryAdvice?: boolean;
 }) {
   const startedAt = Date.now();
   const decoder = new StringDecoder("utf8");
@@ -135,15 +187,28 @@ export function createUpdateStateInspectionDiagnostics(params: {
     },
     stderr: () => `${tail}${pending}`.trim(),
     failure(reason: unknown, termination?: string) {
-      const detail =
-        formatErrorMessageWithCode(reason ?? "").trim() ||
-        "Worker exited without diagnostic output";
+      const detail = formatErrorMessageWithCode(reason ?? "").trim();
+      // Worker causes may follow warnings or a generic first line. Promote only closed public facts.
+      const summary = detail
+        ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
+        : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
+      const signaled = termination === "signal" || termination?.startsWith("signal,");
+      // Storage remediation and retries are next steps only for callers that stop on failure.
+      const advice =
+        params.retryAdvice === false
+          ? signaled
+            ? " The worker was terminated by a signal during the reported step."
+            : ""
+          : signaled
+            ? " The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
+            : " Check access to the reported source, free space, and storage performance, then retry the update.";
+      // Path redaction discards raw detail; only the closed summary precedes source context.
       return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""} after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. Check access to the reported source, free space, and storage performance, then retry the update.`,
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
     },

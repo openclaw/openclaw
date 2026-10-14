@@ -1,6 +1,32 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
 
 const SANDBOX_URL = "https://sandbox.example/mcp-app-sandbox";
 
@@ -216,7 +242,7 @@ describe("BoardWidgetSandboxHost", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("routes transient document fetch failures through the refresh budget", async () => {
+  it("reports transient document fetch failures without confusing them with authorization", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     vi.stubGlobal(
@@ -548,77 +574,119 @@ describe("BoardWidgetSandboxHost", () => {
     });
   });
 
-  it("cancels in-flight requests when the Gateway client is replaced", async () => {
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
-    );
-    let resolveOldRequest: (value: unknown) => void = () => {};
-    const oldClient = {
-      request: vi.fn(
-        async () =>
-          await new Promise<unknown>((resolve) => {
-            resolveOldRequest = resolve;
-          }),
-      ),
-    };
-    const newClient = { request: vi.fn(async () => ({ ok: true })) };
-    const baseOptions = hostOptions(frame, {
-      client: oldClient,
-      resolveFrameUrl: () => "/widget?bt=ticket",
-    });
-    const host = new BoardWidgetSandboxHost(baseOptions);
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
-    const bridgePort = await offerBridgePort(host, frame);
-    const responses: unknown[] = [];
-    bridgePort.addEventListener("message", (event) => {
-      if (event.data?.type === "openclaw:widget-bridge-response") {
-        responses.push(event.data);
+  it.each(["replaced", "reconnected"])(
+    "cancels in-flight requests when the Gateway client is %s",
+    async (change) => {
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+      );
+      let resolveOldRequest: (value: unknown) => void = () => {};
+      const oldClient = {
+        request: vi.fn(
+          async () =>
+            await new Promise<unknown>((resolve) => {
+              resolveOldRequest = resolve;
+            }),
+        ),
+      };
+      const newClient =
+        change === "reconnected" ? oldClient : { request: vi.fn(async () => ({ ok: true })) };
+      const baseOptions = hostOptions(frame, {
+        client: oldClient,
+        resolveFrameUrl: () => "/widget?bt=ticket",
+      });
+      const host = new BoardWidgetSandboxHost(baseOptions);
+      notifyProxyReady(host, frame);
+      await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
+      const bridgePort = await offerBridgePort(host, frame);
+      const responses: unknown[] = [];
+      bridgePort.addEventListener("message", (event) => {
+        if (event.data?.type === "openclaw:widget-bridge-response") {
+          responses.push(event.data);
+        }
+      });
+
+      bridgePort.postMessage(
+        {
+          type: "openclaw:widget-bridge-request",
+          id: "old-client",
+          method: "data.read",
+          params: { bindingId: "health" },
+          ticket: "ticket",
+        },
+        [],
+      );
+      await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
+      if (change === "reconnected") {
+        host.update({ ...baseOptions, connected: false });
       }
-    });
+      host.update({ ...baseOptions, client: newClient, connected: true });
+      await vi.waitFor(() =>
+        expect(responses).toContainEqual({
+          type: "openclaw:widget-bridge-response",
+          id: "old-client",
+          ok: false,
+          error: "Gateway connection changed",
+        }),
+      );
+      resolveOldRequest({ private: "old-context" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client", ok: true }));
+      newClient.request.mockClear();
+      newClient.request.mockResolvedValue({ ok: true });
 
-    bridgePort.postMessage(
-      {
-        type: "openclaw:widget-bridge-request",
-        id: "old-client",
-        method: "data.read",
-        params: { bindingId: "health" },
-        ticket: "ticket",
-      },
-      [],
-    );
-    await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
-    host.update({ ...baseOptions, client: newClient });
-    await vi.waitFor(() =>
-      expect(responses).toContainEqual({
-        type: "openclaw:widget-bridge-response",
-        id: "old-client",
-        ok: false,
-        error: "Gateway connection changed",
-      }),
-    );
-    resolveOldRequest({ private: "old-context" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client", ok: true }));
-
-    await expect(
-      sendBridgeRequest(bridgePort, {
-        type: "openclaw:widget-bridge-request",
-        id: "new-client",
-        method: "state.emit",
-        params: { payload: { phase: "reconnected" } },
-        ticket: "ticket",
-      }),
-    ).resolves.toMatchObject({ id: "new-client", ok: true });
-    expect(newClient.request).toHaveBeenCalledWith("board.event", {
-      ticket: "ticket",
-      payload: { phase: "reconnected" },
-    });
-  });
+      await expect(
+        sendBridgeRequest(bridgePort, {
+          type: "openclaw:widget-bridge-request",
+          id: "new-client",
+          method: "state.emit",
+          params: { payload: { phase: "reconnected" } },
+          ticket: "ticket",
+        }),
+      ).resolves.toMatchObject({ id: "new-client", ok: false });
+      expect(newClient.request).not.toHaveBeenCalled();
+      const renewal = new Promise<void>((resolve) => {
+        bridgePort.addEventListener("message", (event) => {
+          if (
+            event.data?.type === "openclaw:widget-host-init" &&
+            event.data.ticket === "renewed-ticket"
+          ) {
+            bridgePort.postMessage(
+              {
+                type: "openclaw:widget-host-init-ack",
+                ticket: "renewed-ticket",
+              },
+              [],
+            );
+            resolve();
+          }
+        });
+      });
+      host.update({
+        ...baseOptions,
+        client: newClient,
+        widget: { ...widget(), viewTicket: "renewed-ticket" },
+      });
+      await renewal;
+      await expect(
+        sendBridgeRequest(bridgePort, {
+          type: "openclaw:widget-bridge-request",
+          id: "revalidated",
+          method: "state.emit",
+          params: { payload: { phase: "reconnected" } },
+          ticket: "renewed-ticket",
+        }),
+      ).resolves.toMatchObject({ id: "revalidated", ok: true });
+      expect(newClient.request).toHaveBeenCalledWith("board.event", {
+        ticket: "renewed-ticket",
+        payload: { phase: "reconnected" },
+      });
+    },
+  );
 
   it("reloads equal-name revisions when their board session identity changes", async () => {
     const frame = document.createElement("iframe");
@@ -857,26 +925,90 @@ describe("BoardWidgetSandboxHost", () => {
     vi.useFakeTimers();
     const frame = document.createElement("iframe");
     document.body.append(frame);
+    // Document failures share the retry backoff; keep only the proxy unavailable.
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
+    vi.stubGlobal("fetch", fetchMock);
     const onReadyTimeout = vi.fn();
+    const onLoadFailed = vi.fn();
     const host = new BoardWidgetSandboxHost(
       hostOptions(frame, {
         onReadyTimeout,
+        onLoadFailed,
       }),
     );
 
     host.setActive(false);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(onReadyTimeout).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
     host.setActive(true);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(onReadyTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(onReadyTimeout).toHaveBeenCalledOnce();
+    expect(frame.src).toBe("");
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(frame.src).toBe(SANDBOX_URL);
     const reloadSpy = vi.spyOn(frame, "src", "set");
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(reloadSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(reloadSpy).toHaveBeenCalledWith(SANDBOX_URL);
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
     host.dispose();
-    await vi.advanceTimersByTimeAsync(20_000);
+    // Cross both the canceled readiness deadline and its next retry window.
+    await vi.advanceTimersByTimeAsync(34_000);
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    expect(onLoadFailed).not.toHaveBeenCalled();
+  });
+
+  it("rejects Gateway widget HTML that advertises more than the protocol byte cap", async () => {
+    const socketClosed = Promise.withResolvers<void>();
+    let requestCount = 0;
+    const advertised = WIDGET_HTML_MAX_UTF8_BYTES + 1;
+    const server = createServer((request, response) => {
+      requestCount += 1;
+      request.socket.once("close", () => socketClosed.resolve());
+      // Advertise oversize Content-Length and leave the body open so cancel is
+      // visible as a closed TCP socket instead of a full download.
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": String(advertised),
+      });
+      response.write("<!doctype html><p>partial</p>");
+    });
+    const origin = await listenOnLoopback(server);
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const rejected = Promise.withResolvers<void>();
+    const onError = vi.fn<(error: unknown) => void>(() => rejected.resolve());
+    const onLoadFailed = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onError,
+        onLoadFailed,
+        onLoaded,
+        sourceOrigin: origin,
+        resolveFrameUrl: () => "/widget",
+      }),
+    );
+    notifyProxyReady(host, frame);
+    try {
+      await rejected.promise;
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onLoaded).not.toHaveBeenCalled();
+      expect(onLoadFailed).not.toHaveBeenCalled();
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({
+        kind: "rejected",
+        message: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
+      });
+      expect(requestCount).toBe(1);
+      await socketClosed.promise;
+    } finally {
+      host.dispose();
+      await closeServer(server);
+    }
   });
 });

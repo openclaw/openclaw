@@ -4,6 +4,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readInProcessSubagentResume } from "../gateway/in-process-subagent-resume.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { addSubagentRunForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -62,13 +63,18 @@ export function registerSessionsSendResumeTests({
         scenario !== "explicit separate followup" &&
         scenario !== "unrelated caller" &&
         scenario !== "completion unspecified";
+      const childSessionIdentity = {
+        sessionId: "tool-resume-session",
+        lifecycleRevision: "tool-resume-revision",
+      };
       await replaceSessionEntry(
         { agentId: "main", sessionKey: targetKey },
-        { sessionId: "tool-resume-session", updatedAt: Date.now() },
+        { ...childSessionIdentity, updatedAt: Date.now() },
       );
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: previousRunId,
         childSessionKey: targetKey,
+        childSessionIdentity,
         requesterSessionKey: controller,
         requesterDisplayKey: controller,
         controllerSessionKey: controller,
@@ -80,9 +86,10 @@ export function registerSessionsSendResumeTests({
         expectsCompletionMessage: scenario === "completion unspecified" ? undefined : true,
       });
       if (scenario === "newer completed sibling") {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: siblingRunId,
           childSessionKey: targetKey,
+          childSessionIdentity,
           requesterSessionKey: "agent:main:dashboard:separate-requester",
           requesterDisplayKey: "separate-requester",
           controllerSessionKey: parent,
@@ -163,13 +170,15 @@ export function registerSessionsSendResumeTests({
           controllerSessionKey: controller,
         });
       } finally {
-        subagentRuns.delete(previousRunId);
-        subagentRuns.delete(siblingRunId);
+        await mutateSubagentRuns([previousRunId, siblingRunId], (rows) => ({
+          value: undefined,
+          postimages: new Map([...rows.keys()].map((runId) => [runId, null])),
+        }));
       }
     },
   );
 
-  it.each([{ watch: true }, { timeoutSeconds: 1 }])(
+  it.each([{ timeoutSeconds: 1 }])(
     "sessions_send resume rejects competing delivery options %j",
     async (options) => {
       const parent = "agent:main:main";

@@ -1,22 +1,17 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
 export type PersonActivityData = Readonly<
-  Pick<
-    SessionDataController,
-    | "sessionsAgentId"
-    | "sessionsResult"
-    | "sessionResultsByAgent"
-    | "childSessionRowsByParent"
-    | "loadedChildSessionKeys"
-    | "presencePayload"
-  >
+  Pick<SessionDataController, "sessionsResult" | "presencePayload">
 >;
 
-type PersonActivitySource = { data?: PersonActivityData; listeners: Set<() => void> };
-// Share the loaded, caller-visible roster rather than fetching another person's
-// sessions or reconstructing a second cache in each transcript mention.
+type PersonPresenceData = Pick<PersonActivityData, "presencePayload">;
+type PersonActivitySource = { data?: PersonPresenceData; listeners: Set<() => void> };
+// Presence keeps its existing publisher; session membership belongs to the
+// managed roster query below, never the sidebar's presentation filters.
 const sources = new WeakMap<ApplicationContext, PersonActivitySource>();
 function sourceFor(context: ApplicationContext): PersonActivitySource {
   let source = sources.get(context);
@@ -28,12 +23,12 @@ function sourceFor(context: ApplicationContext): PersonActivitySource {
 }
 
 /** Publishes the existing roster owner's facts after its update, without copying state. */
-export class PersonActivityDataController implements ReactiveController {
+export class PersonActivityDataController implements SolidController {
   private source: PersonActivitySource | undefined;
   constructor(
-    private readonly host: ReactiveControllerHost & { readonly isConnected: boolean },
+    private readonly host: SolidControllerHost & { readonly isConnected: boolean },
     private readonly context: () => ApplicationContext | undefined,
-    private readonly data: PersonActivityData,
+    private readonly data: PersonPresenceData,
   ) {}
 
   hostUpdated() {
@@ -67,13 +62,70 @@ export class PersonActivityDataController implements ReactiveController {
 
 export function observePersonActivityData(context: ApplicationContext, changed: () => void) {
   const source = sourceFor(context);
-  source.listeners.add(changed);
+  const sessions = context.sessions;
+  const scope = sessions.captureConnectionScope();
+  let disposed = false;
+  let ready = false;
+  let snapshot: SessionListSnapshot | undefined;
+  let result: PersonActivityData["sessionsResult"] = null;
+  const current = () => !disposed && scope !== null && sessions.isConnectionScopeCurrent(scope);
+  const notify = () => {
+    if (current()) {
+      if (
+        ready &&
+        snapshot &&
+        !snapshot.loading &&
+        !snapshot.error &&
+        snapshot.readSucceeded === true
+      ) {
+        result = snapshot.result;
+      }
+      changed();
+    }
+  };
+  source.listeners.add(notify);
+  const observation = scope
+    ? sessions.observeList(
+        {
+          source: "activity",
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          rowMode: "compact",
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+        },
+        (next) => {
+          snapshot = next;
+          if (ready) {
+            notify();
+          }
+        },
+      )
+    : undefined;
+  const settled = () => {
+    ready = true;
+    notify();
+  };
+  // Do not freeze Recent sessions from a retained snapshot before this open's
+  // access-scoped refresh completes. The managed owner also handles live events.
+  // A resolved refresh may only report temporary Gateway unavailability.
+  // Admit membership from the owner's successful-read receipt, not settlement.
+  void observation?.refresh().then(settled, () => {
+    snapshot = undefined;
+    settled();
+  });
   return {
-    get data() {
-      return source.data;
+    get data(): PersonActivityData | undefined {
+      return current()
+        ? {
+            presencePayload: source.data?.presencePayload,
+            sessionsResult: result,
+          }
+        : undefined;
     },
     dispose: () => {
-      source.listeners.delete(changed);
+      disposed = true;
+      observation?.dispose();
+      source.listeners.delete(notify);
     },
   };
 }

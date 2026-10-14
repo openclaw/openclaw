@@ -1,4 +1,3 @@
-/** Detects mutable file operands in approved commands. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -29,7 +28,6 @@ import {
   BUN_SUBCOMMANDS,
   DENO_RUN_OPTIONS_WITH_VALUE,
   NODE_OPTIONS_WITH_FILE_VALUE,
-  RUBY_UNSAFE_APPROVAL_FLAGS,
 } from "./system-run-mutable-file-options.js";
 import {
   isLikelyScriptLikePathSync,
@@ -48,8 +46,6 @@ import {
   resolvePosixShellScriptOperandIndex,
 } from "./system-run-shell-file-operand.js";
 
-const POSIX_SHELL_WRAPPER_SET: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
-const POSIX_PARSEABLE_SHELL_WRAPPER_SET: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 const PACKAGE_MANAGER_EXECUTABLES = new Set(["corepack", "npm", "npx", "pnpm", "yarn"]);
 
 const MUTABLE_ARGV1_INTERPRETER_PATTERNS = [
@@ -75,11 +71,6 @@ function readTrimmedArgToken(argv: readonly string[], index: number): string {
   return normalizeNullableString(argv[index]) ?? "";
 }
 
-type FileOperandCollection = {
-  hits: number[];
-  sawOptionValueFile: boolean;
-};
-
 function unwrapArgvForMutableOperand(argv: string[]): {
   argv: string[];
   baseIndex: number;
@@ -89,28 +80,26 @@ function unwrapArgvForMutableOperand(argv: string[]): {
   let baseIndex = 0;
   let opaqueMultiplexerSeen = false;
   while (true) {
+    let next: string[] | null;
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
-      baseIndex += current.length - dispatchUnwrap.argv.length;
-      current = dispatchUnwrap.argv;
-      continue;
-    }
-    const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
-    if (shellMultiplexerUnwrap.kind === "unwrapped") {
-      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
-        opaqueMultiplexerSeen = true;
+      next = dispatchUnwrap.argv;
+    } else {
+      const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
+      if (shellMultiplexerUnwrap.kind === "unwrapped") {
+        if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+          opaqueMultiplexerSeen = true;
+        }
+        next = shellMultiplexerUnwrap.argv;
+      } else {
+        next = unwrapKnownPackageManagerExecInvocation(current);
       }
-      baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
-      current = shellMultiplexerUnwrap.argv;
-      continue;
     }
-    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
-    if (packageManagerUnwrap) {
-      baseIndex += current.length - packageManagerUnwrap.length;
-      current = packageManagerUnwrap;
-      continue;
+    if (!next) {
+      return { argv: current, baseIndex, opaqueMultiplexerSeen };
     }
-    return { argv: current, baseIndex, opaqueMultiplexerSeen };
+    baseIndex += current.length - next.length;
+    current = next;
   }
 }
 
@@ -184,45 +173,36 @@ function resolveOptionFilteredPositionalIndex(params: {
   return null;
 }
 
-function collectExistingFileOperandIndexes(params: {
+function resolveGenericInterpreterScriptOperandIndex(params: {
   argv: string[];
-  startIndex: number;
   cwd: string | undefined;
   optionsWithFileValue?: ReadonlySet<string>;
-}): FileOperandCollection {
+}): number | null {
   let afterDoubleDash = false;
   const hits: number[] = [];
-  for (let i = params.startIndex; i < params.argv.length; i += 1) {
+  for (let i = 1; i < params.argv.length; i += 1) {
     const token = readTrimmedArgToken(params.argv, i);
     if (!token) {
       continue;
     }
-    if (afterDoubleDash) {
-      if (resolvesToExistingFileSync(token, params.cwd)) {
-        hits.push(i);
-      }
-      continue;
-    }
-    if (token === "--") {
+    if (!afterDoubleDash && token === "--") {
       afterDoubleDash = true;
       continue;
     }
-    if (token === "-") {
-      return { hits: [], sawOptionValueFile: false };
+    if (!afterDoubleDash && token === "-") {
+      return null;
     }
-    if (token.startsWith("-")) {
+    if (!afterDoubleDash && token.startsWith("-")) {
       const option = parseInlineOptionToken(token);
       const flag = option.name;
       const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;
       if (params.optionsWithFileValue?.has(normalizeLowercaseStringOrEmpty(flag))) {
         if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
-          hits.push(i);
-          return { hits, sawOptionValueFile: true };
+          return null;
         }
         const nextToken = readTrimmedArgToken(params.argv, i + 1);
         if (!inlineValue && nextToken && resolvesToExistingFileSync(nextToken, params.cwd)) {
-          hits.push(i + 1);
-          return { hits, sawOptionValueFile: true };
+          return null;
         }
       }
       continue;
@@ -231,24 +211,7 @@ function collectExistingFileOperandIndexes(params: {
       hits.push(i);
     }
   }
-  return { hits, sawOptionValueFile: false };
-}
-
-function resolveGenericInterpreterScriptOperandIndex(params: {
-  argv: string[];
-  cwd: string | undefined;
-  optionsWithFileValue?: ReadonlySet<string>;
-}): number | null {
-  const collection = collectExistingFileOperandIndexes({
-    argv: params.argv,
-    startIndex: 1,
-    cwd: params.cwd,
-    optionsWithFileValue: params.optionsWithFileValue,
-  });
-  if (collection.sawOptionValueFile) {
-    return null;
-  }
-  return collection.hits.length === 1 ? expectDefined(collection.hits[0], "hits entry at 0") : null;
+  return hits.length === 1 ? expectDefined(hits[0], "hits entry at 0") : null;
 }
 
 function resolveBunScriptOperandIndex(params: {
@@ -297,38 +260,24 @@ function resolveDenoRunScriptOperandIndex(params: {
 }
 
 function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
-  let afterDoubleDash = false;
   for (let i = 1; i < argv.length; i += 1) {
     const token = readTrimmedArgToken(argv, i);
     if (!token) {
       continue;
     }
-    if (afterDoubleDash) {
+    if (token === "--") {
       return false;
     }
-    if (token === "--") {
-      afterDoubleDash = true;
-      continue;
-    }
     if (
-      token === "-C" ||
-      token === "-I" ||
-      token === "-r" ||
       token === "-S" ||
-      token === "--chdir"
-    ) {
-      return true;
-    }
-    if (
+      token === "--chdir" ||
       token.startsWith("-C") ||
       token.startsWith("-I") ||
       token.startsWith("-r") ||
       token.startsWith("--chdir=") ||
-      token.startsWith("--require=")
+      token.startsWith("--require=") ||
+      ["-r", "--require"].includes(normalizeLowercaseStringOrEmpty(token))
     ) {
-      return true;
-    }
-    if (RUBY_UNSAFE_APPROVAL_FLAGS.has(normalizeLowercaseStringOrEmpty(token))) {
       return true;
     }
   }
@@ -350,7 +299,7 @@ function hasNodeFileLoadingOption(argv: string[]): boolean {
 export function isSystemRunCommandTextBoundInterpreterInvocation(argv: string[]): boolean {
   const unwrapped = unwrapArgvForMutableOperand(argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
-  if (POSIX_SHELL_WRAPPER_SET.has(executable)) {
+  if (POSIX_SHELL_WRAPPERS.has(executable)) {
     return false;
   }
   if (
@@ -416,8 +365,8 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   if (unwrapped.opaqueMultiplexerSeen || OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable)) {
     return null;
   }
-  if (POSIX_SHELL_WRAPPER_SET.has(executable)) {
-    if (!POSIX_PARSEABLE_SHELL_WRAPPER_SET.has(executable)) {
+  if (POSIX_SHELL_WRAPPERS.has(executable)) {
+    if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
       return null;
     }
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv, executable);
@@ -525,7 +474,7 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   return (
     Boolean(executable) &&
-    !POSIX_SHELL_WRAPPER_SET.has(executable) &&
+    !POSIX_SHELL_WRAPPERS.has(executable) &&
     isMutableScriptRunner(executable)
   );
 }
@@ -536,6 +485,7 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
   }
 
   let idx = 1;
+  let afterDlx = false;
   while (idx < argv.length) {
     const token = readTrimmedArgToken(argv, idx);
     if (!token) {
@@ -543,52 +493,26 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
       continue;
     }
     if (token === "--") {
+      if (afterDlx) {
+        return resolveMutableFileOperandIndex(argv.slice(idx + 1), cwd) !== null;
+      }
       idx += 1;
       continue;
     }
     if (!token.startsWith("-")) {
+      if (afterDlx) {
+        return resolveMutableFileOperandIndex(argv.slice(idx), cwd) !== null;
+      }
       if (token !== "dlx") {
         return false;
       }
-      return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1), cwd);
-    }
-    const parsedOption = parseInlineOptionToken(token);
-    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (
-      PNPM_OPTIONS_WITH_VALUE.has(flag) ||
-      PNPM_DLX_OPTIONS_WITH_VALUE.has(flag) ||
-      PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)
-    ) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      afterDlx = true;
       idx += 1;
       continue;
     }
-    return true;
-  }
-
-  return false;
-}
-
-function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
-  let idx = 0;
-  while (idx < argv.length) {
-    const token = readTrimmedArgToken(argv, idx);
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (token === "--") {
-      return resolveMutableFileOperandIndex(argv.slice(idx + 1), cwd) !== null;
-    }
-    if (!token.startsWith("-")) {
-      return resolveMutableFileOperandIndex(argv.slice(idx), cwd) !== null;
-    }
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (flag === "-c" || flag === "--shell-mode") {
+    if (afterDlx && (flag === "-c" || flag === "--shell-mode")) {
       return false;
     }
     if (
@@ -606,7 +530,7 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
     return true;
   }
 
-  return true;
+  return afterDlx;
 }
 
 export type SystemRunBindingFailure = {

@@ -1,5 +1,4 @@
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
@@ -7,17 +6,19 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { loadMutableCronStoreInWorker } from "./load.worker.js";
+import { registerCronQuarantineInDatabase } from "./quarantine.kernel.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
-import {
-  bindCronRunReceiptExecutionInDatabase,
-  ensureCronRunReceiptSchema,
-} from "./run-receipt-store.js";
-import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { executeCronStoreSaveCommand } from "./save.worker.js";
 import type { CronStateWorkerOperations } from "./worker-contract.js";
 
-const loadAdmission = createLazyRuntimeModule(() => import("./run-admission.worker.js"));
-let admission: typeof import("./run-admission.worker.js") | undefined;
+const loadQueue = createLazyRuntimeModule(() => import("./run-queue.worker.js"));
+let queue: typeof import("./run-queue.worker.js") | undefined;
+
+const loadReceipts = createLazyRuntimeModule(() => import("./run-receipt.worker.js"));
+let receipts: typeof import("./run-receipt.worker.js") | undefined;
+const loadFinalization = createLazyRuntimeModule(() => import("./run-finalization.worker.js"));
+let finalization: typeof import("./run-finalization.worker.js") | undefined;
 
 const loadRecovery = createLazyRuntimeModule(() => import("./run-recovery.worker.js"));
 let recovery: typeof import("./run-recovery.worker.js") | undefined;
@@ -31,9 +32,36 @@ const loadExternalState = createLazyRuntimeModule(() => import("./external-state
 let externalState: typeof import("./external-state.worker.js") | undefined;
 const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.worker.js"));
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
+const loadSchedulerActor = createLazyRuntimeModule(() => import("./scheduler-actor.worker.js"));
+let schedulerActor: typeof import("./scheduler-actor.worker.js") | undefined;
+const loadJobMutations = createLazyRuntimeModule(() => import("./job-mutations.worker.js"));
+let jobMutations: typeof import("./job-mutations.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
-  if ((type === "cron.recordSkippedRuns" || type === "cron.planStartup") && !scheduler) {
+  if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
+    return loadSchedulerActor().then((loaded) => {
+      schedulerActor = loaded;
+    });
+  }
+  if (type === "cron.prepareJobMutation" && !jobMutations) {
+    return loadJobMutations().then((loaded) => {
+      jobMutations = loaded;
+    });
+  }
+  if (
+    ["cron.requestRuns", "cron.drainQueue", "cron.cancelRequests"].includes(String(type)) &&
+    !queue
+  ) {
+    return loadQueue().then((loaded) => {
+      queue = loaded;
+    });
+  }
+  if (type === "cron.finalizeRuns" && !finalization) {
+    return loadFinalization().then((loaded) => {
+      finalization = loaded;
+    });
+  }
+  if (type === "cron.recordSkippedRuns" && !scheduler) {
     return loadScheduler().then((loaded) => {
       scheduler = loaded;
     });
@@ -54,23 +82,19 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     });
   }
   if (
-    [
-      "cron.reserveRuns",
-      "cron.activateRun",
-      "cron.releaseReservations",
-      "cron.finishReceipt",
-      "cron.finalizeRuns",
-      "cron.removeStaleFamily",
-    ].includes(String(type)) &&
-    !admission
+    ["cron.markDeliveryStarted", "cron.removeStaleFamily", "cron.bindReceiptExecution"].includes(
+      String(type),
+    ) &&
+    !receipts
   ) {
-    return loadAdmission().then((loaded) => {
-      admission = loaded;
+    return loadReceipts().then((loaded) => {
+      receipts = loaded;
     });
   }
   if (
     (type === "cron.scheduleUnowned" ||
       type === "cron.recordFailureAlertOutcome" ||
+      type === "cron.recordFailureRepairSettlement" ||
       type === "cron.maintainHistory") &&
     !maintenance
   ) {
@@ -78,7 +102,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       maintenance = loaded;
     });
   }
-  if (type !== "cron.repairRun" || recovery) {
+  if (type !== "cron.recoverRuns" || recovery) {
     return undefined;
   }
   return loadRecovery().then((loaded) => {
@@ -91,27 +115,33 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.schedulerStart":
+    case "cron.schedulerTick":
+    case "cron.schedulerRefresh":
+    case "cron.schedulerStop":
+    case "cron.prepareJobMutation":
+    case "cron.requestRuns":
+    case "cron.drainQueue":
+    case "cron.cancelRequests":
     case "cron.recordSkippedRuns":
-    case "cron.planStartup":
     case "cron.mutateExternalState":
     case "cron.writeScratch":
     case "cron.mutateJobs":
-    case "cron.reserveRuns":
     case "cron.recordRun":
-    case "cron.activateRun":
-    case "cron.releaseReservations":
-    case "cron.finishReceipt":
+    case "cron.markDeliveryStarted":
+    case "cron.bindReceiptExecution":
     case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
     case "cron.initializeRunReceipts":
-    case "cron.repairRun":
+    case "cron.recoverRuns":
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
+    case "cron.recordFailureRepairSettlement":
     case "cron.save":
     case "cron.saveChanges":
-    case "cron.bindReceiptExecution":
+    case "cron.registerQuarantine":
       return true;
     default:
       return false;
@@ -123,14 +153,47 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.schedulerStart":
+    case "cron.schedulerTick":
+    case "cron.schedulerRefresh":
+    case "cron.schedulerStop":
+      if (!schedulerActor) {
+        throw new Error("Cron scheduler actor is not prepared");
+      }
+      if (command.type === "cron.schedulerStop") {
+        return schedulerActor.stopCronSchedulerInWorker(command.input);
+      }
+      return schedulerActor.runCronSchedulerInWorker(database, command);
+    case "cron.prepareJobMutation":
+      if (!jobMutations) {
+        throw new Error("Cron job mutation worker is not prepared");
+      }
+      return jobMutations.prepareCronJobMutationInWorker(database, command.input);
+    case "cron.requestRuns":
+    case "cron.drainQueue":
+    case "cron.cancelRequests":
+      if (!queue) {
+        throw new Error("Cron queue worker is not prepared");
+      }
+      switch (command.type) {
+        case "cron.requestRuns":
+          return queue.requestCronRunsInWorker(database, command.input);
+        case "cron.drainQueue":
+          return queue.drainCronQueueInWorker(database, command.input);
+        case "cron.cancelRequests":
+          return queue.cancelCronRequestsInWorker(database, command.input);
+      }
+    case "cron.registerQuarantine":
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => registerCronQuarantineInDatabase(db, command.input),
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+        { operationLabel: command.type },
+      );
     case "cron.recordSkippedRuns":
-    case "cron.planStartup":
       if (!scheduler) {
         throw new Error("Cron scheduler worker is not prepared");
       }
-      return command.type === "cron.recordSkippedRuns"
-        ? scheduler.recordSkippedCronRunsInWorker(database, command.input)
-        : scheduler.planCronStartupInWorker(database, command.input);
+      return scheduler.recordSkippedCronRunsInWorker(database, command.input);
     case "cron.mutateExternalState":
       if (!externalState) {
         throw new Error("Cron external-state worker is not prepared");
@@ -148,86 +211,61 @@ export function executeCronStateCommand(
       return mutation.mutateCronJobsInWorker(database, command.input);
     case "cron.recordRun":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          const result = recordCronRunInDatabase(db, command.input);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return result;
-        },
+        ({ db }) => recordCronRunInDatabase(db, command.input),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: command.type },
       );
-    case "cron.reserveRuns":
-    case "cron.activateRun":
-    case "cron.releaseReservations":
-    case "cron.finishReceipt":
     case "cron.finalizeRuns":
+      if (!finalization) {
+        throw new Error("Cron finalization worker is not prepared");
+      }
+      return finalization.finalizeCronRunsInWorker(database, command.input);
+    case "cron.markDeliveryStarted":
+    case "cron.bindReceiptExecution":
     case "cron.removeStaleFamily":
-      if (!admission) {
-        throw new Error("Cron admission worker is not prepared");
+      if (!receipts) {
+        throw new Error("Cron receipts worker is not prepared");
       }
       switch (command.type) {
-        case "cron.reserveRuns":
-          return admission.reserveCronRunsInWorker(database, command.input);
-        case "cron.activateRun":
-          return admission.activateCronRunInWorker(database, command.input);
-        case "cron.releaseReservations":
-          return admission.releaseCronReservationsInWorker(database, command.input);
-        case "cron.finishReceipt":
-          return admission.finishCronReceiptInWorker(database, command.input);
-        case "cron.finalizeRuns":
-          return admission.finalizeCronRunsInWorker(database, command.input);
+        case "cron.bindReceiptExecution":
+          return receipts.bindCronRunReceiptExecutionInWorker(database, command.input);
+        case "cron.markDeliveryStarted":
+          return receipts.markCronDeliveryStartedInWorker(database, command.input);
         case "cron.removeStaleFamily":
-          return admission.removeStaleCronFamilyInWorker(database, command.input);
+          return receipts.removeStaleCronFamilyInWorker(database, command.input);
       }
     case "cron.loadMutable":
       return loadMutableCronStoreInWorker(database, command.input.storeKey);
-    case "cron.repairRun":
+    case "cron.recoverRuns":
       if (!recovery) {
         throw new Error("Cron recovery worker is not prepared");
       }
-      return recovery.repairCronRunInWorker(database, command.input);
+      return recovery.recoverCronRunsInWorker(database, command.input);
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
+    case "cron.recordFailureRepairSettlement":
       if (!maintenance) {
         throw new Error("Cron maintenance worker is not prepared");
       }
       if (command.type === "cron.maintainHistory") {
         return maintenance.maintainCronRunHistoryInWorker(database, command.input);
       }
+      if (command.type === "cron.recordFailureRepairSettlement") {
+        return maintenance.recordCronFailureRepairSettlementInWorker(database, command.input);
+      }
       return command.type === "cron.scheduleUnowned"
         ? maintenance.scheduleUnownedCronJobsInWorker(database, command.input)
         : maintenance.recordCronFailureAlertOutcomeInWorker(database, command.input);
     case "cron.initializeRunReceipts":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          ensureCronRunReceiptSchema(db);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        },
+        ({ db }) => ensureCronRunReceiptSchema(db),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: "cron.run-receipt.initialize" },
       );
     case "cron.save":
     case "cron.saveChanges":
       return executeCronStoreSaveCommand(command, database);
-    case "cron.bindReceiptExecution":
-      return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          const result = bindCronRunReceiptExecutionInDatabase(
-            db,
-            command.input.handle,
-            command.input.binding,
-            prepareCronRunReceiptWriteSchema(db),
-          );
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return result;
-        },
-        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-        { operationLabel: "cron.run-receipt.execution-binding" },
-      );
     default:
       throw new Error("Unknown Cron shared-state worker command");
   }

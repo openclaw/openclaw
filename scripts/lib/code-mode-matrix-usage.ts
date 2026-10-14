@@ -418,54 +418,19 @@ export function selectMatrixLedgerRows(params: MatrixLedgerSelection) {
   };
 }
 
-type MatrixUsageTotals = {
-  input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
-  knownTotalTokens: number;
-  knownCostUsd: number;
-  assistantTurns: number;
-};
+type MatrixUsageTotals = ReturnType<typeof emptyTotals>;
 
-export type MatrixUsageAccounting = MatrixUsageTotals & {
-  coverage: "observed-transcripts-reconciled-with-runtime";
-  runtimeReconciliation: RuntimeReconciliation[];
-  complete: boolean;
-  costComplete: boolean;
-  reasoningComplete: boolean;
-  totalTokens: number | null;
-  costUsd: number | null;
-  reasoningTokens: number | null;
-  toolFailures: number;
-  modelErrors: number;
-  costProvenance: string[];
-  parents: MatrixUsageTotals;
-  descendants: MatrixUsageTotals;
-  unattributed: MatrixUsageTotals;
-  sessionKeys: string[];
-  issues: string[];
-  costIssues: string[];
-  childRuns: { accepted: number; terminal: number; peakConcurrent: number | null };
-};
-
-type RuntimeReconciliation = {
-  source: "root-response" | "child-session";
-  sessionKey: string;
-  runId?: string;
-  reported: ReportedUsage | null;
-  transcript: MatrixUsageTotals;
-  tokenGap: number;
-  costGapUsd: number;
-  matched: boolean;
-  costMatched: boolean | null;
-};
+export type MatrixUsageAccounting = ReturnType<typeof collectMatrixUsage>;
 
 function reconcileRuntimeUsage(
-  identity: Pick<RuntimeReconciliation, "source" | "sessionKey" | "runId">,
+  identity: {
+    source: "root-response" | "child-session";
+    sessionKey: string;
+    runId?: string;
+  },
   reported: ReportedUsage | undefined,
   transcript: MatrixUsageTotals,
-): RuntimeReconciliation {
+) {
   const completeBuckets =
     reported !== undefined && TOKEN_BUCKETS.every((key) => count(reported[key]) !== undefined);
   const bucketTotal = TOKEN_BUCKETS.reduce((sum, key) => sum + (count(reported?.[key]) ?? 0), 0);
@@ -489,7 +454,7 @@ function reconcileRuntimeUsage(
   };
 }
 
-function emptyTotals(): MatrixUsageTotals {
+function emptyTotals() {
   return {
     input: 0,
     cacheRead: 0,
@@ -509,7 +474,7 @@ export function collectMatrixUsage(
     rootUsage: unknown;
     runtimeLog?: string;
   },
-): MatrixUsageAccounting {
+) {
   const selection = selectMatrixLedgerRows(params);
   const issues = [...selection.issues];
   const costIssues: string[] = [];
@@ -770,7 +735,7 @@ export function collectMatrixUsage(
   }
   return {
     ...total,
-    coverage: "observed-transcripts-reconciled-with-runtime",
+    coverage: "observed-transcripts-reconciled-with-runtime" as const,
     runtimeReconciliation,
     complete,
     costComplete,

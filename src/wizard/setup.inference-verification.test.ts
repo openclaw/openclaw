@@ -91,7 +91,7 @@ describe("offerLiveModelVerification", () => {
       browser: { enabled: false },
       agents: {
         ownership: "explicit",
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: "openai/test-model@openai:working" },
       },
       auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
@@ -142,7 +142,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: stateDir,
       stateDir,
       agentDir,
       writeConfig,
@@ -230,7 +229,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: root,
       agentDir,
       stateDir: root,
       writeConfig,
@@ -269,7 +267,6 @@ describe("offerLiveModelVerification", () => {
         opts: { nonInteractive: true },
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig: async (config) => config,
         required: true,
       }),
@@ -282,7 +279,7 @@ describe("offerLiveModelVerification", () => {
 
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: { apiKey: "test-key", baseUrl: "https://api.openai.com/v1", models: [] },
@@ -307,11 +304,10 @@ describe("offerLiveModelVerification", () => {
 
     await expect(
       verifyWithMemoryConfig({
-        config: { agents: { entries: { main: { default: true } } } },
+        config: { agents: { entries: { main: {} } } },
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).resolves.toEqual({
@@ -353,7 +349,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).rejects.toThrow("repair cancelled");
@@ -385,7 +380,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).toMatchObject({ attempted: false, verified: false, persisted: false });

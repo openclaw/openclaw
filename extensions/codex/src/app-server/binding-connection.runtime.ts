@@ -16,7 +16,8 @@ export async function resolveCodexBindingAppServerConnection(
   params: CodexBindingAppServerConnectionParams,
   discoverHomes: CodexCatalogHomeDiscovery | null,
 ): Promise<CodexBindingAppServerConnection> {
-  const { binding, authProfileId, assertCurrent, ...runtimeParams } = params;
+  const { binding, authProfileId, assertCurrent, assertCurrentAsync, ...runtimeParams } = params;
+  await assertCurrentAsync?.();
   assertCurrent?.();
   const usesSupervisionConnection = binding?.connectionScope === "supervision";
   if (
@@ -37,10 +38,9 @@ export async function resolveCodexBindingAppServerConnection(
     const persistedFingerprint =
       binding.pendingSupervisionBranch?.connectionFingerprint ??
       binding.appServerRuntimeFingerprint;
-    let currentFingerprint = buildCodexAppServerConnectionFingerprint(
-      appServer,
-      runtimeParams.agentDir,
-    );
+    const fingerprint = () =>
+      buildCodexAppServerConnectionFingerprint(appServer, runtimeParams.agentDir);
+    let currentFingerprint = fingerprint();
     if (
       persistedFingerprint &&
       currentFingerprint !== persistedFingerprint &&
@@ -73,10 +73,7 @@ export async function resolveCodexBindingAppServerConnection(
             },
           },
         };
-        currentFingerprint = buildCodexAppServerConnectionFingerprint(
-          appServer,
-          runtimeParams.agentDir,
-        );
+        currentFingerprint = fingerprint();
       }
     }
     if (!persistedFingerprint || persistedFingerprint !== currentFingerprint) {

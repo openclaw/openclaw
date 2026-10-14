@@ -1,4 +1,6 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -16,6 +18,11 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
+
+const require = createRequire(import.meta.url);
+const PLUGIN_VERSION = readPluginPackageVersion({ require });
+// Identify the plugin rather than impersonating a browser; challenges can still occur.
+const DDG_USER_AGENT = `openclaw-duckduckgo/${PLUGIN_VERSION} (+https://docs.openclaw.ai)`;
 
 const DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
 const DEFAULT_TIMEOUT_SECONDS = 20;
@@ -165,8 +172,7 @@ export async function runDuckDuckGoSearch(params: {
       init: {
         method: "GET",
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "User-Agent": DDG_USER_AGENT,
         },
       },
     },

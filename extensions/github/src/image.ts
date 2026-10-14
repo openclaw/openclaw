@@ -29,12 +29,8 @@ export function parseGitHubImageParams(params: unknown): string | undefined {
   if (!isRecord(params) || typeof params.url !== "string" || params.url.length > 8192) {
     return undefined;
   }
-  try {
-    const url = new URL(params.url);
-    return isImageUrl(url, true) ? url.href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(params.url);
+  return url && isImageUrl(url, true) ? url.href : undefined;
 }
 
 export async function loadGitHubImage(url: string): Promise<{ url: string; dataUrl: string }> {

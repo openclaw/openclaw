@@ -1,5 +1,4 @@
-export const settledParagraph =
-  "Another paragraph is visible before the next streaming update.\n\n";
+const settledParagraph = "Another paragraph is visible before the next streaming update.\n\n";
 
 export const blockDirectiveCases = [
   {

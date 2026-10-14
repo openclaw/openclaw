@@ -72,11 +72,8 @@ export function createFileWriteTool(): AnyAgentTool {
       const overwrite = asBoolean(raw.overwrite) ?? false;
       const createParents = asBoolean(raw.createParents) ?? false;
 
-      // Compute the sha256 of the bytes we're sending so the node can do
-      // an end-to-end integrity check after writing. This is always
-      // sender-side computed; ignore any caller-supplied expectedSha256
-      // to avoid the model passing a wrong hash and triggering an
-      // unintended unlink.
+      // Compute the integrity hash from the sent bytes rather than trusting a
+      // caller-supplied expectedSha256 that could reject an otherwise valid write.
       const sourceBytes = await readSourceBytes({ contentBase64, sourceMediaId });
       const buffer = sourceBytes.buffer;
       const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");

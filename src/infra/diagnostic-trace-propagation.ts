@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
@@ -26,39 +27,11 @@ const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
   "openclaw.diagnosticTracePropagation.state.v1",
 );
 
-function createDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
-  return {
-    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
-    bridges: new Set(),
-  };
-}
-
-function isDiagnosticTracePropagationState(
-  value: unknown,
-): value is DiagnosticTracePropagationState {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<DiagnosticTracePropagationState>;
-  return (
-    candidate.marker === DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY && candidate.bridges instanceof Set
-  );
-}
-
 function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY];
-  if (isDiagnosticTracePropagationState(existing)) {
-    return existing;
-  }
-  const state = createDiagnosticTracePropagationState();
-  Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
-  return state;
+  return resolveGlobalSingleton(DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, () => ({
+    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
+    bridges: new Set<RegisteredDiagnosticTracePropagationBridge>(),
+  }));
 }
 
 function activeDiagnosticTracePropagationBridge():

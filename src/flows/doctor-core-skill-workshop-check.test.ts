@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck } from "./health-checks.js";
@@ -17,12 +18,45 @@ function getSkillWorkshopCheck(): HealthCheck {
 }
 
 describe("core/doctor/skill-workshop-tool-policy", () => {
+  it.each([true, false])("respects a reader's Workshop opt-out (deny=%s)", async (denied) => {
+    const result = await runDoctorLintChecks(
+      {
+        mode: "lint",
+        runtime,
+        cfg: {
+          skills: { workshop: { autonomous: { mode: "auto" } } },
+          agents: {
+            entries: {
+              reader: {
+                tools: { profile: "minimal", ...(denied ? { deny: ["group:agents"] } : {}) },
+              },
+            },
+          },
+        },
+      },
+      { checks: [getSkillWorkshopCheck()] },
+    );
+
+    expect(result.findings).toEqual(
+      denied
+        ? []
+        : [
+            expect.objectContaining({
+              severity: "warning",
+              target: "reader",
+              path: "agents.entries.reader.tools.profile",
+              fixHint: 'Add agents.entries.reader.tools.alsoAllow: ["skill_workshop"].',
+            }),
+          ],
+    );
+  });
+
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
     const findings = await getSkillWorkshopCheck().detect({
       mode: "doctor",
       runtime,
       cfg: {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
         tools: { profile: "messaging" },
       },
     });
@@ -39,7 +73,7 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
 
   it("checks every explicit-roster agent without turning selection into a health error", async () => {
     const cfg: OpenClawConfig = {
-      skills: { workshop: { autonomous: { mode: "propose" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
@@ -78,14 +112,14 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
     },
     {
       label: "legacy-default roster",
-      cfg: {
+      cfg: createCanonicalAgentConfigFixture({
         agents: {
           list: [
             { id: "owner", default: true, tools: { profile: "messaging" } },
             { id: "helper", tools: { profile: "coding" } },
           ],
         },
-      } satisfies OpenClawConfig,
+      }).config,
       target: "owner",
     },
   ])("preserves normal diagnostics for a $label", async ({ cfg, target }) => {
@@ -94,7 +128,7 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       runtime,
       cfg: {
         ...cfg,
-        skills: { workshop: { autonomous: { mode: "propose" } } },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
       },
     });
 

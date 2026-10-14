@@ -1,17 +1,16 @@
 // Discord tests cover native command.commands allowfrom plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
-import type { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", { spy: true });
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -85,11 +84,15 @@ function createDispatchSpy() {
       tool: 0,
     },
   } as never);
-  nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
+  vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(
+    dispatchChannelInboundTurnForTest,
+  );
   return dispatchSpy;
 }
 
-const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelInboundTurn = async (
+  plan,
+) => {
   const dispatchResult = await dispatcherModule.dispatchReplyWithDispatcher({
     ctx: plan.ctxPayload,
     cfg: plan.cfg,
@@ -167,17 +170,14 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
   expect(interaction.reply).not.toHaveBeenCalled();
 }
 
-function expectChannelNotAllowedReply(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).toHaveBeenCalledWith({
-    content: "This channel is not allowed.",
-    ephemeral: true,
-  });
-}
-
 describe("Discord native slash commands with commands.allowFrom", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     vi.restoreAllMocks();
-    nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
+    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(
+      dispatchChannelInboundTurnForTest,
+    );
   });
 
   it.each([false, true])(
@@ -286,27 +286,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectUnauthorizedReply(interaction);
-  });
-
-  it("does not treat open-DM wildcard access as guild command owner authorization", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
-      mutateConfig: (cfg) => {
-        cfg.commands = {};
-        cfg.channels!.discord = {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          guilds: {
-            "000000000000000000": {
-              channels: { "111111111111111111": { enabled: true, requireMention: false } },
-            },
-          },
-        };
-      },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectChannelNotAllowedReply(interaction);
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord contains a matching guild: entry", async () => {

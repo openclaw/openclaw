@@ -13,7 +13,6 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   emitSessionsChanged,
@@ -27,8 +26,9 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type TreeEventPayload = {
@@ -42,7 +42,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["sessions.list", "sessions.subscribe"])(
   "%s restores ordinary ancestor delivery across reads and recap-only events",
   async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const root = "agent:main:root";
       const child = "agent:main:child";
@@ -109,6 +109,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
       try {
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!)).toEqual(payloadFor(peers[0]!));
         publish();
         expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
         publish();
@@ -164,7 +165,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
       } finally {
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
       }
     });
@@ -172,7 +173,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
 );
 
 it("publishes fresh ancestor rows through private intermediates with list visibility and no duplicates", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const profiles = [
@@ -214,39 +215,16 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
+    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
+    await initializeSessionReadContext(context);
     const createPeer = (profile: (typeof profiles)[number], connId: string) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
-        },
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
+      const { client, send } = createSessionRowEventPeer(profile, connId, now);
       connection.clients.add(client);
       connection.sessionEventSubscribers.subscribe(client.connId);
       connection.sessionMessageSubscribers.subscribe(client.connId, child);
       return { client, send, ancestors: new Map<string, GatewaySessionRow>() };
     };
     const peers = profiles.map((profile, index) => createPeer(profile, `tree-events-${index}`));
-    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
-    await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     const payloadFor = (peer: (typeof peers)[number]): TreeEventPayload =>
@@ -432,7 +410,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       } finally {
         serialization.mockRestore();
       }
-      expect(normalizations).toBe(3);
+      // A new connection gets full rows without reencoding unchanged immutable presentations.
+      expect(normalizations).toBe(0);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);
@@ -555,7 +534,7 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       subagentRuns.delete("tree-child");
     }

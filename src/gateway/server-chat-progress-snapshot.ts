@@ -4,12 +4,20 @@ import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
+const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
+  ["start", ["args"]],
+  ["input_delta", ["diff"]],
+  ["update", ["partialResult"]],
+  ["review", ["review", "approvalReviewOutcome"]],
+  ["result", ["approvalReviewOutcome", "isError", "result"]],
+]);
 const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
 const isRawJSON =
   "isRawJSON" in JSON && typeof JSON.isRawJSON === "function" ? JSON.isRawJSON : undefined;
@@ -76,16 +84,6 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
   });
 }
 
-function freezeCapturedProgress(value: unknown): void {
-  if (value === null || typeof value !== "object") {
-    return;
-  }
-  for (const child of Object.values(value)) {
-    freezeCapturedProgress(child);
-  }
-  Object.freeze(value);
-}
-
 function captureProgressEvent(event: AgentEventPayload) {
   try {
     const json = stringifyProgressEvent(event);
@@ -96,7 +94,7 @@ function captureProgressEvent(event: AgentEventPayload) {
     // Own the wire representation; producers and replay readers cannot change
     // captured content or invalidate its size after this synchronous receipt.
     const captured: AgentEventPayload = JSON.parse(json);
-    freezeCapturedProgress(captured);
+    deepFreezeDiagnosticValue(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }
@@ -137,19 +135,27 @@ export function updateChatRunProgressSnapshot(
       "starting_model",
     ].includes(phase);
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isAssistant =
     event.stream === "assistant" &&
-    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
+    Boolean(
+      snapshot?.events.some(
+        (candidate) =>
+          candidate.stream === "run_status" ||
+          (candidate.stream === "lifecycle" && candidate.data.phase === "fallback_step"),
+      ),
+    );
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
       : typeof data.id === "string" && data.id.trim()
         ? data.id.trim()
         : "";
+  const toolFields = TOOL_PROGRESS_FIELDS.get(phase);
   const isTool =
     event.stream === "tool" &&
     Boolean(toolCallId) &&
-    ["start", "input_delta", "update", "review", "result"].includes(phase) &&
+    toolFields !== undefined &&
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   const isItem = event.stream === "item" && (Boolean(preambleItemId) || isPreamble);
@@ -180,7 +186,16 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isItem && !isUsage && !isRetryStatus && !isAssistant) {
+  if (
+    mode === "summary" &&
+    !isTool &&
+    !isItem &&
+    !isUsage &&
+    !isRetryStatus &&
+    !isFallbackStatus &&
+    !isAssistant &&
+    !isNotice
+  ) {
     return snapshot;
   }
   if (
@@ -189,6 +204,7 @@ export function updateChatRunProgressSnapshot(
     !isUsage &&
     !isStartupStatus &&
     !isRetryStatus &&
+    !isFallbackStatus &&
     !isAssistant &&
     !isStandaloneGuardian &&
     !isNotice &&
@@ -249,10 +265,21 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isItem) {
+  } else if (
+    isStartupStatus ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isAssistant ||
+    isTool ||
+    isItem
+  ) {
     // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
+      if (
+        candidate.stream === "run_status" ||
+        candidate.stream === "assistant" ||
+        (candidate.stream === "lifecycle" && candidate.data.phase === "fallback_step")
+      ) {
         return true;
       }
       if (isPreamble) {
@@ -291,32 +318,7 @@ export function updateChatRunProgressSnapshot(
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? mode === "summary"
-      ? {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-        }
-      : {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-          ...(phase === "start"
-            ? { args: data.args }
-            : phase === "update"
-              ? { partialResult: data.partialResult }
-              : phase === "input_delta"
-                ? { diff: data.diff }
-                : phase === "review"
-                  ? { review: data.review, approvalReviewOutcome: data.approvalReviewOutcome }
-                  : phase === "result"
-                    ? {
-                        approvalReviewOutcome: data.approvalReviewOutcome,
-                        isError: data.isError,
-                        result: data.result,
-                      }
-                    : {}),
-        }
+    ? { phase, name: typeof data.name === "string" ? data.name : undefined, toolCallId }
     : isAssistant
       ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
       : isPreamble
@@ -329,6 +331,11 @@ export function updateChatRunProgressSnapshot(
             progressText: data.progressText,
           }
         : { ...previousUsage?.data, ...data };
+  if (isTool && mode === "full") {
+    for (const field of toolFields) {
+      storedData[field] = data[field];
+    }
+  }
   for (const key of Object.keys(storedData)) {
     if (storedData[key] === undefined) {
       delete storedData[key];

@@ -17,16 +17,18 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { setUserPreferences } from "../state/user-preferences.js";
-import { syncGitHubIdentity } from "../state/user-profiles.js";
+import { setUserPreferences } from "../state/user-preferences.test-support.js";
+import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import * as publicationExecutor from "./github-publication-executor.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -62,7 +64,7 @@ describe("Gateway GitHub publication attribution", () => {
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "credit-in-title",
@@ -136,8 +138,8 @@ describe("Gateway GitHub publication attribution", () => {
             .mockImplementation((params) =>
               execute({
                 ...params,
-                recordEffect: (effect, observed) => {
-                  params.recordEffect?.(effect, observed);
+                recordEffect: async (effect, observed) => {
+                  await params.recordEffect?.(effect, observed);
                   if (effect === boundary && observed === undefined) {
                     optOut();
                   }
@@ -154,8 +156,8 @@ describe("Gateway GitHub publication attribution", () => {
                 ...params,
                 execution: {
                   ...params.execution,
-                  recordEffect: (effect, observed) => {
-                    params.execution.recordEffect(effect, observed);
+                  recordEffect: async (effect, observed) => {
+                    await params.execution.recordEffect(effect, observed);
                     if (effect === boundary && observed === undefined) {
                       optOut();
                     }
@@ -171,7 +173,7 @@ describe("Gateway GitHub publication attribution", () => {
         createGitHubPublicationCoordinator({
           placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
         });
-      const result = await coordinator.requestForSession({
+      const result = await coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: `opt-out-${surface}-${boundary}`,
@@ -246,7 +248,7 @@ describe("Gateway GitHub publication attribution", () => {
         sessionKey: SESSION_KEY,
         idempotencyKey: "unpushed-credit-recovery",
       };
-      const interrupted = await repository.coordinator.requestForSession(request);
+      const interrupted = await repository.coordinator.requestForSessionV2(request);
       expect(interrupted.status).toBe("requested");
       expect(readRepositoryGitHubPublication(interrupted.requestId)?.head_commit).toBeTruthy();
       expect(repository.runtime.head).toBeNull();
@@ -258,7 +260,7 @@ describe("Gateway GitHub publication attribution", () => {
         );
       }
       mocks.runCommand.mockClear().mockImplementation(transport);
-      const resumed = await repository.coordinator.requestForSession(request);
+      const resumed = await repository.coordinator.requestForSessionV2(request);
 
       expect(resumed).toMatchObject({
         status: "failed",
@@ -301,10 +303,17 @@ describe("Gateway GitHub publication attribution", () => {
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
       cfg: config,
+      requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey: childKey,
       incognito: false,
       requesterInternalKey: SESSION_KEY,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+        cfg: config,
+        key: SESSION_KEY,
+        agentId: "main",
+        projection: "full",
+      }),
       creationPolicy: { actor: { type: "agent", id: "main" } },
       completionOwnerSessionKey: SESSION_KEY,
       modelPatch: {},
@@ -336,7 +345,7 @@ describe("Gateway GitHub publication attribution", () => {
       createdAt: 1,
       lastActiveAt: 1,
     };
-    insertRegistryWorktree(process.env, worktree);
+    await insertRegistryWorktree(process.env, worktree);
     mocks.findWorktree.mockReturnValue(worktree);
     mocks.findWorktreeById.mockReturnValue(worktree);
     mocks.resolveRepository.mockResolvedValue({
@@ -354,16 +363,24 @@ describe("Gateway GitHub publication attribution", () => {
       { identity: { type: "profile", id: people[0]!.id }, promptedAt: 2, sessionAgentId: "main" },
     );
     setUserPreferences(people[2]!.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
-    const { loadGatewaySessionEntryReadOnly } =
-      await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-    mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
+    mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+      loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key,
+        ...options,
+        readOnly: true,
+      }),
+    );
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: childKey,
       agentId: "main",
       idempotencyKey: "ordered-attribution",
@@ -394,7 +411,7 @@ describe("Gateway GitHub publication attribution", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "local-session-url",

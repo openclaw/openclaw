@@ -721,6 +721,7 @@ ${overflowTable}`,
         await viewport.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
       ).toBe(true);
       expect(await shell.getAttribute("class")).not.toContain("can-scroll-right");
+      const originalTable = await shell.elementHandle();
 
       const retained = await page
         .locator("openclaw-chat-pane")
@@ -748,6 +749,9 @@ ${overflowTable}`,
         await viewport.evaluate((element) => element.scrollWidth - element.clientWidth),
       ).toBeGreaterThan(1);
       await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
+      expect(await shell.evaluate((element, original) => element === original, originalTable)).toBe(
+        true,
+      );
       if (captureProof) {
         await page.screenshot({ path: path.join(artifactDir, "retained-viewport-overflow.png") });
       }
@@ -832,6 +836,8 @@ ${overflowTable}`,
             root: "/workspace",
             sessionKey: sourceKey,
             file: {
+              previewKind: "text",
+              contentEncoding: "utf8",
               content: "// Workspace file\nexport const ready = true;\n",
               kind: "read",
               missing: false,

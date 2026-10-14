@@ -56,6 +56,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   return {
     ...actual,
     buildSessionEntry: buildSessionEntryMock,
+    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+      Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
@@ -77,6 +79,7 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
@@ -104,9 +107,6 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Sync yield harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Sync yield harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -141,13 +141,17 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
   }
 
-  async syncTargetArchiveFiles(files: string[]): Promise<void> {
+  async reindexArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
     await this.syncArchiveFiles({
-      needsFullReindex: false,
-      targetArchiveFiles: files,
+      needsFullReindex: true,
     });
   }
 
@@ -188,10 +192,7 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }
@@ -200,17 +201,6 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
 describe("session sync responsiveness", () => {
   beforeEach(() => {
     setSyncYieldStateDir();
-    buildSessionEntryMock.mockImplementation(async (absPath: string) => {
-      const name = path.basename(absPath);
-      return {
-        path: `sessions/${name}`,
-        absPath,
-        mtimeMs: 1,
-        size: 1,
-        hash: `hash-${name}`,
-        content: `user message for ${name}`,
-      };
-    });
   });
 
   afterEach(() => {
@@ -222,7 +212,7 @@ describe("session sync responsiveness", () => {
     { concurrency: 1, fileCount: 4 },
     { concurrency: 4, fileCount: 40 },
   ])(
-    "serves queued work during slow session indexing with $concurrency workers",
+    "serves queued work before publishing a prepared session batch with $concurrency workers",
     async ({ concurrency, fileCount }) => {
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       const files = Array.from({ length: fileCount }, (_value, index) =>
@@ -235,28 +225,39 @@ describe("session sync responsiveness", () => {
           resolve();
         });
       });
-      const observedBeforeNextWave: boolean[] = [];
+      const observedBeforePublication: boolean[] = [];
       const db = createDb();
       let elapsedMs = 0;
+      buildSessionEntryMock.mockImplementation(async (absPath: string) => {
+        // Model worker preparation time; microtask-only I/O keeps the owner's yield observable.
+        elapsedMs += 20;
+        const name = path.basename(absPath);
+        return {
+          path: `sessions/${name}`,
+          absPath,
+          mtimeMs: 1,
+          size: 1,
+          hash: `hash-${name}`,
+          content: `user message for ${name}`,
+        };
+      });
       const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const harness = new SessionSyncYieldHarness(
         db,
         (count) => {
-          // Model expensive synchronous indexing without sleeping or a timing-sensitive assertion.
-          elapsedMs += 20;
-          if (count === concurrency + 1) {
-            observedBeforeNextWave.push(immediateRan);
+          if (count === 1) {
+            observedBeforePublication.push(immediateRan);
           }
         },
         concurrency,
       );
 
       try {
-        await harness.syncTargetArchiveFiles(files);
+        await harness.reindexArchiveFiles(files);
         expect(harness.indexedPaths).toEqual(
           files.map((file) => `sessions/${path.basename(file)}`),
         );
-        expect(observedBeforeNextWave).toEqual([true]);
+        expect(observedBeforePublication).toEqual([true]);
         await immediate;
       } finally {
         clock.mockRestore();

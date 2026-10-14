@@ -1,8 +1,15 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function seedTrajectorySession(tempHome: string, sessionKey: string) {
   const stateDir = path.join(tempHome, "isolated-state");
@@ -18,6 +25,7 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
     import("../src/config/sessions/session-accessor.js"),
     import("../src/state/openclaw-agent-db.js"),
   ]);
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(
     { agentId: "main", env, sessionKey },
     { sessionId: "trajectory-process-session", updatedAt: 1 },
@@ -189,11 +197,9 @@ describe("cli json stdout contract", () => {
           expect(result.stdout).toContain(`.openclaw/trajectory-exports/${output}`);
           expect(result.stdout).toContain("trajectory-process-session");
         }
-        await expect(
-          fs.access(
-            path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
-          ),
-        ).resolves.toBeUndefined();
+        await fs.access(
+          path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
+        );
       },
       { prefix: "openclaw-trajectory-success-e2e-" },
     );

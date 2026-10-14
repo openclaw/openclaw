@@ -5,10 +5,12 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { expandSessionRowFacts } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import type { SessionPatch } from "./patch.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionDeleteOptions,
   SessionListOptions,
@@ -36,6 +38,9 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    rowMode: "dashboard",
+    source: "dashboard",
+    excludeDock: true,
     hasBoard: true,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
@@ -50,6 +55,8 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    source: "dashboard",
+    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -73,9 +80,12 @@ export function buildSessionRequestParams(
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
   const params: SessionsListParams = {
+    rowMode: options.rowMode ?? "compact",
+    source: options.source ?? "chat-pane",
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
+    excludeDock: options.excludeDock ?? true,
   };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
@@ -137,28 +147,107 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
 
 export function normalizeManagedSessionListQuery(
   options: SessionListOptions,
-): Readonly<SessionsListParams & { limit: number }> {
+): Readonly<SessionsListParams & { limit: number; pageSize?: number }> {
   const { offset: _offset, append: _append, ...queryOptions } = options;
   const limit =
     typeof options.limit === "number" && options.limit > 0
       ? Math.floor(options.limit)
       : DEFAULT_SESSION_LIST_QUERY.limit;
-  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
+  return Object.freeze({
+    ...buildSessionListParams({ ...queryOptions, limit }),
+    limit,
+    ...(options.pageSize ? { pageSize: options.pageSize } : {}),
+  });
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+  return JSON.stringify(query);
 }
 
 export async function requestSessionList(
   client: SessionRequestClient,
-  options: SessionListOptions = {},
+  options: SessionListOptions,
+  isCurrent: () => boolean,
 ): Promise<SessionsListResult | null> {
-  return requestSessionListParams(client, buildSessionListParams(options));
+  return requestSessionListParams(client, buildSessionListParams(options), isCurrent);
 }
+
+// Keep raw wire rows separate from locally reconciled/optimistic presentation.
+// Gateway publication identities retire them; eviction or a new client simply reads full rows.
+const sidebarWireRows = new WeakMap<
+  SessionRequestClient,
+  Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
+>();
 
 export async function requestSessionListParams(
   client: SessionRequestClient,
-  params: Readonly<SessionsListParams>,
+  query: Readonly<SessionsListParams & { pageSize?: number }>,
+  isCurrent: () => boolean,
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
-  return result ?? null;
+  const { pageSize, ...params } = query;
+  const read = async (request: SessionsListParams) => {
+    const { source: _source, ...membership } = request;
+    const key = JSON.stringify(membership);
+    const cache = sidebarWireRows.get(client);
+    const previous = request.rowMode === "sidebar" ? cache?.get(key) : undefined;
+    const result = await client.request<SessionsListResult | undefined>("sessions.list", {
+      ...request,
+      ...(previous ? { ifRowsRevision: previous.revision } : {}),
+    });
+    if (!result || !isCurrent()) {
+      return null;
+    }
+    const { sharedFacts, rowsUnchanged, ...list } = result;
+    if (rowsUnchanged && (!previous || result.rowsRevision !== previous.revision)) {
+      throw new Error("The session query returned an unknown row revision. Try again.");
+    }
+    const sessions = rowsUnchanged
+      ? previous!.sessions
+      : sharedFacts
+        ? expandSessionRowFacts(list.sessions, sharedFacts)
+        : list.sessions;
+    if (request.rowMode === "sidebar" && result.rowsRevision) {
+      const retained = cache ?? new Map();
+      retained.delete(key);
+      retained.set(key, { revision: result.rowsRevision, sessions });
+      if (retained.size > 16) {
+        retained.delete(retained.keys().next().value!);
+      }
+      sidebarWireRows.set(client, retained);
+    }
+    return { ...list, sessions };
+  };
+  if (!pageSize || !params.limit || params.limit <= pageSize) {
+    return read(params);
+  }
+  // The Gateway enriches only a bounded prefix per response. Page the requested
+  // window here so initial loads and retained-window refreshes keep the same fields.
+  let result: SessionsListResult | null = null;
+  let offset = params.offset ?? 0;
+  for (let remaining = params.limit; remaining > 0; remaining -= pageSize) {
+    if (!isCurrent()) {
+      return null;
+    }
+    const page = await read({
+      ...params,
+      limit: Math.min(remaining, pageSize),
+      ...(offset > 0 ? { offset } : {}),
+    });
+    if (!isCurrent() || !page) {
+      return null;
+    }
+    result = result ? appendSessionResults(result, page) : page;
+    if (!page.hasMore || page.sessions.length === 0) {
+      break;
+    }
+    const nextOffset = page.nextOffset ?? offset + page.sessions.length;
+    if (nextOffset <= offset) {
+      throw new Error("Session list pagination did not advance.");
+    }
+    offset = nextOffset;
+  }
+  return result;
 }
 
 export function requestSessionPatch(

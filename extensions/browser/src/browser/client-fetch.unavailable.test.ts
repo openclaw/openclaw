@@ -18,8 +18,9 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: mocks.loadConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => mocks.sourceConfig,
 }));
 vi.mock("../control-service.js", async (importOriginal) => ({
@@ -66,11 +67,6 @@ describe("browser control availability diagnostics", () => {
 
   it.each([
     {
-      name: "allowlist exclusion",
-      config: { plugins: { allow: ["telegram"] } },
-      contains: ['"browser" is not in plugins.allow', "Add", "openclaw plugins enable browser"],
-    },
-    {
       name: "global plugin disablement",
       config: { plugins: { enabled: false } },
       contains: [
@@ -114,9 +110,10 @@ describe("browser control availability diagnostics", () => {
     mocks.sourceConfig = { plugins: { allow: ["telegram"] } };
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
-      contains: ['"browser" is not in plugins.allow', "openclaw plugins enable browser"],
-      omits: ["Restart"],
+      contains: ['"browser" is not in plugins.allow', "Add", "openclaw plugins enable browser"],
+      omits: ["Restart", "not installed", "not yet loaded"],
     });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it.each([

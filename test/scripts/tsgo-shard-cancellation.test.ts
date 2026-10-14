@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
@@ -10,12 +11,24 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 import { overrideNativeFixtureExecutable } from "./native-boundary-fixture.js";
 
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
+
+// Failed owner cleanup leaves only a foreign PID, not a child handle.
+async function waitForRescuedCompiler(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  }
+}
 
 it.runIf(process.platform !== "win32")(
   "releases shard artifacts after canceling a compiler that requires forced termination",
@@ -84,12 +97,15 @@ Date.now = () => start + (now() - start) * 10;
         }),
       );
       try {
-        const compilerReady = await Promise.race([
-          ready.promise,
-          completion.then((code) => {
-            throw new Error(`Shards exited before compiler readiness: ${code}\n${output}`);
-          }),
-        ]);
+        const compilerReady = await withinTest(
+          Promise.race([
+            ready.promise,
+            completion.then((code) => {
+              throw new Error(`Shards exited before compiler readiness: ${code}\n${output}`);
+            }),
+          ]),
+          signal,
+        );
         compilerPid = compilerReady.pid;
         if (!child) {
           throw new Error("Missing shard process");
@@ -113,7 +129,7 @@ Date.now = () => start + (now() - start) * 10;
               if (isProcessAlive(compilerPid)) {
                 process.kill(compilerPid, "SIGKILL");
               }
-              await waitForDead(compilerPid, 2_000);
+              await waitForRescuedCompiler(compilerPid, signal);
             }
           }
         });

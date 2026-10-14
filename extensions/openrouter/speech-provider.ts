@@ -15,12 +15,8 @@ const OPENROUTER_TTS_MODELS = [
 ] as const;
 const OPENROUTER_TTS_RESPONSE_FORMATS = ["mp3", "pcm"] as const;
 
-type OpenRouterTtsExtraConfig = {
-  provider?: Record<string, unknown>;
-};
-
 export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
-  return createOpenAiCompatibleSpeechProvider<OpenRouterTtsExtraConfig>({
+  return createOpenAiCompatibleSpeechProvider({
     id: "openrouter",
     label: "OpenRouter",
     autoSelectOrder: 35,

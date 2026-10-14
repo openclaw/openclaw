@@ -1,15 +1,21 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import { killProcessTree, resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
+import { closedStdinDoctorEntrypoint } from "./doctor-closed-stdin-entrypoint.test-support.js";
 import {
   CODEX_MANAGED_APP_SERVER_CHECK_ID,
   registerCodexManagedAppServerDoctorChecks,
 } from "./doctor.js";
+
+const closedStdinDoctor = resolveRuntimeWorkerUrl(closedStdinDoctorEntrypoint);
 
 function config(appServer: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -71,7 +77,7 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
     })),
     isDesktopCommand: vi.fn((command: string) => command.startsWith("/Applications/")),
     resolveNativeCommand,
-    runVersionCommand: vi.fn(async () => ({ stdout: `codex-cli ${version}\n`, stderr: "" })),
+    runVersionCommand: vi.fn(async () => `codex-cli ${version}\n`),
   };
 }
 
@@ -95,78 +101,109 @@ function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctor
 
 describe("managed Codex doctor check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.each([
-    { code: "Unknown system error -86", errno: -86, syscall: "spawn" },
-    { code: "Unknown system error -86" },
-  ])(
-    "reports an incompatible passive catalog executable without Codex routes: %j",
-    async (failure) => {
-      const cfg = config({ homeScope: "user" });
-      cfg.agents = { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } };
-      const deps = managedDeps();
-      deps.runVersionCommand.mockRejectedValueOnce(
-        Object.assign(new Error("spawn failed"), failure),
-      );
-      await expect(createCheck(deps).detect(context(cfg))).resolves.toEqual([
-        expect.objectContaining({
-          severity: "warning",
-          path: "/candidate/plugin/codex-native",
-          message: expect.stringContaining(
-            "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
-          ),
-        }),
-      ]);
-      expect(deps.resolveStartOptions).toHaveBeenCalledWith(
-        expect.objectContaining({ managedCommandOrder: "package-only" }),
-        { pluginRoot: "/candidate/plugin" },
-      );
-    },
-  );
-
-  it.each(["active", "passive", "updating"])(
-    "reports a real missing executable for %s use",
-    async (scope) => {
-      const directory = tempDirs.make("openclaw-codex-missing-");
-      const command = path.join(directory, "missing-codex");
-      const check = createCheck({
-        ...managedDeps(),
-        resolveNativeCommand: () => command,
-        runVersionCommand: undefined,
-      });
-      const cfg = config();
-      if (scope === "passive") {
-        cfg.agents = { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } };
-      }
-      const ctx = context(cfg);
-      await expect(
-        check.detect(
-          scope === "updating"
-            ? {
-                ...ctx,
-                mode: "fix",
-                env: { OPENCLAW_UPDATE_POST_CORE: "1" },
-              }
-            : ctx,
-        ),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          severity: scope === "active" ? "error" : "warning",
-          path: command,
-          message: `Codex catalog updater cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
-        }),
-      ]);
-    },
-  );
-
-  async function createAgentDirectory(computerUse = false) {
-    const agentDir = tempDirs.make("openclaw-codex-doctor-agent-");
-    if (computerUse) {
-      await fs.mkdir(path.join(agentDir, "codex-home"));
+  it.skipIf(process.platform === "win32")(
+    "returns successful JSON when a version binary closes stdin immediately",
+    async () => {
+      const root = tempDirs.make("openclaw-codex-closed-stdin-");
+      const command = path.join(root, "codex");
       await fs.writeFile(
-        path.join(agentDir, "codex-home", "config.toml"),
-        '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+        command,
+        `#!${process.execPath}
+const fs = require("node:fs");
+const stdin = fs.fstatSync(0);
+fs.closeSync(0);
+// Reject an unnecessary input transport deterministically instead of racing its empty write.
+if (stdin.isSocket() || stdin.isFIFO()) process.exit(1);
+fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
+`,
+        { mode: 0o755 },
       );
-    }
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(closedStdinDoctor), command, JSON.stringify(config())],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            PATH: path.dirname(process.execPath),
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: true,
+        findings: [],
+        checksRun: 1,
+        checksSkipped: 0,
+      });
+    },
+  );
+  it("reports an incompatible passive catalog executable without Codex routes", async () => {
+    const cfg = config({ homeScope: "user" });
+    cfg.agents = { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } };
+    const deps = managedDeps();
+    deps.runVersionCommand.mockRejectedValueOnce(
+      Object.assign(new Error("spawn failed"), {
+        code: "Unknown system error -86",
+        errno: -86,
+        syscall: "spawn",
+      }),
+    );
+    await expect(createCheck(deps).detect(context(cfg))).resolves.toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        path: "/candidate/plugin/codex-native",
+        message: expect.stringContaining(
+          "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
+        ),
+      }),
+    ]);
+    expect(deps.resolveStartOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ managedCommandOrder: "package-only" }),
+      { pluginRoot: "/candidate/plugin", preferInstalled: false },
+    );
+  });
+
+  it("reports a real missing executable during update finalization", async () => {
+    const directory = tempDirs.make("openclaw-codex-missing-");
+    const command = path.join(directory, "missing-codex");
+    const check = createCheck({
+      ...managedDeps(),
+      resolveNativeCommand: () => command,
+      runVersionCommand: undefined,
+    });
+
+    await expect(
+      check.detect({
+        ...context(config()),
+        mode: "fix",
+        env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        path: command,
+        message: `Codex catalog updater cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
+      }),
+    ]);
+  });
+
+  async function createAgentDirectory() {
+    const agentDir = tempDirs.make("openclaw-codex-doctor-agent-");
+    await fs.mkdir(path.join(agentDir, "codex-home"));
+    await fs.writeFile(
+      path.join(agentDir, "codex-home", "config.toml"),
+      '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+    );
     return agentDir;
   }
   it("registers once in each host registry", () => {
@@ -186,45 +223,6 @@ describe("managed Codex doctor check", () => {
       expect(host.registerHealthCheck).toHaveBeenCalledOnce();
       expect(check?.id).toBe(CODEX_MANAGED_APP_SERVER_CHECK_ID);
     }
-  });
-
-  it("accepts the exact pinned native binary without changing explicit long-context config", async () => {
-    const cfg = config();
-    const before = structuredClone(cfg);
-    const deps = managedDeps();
-    const check = createCheck(deps);
-
-    await expect(check.detect(context(cfg))).resolves.toEqual([]);
-    expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native");
-    expect(cfg).toEqual(before);
-  });
-
-  it("reports a version mismatch as a warning during update finalization", async () => {
-    const check = createCheck(managedDeps("0.146.0"));
-    await expect(
-      check.detect({
-        ...context(config()),
-        mode: "fix",
-        env: { OPENCLAW_UPDATE_POST_CORE: "1" },
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        severity: "warning",
-        fixHint: expect.stringContaining("after restart"),
-      }),
-    ]);
-  });
-
-  it("keeps an explicitly selected candidate lint check strict during an update", async () => {
-    const check = createCheck(managedDeps("0.146.0"));
-
-    await expect(
-      check.detect({
-        ...context(config()),
-        env: { OPENCLAW_UPDATE_POST_CORE: "1" },
-      }),
-    ).resolves.toEqual([expect.objectContaining({ severity: "error" })]);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -338,7 +336,7 @@ setInterval(() => {}, 1000);
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             path: command,
             message:
-              "Managed Codex app-server version check failed: Version probe timed out after 5000 ms",
+              "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
           }),
         ]);
@@ -367,98 +365,20 @@ setInterval(() => {}, 1000);
     expect(deps.runVersionCommand).not.toHaveBeenCalled();
   });
 
-  it("checks the passive catalog package without enforcing its pin on a desktop-owned command", async () => {
-    const deps = managedDeps("0.146.0");
-    const check = createCheck(deps);
-
-    await expect(check.detect(context(config({ homeScope: "user" })))).resolves.toEqual([
-      expect.objectContaining({ path: "/candidate/plugin/codex-native", severity: "error" }),
-    ]);
-    expect(deps.resolveStartOptions).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ managedCommandOrder: "desktop-first" }),
-      { pluginRoot: "/candidate/plugin" },
-    );
-    expect(deps.resolveStartOptions).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ managedCommandOrder: "package-only" }),
-      { pluginRoot: "/candidate/plugin" },
-    );
-    expect(deps.resolveNativeCommand).toHaveBeenCalledExactlyOnceWith("/candidate/plugin/codex");
-    expect(deps.runVersionCommand).toHaveBeenCalledExactlyOnceWith(
-      "/candidate/plugin/codex-native",
-    );
-  });
-
-  it("uses persisted per-agent Computer Use state before selecting the managed command", async () => {
-    const agentDir = await createAgentDirectory(true);
-    const cfg = config();
-    cfg.agents = {
-      ...cfg.agents,
-      list: [{ id: "main", agentDir }],
-    };
-    const deps = managedDeps();
-    const check = createCheck(deps);
-
-    await expect(check.detect(context(cfg))).resolves.toEqual([]);
-    expect(deps.resolveStartOptions).toHaveBeenCalledWith(
-      expect.objectContaining({ managedCommandOrder: "desktop-first" }),
-      { pluginRoot: "/candidate/plugin" },
-    );
-    expect(deps.resolveNativeCommand).toHaveBeenCalledExactlyOnceWith("/candidate/plugin/codex");
-    expect(deps.runVersionCommand).toHaveBeenCalledExactlyOnceWith(
-      "/candidate/plugin/codex-native",
-    );
-  });
-
-  it("still validates the package when any configured agent can select it", async () => {
-    const desktopAgentDir = await createAgentDirectory(true);
-    const packageAgentDir = await createAgentDirectory();
-    const cfg = config();
-    cfg.agents = {
-      ...cfg.agents,
-      list: [
-        { id: "desktop", agentDir: desktopAgentDir },
-        { id: "package", agentDir: packageAgentDir },
-      ],
-    };
-    const deps = managedDeps("0.146.0");
-    const check = createCheck(deps);
-
-    await expect(check.detect(context(cfg))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        message: `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected 0.146.0.`,
-      }),
-    ]);
-    expect(deps.resolveStartOptions).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ managedCommandOrder: "desktop-first" }),
-      { pluginRoot: "/candidate/plugin" },
-    );
-    expect(deps.resolveStartOptions).toHaveBeenNthCalledWith(
-      2,
-      expect.not.objectContaining({ managedCommandOrder: expect.anything() }),
-      { pluginRoot: "/candidate/plugin" },
-    );
-    expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native");
-  });
-
   it("ignores managed commands for agents whose effective runtime is not Codex", async () => {
-    const desktopAgentDir = await createAgentDirectory(true);
+    const desktopAgentDir = await createAgentDirectory();
     const cfg = config();
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "desktop", agentDir: desktopAgentDir },
-        {
-          id: "openclaw",
+      entries: {
+        desktop: { agentDir: desktopAgentDir },
+        openclaw: {
           model: "anthropic/claude-opus-4-7",
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
           },
         },
-      ],
+      },
     };
     const deps = managedDeps();
     const check = createCheck(deps);

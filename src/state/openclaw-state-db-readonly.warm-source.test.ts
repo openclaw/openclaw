@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import * as sqliteBackup from "../infra/sqlite-backup.js";
 import {
   executeExistingOpenClawStateRead,
@@ -20,6 +21,12 @@ const expectedReply = {
   type: "tui.lastSession.read",
   sourceAdmitted: true,
   row: { value_json: valueJson, updated_at_ms: 1 },
+};
+const expectedSnapshotReply = {
+  ...expectedReply,
+  ...(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+    ? {}
+    : { nativeCleanupFailure: { error: undefined } }),
 };
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -66,7 +73,7 @@ it.each([false, true])(
     const { options, database } = createSource();
     const backup = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     await expect(readSource(options, independent ? true : undefined)).resolves.toEqual(
-      expectedReply,
+      independent ? expectedReply : expectedSnapshotReply,
     );
     expect(backup).toHaveBeenCalledTimes(independent ? 0 : 1);
     if (!independent) {
@@ -77,33 +84,25 @@ it.each([false, true])(
 );
 
 // Windows SQLite handles do not allow renaming the open native database.
-it.runIf(process.platform !== "win32").each(["absent", "replaced"] as const)(
-  "keeps the original native rows when its pathname is already %s",
-  async (pathnameState) => {
+it.runIf(process.platform !== "win32")(
+  "keeps the original native rows when its pathname has been replaced",
+  async () => {
     const { options, database } = createSource();
     // Keep this fixture's committed bytes in its main file before moving the pathname.
     database.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
     const originalPath = `${options.path}.original`;
     fs.renameSync(options.path, originalPath);
     const successor = "invalid successor; must never be opened or modified by this read";
-    if (pathnameState === "replaced") {
-      fs.writeFileSync(options.path, successor);
-    }
+    fs.writeFileSync(options.path, successor);
     const backup = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     try {
-      await expect(readSource(options, true)).resolves.toEqual(expectedReply);
+      await expect(readSource(options, true)).resolves.toEqual(expectedSnapshotReply);
       expect(backup).toHaveBeenCalledOnce();
       expect(backup.mock.calls[0]?.[0]).toBe(database.db);
       expect(database.db.isOpen).toBe(true);
-      if (pathnameState === "replaced") {
-        expect(fs.readFileSync(options.path, "utf8")).toBe(successor);
-      } else {
-        expect(fs.existsSync(options.path)).toBe(false);
-      }
+      expect(fs.readFileSync(options.path, "utf8")).toBe(successor);
     } finally {
-      if (pathnameState === "replaced") {
-        fs.rmSync(options.path);
-      }
+      fs.rmSync(options.path);
       fs.renameSync(originalPath, options.path);
     }
   },

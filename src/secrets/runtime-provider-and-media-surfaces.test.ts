@@ -4,14 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as mediaCapabilityRegistry from "../media-understanding/provider-capability-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   listActiveDegradedSecretOwners,
   setActiveCredentialDegradedOwner,
 } from "./runtime-degraded-state.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
@@ -28,6 +30,28 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
+
+it("requires Doctor before resolving a providerless config SecretRef", async () => {
+  await expect(
+    prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            example: {
+              baseUrl: "https://example.test/v1",
+              models: [],
+              apiKey: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+            },
+          },
+        },
+      }),
+      env: { SYNTHETIC_AUTH_KEY: "synthetic-credential" },
+      includeAuthStoreRefs: false,
+    }),
+  ).rejects.toThrow("openclaw doctor --fix");
+});
 
 function envTokenRef(id: string) {
   return { source: "env" as const, provider: "default" as const, id };
@@ -80,7 +104,7 @@ describe("secrets runtime provider and media surfaces", () => {
     };
     try {
       const config = asConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         secrets: {
           providers: {
             default: { source: "file", path: secretsPath, mode: "json" },
@@ -109,11 +133,8 @@ describe("secrets runtime provider and media surfaces", () => {
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       });
-      const {
-        activateSecretsRuntimeSnapshot,
-        getActiveSecretsRuntimeSnapshot,
-        refreshActiveProviderAuthRuntimeSnapshot,
-      } = await import("./runtime.js");
+      const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+        await import("./runtime.js");
       const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
@@ -168,7 +189,7 @@ describe("secrets runtime provider and media surfaces", () => {
 
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: {
@@ -185,11 +206,8 @@ describe("secrets runtime provider and media surfaces", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
+    const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+      await import("./runtime.js");
     const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
     const openaiProvider = initial.config.models?.providers?.openai;
@@ -222,7 +240,7 @@ describe("secrets runtime provider and media surfaces", () => {
 
   it("retries provider auth publication after a queued runtime config mutation", async () => {
     const initialConfig = asConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: { port: 19_040 },
     });
     const initial = await prepareSecretsRuntimeSnapshot({
@@ -230,11 +248,8 @@ describe("secrets runtime provider and media surfaces", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
+    const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+      await import("./runtime.js");
     const { registerProviderAuthRuntimeSnapshotActivationOwner } =
       await import("./runtime-state.js");
     const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -317,56 +332,6 @@ describe("secrets runtime provider and media surfaces", () => {
     }
   });
 
-  it("resolves shared media model request refs when capability blocks are omitted", async () => {
-    const registrySpy = vi
-      .spyOn(mediaCapabilityRegistry, "buildMediaUnderstandingCapabilityRegistry")
-      .mockImplementation(() => {
-        throw new Error("UNEXPECTED_MEDIA_CAPABILITY_DISCOVERY");
-      });
-    try {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          tools: {
-            media: {
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-mini-transcribe",
-                  capabilities: ["audio"],
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: {
-                        source: "env",
-                        provider: "default",
-                        id: "MEDIA_SHARED_AUDIO_TOKEN",
-                      },
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        }),
-        env: {
-          MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
-        },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
-
-      expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-        mode: "authorization-bearer",
-        token: "shared-audio-token",
-      });
-      expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-        "tools.media.models[0].request.auth.token",
-      );
-    } finally {
-      registrySpy.mockRestore();
-    }
-  });
-
   it("resolves shared media model request refs from inferred provider capabilities", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.mediaUnderstandingProviders.push({
@@ -414,48 +379,6 @@ describe("secrets runtime provider and media surfaces", () => {
       token: "inferred-audio-token",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models[0].request.auth.token",
-    );
-  });
-
-  it("treats shared media model request refs as inactive when inferred capabilities are disabled", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "deepgram",
-      pluginName: "Deepgram Plugin",
-      source: "test",
-      provider: {
-        id: "deepgram",
-        capabilities: ["audio"],
-      },
-    });
-    setActivePluginRegistry(pluginRegistry);
-
-    const inferredTokenRef = envTokenRef("MEDIA_INFERRED_DISABLED_AUDIO_TOKEN");
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "deepgram",
-                request: { auth: { mode: "authorization-bearer", token: inferredTokenRef } },
-              },
-            ],
-            audio: { enabled: false },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: inferredTokenRef,
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "tools.media.models[0].request.auth.token",
     );
   });
@@ -557,8 +480,8 @@ describe("secrets runtime provider and media surfaces", () => {
 
         agents: {
           defaults: {},
-          list: [
-            {
+          entries: {
+            main: {
               enabled: true,
               memory: {
                 search: {
@@ -566,7 +489,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 },
               },
             },
-          ],
+          },
         },
       }),
       env: {},
@@ -584,11 +507,102 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it("does not let a managed local embedding service depend on a remote api key ref", async () => {
+    const missingRef = envTokenRef("MISSING_LLAMA_CPP_API_KEY");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        memory: { search: { provider: "local" } },
+        models: {
+          providers: {
+            "llama-cpp": {
+              baseUrl: "http://127.0.0.1:35063/v1",
+              apiKey: missingRef,
+              localService: { command: "/fixture/llama-server" },
+              models: [],
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "llama-cpp",
+            providers: ["llama-cpp"],
+            contracts: { embeddingProviders: ["local"] },
+          }),
+        ],
+      },
+    });
+
+    expect(snapshot.config.models?.providers?.["llama-cpp"]?.apiKey).toEqual(missingRef);
+    expect(snapshot.degradedOwners).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ ownerId: "memory-provider:main" })]),
+    );
+    activateSecretsRuntimeSnapshot(snapshot);
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "llama-cpp",
+        cfg: snapshot.config,
+        store: { version: 1, profiles: {} },
+      }),
+    ).resolves.toMatchObject({ apiKey: "llama-cpp-local", mode: "api-key" });
+  });
+
+  it.each(["llmman", "lmstudio"])(
+    "keeps a managed %s provider unavailable when its authored key cannot resolve",
+    async (provider) => {
+      vi.stubEnv(`${provider.toUpperCase()}_API_KEY`, "synthetic-env-fallback");
+      const missingRef = envTokenRef("MISSING_LOCAL_PROVIDER_KEY");
+      const store = {
+        version: 1 as const,
+        profiles: {
+          [`${provider}:default`]: {
+            type: "api_key" as const,
+            provider,
+            key: "synthetic-profile-fallback",
+          },
+        },
+      };
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "http://127.0.0.1:35063/v1",
+                api: "openai-completions",
+                apiKey: missingRef,
+                localService: { command: `/fixture/${provider}` },
+                models: [],
+              },
+            },
+          },
+        }),
+        env: {
+          LLMMAN_API_KEY: "synthetic-env-fallback",
+          LMSTUDIO_API_KEY: "synthetic-env-fallback",
+        },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => store,
+        allowUnavailableSecretOwners: true,
+      });
+      expect(snapshot.config.models?.providers?.[provider]?.apiKey).toEqual(missingRef);
+      expect(snapshot.degradedOwners).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
+        ]),
+      );
+      activateSecretsRuntimeSnapshot(snapshot);
+      await expect(
+        resolveApiKeyForProviderCore({ provider, cfg: snapshot.config, store }),
+      ).rejects.toMatchObject({ name: "SecretSurfaceUnavailableError" });
+    },
+  );
+
   it.each([
-    ["bare shorthand", "$MEMORY_REMOTE_KEY", "resolved-memory-key"],
-    ["braced shorthand", "${MEMORY_REMOTE_KEY}", "resolved-memory-key"],
     ["missing bare shorthand", "$MISSING_MEMORY_KEY", envTokenRef("MISSING_MEMORY_KEY")],
-    ["retired marker", "secretref-env:MEMORY_REMOTE_KEY", "secretref-env:MEMORY_REMOTE_KEY"],
   ] as const)(
     "materializes memory %s through its canonical Gateway snapshot",
     async (_, apiKey, expected) => {
@@ -671,17 +685,16 @@ describe("secrets runtime provider and media surfaces", () => {
 
         agents: {
           defaults: {},
-          list: [
-            { id: "cold", default: true },
-            {
-              id: "healthy",
+          entries: {
+            cold: {},
+            healthy: {
               memory: {
                 search: {
                   remote: { apiKey: healthyRef, headers: { "X-Memory-Value": healthyRef } },
                 },
               },
             },
-          ],
+          },
         },
       }),
       env: { HEALTHY_TEST_VALUE: healthyValue },
@@ -690,8 +703,10 @@ describe("secrets runtime provider and media surfaces", () => {
       allowUnavailableSecretOwners: true,
     });
 
-    expect(snapshot.config.agents?.list?.[1]?.memory?.search?.remote?.apiKey).toBe(healthyValue);
-    expect(snapshot.config.agents?.list?.[1]?.memory?.search?.remote?.headers).toEqual({
+    expect(snapshot.config.agents?.entries?.healthy?.memory?.search?.remote?.apiKey).toBe(
+      healthyValue,
+    );
+    expect(snapshot.config.agents?.entries?.healthy?.memory?.search?.remote?.headers).toEqual({
       "X-Memory-Value": healthyValue,
     });
     expect(snapshot.degradedOwners).toMatchObject([

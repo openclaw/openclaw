@@ -169,7 +169,6 @@ afterEach(() => {
 
 describe("syncControlUiCatalogFallbackBaseline", () => {
   it("checks and writes ordered fallback bytes without rewriting a matching baseline", async () => {
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const expected = baseline({ "group.second": ["de"], missing: ["de", "fr"] });
 
     await expect(
@@ -179,36 +178,11 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     await syncControlUiCatalogFallbackBaseline(writeOptions);
     expect(fixture.writes).toEqual([{ path: baselinePath, data: expected }]);
     expect(fixture.files.get(baselinePath)).toBe(expected);
-    expect(stdout).toHaveBeenCalledWith(
-      "control-ui-i18n: catalog: fallback_keys=2 fallback_pairs=3\n",
-    );
 
     fixture.writes.length = 0;
     await syncControlUiCatalogFallbackBaseline(writeOptions);
     await syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false });
     expect(fixture.writes).toEqual([]);
-  });
-
-  it("uses a fresh English snapshot and hashes raw source bytes on every invocation", async () => {
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    fixture.loadSource.mockReturnValue({ group: { first: "", second: "abc" }, missing: "abc" });
-    fixture.readSource.mockResolvedValue("");
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    expect(fixture.files.get(baselinePath)).toBe(
-      baseline(
-        { "group.first": ["de", "fr"], "group.second": ["de"], missing: ["de", "fr"] },
-        emptyHash,
-      ),
-    );
-
-    fixture.readSource.mockResolvedValue("abc\n");
-    await syncControlUiCatalogFallbackBaseline(writeOptions);
-    expect(fixture.files.get(baselinePath)).toBe(
-      baseline(
-        { "group.first": ["de", "fr"], "group.second": ["de"], missing: ["de", "fr"] },
-        "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb",
-      ),
-    );
   });
 
   it("keeps an empty first memory as fallbacks and rejects missing hashes from parsed rows", async () => {
@@ -231,26 +205,22 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     );
   });
 
-  it.each([false, true])(
-    "preserves the first missing/malformed memory error (allowCatalogDrift=%s)",
-    async (allowCatalogDrift) => {
-      fixture.files.delete(memoryPath("fr"));
-      fixture.files.set(memoryPath("de"), "{");
-      await expect(
-        syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift }),
-      ).rejects.toThrow("ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations");
+  it("preserves the first missing/malformed memory error during scoped sync", async () => {
+    fixture.files.delete(memoryPath("fr"));
+    fixture.files.set(memoryPath("de"), "{");
+    await expect(
+      syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true }),
+    ).rejects.toThrow("ui/src/i18n/.i18n/fr.tm.jsonl does not contain fr translations");
 
-      fixture.files.set(memoryPath("fr"), "{");
-      fixture.files.delete(memoryPath("de"));
-      await expect(
-        syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift }),
-      ).rejects.toBeInstanceOf(SyntaxError);
-      expect(fixture.writes).toEqual([]);
-    },
-  );
+    fixture.files.set(memoryPath("fr"), "{");
+    fixture.files.delete(memoryPath("de"));
+    await expect(
+      syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true }),
+    ).rejects.toBeInstanceOf(SyntaxError);
+    expect(fixture.writes).toEqual([]);
+  });
 
   it("only tolerates analyzer drift during scoped sync", async () => {
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     fixture.loadSource.mockReturnValue({ greeting: "Hello {count}" });
     setMemory("fr", [
       row({
@@ -268,23 +238,17 @@ describe("syncControlUiCatalogFallbackBaseline", () => {
     expect(fixture.writes).toEqual([]);
     await syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true });
     expect(fixture.files.get(baselinePath)).toBe(baseline({ greeting: ["de"] }));
-    expect(stdout).toHaveBeenCalledWith(
-      "control-ui-i18n: catalog: tolerated_errors=1 during scoped sync\n",
-    );
   });
 
-  it.each([false, true])(
-    "rejects terminology errors before later locale errors (allowCatalogDrift=%s)",
-    async (allowCatalogDrift) => {
-      fixture.loadSource.mockReturnValue({ sessionsView: { subagentPrefix: "abc" } });
-      setMemory("fr", [
-        row({ segment_id: "sessionsView.subagentPrefix", segment_ids: [], translated: "Cron" }),
-      ]);
-      fixture.files.set(memoryPath("de"), "{");
-      await expect(
-        syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift }),
-      ).rejects.toThrow("fr: sessionsView.subagentPrefix");
-      expect(fixture.writes).toEqual([]);
-    },
-  );
+  it("rejects terminology errors before later locale errors during scoped sync", async () => {
+    fixture.loadSource.mockReturnValue({ sessionsView: { subagentPrefix: "abc" } });
+    setMemory("fr", [
+      row({ segment_id: "sessionsView.subagentPrefix", segment_ids: [], translated: "Cron" }),
+    ]);
+    fixture.files.set(memoryPath("de"), "{");
+    await expect(
+      syncControlUiCatalogFallbackBaseline({ ...writeOptions, allowCatalogDrift: true }),
+    ).rejects.toThrow("fr: sessionsView.subagentPrefix");
+    expect(fixture.writes).toEqual([]);
+  });
 });

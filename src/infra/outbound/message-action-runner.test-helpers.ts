@@ -35,7 +35,6 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
-  prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
   isDeliveredCurrentSourceReplyAsync: vi.fn(async () => false),
@@ -101,17 +100,6 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
         }
       : undefined,
 }));
-
-vi.mock("./message-action-threading.js", async (importOriginal) => {
-  const threading = await importOriginal<typeof import("./message-action-threading.js")>();
-  hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
-    threading.prepareOutboundMirrorRoute,
-  );
-  return {
-    ...threading,
-    prepareOutboundMirrorRoute: hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute,
-  };
-});
 
 vi.mock("../../media/web-media.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../media/web-media.js")>()),
@@ -381,7 +369,6 @@ export function resetMessageActionRunnerMocks() {
   mocks.maybeApplyTtsToPayload.mockImplementation(
     async (params: { payload: unknown }) => params.payload,
   );
-  mocks.prepareOutboundMirrorRoute.mockClear();
   mocks.beginTerminalSourceReplyDelivery.mockReset();
   mocks.cancelTerminalSourceReplyDelivery.mockReset();
   mocks.reconcileTerminalSourceReplyDelivery.mockReset();

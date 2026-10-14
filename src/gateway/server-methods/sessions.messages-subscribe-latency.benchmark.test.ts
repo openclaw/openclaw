@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -15,14 +16,22 @@ import * as lifetime from "../session-utils-read-lifetime.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { proveSubscriptionDoesNotWaitForDisplayRows } from "./sessions.messages-subscribe-wait.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("subscribes during an active turn among 8,000 sessions without waiting for display facts", async ({
+  signal,
+}) => {
+  await proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal);
+});
 
 it("measures subscription dispatch with a 160k-token transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = rolePolicyConfig();
     cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:subscribe-perf",
@@ -76,9 +85,9 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
     let readMs = 0;
     let currencyReads = 0;
     const retain = lifetime.retainGatewaySessionEntryReadOnly;
-    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation((...args) => {
+    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation(async (...args) => {
       const start = performance.now();
-      const read = retain(...args);
+      const read = await retain(...args);
       readMs += performance.now() - start;
       const assert = read.isCurrentAtResponse;
       return {

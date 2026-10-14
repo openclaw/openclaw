@@ -8,7 +8,6 @@ import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { formatVersionLabel } from "./version-format.js";
 
-/** Options accepted by `openclaw plugins search`. */
 export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
@@ -26,7 +25,6 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install clawhub:${pkg.name}`)}`)}`;
 }
 
-/** Search ClawHub for installable plugins and write JSON or terminal output. */
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
   opts: PluginsSearchOptions = {},

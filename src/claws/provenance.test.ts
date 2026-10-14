@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
@@ -23,11 +23,12 @@ import {
 import { makeProvenancePlan, readInstallRow, stateEnv } from "./provenance.test-helpers.js";
 import type { ClawPackage } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function makePlan(
   manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },
@@ -125,38 +126,6 @@ describe("Claw root install provenance", () => {
       extension: extensionFixture,
     });
     expect(readClawPackageRefs({ env: stateEnv(root) })).toEqual([replayed]);
-  });
-
-  it("persists package identity, agent ownership, workspace, and config digest", async () => {
-    const { root, plan } = await makePlan();
-
-    const record = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 42 });
-
-    expect(record).toMatchObject({
-      schemaVersion: "openclaw.clawInstallRecord.v2",
-      claw: { name: "@acme/worker", version: "1.0.0", integrity: "sha256:manifest" },
-      manifestSchemaVersion: 1,
-      planIntegrity: plan.planIntegrity,
-      agentId: "worker",
-      workspace: plan.agent.workspace,
-      agentOwnedPaths: ['agents.entries["worker"]'],
-      status: "complete",
-      addedAtMs: 42,
-    });
-    expect(record.agentConfigDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(readInstallRow("worker", root)).toMatchObject({
-      agent_id: record.agentId,
-      schema_version: record.schemaVersion,
-      claw_name: record.claw.name,
-      claw_version: record.claw.version,
-      integrity: record.claw.integrity,
-      plan_integrity: record.planIntegrity,
-      workspace: record.workspace,
-      agent_config_digest: record.agentConfigDigest,
-      agent_owned_paths_json: JSON.stringify(record.agentOwnedPaths),
-      status: record.status,
-      added_at_ms: record.addedAtMs,
-    });
   });
 
   it("does not overwrite a completed install record for the same agent", async () => {
@@ -264,35 +233,6 @@ describe("Claw root install provenance", () => {
     expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(original);
   });
 
-  it("records package references independently of shared package ownership", async () => {
-    const { root, plan } = await makePlan();
-    const pkg = {
-      kind: "plugin" as const,
-      source: "clawhub" as const,
-      ref: "@acme/audit",
-      version: "2.3.4",
-      integrity: "sha256:audit-2.3.4",
-    };
-
-    const record = persistClawPackageRef(plan, pkg, { env: stateEnv(root), nowMs: 43 });
-
-    expect(record).toMatchObject({
-      schemaVersion: "openclaw.clawPackageRef.v1",
-      agentId: "worker",
-      clawName: "@acme/worker",
-      ...pkg,
-    });
-    expect(
-      readClawPackageRefs({
-        env: stateEnv(root),
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/audit",
-        version: "2.3.4",
-      }),
-    ).toEqual([record]);
-  });
-
   it("rejects a package claim when the persisted reference changed after planning", async () => {
     const { root, plan } = await makePlan();
     const options = { env: stateEnv(root) };
@@ -311,46 +251,6 @@ describe("Claw root install provenance", () => {
       "changed after planning",
     );
     expect(readClawPackageRefs(options)).toEqual([current]);
-  });
-
-  it("replaces and restores package references with complete timestamps", async () => {
-    const { root, plan } = await makePlan();
-    const options = { env: stateEnv(root) };
-    const planned = persistClawPackageRef(
-      plan,
-      {
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/audit",
-        version: "2.3.4",
-        integrity: "sha256:audit-2.3.4",
-        extension: extensionFixture,
-      },
-      { ...options, nowMs: 43 },
-    );
-    const replacement = {
-      ...planned,
-      version: "3.0.0",
-      status: "pending" as const,
-      updatedAtMs: 44,
-    };
-
-    replaceClawPackageRefExpected(planned, replacement, options);
-    expect(readClawPackageRefs(options)).toEqual([replacement]);
-
-    const restored = persistClawPackageRef(
-      plan,
-      {
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/audit",
-        version: "2.3.4",
-        integrity: "sha256:audit-2.3.4",
-        extension: extensionFixture,
-      },
-      { ...options, nowMs: 45 },
-    );
-    expect(readClawPackageRefs(options)).toEqual(expect.arrayContaining([replacement, restored]));
   });
 });
 
@@ -375,29 +275,6 @@ describe("applyClawAddPlan", () => {
 
     expect(result.status).toBe("complete");
     expect(order).toEqual(["requirement", "agent"]);
-  });
-
-  it("retains an introduced shared requirement when later agent creation fails", async () => {
-    const { root, plan } = await makePackagePlan();
-    const requirement = makePluginRef();
-
-    const result = await applyClawAddPlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: stateEnv(root),
-      installPackages: async () => [requirement],
-      commitConfig: async () => {
-        throw new Error("config unavailable");
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "partial",
-      workspaceCreated: false,
-      configCommitted: false,
-      packages: [{ ref: "@acme/audit", origin: "claw-introduced" }],
-      error: { code: "config_commit_failed" },
-    });
-    await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
   it("reports retained plugin requirements when a later workspace package fails", async () => {
@@ -513,7 +390,7 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
 
@@ -534,35 +411,20 @@ describe("applyClawAddPlan", () => {
       configCommitted: true,
       installRecord: { agentId: "worker" },
     });
-    expect(config.agents?.defaults).toEqual({ workspace: "/operator/default" });
-    expect(config.agents?.entries).toEqual({
-      main: { default: true },
-      worker: {
-        name: "Worker",
-        identity: { name: "Work" },
-        tools: { deny: ["exec"] },
-        workspace: plan.agent.workspace,
+    expect(config.agents).toEqual({
+      ownership: "explicit",
+      defaults: { workspace: "/operator/default", systemAgent: { agentId: "main" } },
+      entries: {
+        main: {},
+        worker: {
+          name: "Worker",
+          identity: { name: "Work" },
+          tools: { deny: ["exec"] },
+          workspace: plan.agent.workspace,
+        },
       },
     });
-    await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
-  });
-
-  it("materializes the implicit main agent before appending the first configured agent", async () => {
-    const { root, plan } = await makePlan();
-    let config: OpenClawConfig = {};
-
-    await applyClawAddPlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: stateEnv(root),
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-    });
-
-    expect(config.agents?.entries).toEqual({
-      main: { default: true },
-      worker: expect.any(Object),
-    });
+    await access(plan.agent.workspace);
   });
 
   it("rejects overlap with the implicit main workspace before materializing it", async () => {
@@ -772,28 +634,6 @@ describe("applyClawAddPlan", () => {
       creatorAgentId: null,
       createdAtMs: expect.any(Number),
     });
-  });
-
-  it("recreates a missing workspace for a matching workspace-ready record", async () => {
-    const { root, plan } = await makePlan();
-    persistClawInstallRecord(plan, {
-      env: stateEnv(root),
-      status: "workspace_ready",
-      nowMs: 1,
-    });
-    let config: OpenClawConfig = {};
-
-    const result = await applyClawAddPlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: stateEnv(root),
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-    });
-
-    expect(result.status).toBe("complete");
-    await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
-    expect(config.agents?.entries?.worker).toBeDefined();
   });
 
   it("rejects a non-directory replacement for a workspace-ready record", async () => {

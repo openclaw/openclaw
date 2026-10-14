@@ -152,42 +152,50 @@ describe("native PR provisioning diagnostics", () => {
     expect(held.outcome.holder.owner).not.toContain(credential);
   });
 
-  it.each(["cause", "message", "name", "outcome"])(
-    "falls back if a %s getter prevents safe reporting",
-    (field) => {
-      const error = storage(new Error("nested"));
-      Object.defineProperty(error, field, {
-        get() {
-          throw new Error("unsafe diagnostic getter");
-        },
-      });
-      expect(formatProvisionError(error)).toBe(unavailable);
-    },
-  );
+  it.each([
+    ...["cause", "message", "name", "outcome"].map((field) => ({ field, getter: true })),
+    ...["message", "name", "outcome"].map((field) => ({ field, getter: false })),
+  ])("safely rejects $field diagnostics (getter=$getter)", ({ field, getter }) => {
+    let calls = 0;
+    const opaque = {
+      toJSON() {
+        calls++;
+        return { secret: "must-not-appear" };
+      },
+    };
+    const error = storage(new Error("nested"));
+    Object.defineProperty(
+      error,
+      field,
+      getter
+        ? {
+            get() {
+              throw new Error("unsafe diagnostic getter");
+            },
+          }
+        : {
+            value: field === "outcome" ? { kind: "store-unavailable", reason: opaque } : opaque,
+          },
+    );
+    expect(formatProvisionError(error)).toBe(unavailable);
+    expect(calls).toBe(0);
+  });
 
-  it.each(["message", "name", "outcome"])(
-    "rejects an object-valued %s without calling toJSON",
-    (field) => {
-      let calls = 0;
-      const opaque = {
-        toJSON() {
-          calls++;
-          return { secret: "must-not-appear" };
-        },
-      };
-      const error = storage(new Error("nested"));
-      Object.defineProperty(error, field, {
-        value: field === "outcome" ? { kind: "store-unavailable", reason: opaque } : opaque,
-      });
-      expect(formatProvisionError(error)).toBe(unavailable);
-      expect(calls).toBe(0);
-    },
-  );
-
-  it("reports ordinary errors without fabricating storage facts and safely handles primitives", () => {
-    const out = render(new Error("plain failure"));
+  it.each([
+    "plain failure",
+    "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)",
+  ])("reports ordinary errors without fabricating storage facts: %s", (message) => {
+    const out = render(new Error(message));
     expect(out.outcome).toBeUndefined();
-    expect(out.error.nodes[0]).toMatchObject({ type: "error", message: "plain failure" });
+    expect(out.error.nodes).toEqual([{ type: "error", name: "Error", message }]);
+    const carrier = new Error("wire carrier");
+    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
+    expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
+      message,
+    );
+  });
+
+  it("safely handles primitives", () => {
     expect(formatProvisionError("plain failure")).toBe("plain failure");
     for (const value of [undefined, null, 0, true, Symbol("failure"), 1n]) {
       expect(formatProvisionError(value)).toBe(unavailable);
@@ -195,7 +203,7 @@ describe("native PR provisioning diagnostics", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "reports the real native storage failure while retaining exit and recovery custody",
+    "reports the real native storage failure, keeps its exit status, and releases the drained lock",
     () => {
       const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-diagnostic-"), {
         precreateWorktree: false,
@@ -215,7 +223,7 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome).toEqual({ kind: "store-unavailable", reason: "storage-error" });
+      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
       expect(out.error.nodes).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
@@ -225,9 +233,8 @@ describe("native PR provisioning diagnostics", () => {
       expect(readFileSync(database, "utf8")).toBe(corrupt);
       expect(existsSync(f.worktree)).toBe(false);
       expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
-      expect(f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toMatch(
-        /^[0-9a-f]{40}$/,
-      );
+      expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code 1");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     },
   );
 });

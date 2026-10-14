@@ -192,6 +192,7 @@ async function classifyFileAttachment(params: {
       limits: { ...baseLimits, allowedMimes },
       config: cfg,
       classification,
+      mimeType: attachment.mime,
     });
   } catch (err) {
     if (shouldLogVerbose()) {

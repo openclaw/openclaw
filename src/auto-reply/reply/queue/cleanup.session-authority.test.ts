@@ -1,21 +1,35 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../../../process/command-queue.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createQueueSettings,
   createQueueTestRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
-import { clearSessionQueues, prepareSessionFollowupCleanup } from "./cleanup.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import {
+  clearSessionLifecycleQueues,
+  hasSessionLifecycleQueueWork,
+  prepareSessionFollowupCleanup,
+} from "./cleanup.js";
+import { clearFollowupDrainCallback, kickFollowupDrainIfIdle } from "./drain.js";
 import { enqueueFollowupRun } from "./enqueue.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
 
 installQueueRuntimeErrorSilencer();
 const key = "agent:main:queue-stop";
 const alias = "original-session";
 const keys = [key, alias];
-afterEach(() => clearSessionQueues(keys));
+afterEach(() => {
+  for (const queueKey of keys) {
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
+  }
+});
 
 function source(prompt: string, sessionId = "original-session") {
   const item = createQueueTestRun({ prompt });
@@ -31,17 +45,76 @@ function source(prompt: string, sessionId = "original-session") {
   return { item, abandoned, settled };
 }
 
-function prepare(assertCurrent = () => {}) {
+function prepare(assertCurrent = () => {}, allIncarnations = false) {
   return prepareSessionFollowupCleanup({
     keys,
     agentId: "main",
     sessionKey: key,
-    sessionId: alias,
+    sessionId: allIncarnations ? undefined : alias,
     assertCurrent,
   });
 }
 
 describe("session-owned pending followup cleanup", () => {
+  it.each([alias, undefined])(
+    "matches queued work by agent and key with sessionId=%s",
+    async (sessionId) => {
+      const sharedKey = "global";
+      const lane = "session:global";
+      const owned = [
+        source("current"),
+        source("older", "older-session"),
+        source("retargeted"),
+      ] as const;
+      owned[2].item.admissionSessionId = "next-session";
+      const foreign = source("research");
+      foreign.item.run.agentId = "research";
+      for (const run of [...owned, foreign]) {
+        run.item.run.sessionKey = sharedKey;
+        enqueueFollowupRun(sharedKey, run.item, createQueueSettings(), "none", undefined, false);
+      }
+      setCommandLaneConcurrency(lane, 0);
+      const commands = [alias, "older-session", "next-session"].map((id) =>
+        enqueueCommandInLane(lane, async () => id, {
+          sessionTarget: { agentId: "main", sessionKey: sharedKey, sessionId: id },
+        }),
+      );
+      commands.push(
+        enqueueCommandInLane(lane, async () => "research", {
+          sessionTarget: { agentId: "research", sessionKey: sharedKey, sessionId: alias },
+        }),
+        enqueueCommandInLane(lane, async () => "untagged"),
+      );
+      const settled = Promise.allSettled(commands);
+      const target = { keys: [sharedKey], agentId: "main", sessionKey: sharedKey, sessionId };
+      try {
+        expect.soft(hasSessionLifecycleQueueWork(target)).toBe(true);
+        const cleared = clearSessionLifecycleQueues({ ...target, assertCurrent: () => {} });
+        expect(cleared).toMatchObject({
+          followupCleared: sessionId === undefined ? 3 : 1,
+          laneCleared: sessionId === undefined ? 3 : 1,
+        });
+        expect(FOLLOWUP_QUEUES.get(sharedKey)?.items).toEqual(
+          sessionId === undefined ? [foreign.item] : [owned[1].item, owned[2].item, foreign.item],
+        );
+        expect(hasSessionLifecycleQueueWork(target)).toBe(false);
+        expect(foreign.settled).not.toHaveBeenCalled();
+        setCommandLaneConcurrency(lane, 1);
+        expect((await settled).map((result) => result.status)).toEqual(
+          sessionId === undefined
+            ? ["rejected", "rejected", "rejected", "fulfilled", "fulfilled"]
+            : ["rejected", "fulfilled", "fulfilled", "fulfilled", "fulfilled"],
+        );
+      } finally {
+        clearFollowupQueue(sharedKey);
+        clearFollowupDrainCallback(sharedKey);
+        clearCommandLane(lane);
+        setCommandLaneConcurrency(lane, 1);
+        await settled;
+      }
+    },
+  );
+
   it("does not treat an absent producer agent as the default agent", () => {
     const original = source("pending admission");
     original.item.run.agentId = "";
@@ -77,7 +150,7 @@ describe("session-owned pending followup cleanup", () => {
     }
   });
 
-  it("preserves injecting, in-flight and active-summary sources and their drain owner", () => {
+  it("preserves injecting, in-flight and active-summary sources", () => {
     const runs = Array.from({ length: 5 }, (_, index) => source(`protected-${index}`));
     for (const { item } of runs) {
       enqueueFollowupRun(key, item, createQueueSettings({ cap: 2 }), "none", undefined, false);
@@ -94,7 +167,6 @@ describe("session-owned pending followup cleanup", () => {
       settle: vi.fn(),
     };
     queue.draining = true;
-    const drainOwner = (queue.drainOwner = {});
     expect(prepare()()).toBe(2);
     expect(queue.items).toEqual([inFlight, injecting]);
     expect(queue.summarySources).toEqual([activeSummary]);
@@ -102,42 +174,45 @@ describe("session-owned pending followup cleanup", () => {
     expect(queue.inFlight.has(inFlight)).toBe(true);
     expect(queue.activeSummarySources.has(activeSummary)).toBe(true);
     expect(queue.draining).toBe(true);
-    expect(queue.drainOwner).toBe(drainOwner);
     expect(queue.abortController.signal.aborted).toBe(false);
     expect(injecting.steerPending.settle).not.toHaveBeenCalled();
   });
 
-  it.each(["agent", "key", "admission", "run-object", "new-source"] as const)(
-    "does not adopt a changed %s after preparation",
+  it.each(["agent", "key", "session", "admission", "new-source", "all-incarnations"] as const)(
+    "respects captured authority after %s changes",
     (change) => {
       const original = source("original");
       const settings = createQueueSettings();
       enqueueFollowupRun(key, original.item, settings, "none", undefined, false);
       const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "original queue");
-      const cleanup = prepare();
+      const allIncarnations = change === "all-incarnations";
+      const cleanup = prepare(undefined, allIncarnations);
       const successor = source("successor");
       if (change === "agent") {
         original.item.run.agentId = "other";
       } else if (change === "key") {
         original.item.run.sessionKey = "agent:main:other";
+      } else if (change === "session") {
+        original.item.run.sessionId = "successor-session";
       } else if (change === "admission") {
         original.item.admissionSessionId = "successor-session";
-      } else if (change === "run-object") {
-        original.item.run = { ...original.item.run };
+      } else if (allIncarnations) {
+        original.item.run.sessionId = "next-session";
+        original.item.admissionSessionId = "next-admission";
       } else {
         queue.items.splice(0, 1, successor.item);
       }
-      expect(cleanup()).toBe(0);
-      expect(original.settled).not.toHaveBeenCalled();
+      expect(cleanup()).toBe(allIncarnations ? 1 : 0);
+      expect(original.settled).toHaveBeenCalledTimes(allIncarnations ? 1 : 0);
       expect(successor.settled).not.toHaveBeenCalled();
-      expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([
-        change === "new-source" ? successor.item : original.item,
-      ]);
+      expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual(
+        allIncarnations ? undefined : [change === "new-source" ? successor.item : original.item],
+      );
       expect(queue.abortController.signal.aborted).toBe(false);
     },
   );
 
-  it.each(["unchanged", "lifecycle", "admission", "in-flight", "active-summary"] as const)(
+  it.each(["unchanged", "admission", "in-flight", "active-summary"] as const)(
     "follows only the recorded compact-source custody after capture (%s)",
     (change) => {
       const original = source("original");
@@ -168,9 +243,7 @@ describe("session-owned pending followup cleanup", () => {
       expect(compact).not.toBe(original.item);
       expect(compact.admissionSessionId).toBe(alias);
       expect(compact.turnAdoptionLifecycle).toBe(original.item.turnAdoptionLifecycle);
-      if (change === "lifecycle") {
-        compact.turnAdoptionLifecycle = { onAdopted: () => {} };
-      } else if (change === "admission") {
+      if (change === "admission") {
         compact.admissionSessionId = "successor-session";
       } else if (change === "in-flight") {
         queue.inFlight.add(compact);

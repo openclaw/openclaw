@@ -28,7 +28,7 @@ vi.mock("./subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: spawn,
 }));
-const config = { agents: { entries: { main: { default: true } } } };
+const config = { agents: { entries: { main: {} } } };
 function spawnTool(signal?: AbortSignal) {
   return createSessionsSpawnTool({
     config,
@@ -139,6 +139,30 @@ describe("execution allowlist availability", () => {
 });
 
 describe("collector tool availability", () => {
+  it("reuses immutable schema variants without sharing collector authority", async () => {
+    const first = spawnTool();
+    const second = spawnTool();
+    const hidden = first.parameters;
+    expect(second.parameters).toBe(hidden);
+
+    finalizeAgentToolAvailability([first, reader()]);
+    finalizeAgentToolAvailability([second, reader()]);
+    expect(second.parameters).toBe(first.parameters);
+    expect(first.parameters).toHaveProperty("properties.collect");
+
+    finalizeAgentToolAvailability([first]);
+    expect(first.parameters).not.toHaveProperty("properties.collect");
+    await expect(first.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
+      "Collector results are unavailable",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    await second.execute("allowed", { task: "inspect", collect: true });
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ collect: true }),
+      expect.anything(),
+    );
+  });
+
   it("preserves normalized collector fields across availability changes", () => {
     const source = spawnTool();
     const wait = reader();

@@ -1,10 +1,13 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.worker-contract.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceConflictReport,
@@ -15,6 +18,32 @@ import {
   isWorkerWorkspaceResultCleanupRef,
   moveStagedWorkerWorkspaceResultToCleanup,
 } from "./workspace-result-staging.js";
+
+const log = createSubsystemLogger("gateway/worker-placement");
+
+export async function resolvePriorWorkspaceResultConflict(
+  resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],
+  placement: {
+    sessionId: string;
+    workspaceResultConflict?: WorkerWorkspaceResultConflict;
+  },
+): Promise<WorkerWorkspaceResultConflict | undefined> {
+  if (placement.workspaceResultConflict) {
+    return placement.workspaceResultConflict;
+  }
+  const lookup = await resolve();
+  if (lookup.kind === "conflict") {
+    return lookup.conflict;
+  }
+  if (lookup.kind === "unknown") {
+    log.warn(
+      `Cloud workspace conflict state unknown sessionId=${boundedWorkerError(placement.sessionId, 128)} reason=${lookup.reason}; preserving prior conflict state`,
+    );
+    // Undefined means no prior knowledge to finalizeWorkspaceResultConflicts: it cannot
+    // clear the retained report or delete its unseen staged ref. The warning signals this.
+  }
+  return undefined;
+}
 
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
 
@@ -29,6 +58,7 @@ export function createWorkspaceResultJournal(params: {
   >;
   turnClaim: WorkerSessionTurnClaim;
   assertCurrent?: () => void;
+  assertCommitCurrent?: () => void;
   current?: PlacementTurnClaimCurrentCheck;
 }) {
   const owner = {
@@ -47,7 +77,7 @@ export function createWorkspaceResultJournal(params: {
         return params.placements.beginWorkspaceReconciliation(owner, next, params.assertCurrent);
       },
       commit: async (manifestRef: string) => {
-        params.assertCurrent?.();
+        (params.assertCommitCurrent ?? params.assertCurrent)?.();
         await params.placements.updateWorkspaceBaseManifest(
           { claim: params.turnClaim, manifestRef },
           params.assertCurrent,
@@ -143,9 +173,8 @@ type StagedWorkspaceResultSettlement = {
   stagedResultRef: string | null | undefined;
   conflictRetained: boolean;
   beforeComplete: () => Promise<void>;
-  complete?: () => WorkerSessionPlacementRecord;
+  complete?: () => Promise<WorkerSessionPlacementRecord>;
   afterComplete?: (completed: WorkerSessionPlacementRecord) => Promise<void>;
-  validateCompleted?: (completed: WorkerSessionPlacementRecord) => void;
 };
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
@@ -172,9 +201,11 @@ export async function settleStagedWorkspaceResult(
     params.assertCurrent();
   }
   const completed = params.complete
-    ? params.complete()
-    : params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
-  params.validateCompleted?.(completed);
+    ? await params.complete()
+    : await params.placements.completeWorkspaceResultAndReleaseTurn(
+        params.turnClaim,
+        params.assertCurrent,
+      );
   await params.afterComplete?.(completed);
   if (cleanupRef) {
     // Cleanup refs remain discoverable after the SQLite fence disappears.

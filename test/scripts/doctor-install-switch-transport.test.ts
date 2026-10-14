@@ -68,14 +68,21 @@ env -0
   );
 }
 
-it.runIf(process.platform === "linux")(
-  "routes the Doctor scenario through its explicit synthetic user bus",
-  async () => {
+it.runIf(process.platform === "linux").each([true, false])(
+  "routes the Doctor scenario only through an explicit synthetic user bus (address=%s)",
+  async (hasAddress) => {
     const env = scenarioEnvironment();
-    const invocations: string[][] = [];
+    if (!hasAddress) {
+      delete env.DBUS_SESSION_BUS_ADDRESS;
+    }
+    const invocations: Array<{ command: string; args: string[] }> = [];
     vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+      invocations.push({ command, args: [...args] });
+      if (!hasAddress && command === "systemctl") {
+        expect(args).toEqual(["--system", "is-system-running"]);
+        return { code: 0, termination: "exit", stdout: "running\n", stderr: "" };
+      }
       expect(command).toBe("busctl");
-      invocations.push([...args]);
       // Invoke only the repository shim; never resolve busctl from the host PATH.
       const result = spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
       return {
@@ -85,70 +92,30 @@ it.runIf(process.platform === "linux")(
         stderr: result.stderr,
       };
     });
-    await expect(resolveSystemdUserTransport(env)).resolves.toEqual({
-      kind: "session-bus",
-      address: env.DBUS_SESSION_BUS_ADDRESS,
-      runtimeDir: env.XDG_RUNTIME_DIR,
-    });
-    expect(invocations).toEqual([versionArgs]);
-    expect(env.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${env.XDG_RUNTIME_DIR}/bus`);
-    const runtimeDir = env.XDG_RUNTIME_DIR;
-    if (!runtimeDir) {
-      throw new Error("Doctor fixture must configure its synthetic runtime directory");
-    }
-    expect(runtimeDir.startsWith(env.HOME + path.sep)).toBe(true);
-  },
-);
-
-it.runIf(process.platform === "linux")(
-  "reproduces the original missing-address machine-scope rejection",
-  async () => {
-    const env = scenarioEnvironment();
-    delete env.DBUS_SESSION_BUS_ADDRESS;
-    const invocations: Array<{ command: string; args: string[] }> = [];
-    vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
-      invocations.push({ command, args: [...args] });
-      if (command === "systemctl") {
-        expect(args).toEqual(["--system", "is-system-running"]);
-        return {
-          code: 0,
-          termination: "exit",
-          stdout: "running\n",
-          stderr: "",
-        };
+    if (hasAddress) {
+      await expect(resolveSystemdUserTransport(env)).resolves.toEqual({
+        kind: "session-bus",
+        address: env.DBUS_SESSION_BUS_ADDRESS,
+        runtimeDir: env.XDG_RUNTIME_DIR,
+      });
+      expect(invocations).toEqual([{ command: "busctl", args: versionArgs }]);
+      expect(env.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${env.XDG_RUNTIME_DIR}/bus`);
+      const runtimeDir = env.XDG_RUNTIME_DIR;
+      if (!runtimeDir) {
+        throw new Error("Doctor fixture must configure its synthetic runtime directory");
       }
-      expect(command).toBe("busctl");
-      const result = spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
-      return {
-        code: result.status ?? 1,
-        termination: "exit",
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
-    });
-    await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
-      reason: "systemd-user-bus-unavailable",
-    });
-    expect(invocations).toEqual([
-      { command: "busctl", args: ["--machine", "testuser@", ...versionArgs] },
-      { command: "systemctl", args: ["--system", "is-system-running"] },
-    ]);
-    console.info("original Doctor argv:", JSON.stringify(invocations[0]?.args));
+      expect(runtimeDir.startsWith(env.HOME + path.sep)).toBe(true);
+    } else {
+      await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
+        reason: "systemd-user-bus-unavailable",
+      });
+      expect(invocations).toEqual([
+        { command: "busctl", args: ["--machine", "testuser@", ...versionArgs] },
+        { command: "systemctl", args: ["--system", "is-system-running"] },
+      ]);
+    }
   },
 );
-
-it.runIf(process.platform === "linux")("still rejects an unavailable synthetic bus", async () => {
-  const env = scenarioEnvironment();
-  vi.mocked(execFileUtf8).mockResolvedValue({
-    code: 1,
-    termination: "exit",
-    stdout: "",
-    stderr: "Failed to connect to bus: No such file or directory",
-  });
-  await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
-    reason: "systemd-user-bus-unavailable",
-  });
-});
 
 it("keeps machine scope, auto-start, and foreign-manager probes outside the shim contract", () => {
   const env = scenarioEnvironment();

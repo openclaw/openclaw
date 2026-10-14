@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -13,7 +13,6 @@ import {
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
-  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asFiniteNumber,
@@ -21,7 +20,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  GeneratedVideoAsset,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
@@ -250,48 +249,27 @@ function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): strin
   }
 }
 
-async function pollPixVerseVideo(params: {
-  videoId: number;
-  baseUrl: string;
-  deadline: ProviderOperationDeadline;
-  fetchFn: typeof fetch;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
-  headers: Headers;
-}): Promise<PixVerseVideoResultResponse> {
-  const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
-    readPixVerseSuccess(payload, "PixVerse video status request failed");
-  const payload = await pollProviderOperationJson<PixVerseEnvelope<PixVerseVideoResultResponse>>({
-    url: `${params.baseUrl}/video/result/${params.videoId}`,
-    headers: () => buildPixVerseHeaders(params.headers),
-    deadline: params.deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
-    maxAttempts: MAX_POLL_ATTEMPTS,
-    pollIntervalMs: POLL_INTERVAL_MS,
-    requestFailedMessage: "PixVerse video status request failed",
-    timeoutMessage: `PixVerse video generation task ${params.videoId} did not finish in time`,
-    isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
-    getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    dispatcherPolicy: params.dispatcherPolicy,
-  });
-  return readResult(payload);
-}
-
-function extractPixVerseVideo(payload: PixVerseVideoResultResponse): GeneratedVideoAsset {
-  const url = normalizeOptionalString(payload.url);
-  if (!url) {
-    throw new Error("PixVerse video generation completed without output URL");
-  }
+function buildPixVerseModeCapabilities(imageToVideo = false): VideoGenerationModeCapabilities {
   return {
-    url,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-    metadata: {
-      sourceUrl: url,
-      outputWidth: asFiniteNumber(payload.outputWidth),
-      outputHeight: asFiniteNumber(payload.outputHeight),
+    maxVideos: 1,
+    ...(imageToVideo ? { maxInputImages: 1 } : {}),
+    maxDurationSeconds: MAX_DURATION_SECONDS,
+    supportedDurationSeconds: Array.from({ length: MAX_DURATION_SECONDS }, (_, index) => index + 1),
+    ...(!imageToVideo ? { aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS] } : {}),
+    resolutions: ["360P", "540P", "720P", "1080P"],
+    ...(!imageToVideo ? { supportsAspectRatio: true } : {}),
+    supportsResolution: true,
+    supportsAudio: true,
+    providerOptions: {
+      seed: "number",
+      negative_prompt: "string",
+      negativePrompt: "string",
+      quality: "string",
+      ...(imageToVideo ? { motion_mode: "string" as const, motionMode: "string" as const } : {}),
+      camera_movement: "string",
+      cameraMovement: "string",
+      template_id: "number",
+      templateId: "number",
     },
   };
 }
@@ -303,55 +281,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
+    isConfiguredAsync: (ctx) =>
+      isProviderApiKeyConfiguredAsync({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS],
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
-      },
+      generate: buildPixVerseModeCapabilities(),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          motion_mode: "string",
-          motionMode: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
+        ...buildPixVerseModeCapabilities(true),
       },
       videoToVideo: {
         enabled: false,
@@ -448,17 +384,42 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
           submitted.video_id,
           "PixVerse video generation response missing video_id",
         );
-        const completed = await pollPixVerseVideo({
-          videoId,
-          baseUrl,
+        const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
+          readPixVerseSuccess(payload, "PixVerse video status request failed");
+        const completedEnvelope = await pollProviderOperationJson<
+          PixVerseEnvelope<PixVerseVideoResultResponse>
+        >({
+          url: `${baseUrl}/video/result/${videoId}`,
+          headers: () => buildPixVerseHeaders(headers),
           deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          maxAttempts: MAX_POLL_ATTEMPTS,
+          pollIntervalMs: POLL_INTERVAL_MS,
+          requestFailedMessage: "PixVerse video status request failed",
+          timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
+          isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
+          getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
           allowPrivateNetwork,
           dispatcherPolicy,
-          headers,
         });
+        const completed = readResult(completedEnvelope);
+        const url = normalizeOptionalString(completed.url);
+        if (!url) {
+          throw new Error("PixVerse video generation completed without output URL");
+        }
+        const video = {
+          url,
+          mimeType: "video/mp4",
+          fileName: "video-1.mp4",
+          metadata: {
+            sourceUrl: url,
+            outputWidth: asFiniteNumber(completed.outputWidth),
+            outputHeight: asFiniteNumber(completed.outputHeight),
+          },
+        };
         return {
-          videos: [extractPixVerseVideo(completed)],
+          videos: [video],
           model,
           metadata: {
             endpoint,

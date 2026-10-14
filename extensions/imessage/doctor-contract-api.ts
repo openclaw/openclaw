@@ -1,18 +1,17 @@
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import path from "node:path";
+import { defineRetiredPluginStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
-export const stateMigrations: PluginDoctorStateMigration[] = [
-  {
-    id: "imessage-legacy-state",
-    label: "iMessage legacy state",
-    async detectLegacyState(params) {
-      const { imessageRetiredStateMigration } = await import("./src/state-migrations.js");
-      return imessageRetiredStateMigration.detectLegacyState(params);
-    },
-    async migrateLegacyState(params) {
-      const { imessageRetiredStateMigration } = await import("./src/state-migrations.js");
-      return imessageRetiredStateMigration.migrateLegacyState(params);
-    },
-  },
+export const stateMigrations = [
+  defineRetiredPluginStateMigration({
+    id: "imessage-retired-state",
+    label: "iMessage retired monitor state",
+    intermediateVersion: "2026.9.5",
+    findSources: ({ stateDir }) => [
+      path.join(stateDir, "imessage", "reply-cache.jsonl"),
+      path.join(stateDir, "imessage", "sent-echoes.jsonl"),
+      { directory: path.join(stateDir, "imessage", "catchup"), suffix: ".json" },
+    ],
+  }),
 ];

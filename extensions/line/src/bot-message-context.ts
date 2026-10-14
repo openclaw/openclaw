@@ -5,7 +5,7 @@ import {
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
   type BuildChannelInboundEventContextParams,
@@ -40,7 +40,6 @@ import {
   normalizeStringEntries,
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeLineAllowEntry } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
@@ -98,34 +97,14 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
     return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
   }
   const userId =
-    source.type === "user"
+    source.type === "user" || source.type === "group" || source.type === "room"
       ? source.userId
-      : source.type === "group"
-        ? source.userId
-        : source.type === "room"
-          ? source.userId
-          : undefined;
+      : undefined;
   const groupId = source.type === "group" ? source.groupId : undefined;
   const roomId = source.type === "room" ? source.roomId : undefined;
   const isGroup = source.type === "group" || source.type === "room";
 
   return { userId, groupId, roomId, isGroup };
-}
-
-function buildPeerId(source: EventSource): string {
-  if (!source) {
-    return "unknown";
-  }
-  const groupKey =
-    normalizeOptionalString(source.type === "group" ? source.groupId : undefined) ??
-    normalizeOptionalString(source.type === "room" ? source.roomId : undefined);
-  if (groupKey) {
-    return groupKey;
-  }
-  if (source.type === "user" && source.userId) {
-    return source.userId;
-  }
-  return "unknown";
 }
 
 export async function prepareLineInboundRoute(params: {
@@ -134,7 +113,8 @@ export async function prepareLineInboundRoute(params: {
   account: ResolvedLineAccount;
 }): Promise<PreparedLineInboundRoute> {
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
-  const peerId = buildPeerId(params.source);
+  const peerId =
+    normalizeOptionalString(groupId ?? roomId) ?? (!isGroup && userId ? userId : "unknown");
   const routeInput = {
     channel: "line",
     accountId: params.account.accountId,
@@ -372,11 +352,12 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
       })
     : undefined;
 
-  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-  });
+  const { storePath, envelopeOptions, previousTimestamp } =
+    await resolveInboundSessionEnvelopeContextAsync({
+      cfg: params.cfg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+    });
 
   const agentBody = params.agentBody ?? params.rawBody;
   const media =
@@ -443,15 +424,12 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
     sessionKey: params.route.sessionKey,
   });
   if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo =
       params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`
         : "";
     const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
-    logVerbose(
-      `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
-    );
+    logVerbose(`${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo}`);
   }
 
   return {
@@ -524,7 +502,13 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0
-      ? allMedia.map((media) => ({ ...media, kind: nativeMediaKind }))
+      ? allMedia.map((media) => ({
+          ...media,
+          kind:
+            nativeMediaKind === "document" && media.contentType?.startsWith("image/")
+              ? "image"
+              : nativeMediaKind,
+        }))
       : nativeMediaKind
         ? [{ kind: nativeMediaKind }]
         : [];

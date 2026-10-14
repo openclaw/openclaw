@@ -2,22 +2,6 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { VideoGenerationProvider } from "./types.js";
 
-// Duration support is provider/mode/model scoped. Values are normalized to
-// positive rounded seconds before runtime snaps requests to the nearest option.
-function normalizeSupportedDurationValues(
-  values: readonly number[] | undefined,
-): number[] | undefined {
-  if (!Array.isArray(values) || values.length === 0) {
-    return undefined;
-  }
-  const normalized = uniqueValues(values)
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .map((value) => Math.round(value))
-    .filter((value) => value > 0)
-    .toSorted((left, right) => left - right);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 export function resolveVideoGenerationSupportedDurations(params: {
   provider?: VideoGenerationProvider;
   model?: string;
@@ -35,7 +19,16 @@ export function resolveVideoGenerationSupportedDurations(params: {
     model && caps?.supportedDurationSecondsByModel
       ? caps.supportedDurationSecondsByModel[model]
       : undefined;
-  return normalizeSupportedDurationValues(modelSpecific ?? caps?.supportedDurationSeconds);
+  const values = modelSpecific ?? caps?.supportedDurationSeconds;
+  if (!Array.isArray(values) || values.length === 0) {
+    return undefined;
+  }
+  const normalized = uniqueValues(values)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.round(value))
+    .filter((value) => value > 0)
+    .toSorted((left, right) => left - right);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 // Normalize requested duration for providers with explicit allowed values. Ties
@@ -55,9 +48,17 @@ export function normalizeVideoGenerationDuration(params: {
   if (!supported || supported.length === 0) {
     return rounded;
   }
+  return selectSupportedVideoDuration(rounded, supported);
+}
+
+/** Select from a nonempty duration list, preferring the longer value on ties. */
+export function selectSupportedVideoDuration(
+  durationSeconds: number,
+  supported: readonly number[],
+): number {
   return supported.reduce((best, current) => {
-    const currentDistance = Math.abs(current - rounded);
-    const bestDistance = Math.abs(best - rounded);
+    const currentDistance = Math.abs(current - durationSeconds);
+    const bestDistance = Math.abs(best - durationSeconds);
     if (currentDistance < bestDistance) {
       return current;
     }

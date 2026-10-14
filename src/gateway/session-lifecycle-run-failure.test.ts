@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
@@ -9,31 +9,50 @@ import {
 import { prepareCliHistoryBoundary } from "../agents/cli-runner/history-boundary.js";
 import { loadCliSessionPromptContext } from "../agents/cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
+import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { buildEmbeddedRunnerAssistant } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../auto-reply/reply/agent-lifecycle-terminal.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const target = {
   agentId: "main",
@@ -49,13 +68,16 @@ const event = {
   data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
 };
 
-async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
+async function seed(
+  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
+) {
+  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1_000,
     startedAt: 1_000,
-    status: "running",
     lifecycleRunId: runId,
+    activeWriterRunId: runId,
     goal: {
       schemaVersion: 1,
       id: "failure-goal",
@@ -84,9 +106,25 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
             parentId: "user-turn",
             message: {
               role: "assistant",
-              content: [],
-              stopReason: "error",
-              errorMessage: "Provider failed",
+              content: hasPriorOutput
+                ? [
+                    {
+                      type: "text",
+                      text: "Running it now.",
+                      ...(assistantBranch === "commentary"
+                        ? {
+                            textSignature: JSON.stringify({
+                              v: 1,
+                              id: "commentary",
+                              phase: "commentary",
+                            }),
+                          }
+                        : {}),
+                    },
+                  ]
+                : [],
+              stopReason: hasPriorOutput ? "stop" : "error",
+              errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
             },
           },
@@ -112,10 +150,100 @@ async function reports() {
 }
 
 describe("durable pre-reply run failure", () => {
+  it("publishes and persists one incomplete-turn notice after the model stops without an answer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      await seed();
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "thinking", thinking: "Still deciding." }],
+      });
+      await replaceTranscriptEvents(target, [
+        ...(await loadTranscriptEvents(target)),
+        {
+          type: "message",
+          id: "reasoning-only-assistant",
+          parentId: "user-turn",
+          message: { ...assistant, __openclaw: { runId } },
+        },
+      ]);
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          runParams: { ...target, runId },
+          attemptAssistant: assistant,
+          retryState: { reasoningOnlyAttempts: 2 },
+        }),
+      );
+      assert(resolved.action === "complete");
+      const result = resolved.result;
+      const notice = "⚠️ Agent couldn't generate a response. Please try again.";
+      let persistence: Promise<void> | undefined;
+      const h = createAgentEventTestHarness({
+        lifecycleErrorRetryGraceMs: 0,
+        persistGatewaySessionLifecycleEventForEvent: (params) =>
+          persistGatewaySessionLifecycleEvent({ ...params, ...target }),
+        trackTrackedRunTerminalPersistence: (params) => {
+          persistence = params.persistence;
+        },
+      });
+      onTestFinished(() => h.handler.dispose());
+      h.register(runId, target.sessionKey, runId, {
+        agentId: target.agentId,
+      });
+      const deliveries: Promise<void>[] = [];
+      const terminal = createAgentLifecycleTerminalBackstop({
+        runId,
+        sessionKey: target.sessionKey,
+        startedAt: 1_000,
+        getLifecycleGeneration: () => "incomplete-turn-generation",
+        resolveTerminationFields: () => ({}),
+        onTerminalEvent: (terminalEvent) => {
+          deliveries.push(
+            Promise.resolve(
+              h.emit(runId, terminalEvent.stream, terminalEvent.data, {
+                ...target,
+                seq: 2,
+                ts: 2_000,
+              }),
+            ),
+          );
+        },
+      });
+      terminal.note({
+        stream: "lifecycle",
+        data: { phase: "finishing", stopReason: "stop", aborted: false },
+      });
+      terminal.emit(
+        "error",
+        new Error(result.meta.error?.message),
+        resolveAgentLifecycleTerminalMetadata(result.meta),
+      );
+      terminal.emit("error", new Error("Duplicate terminal"));
+      await Promise.all(deliveries);
+      await persistence;
+
+      expect(h.chat().map(([, payload]) => payload)).toEqual([
+        expect.objectContaining({ runId, state: "error", errorMessage: notice }),
+      ]);
+      expect(await reports()).toMatchObject([
+        {
+          content: `Your request couldn't be completed: ${notice}`,
+          display: true,
+          details: { runId, error: notice },
+        },
+      ]);
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: "failed",
+        abortedLastRun: false,
+        lastRunId: runId,
+      });
+    });
+  });
+
   it.each(["timeout", "rpc", "auth-revoked", undefined])(
     "preserves the active turn when a queued follow-up ends with %s",
     async (stopReason) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         await seed();
         const before = structuredClone(loadSessionEntry(target));
         assert(before);
@@ -179,12 +307,12 @@ describe("durable pre-reply run failure", () => {
                   key: target.sessionKey,
                   sessionId: target.sessionId,
                   kind: "direct",
-                  status: "running",
                   updatedAt: before.updatedAt,
                   startedAt: before.startedAt,
                   goal: before.goal,
                 },
                 lifecycleRunId: runId,
+                activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
                 includeSession: true,
                 lifecycle: true,
@@ -219,10 +347,25 @@ describe("durable pre-reply run failure", () => {
     },
   );
 
-  it("records one displayed failure per run and retains it after the next run starts", async () => {
+  it("records one child failure outside its requester's ended turn and retains it after the next run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
-      await persistGatewaySessionLifecycleEvent({ ...target, event });
+      const requester = await resolveSessionTranscriptRuntimeTarget({
+        ...target,
+        sessionKey: "agent:main:requester",
+        sessionId: "requester-session",
+      });
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: { ...requester, expectedWriterRunId: "requester-run" },
+          assertCommitAllowed: () => {
+            throw new Error("Requester turn has ended");
+          },
+          withTranscriptWrite: async (write) => await write(),
+        },
+        () => persistGatewaySessionLifecycleEvent({ ...target, event }),
+      );
       const pausedGoal = loadSessionEntry(target)?.goal;
       expect(pausedGoal).toMatchObject({
         id: "failure-goal",
@@ -256,6 +399,7 @@ describe("durable pre-reply run failure", () => {
 
   it("records provider authentication failures as operator copy, not raw provider text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
       const providerError =
         "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401";
@@ -264,23 +408,25 @@ describe("durable pre-reply run failure", () => {
         event: { ...event, data: { ...event.data, error: providerError } },
       });
       const [report] = await reports();
+      const failureCopy =
+        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
       expect(report).toMatchObject({
-        content: expect.stringMatching(
-          /^Your request couldn't be completed: ⚠️ Authentication failed \(provider returned HTTP 401\)/,
-        ),
-        details: { runId, error: expect.stringMatching(/^⚠️ Authentication failed/) },
+        content: `Your request couldn't be completed: ${failureCopy}`,
+        details: { runId, error: failureCopy },
       });
       expect(JSON.stringify(report)).not.toContain("Missing bearer");
     });
   });
 
-  it.each(["active", "inactive", "other-run"] as const)(
-    "checks assistant output on the %s branch for this run",
+  it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
+    "persists one terminal receipt despite assistant output on the %s branch",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         await seed(branch);
         await persistGatewaySessionLifecycleEvent({ ...target, event });
-        expect(await reports()).toHaveLength(branch === "active" ? 0 : 1);
+        await persistGatewaySessionLifecycleEvent({ ...target, event });
+        expect(await reports()).toMatchObject([{ details: { runId, error } }]);
       });
     },
   );
@@ -299,6 +445,7 @@ describe("durable pre-reply run failure", () => {
     "records a run-timeout kill delivered as an aborted $phase event",
     async ({ phase, error: timeoutError, reason, ...timeoutFields }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         await seed();
         await persistGatewaySessionLifecycleEvent({
           ...target,
@@ -334,6 +481,7 @@ describe("durable pre-reply run failure", () => {
     { phase: "completed" },
   ])("does not report $phase / $stopReason", async (data) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
       await persistGatewaySessionLifecycleEvent({ ...target, event: { ...event, data } });
       expect(await reports()).toEqual([]);
@@ -342,6 +490,7 @@ describe("durable pre-reply run failure", () => {
 
   it("sanitizes and bounds the stored error", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
       const secret = [
         String.fromCharCode(115, 107),
@@ -393,6 +542,7 @@ describe("durable pre-reply run failure", () => {
     },
   ])("retains the terminal cause of a bounded $name", async ({ prefix, context }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
       const cause = "Cloud workspace reconciliation exceeds the 25000 entry limit.";
       await persistGatewaySessionLifecycleEvent({
@@ -410,6 +560,7 @@ describe("durable pre-reply run failure", () => {
 
   it.each(["session", "run"])("does not report a stale %s error", async (stale) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
       await persistGatewaySessionLifecycleEvent({
         ...target,
@@ -424,18 +575,59 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it("does not report an error whose lifecycle write was refused", async () => {
+  it.each(["before", "after"])(
+    "rejects authority revoked %s the lifecycle commit",
+    async (when) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed();
+        let current = when === "after";
+        onTestFinished(
+          sessionChanges.subscribe((change) => {
+            if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+              current = false;
+            }
+          }),
+        );
+        await expect(
+          persistGatewaySessionLifecycleEvent({
+            ...target,
+            event,
+            assertCommitAllowed: () => {
+              if (!current) {
+                throw new Error("Run authority expired");
+              }
+            },
+          }),
+        ).rejects.toThrow("Run authority expired");
+        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : undefined);
+        expect(await reports()).toEqual([]);
+      });
+    },
+  );
+
+  it("refuses a receipt after another writer claims the accepted terminal's session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seed();
-      await expect(
-        persistGatewaySessionLifecycleEvent({
-          ...target,
-          event,
-          assertCommitAllowed: () => {
-            throw new Error("Run authority expired");
-          },
-        }),
-      ).rejects.toThrow("Run authority expired");
+      let replacement: Promise<unknown> | undefined;
+      const unsubscribe = sessionChanges.subscribe((change) => {
+        if (!("sessionKey" in change) || change.sessionKey !== target.sessionKey) {
+          return;
+        }
+        unsubscribe();
+        replacement = patchSessionEntryCore(target, () => ({ activeWriterRunId: "successor-run" }));
+      });
+      onTestFinished(unsubscribe);
+      await expect(persistGatewaySessionLifecycleEvent({ ...target, event })).rejects.toThrow(
+        SessionTranscriptWriterClaimReboundError,
+      );
+      await replacement;
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: "failed",
+        lastRunError: error,
+        activeWriterRunId: "successor-run",
+      });
       expect(await reports()).toEqual([]);
     });
   });
@@ -454,7 +646,6 @@ async function createCliHistoryFixture() {
     startedAt: 1_000,
     lifecycleRunId: cliRunId,
     activeWriterRunId: cliRunId,
-    status: "running",
   });
   const scope = await resolveSessionTranscriptRuntimeTarget(cliTarget);
   const admission = prepareSystemAgentRunAdmission({}, cliRunId, "main", "cli-timeout-test");
@@ -483,7 +674,7 @@ async function createCliHistoryFixture() {
   const scheduler = createTestGatewayScheduler();
   onTestFinished(() => scheduler.stop());
   const owner = createSessionLifecyclePersistenceOwner(scheduler);
-  const captured = captureAgentRunTerminalWriteContext(cliRunId);
+  const captured = captureAgentRunTerminalPersistence(cliRunId).writeContext;
   if (!captured) {
     throw new Error("Expected the admitted runtime's terminal write context");
   }
@@ -533,6 +724,7 @@ describe("CLI history through Gateway terminal persistence", () => {
     "retains same-account context after %s outside the CLI stack",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const f = await createCliHistoryFixture();
         try {
           await f.persist(phase);
@@ -542,13 +734,19 @@ describe("CLI history through Gateway terminal persistence", () => {
         }
         const context = await f.laterContext("account-a");
         expect(JSON.stringify(context.reseedMessages)).toContain("Prior account-owned request");
-        expect(context.durableContext).toContain(
-          "Your request couldn't be completed: Run timed out",
-        );
+        expect(context.durableContext).toBeUndefined();
         const transcript = await loadTranscriptEvents(f.cliTarget);
         expect(
           transcript.filter((entry) => isRecord(entry) && entry.type === "custom_message"),
-        ).toHaveLength(1);
+        ).toEqual([
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            content: "Your request couldn't be completed: Run timed out",
+            display: true,
+            excludeFromContext: true,
+            details: { runId: "cli-timeout-run", error: "Run timed out" },
+          }),
+        ]);
         const otherAccount = await f.laterContext("account-b");
         expect(otherAccount.reseedMessages).toEqual([]);
         expect(otherAccount.durableContext).toBeUndefined();
@@ -558,6 +756,7 @@ describe("CLI history through Gateway terminal persistence", () => {
 
   it("keeps normal completion pending until its accepted write finishes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = await createCliHistoryFixture();
       const release = createDeferred();
       const pending = release.promise.then(() => f.persist("end"));
@@ -571,7 +770,16 @@ describe("CLI history through Gateway terminal persistence", () => {
       expect(completed).toBe(false);
       release.resolve();
       await finish;
-      expect((await f.laterContext("account-a")).durableContext).toContain("Run timed out");
+      expect(await loadTranscriptEvents(f.cliTarget)).toContainEqual(
+        expect.objectContaining({
+          type: "custom_message",
+          customType: "run-failed-before-reply",
+          content: "Your request couldn't be completed: Run timed out",
+          display: true,
+          excludeFromContext: true,
+          details: { runId: "cli-timeout-run", error: "Run timed out" },
+        }),
+      );
     });
   });
 
@@ -579,6 +787,7 @@ describe("CLI history through Gateway terminal persistence", () => {
     "rejects a captured writer after %s without changing history",
     async (revoke) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const f = await createCliHistoryFixture();
         const before = await loadTranscriptEvents(f.cliTarget);
         const pending = f.persist("end");

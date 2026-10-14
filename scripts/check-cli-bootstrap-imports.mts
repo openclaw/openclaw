@@ -5,7 +5,10 @@ import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
 import type { Node as AcornNode } from "acorn";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+} from "../src/shared/worker-bundle-hash.js";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
@@ -23,6 +26,11 @@ const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
 ];
 // fs-safe must retain its package scope for optional native-platform loading.
 const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
+// These import-safe subpaths retain proc-safe's package-scoped, lazy native loader.
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS = new Set([
+  "@openclaw/proc-safe/errors",
+  "@openclaw/proc-safe/identity",
+]);
 const WORKER_DEPLOY_ENTRYPOINTS = WORKER_BUNDLE_ARTIFACT_PATHS.map(
   (entry) => `dist/worker/${entry}`,
 );
@@ -91,7 +99,7 @@ function resolveRelativeImport(importer: string, specifier: string, fsImpl: type
 /**
  * Lists static import/export specifiers from a JavaScript source string.
  */
-export function listStaticImportSpecifiers(source: string) {
+function listStaticImportSpecifiers(source: string) {
   return [...source.matchAll(STATIC_IMPORT_RE)].map((match) => match.groups?.specifier ?? "");
 }
 
@@ -274,7 +282,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
     (filePath, specifier) =>
       NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.some(
         (dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`),
-      )
+      ) || NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS.has(specifier)
         ? ""
         : `Native hook relay static graph imports unexpected package "${specifier}" from ${
             path.relative(rootDir, filePath) || filePath
@@ -465,27 +473,15 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   );
   const errors: string[] = [];
   const sources: Array<{ relativeEntrypoint: string; source: string }> = [];
-  for (const entrypoint of entrypoints) {
-    const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
-    try {
-      const stats = fsImpl.lstatSync(entrypoint);
-      if (stats.isSymbolicLink() || !stats.isFile()) {
-        return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
-      }
-      sources.push({
-        relativeEntrypoint,
-        source: fsImpl.readFileSync(entrypoint, "utf8"),
-      });
-    } catch {
-      return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
-    }
-  }
   try {
     for (const entry of fsImpl.readdirSync(artifactDir, { withFileTypes: true })) {
       if (artifactNames.has(entry.name)) {
         continue;
       }
-      if (entry.name === "package.json") {
+      if (WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(entry.name)) {
+        artifactNames.add(entry.name);
+        entrypoints.push(path.join(artifactDir, entry.name));
+      } else if (entry.name === "package.json") {
         errors.push(
           "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
         );
@@ -508,10 +504,31 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
     );
   }
+  for (const entrypoint of entrypoints) {
+    const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
+    try {
+      const stats = fsImpl.lstatSync(entrypoint);
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
+      }
+      sources.push({
+        relativeEntrypoint,
+        source: fsImpl.readFileSync(entrypoint, "utf8"),
+      });
+    } catch {
+      return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
+    }
+  }
   for (const { relativeEntrypoint, source } of sources) {
     try {
       for (const specifier of listRuntimeImportSpecifiers(source)) {
-        if (isBuiltinSpecifier(specifier)) {
+        if (
+          isBuiltinSpecifier(specifier) ||
+          specifier === "bun:ffi" ||
+          (specifier.startsWith("./") &&
+            specifier.endsWith(".mjs") &&
+            artifactNames.has(specifier.slice(2)))
+        ) {
           continue;
         }
         errors.push(

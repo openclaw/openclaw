@@ -52,7 +52,6 @@ export NOVITA_API_KEY="<your-novita-api-key>" # pragma: allowlist secret
 - `novita/minimax/minimax-m3`
 - `novita/zai-org/glm-5.2`
 - `novita/deepseek/deepseek-v4-pro`
-- `novita/deepseek/deepseek-v4-flash`
 - `novita/qwen/qwen3.7-max`
 
 `novita/minimax/minimax-m2.7` remains selectable as a deprecated compatibility

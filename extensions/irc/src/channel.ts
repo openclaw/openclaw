@@ -17,9 +17,8 @@ import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
-  buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
@@ -61,8 +60,6 @@ const meta = {
   systemImage: "number",
   markdownCapable: true,
 };
-
-const loadIrcChannelRuntime = createLazyRuntimeModule(() => import("./channel-runtime.js"));
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);
@@ -287,13 +284,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     status: createComputedAccountStatusAdapter<ResolvedIrcAccount, IrcProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: ({ account, snapshot }) => ({
-        ...buildBaseChannelStatusSummary(snapshot),
+        ...buildProbeChannelStatusSummary(snapshot),
         host: account.host,
         port: snapshot.port,
         tls: account.tls,
         nick: account.nick,
-        probe: snapshot.probe,
-        lastProbeAt: snapshot.lastProbeAt ?? null,
       }),
       probeAccount: async ({ cfg, account, timeoutMs }) =>
         probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
@@ -330,7 +325,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         if (!target) {
           throw new Error(`invalid IRC pairing id: ${id}`);
         }
-        const { sendMessageIrc } = await loadIrcChannelRuntime();
+        const { sendMessageIrc } = await import("./channel-runtime.js");
         await sendMessageIrc(target, message, {
           cfg: cfg as CoreConfig,
           accountId,

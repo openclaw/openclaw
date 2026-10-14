@@ -1,15 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { html } from "lit";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
-import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
-import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
+import type { UsageTotals } from "./types.ts";
 
 registerUsageEnglish();
 
@@ -26,20 +23,22 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-function formatUsageTokens(n: number): string {
-  return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): string {
+  return report?.state === "unavailable"
+    ? t("usage.common.unknown")
+    : formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
 }
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
+  return report?.state === "unavailable" ? t("usage.common.unknown") : `$${n.toFixed(decimals)}`;
 }
 
-export function formatAnalysisCost(value: number): string {
+export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
+  return formatUsageCost(value, decimals, report);
 }
 
 function formatHourLabel(hour: number): string {
@@ -48,113 +47,14 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
 }
 
-function forEachSessionHourSlice(
-  session: UsageSessionEntry,
-  timeZone: "local" | "utc",
-  visitor: (params: {
-    usage: NonNullable<UsageSessionEntry["usage"]>;
-    hour: number;
-    weekday: number;
-    share: number;
-  }) => void,
-) {
-  const usage = session.usage;
-  if (!usage) {
-    return false;
-  }
-
-  const start = usage.firstActivity ?? session.updatedAt;
-  const end = usage.lastActivity ?? session.updatedAt;
-  if (!start || !end) {
-    return false;
-  }
-
-  const startMs = Math.min(start, end);
-  const endMs = Math.max(start, end);
-
-  if (startMs === endMs) {
-    const date = new Date(startMs);
-    visitor({
-      usage,
-      hour: getZonedHour(date, timeZone),
-      weekday: getZonedWeekday(date, timeZone),
-      share: 1,
-    });
-    return true;
-  }
-
-  const durationMs = endMs - startMs;
-  let cursor = startMs;
-  while (cursor < endMs) {
-    const date = new Date(cursor);
-    const nextMs = Math.min(nextHourBoundary(date, timeZone), endMs);
-    visitor({
-      usage,
-      hour: getZonedHour(date, timeZone),
-      weekday: getZonedWeekday(date, timeZone),
-      share: (nextMs - cursor) / durationMs,
-    });
-    cursor = nextMs;
-  }
-
-  return true;
-}
-
-function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
-  const hourErrors = Array.from({ length: 24 }, () => 0);
-  const hourMsgs = Array.from({ length: 24 }, () => 0);
-
-  for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
-      continue;
-    }
-    const messageCounts = usage.messageCounts;
-
-    // Prefer precise quarter-hour message counts when available.
-    // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
-    // For local view, construct a Date from the UTC components and use getHours()
-    // so the browser's DST-aware timezone logic handles offset automatically.
-    if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
-      const bucketState: UtcQuarterBucketState = {
-        utcDateKey: undefined,
-        utcWeekday: null,
-        utcStartMs: 0,
-      };
-      for (const quarterHour of usage.utcQuarterHourMessageCounts) {
-        const mapped = mapUtcQuarterBucket(
-          quarterHour.date,
-          quarterHour.quarterIndex,
-          timeZone,
-          bucketState,
-        );
-        if (!mapped) {
-          continue;
-        }
-        hourErrors[mapped.hour] = (hourErrors[mapped.hour] ?? 0) + quarterHour.errors;
-        hourMsgs[mapped.hour] = (hourMsgs[mapped.hour] ?? 0) + quarterHour.total;
-      }
-      continue;
-    }
-
-    // Fallback: time-based proportional allocation (legacy algorithm)
-    forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
-      hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
-      hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
-    });
-  }
-
+function buildPeakErrorHours(hourMsgs: number[], hourErrors: number[]) {
   return hourMsgs
-    .map((msgs, hour) => {
-      const errors = hourErrors[hour] ?? 0;
-      const rate = msgs > 0 ? errors / msgs : 0;
-      return {
-        hour,
-        rate,
-        errors,
-        msgs,
-      };
-    })
+    .map((msgs, hour) => ({
+      hour,
+      msgs,
+      errors: hourErrors[hour] ?? 0,
+      rate: msgs > 0 ? (hourErrors[hour] ?? 0) / msgs : 0,
+    }))
     .filter((entry) => entry.msgs > 0 && entry.errors > 0)
     .toSorted((a, b) => b.rate - a.rate)
     .slice(0, 5)
@@ -165,402 +65,36 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }));
 }
 
-type UsageMosaicStats = {
-  hasData: boolean;
-  totalTokens: number;
-  hourTotals: number[];
-  weekdayTotals: Array<{ label: string; tokens: number }>;
-};
-
-function getZonedHour(date: Date, zone: "local" | "utc"): number {
-  return zone === "utc" ? date.getUTCHours() : date.getHours();
-}
-
-function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
-  return zone === "utc" ? date.getUTCDay() : date.getDay();
-}
-
-function parseYmdDate(dateStr: string, timeZone: "local" | "utc" = "local"): Date | null {
+function parseYmdDate(dateStr: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) {
     return null;
   }
-  const [, y, m, d] = match;
-  const year = Number(y);
-  const month = Number(m) - 1;
-  const day = Number(d);
-  const date =
-    timeZone === "utc" ? new Date(Date.UTC(year, month, day)) : new Date(year, month, day);
-  const [actualYear, actualMonth, actualDay] =
-    timeZone === "utc"
-      ? [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()]
-      : [date.getFullYear(), date.getMonth(), date.getDate()];
-  // Reject normalized dates, including a local calendar date skipped by an offset change.
-  return actualYear === year && actualMonth === month && actualDay === day ? date : null;
-}
-
-type UtcQuarterBucketState = {
-  utcDateKey: string | undefined;
-  utcWeekday: number | null;
-  utcStartMs: number;
-};
-
-function mapUtcQuarterBucket(
-  dateStr: string,
-  quarterIndex: number,
-  timeZone: "local" | "utc",
-  state: UtcQuarterBucketState,
-): { hour: number; weekday: number } | null {
-  if (!Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
-    return null;
-  }
-  if (dateStr !== state.utcDateKey) {
-    state.utcDateKey = dateStr;
-    const date = parseYmdDate(dateStr, "utc");
-    state.utcWeekday = date ? date.getUTCDay() : null;
-    state.utcStartMs = date ? date.getTime() : 0;
-  }
-  if (state.utcWeekday === null) {
-    return null;
-  }
-  const localDate =
-    timeZone === "local" ? new Date(state.utcStartMs + quarterIndex * 900_000) : null;
-  return {
-    // Date getters return +0 even for a -0 quarter index.
-    hour: localDate ? getZonedHour(localDate, timeZone) : Math.floor((quarterIndex + 0) / 4),
-    weekday: localDate ? getZonedWeekday(localDate, timeZone) : state.utcWeekday,
-  };
-}
-
-function nextHourBoundary(date: Date, zone: "local" | "utc"): number {
-  const start = date.getTime();
-  const minutes = zone === "utc" ? date.getUTCMinutes() : date.getMinutes();
-  const seconds = zone === "utc" ? date.getUTCSeconds() : date.getSeconds();
-  // Local setters can move backward into the first occurrence of a repeated hour.
-  const next = start + (60 - minutes) * 60_000 - seconds * 1_000 - date.getMilliseconds();
-  if (zone === "utc" || new Date(next - 1).getTimezoneOffset() === date.getTimezoneOffset()) {
-    return next;
-  }
-
-  // Some zones change offset within an hour (Chatham at :45). Split at that
-  // transition so the elapsed interval keeps its original local hour and weekday.
-  const offset = date.getTimezoneOffset();
-  let low = start + 1;
-  let high = next - 1;
-  while (low < high) {
-    const middle = low + Math.floor((high - low) / 2);
-    if (new Date(middle).getTimezoneOffset() === offset) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
-  }
-  return low;
-}
-
-function forEachSessionTokenUsageBucket(
-  session: UsageSessionEntry,
-  timeZone: "local" | "utc",
-  visitor: (params: { hour: number; weekday: number; tokens: number }) => boolean | void,
-): boolean {
-  const buckets = session.usage?.utcQuarterHourTokenUsage;
-  if (!buckets || buckets.length === 0) {
-    return false;
-  }
-  let visited = false;
-  const bucketState: UtcQuarterBucketState = {
-    utcDateKey: undefined,
-    utcWeekday: null,
-    utcStartMs: 0,
-  };
-  for (const bucket of buckets) {
-    if (bucket.totalTokens <= 0) {
-      continue;
-    }
-    const mapped = mapUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone, bucketState);
-    if (!mapped) {
-      continue;
-    }
-    visited = true;
-    if (
-      visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens }) === false
-    ) {
-      break;
-    }
-  }
-  return visited;
-}
-
-function sessionSpanTouchesSelectedHours(
-  session: UsageSessionEntry,
-  hours: number[],
-  timeZone: "local" | "utc",
-): boolean {
-  const usage = session.usage;
-  const start = usage?.firstActivity ?? session.updatedAt;
-  const end = usage?.lastActivity ?? session.updatedAt;
-  if (!start || !end) {
-    return false;
-  }
-  const startMs = Math.min(start, end);
-  const endMs = Math.max(start, end);
-  let cursor = startMs;
-  while (cursor <= endMs) {
-    const date = new Date(cursor);
-    const hour = getZonedHour(date, timeZone);
-    if (hours.includes(hour)) {
-      return true;
-    }
-    if (cursor === endMs) {
-      break;
-    }
-    cursor = Math.min(nextHourBoundary(date, timeZone), endMs);
-  }
-  return false;
-}
-
-function sessionTouchesSelectedHours(
-  session: UsageSessionEntry,
-  hours: number[],
-  timeZone: "local" | "utc",
-): boolean {
-  if (hours.length === 0) {
-    return true;
-  }
-  let touches = false;
-  const hasPreciseTokenBuckets = forEachSessionTokenUsageBucket(session, timeZone, ({ hour }) => {
-    touches = hours.includes(hour);
-    return !touches;
-  });
-  if (hasPreciseTokenBuckets) {
-    return touches;
-  }
-  return sessionSpanTouchesSelectedHours(session, hours, timeZone);
-}
-
-function buildUsageMosaicStats(
-  sessions: UsageSessionEntry[],
-  timeZone: "local" | "utc",
-): UsageMosaicStats {
-  const hourTotals = Array.from({ length: 24 }, () => 0);
-  const weekdayTotals = Array.from({ length: 7 }, () => 0);
-  let totalTokens = 0;
-  let hasData = false;
-
-  for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage || !usage.totalTokens || usage.totalTokens <= 0) {
-      continue;
-    }
-    totalTokens += usage.totalTokens;
-
-    if (
-      forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
-        hourTotals[hour] = (hourTotals[hour] ?? 0) + tokens;
-        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + tokens;
-      })
-    ) {
-      hasData = true;
-      continue;
-    }
-
-    if (
-      !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
-        hourTotals[hour] = (hourTotals[hour] ?? 0) + usageLocal.totalTokens * share;
-        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usageLocal.totalTokens * share;
-      })
-    ) {
-      continue;
-    }
-    hasData = true;
-  }
-
-  const weekdayLabels = [
-    t("usage.mosaic.sun"),
-    t("usage.mosaic.mon"),
-    t("usage.mosaic.tue"),
-    t("usage.mosaic.wed"),
-    t("usage.mosaic.thu"),
-    t("usage.mosaic.fri"),
-    t("usage.mosaic.sat"),
-  ].map((label, index) => ({
-    label,
-    tokens: weekdayTotals[index] ?? 0,
-  }));
-
-  return {
-    hasData,
-    totalTokens,
-    hourTotals,
-    weekdayTotals: weekdayLabels,
-  };
-}
-
-function renderUsageMosaic(
-  sessions: UsageSessionEntry[],
-  timeZone: "local" | "utc",
-  selectedHours: number[],
-  onSelectHour: (hour: number, shiftKey: boolean) => void,
-) {
-  const stats = buildUsageMosaicStats(sessions, timeZone);
-  const maxHour = Math.max(...stats.hourTotals, 1);
-  const maxWeekday = Math.max(...stats.weekdayTotals.map((d) => d.tokens), 1);
-
-  return renderSettingsSection(
-    {
-      title: t("usage.mosaic.title"),
-      description: stats.hasData
-        ? t("usage.mosaic.subtitle", {
-            zone:
-              timeZone === "utc"
-                ? t("usage.filters.timeZoneUtc")
-                : t("usage.filters.timeZoneLocal"),
-          })
-        : t("usage.mosaic.subtitleEmpty"),
-      actions: html`
-        <div class="usage-mosaic-total">
-          ${formatUsageTokens(stats.hasData ? stats.totalTokens : 0)}
-          ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
-        </div>
-      `,
-    },
-    html`
-      <div class="usage-panel usage-mosaic">
-        ${
-          stats.hasData
-            ? html`
-                <div class="usage-mosaic-grid">
-                  <div class="usage-mosaic-section">
-                    <div class="usage-mosaic-section-title">${t("usage.mosaic.dayOfWeek")}</div>
-                    <div class="usage-daypart-grid">
-                      ${stats.weekdayTotals.map((part) => {
-                        const intensity = Math.min(part.tokens / maxWeekday, 1);
-                        const bg =
-                          part.tokens > 0
-                            ? `color-mix(in srgb, var(--accent) ${(12 + intensity * 60).toFixed(1)}%, transparent)`
-                            : "transparent";
-                        return html`
-                          <div class="usage-daypart-cell" style="background: ${bg};">
-                            <div class="usage-daypart-label">${part.label}</div>
-                            <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
-                          </div>
-                        `;
-                      })}
-                    </div>
-                  </div>
-                  <div class="usage-mosaic-section">
-                    <div class="usage-mosaic-section-title">
-                      <span>${t("usage.filters.hours")}</span>
-                      <span class="usage-mosaic-sub">0 → 23</span>
-                    </div>
-                    <div class="usage-hour-grid">
-                      ${stats.hourTotals.map((value, hour) => {
-                        const intensity = Math.min(value / maxHour, 1);
-                        const bg =
-                          value > 0
-                            ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
-                            : "transparent";
-                        const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
-                          t("usage.metrics.tokens"),
-                        )}`;
-                        const border =
-                          intensity > 0.7
-                            ? "color-mix(in srgb, var(--accent) 60%, transparent)"
-                            : "color-mix(in srgb, var(--accent) 24%, transparent)";
-                        const selected = selectedHours.includes(hour);
-                        return html`
-                          <button
-                            type="button"
-                            class="usage-hour-cell ${selected ? "selected" : ""}"
-                            style="background: ${bg}; border-color: ${border};"
-                            title="${title}"
-                            aria-label=${title}
-                            aria-pressed=${selected ? "true" : "false"}
-                            @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                          ></button>
-                        `;
-                      })}
-                    </div>
-                    <div class="usage-hour-labels">
-                      <span>${t("usage.mosaic.midnight")}</span>
-                      <span>${t("usage.mosaic.fourAm")}</span>
-                      <span>${t("usage.mosaic.eightAm")}</span>
-                      <span>${t("usage.mosaic.noon")}</span>
-                      <span>${t("usage.mosaic.fourPm")}</span>
-                      <span>${t("usage.mosaic.eightPm")}</span>
-                    </div>
-                    <div class="usage-hour-legend">
-                      <span></span>
-                      ${t("usage.mosaic.legend")}
-                    </div>
-                  </div>
-                </div>
-              `
-            : html`<div class="usage-empty-block usage-empty-block--compact">
-                ${t("usage.mosaic.noTimelineData")}
-              </div>`
-        }
-      </div>
-    `,
-  );
-}
-
-function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
-  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
-  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
-  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day
+    ? date
+    : null;
 }
 
 function parseIsoDayIndex(dateStr: string): number | null {
-  const date = parseYmdDate(dateStr, "utc");
+  const date = parseYmdDate(dateStr);
   return date ? date.getTime() / DAY_MS : null;
 }
 
-function formatIsoDayIndex(dayIndex: number): string {
-  return new Date(dayIndex * DAY_MS).toISOString().slice(0, 10);
-}
-
 function formatDayLabel(dateStr: string): string {
-  const date = parseYmdDate(dateStr);
-  if (!date) {
-    return dateStr;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatCalendarDate(dateStr, { month: "short", day: "numeric" });
 }
 
 function formatFullDate(dateStr: string): string {
-  const date = parseYmdDate(dateStr);
-  if (!date) {
-    return dateStr;
-  }
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+  return formatCalendarDate(dateStr, { month: "long", day: "numeric", year: "numeric" });
 }
 
-function buildUsageCostWindowSummary(
-  daily: Array<UsageTotals & { date: string }>,
-  startDate: string,
-  endDate: string,
-): UsageCostWindowSummary | null {
-  const startDay = parseIsoDayIndex(startDate);
-  const endDay = parseIsoDayIndex(endDate);
-  if (startDay === null || endDay === null || startDay > endDay) {
-    return null;
-  }
-
-  const totals = createEmptyCostUsageTotals();
-  for (const entry of daily) {
-    const day = parseIsoDayIndex(entry.date);
-    if (day !== null && day >= startDay && day <= endDay) {
-      addCostUsageTotals(totals, entry);
-    }
-  }
-
-  return {
-    days: endDay - startDay + 1,
-    endDate,
-    totals,
-  };
+function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
+  const date = parseYmdDate(dateStr);
+  return date ? date.toLocaleDateString(undefined, { ...options, timeZone: "UTC" }) : dateStr;
 }
 
 function buildUsageCostWindows(
@@ -575,39 +109,18 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return [1, 7, 30, 90]
-    .filter((days) => days < rangeDays)
-    .map((days) => {
-      const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
-      return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);
-    })
-    .filter((summary): summary is UsageCostWindowSummary => summary !== null);
-}
-
-const buildAggregatesFromSessions = (
-  sessions: UsageSessionEntry[],
-  fallback?: UsageAggregates | null,
-): UsageAggregates => {
-  if (sessions.length === 0) {
-    return (
-      fallback ?? {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
+    const startDay = rangeEndDay - days + 1;
+    const totals = createEmptyCostUsageTotals();
+    for (const entry of daily) {
+      const day = parseIsoDayIndex(entry.date);
+      if (day !== null && day >= startDay && day <= rangeEndDay) {
+        addCostUsageTotals(totals, entry);
       }
-    );
-  }
-
-  const accumulator = createUsageAggregateAccumulator();
-  for (const session of sessions) {
-    accumulator.add(session);
-  }
-  return accumulator.finish();
-};
+    }
+    return { days, endDate: rangeEndDate, totals };
+  });
+}
 
 type UsageInsightStats = {
   durationCount: number;
@@ -617,53 +130,13 @@ type UsageInsightStats = {
   errorRate: number;
 };
 
-const buildUsageInsightStats = (
-  sessions: UsageSessionEntry[],
-  totals: UsageTotals | null,
-  aggregates: UsageAggregates,
-): UsageInsightStats => {
-  let durationSumMs = 0;
-  let durationCount = 0;
-  for (const session of sessions) {
-    const duration = session.usage?.durationMs ?? 0;
-    if (duration > 0) {
-      durationSumMs += duration;
-      durationCount += 1;
-    }
-  }
-
-  const avgDurationMs = durationCount ? durationSumMs / durationCount : 0;
-  const throughputTokensPerMin =
-    totals && durationSumMs > 0 ? totals.totalTokens / (durationSumMs / 60000) : undefined;
-  const throughputCostPerMin =
-    totals && durationSumMs > 0 ? totals.totalCost / (durationSumMs / 60000) : undefined;
-
-  const errorRate = aggregates.messages.total
-    ? aggregates.messages.errors / aggregates.messages.total
-    : 0;
-
-  return {
-    durationCount,
-    avgDurationMs,
-    throughputTokensPerMin,
-    throughputCostPerMin,
-    errorRate,
-  };
-};
-
 export type { UsageInsightStats };
 export {
-  buildAggregatesFromSessions,
-  buildUsageCostWindowSummary,
   buildUsageCostWindows,
   buildPeakErrorHours,
-  buildUsageInsightStats,
   charsToTokens,
   formatUsageCost,
   formatDayLabel,
   formatFullDate,
-  formatIsoDate,
   formatUsageTokens,
-  renderUsageMosaic,
-  sessionTouchesSelectedHours,
 };

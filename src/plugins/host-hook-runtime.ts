@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -109,54 +110,23 @@ async function waitForLiveTerminalEventHandlers(runId: string): Promise<"settled
   }
 }
 
-function waitForTerminalEventHandlers(runId: string): Promise<void> {
-  let timeout: NodeJS.Timeout | undefined;
+async function waitForTerminalEventHandlers(runId: string): Promise<void> {
   const settled = waitForLiveTerminalEventHandlers(runId);
   // Promise.race bounds the host wait; JavaScript cannot cancel the plugin
   // promises themselves, so timeout also marks the run expired to block late
   // run-context resurrection by handlers that eventually settle.
-  const timedOut = new Promise<"timeout">((resolve) => {
-    timeout = setTimeout(() => {
+  await raceWithTimeout(
+    settled,
+    PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
+    () => {
       rememberBoundedRunId(getPluginHostRuntimeState().terminalEventCleanupExpiredRunIds, runId);
       getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.delete(runId);
       log.warn(
         `plugin terminal agent event subscriptions still running after ${PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS}ms; clearing run context without waiting for them to settle`,
       );
-      resolve("timeout");
-    }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
-  });
-  if (timeout) {
-    timeout.unref?.();
-  }
-  return Promise.race([settled, timedOut]).then(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
-  });
-}
-
-function getPluginRunContextNamespaces(
-  runId: string,
-  pluginId: string,
-  create = false,
-): PluginRunContextNamespaces | undefined {
-  const contexts = getPluginRunContexts();
-  let byPlugin = contexts.get(runId);
-  if (!byPlugin && create) {
-    byPlugin = new Map();
-    contexts.set(runId, byPlugin);
-  }
-  if (!byPlugin) {
-    return undefined;
-  }
-  let namespaces = byPlugin.get(pluginId);
-  if (create) {
-    // A new write owns its namespace map, even when it repeats the same value.
-    namespaces = new Map(namespaces);
-    byPlugin.set(pluginId, namespaces);
-  }
-  return namespaces;
+    },
+    { ref: false },
+  );
 }
 
 /** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */
@@ -187,8 +157,13 @@ export function setPluginRunContext(params: {
   if (params.patch.value === undefined || !isPluginJsonValue(params.patch.value)) {
     return false;
   }
-  const namespaces = getPluginRunContextNamespaces(runId, params.pluginId, true);
-  namespaces?.set(namespace, structuredClone(params.patch.value));
+  const contexts = getPluginRunContexts();
+  const byPlugin = contexts.get(runId) ?? new Map<string, PluginRunContextNamespaces>();
+  contexts.set(runId, byPlugin);
+  // A new write owns its namespace map, even when it repeats the same value.
+  const namespaces = new Map(byPlugin.get(params.pluginId));
+  byPlugin.set(params.pluginId, namespaces);
+  namespaces.set(namespace, structuredClone(params.patch.value));
   return true;
 }
 
@@ -202,7 +177,7 @@ export function getPluginRunContext(params: {
   if (!runId || !namespace) {
     return undefined;
   }
-  const value = getPluginRunContextNamespaces(runId, params.pluginId)?.get(namespace);
+  const value = getPluginRunContexts().get(runId)?.get(params.pluginId)?.get(namespace);
   return value === undefined ? undefined : structuredClone(value);
 }
 
@@ -306,6 +281,26 @@ function logAgentEventSubscriptionFailure(
   );
 }
 
+function snapshotAgentEventMetadata(event: AgentEventPayload): AgentEventPayload {
+  const data: Record<string, unknown> = {};
+  for (const key of Object.keys(event.data)) {
+    const descriptor = Object.getOwnPropertyDescriptor(event.data, key);
+    if (!descriptor || !("value" in descriptor)) {
+      continue;
+    }
+    const value: unknown = descriptor.value;
+    if (
+      value === null ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      (typeof value === "string" && value.length <= 256)
+    ) {
+      Object.defineProperty(data, key, { value, enumerable: true });
+    }
+  }
+  return structuredClone({ ...event, data });
+}
+
 export function dispatchPluginAgentEventSubscriptions(params: {
   registry: PluginRegistry | null | undefined;
   event: AgentEventPayload;
@@ -317,6 +312,18 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const streams = registration.subscription.streams;
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
       continue;
+    }
+    const phases = registration.subscription.phases;
+    if (phases && phases.length > 0) {
+      const data = params.event.data;
+      if (
+        !data ||
+        typeof data !== "object" ||
+        typeof data.phase !== "string" ||
+        !phases.includes(data.phase)
+      ) {
+        continue;
+      }
     }
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
@@ -351,7 +358,12 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     };
     try {
       const pending = Promise.resolve(
-        registration.subscription.handle(structuredClone(params.event), ctx),
+        registration.subscription.handle(
+          registration.subscription.payload === "metadata"
+            ? snapshotAgentEventMetadata(params.event)
+            : structuredClone(params.event),
+          ctx,
+        ),
       )
         .catch((error: unknown) => {
           logAgentEventSubscriptionFailure(pluginId, registration.subscription.id, error);

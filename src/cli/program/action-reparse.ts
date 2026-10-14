@@ -1,4 +1,3 @@
-// Reparse support for lazy commands after their placeholder has been replaced.
 import type { Command, Option } from "commander";
 import { buildParseArgv } from "../argv.js";
 import { getCommandHierarchy, getRootCommand } from "./command-tree.js";
@@ -171,7 +170,6 @@ function hoistLazyParentOptions(
     : [...argv.slice(0, lazyCommandIndex), ...hoisted, lazyCommandName, ...remaining];
 }
 
-/** Re-run parsing after replacing a lazy command placeholder. */
 export async function reparseProgramFromActionCommand(
   program: Command,
   actionCommand: Command,

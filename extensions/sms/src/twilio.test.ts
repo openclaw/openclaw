@@ -1,5 +1,6 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -23,6 +24,27 @@ import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -67,6 +89,80 @@ async function readTestTwilioForm(body: string): Promise<Record<string, string>>
 }
 
 describe("Twilio SMS helpers", () => {
+  it.each([false, true])(
+    "rechecks custom-fetch credentials after effect preparation (replaced=%s)",
+    async (replaced) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<Response>();
+      const account = createAccount();
+      setRuntimeConfigSnapshot({ channels: { sms: account } } as never);
+      const replace = () =>
+        setRuntimeConfigSnapshot({
+          channels: { sms: { ...account, authToken: "replacement" } },
+        } as never);
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const fetchImpl = vi.fn<typeof fetch>(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const sending = sendSmsViaTwilio({
+        account,
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(fetchImpl).not.toHaveBeenCalled();
+        if (replaced) {
+          replace();
+        }
+        prepared.resolve();
+        if (!replaced) {
+          await dispatched.promise;
+          replace();
+        }
+        response.resolve(Response.json({ sid: "SM456" }));
+        const outcome = await sending;
+        if (replaced) {
+          expect(outcome).toMatchObject({
+            error: {
+              name: "PlatformMessageNotDispatchedError",
+              cause: { message: "SMS credentials changed for default; retry the operation." },
+            },
+          });
+          expect("error" in outcome && outcome.error).toBeInstanceOf(
+            PlatformMessageNotDispatchedError,
+          );
+        } else {
+          expect(outcome).toEqual({ value: { sid: "SM456", to: "+15551234567" } });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ sid: "SM456" }));
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     clearRuntimeConfigSnapshot();

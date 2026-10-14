@@ -50,7 +50,7 @@ export function resolveInstalledPluginIndexStateDatabaseOptions(
   return { env: resolveStoreEnv(options) };
 }
 
-/** Resolves the legacy JSON installed plugin index path for migration/doctor use. */
+/** Locates unsupported JSON state without importing or changing it. */
 export function resolveLegacyInstalledPluginIndexStorePath(
   options: InstalledPluginIndexStoreOptions = {},
 ): string {
@@ -60,4 +60,8 @@ export function resolveLegacyInstalledPluginIndexStorePath(
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveActivePluginInstallRoots(env).stateDir;
   return path.join(stateDir, LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH);
+}
+
+export function legacyInstalledPluginIndexUnsupportedMessage(sourcePath: string): string {
+  return `Plugin install index ${sourcePath} predates the July 2026 upgrade support window and was left unchanged. Run openclaw doctor --fix on 2026.9.5 with a pre-update backup before upgrading again: https://docs.openclaw.ai/install/updating#upgrading-very-old-versions`;
 }

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   initializeAndroidStoreRelease,
   mobileReleaseRefFor,
@@ -27,8 +27,8 @@ function git(cwd: string, args: string[]): string {
   return run("git", args, cwd);
 }
 
-function createFixtureRepo(): { remote: string; root: string; sha: string } {
-  const root = tempRoots.make("openclaw-mobile-release-ref-");
+function createFixtureRepo(tempDirs = tempRoots): { remote: string; root: string; sha: string } {
+  const root = tempDirs.make("openclaw-mobile-release-ref-");
   const remote = path.join(root, "remote.git");
   const checkout = path.join(root, "checkout");
 
@@ -50,6 +50,190 @@ function createFixtureRepo(): { remote: string; root: string; sha: string } {
 }
 
 describe("mobile-release-ref", () => {
+  describe("transient Git failures", () => {
+    const retryRoots = useAutoCleanupTempDirTracker(afterAll);
+    let fixture: ReturnType<typeof createFixtureRepo>;
+    let options: ReturnType<typeof parseArgs>;
+    let nextBuild = 100;
+
+    beforeAll(() => {
+      fixture = createFixtureRepo(retryRoots);
+    });
+
+    beforeEach(() => {
+      options = parseArgs([
+        "record",
+        "--platform",
+        "ios",
+        "--version",
+        "2026.6.10",
+        "--build",
+        String(nextBuild++),
+        "--sha",
+        fixture.sha,
+        "--root",
+        fixture.root,
+      ]);
+      vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      "Unable to determine if workflow can be created or updated due to timeout; `workflows` scope may be required.",
+      "fatal: unable to access remote: The requested URL returned error: 503",
+      "fatal: unable to access remote: Recv failure: Connection reset by peer",
+    ])("retries a transient push failure and records the original source: %s", (stderr) => {
+      let pushes = 0;
+      const result = recordMobileReleaseRef(options, {
+        execFileSync(command, args, execOptions) {
+          if (args[0] === "push" && ++pushes === 1) {
+            throw Object.assign(new Error("Git push failed"), { stderr });
+          }
+          return execFileSync(command, args, execOptions);
+        },
+      });
+      expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
+      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
+      expect(pushes).toBe(2);
+      expect(Atomics.wait).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a failed preflight read before creating a release ref", () => {
+      let reads = 0;
+      const result = recordMobileReleaseRef(options, {
+        execFileSync(command, args, execOptions) {
+          if (args[0] === "ls-remote" && ++reads === 1) {
+            throw Object.assign(new Error("Git lookup failed"), {
+              stderr: "fatal: Could not resolve host: github.com",
+            });
+          }
+          return execFileSync(command, args, execOptions);
+        },
+      });
+      expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
+      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
+      expect(Atomics.wait).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([1, 4])("reconciles a lost push response when %i readbacks fail", (failedReads) => {
+      let pushes = 0;
+      let readbacks = 0;
+      const record = () =>
+        recordMobileReleaseRef(options, {
+          execFileSync(command, args, execOptions) {
+            if (args[0] === "ls-remote" && pushes > 0 && ++readbacks <= failedReads) {
+              throw Object.assign(new Error("Git lookup failed"), {
+                stderr: "fatal: Operation timed out",
+              });
+            }
+            const result = execFileSync(command, args, execOptions);
+            if (args[0] === "push") {
+              pushes += 1;
+              throw Object.assign(new Error("Git response lost"), {
+                stderr: "fatal: the remote end hung up unexpectedly",
+              });
+            }
+            return result;
+          },
+        });
+      if (failedReads === 1) {
+        expect(record()).toMatchObject({ sha: fixture.sha, status: "already-recorded" });
+      } else {
+        expect(record).toThrow("Failed to inspect remote release ref");
+      }
+      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
+      expect(pushes).toBe(1);
+      expect(Atomics.wait).toHaveBeenCalledTimes(Math.min(failedReads, 3));
+    });
+
+    it("stops after four transient push failures with bounded increasing delays", () => {
+      let pushes = 0;
+      expect(() =>
+        recordMobileReleaseRef(options, {
+          execFileSync(command, args, execOptions) {
+            if (args[0] === "push") {
+              pushes += 1;
+              throw Object.assign(new Error("Git push failed"), {
+                stderr: "fatal: The requested URL returned error: 502",
+              });
+            }
+            return execFileSync(command, args, execOptions);
+          },
+        }),
+      ).toThrow("Failed to create mobile release ref");
+      expect(pushes).toBe(4);
+      expect(vi.mocked(Atomics.wait).mock.calls.map((call) => call[3])).toEqual([
+        5_000, 10_000, 20_000,
+      ]);
+      expect(() => resolveMobileReleaseRef(options)).toThrow("does not exist");
+    });
+
+    it.each([
+      "fatal: Authentication failed",
+      "fatal: The requested URL returned error: 403",
+      "remote: refusing to allow a GitHub App to create or update workflow without workflows permission",
+      "remote: GH013: Repository rule violations found",
+      "unknown remote rejection",
+    ])("does not retry a permanent or unrecognized push failure: %s", (stderr) => {
+      let pushes = 0;
+      expect(() =>
+        recordMobileReleaseRef(options, {
+          execFileSync(command, args, execOptions) {
+            if (args[0] === "push") {
+              pushes += 1;
+              throw Object.assign(new Error("Git push failed"), { stderr });
+            }
+            return execFileSync(command, args, execOptions);
+          },
+        }),
+      ).toThrow(stderr);
+      expect(pushes).toBe(1);
+      expect(Atomics.wait).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "preserves a ref created during backoff (conflicting source: %s)",
+      (conflict) => {
+        const otherSha = conflict
+          ? git(fixture.root, [
+              "commit-tree",
+              `${fixture.sha}^{tree}`,
+              "-p",
+              fixture.sha,
+              "-m",
+              "competing release",
+            ]).trim()
+          : fixture.sha;
+        const ref = `refs/openclaw/mobile-releases/ios/2026.6.10-${options.build}`;
+        vi.mocked(Atomics.wait).mockImplementation(() => {
+          git(fixture.root, ["push", "origin", `${otherSha}:${ref}`]);
+          return "timed-out";
+        });
+        let pushes = 0;
+        const record = () =>
+          recordMobileReleaseRef(options, {
+            execFileSync(command, args, execOptions) {
+              if (args[0] === "push" && ++pushes === 1) {
+                throw Object.assign(new Error("Git push failed"), {
+                  stderr: "fatal: Connection timed out",
+                });
+              }
+              return execFileSync(command, args, execOptions);
+            },
+          });
+        if (conflict) {
+          expect(record).toThrow(`already points at ${otherSha}`);
+        } else {
+          expect(record()).toMatchObject({ sha: fixture.sha, status: "created" });
+        }
+        expect(git(fixture.root, ["ls-remote", "--refs", "origin", ref]).trim()).toBe(
+          `${otherSha}\t${ref}`,
+        );
+        expect(Atomics.wait).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   it("renders platform release refs from store identities", () => {
     expect(mobileReleaseRefFor({ platform: "ios", version: "2026.6.10", build: "8" })).toBe(
       "refs/openclaw/mobile-releases/ios/2026.6.10-8",
@@ -113,6 +297,17 @@ describe("mobile-release-ref", () => {
         version: "2026.6.10",
       }),
     ).toThrow("Invalid Android versionCode");
+  });
+
+  it("preserves flag ordering and fails before treating a missing value as help", () => {
+    expect(
+      parseArgs(["resolve", "--platform", "android", "--", "--platform", "ios"]),
+    ).toMatchObject({ platform: "ios", sha: "HEAD" });
+    expect(() => parseArgs(["resolve", "--root", "-h"])).toThrow("Missing value for --root.");
+    expect(() => parseArgs(["resolve", "--platform=ios"])).toThrow(
+      "Unknown argument: --platform=ios",
+    );
+    expect(() => parseArgs(["resolve", "--help", "--unknown"])).toThrow("Usage:");
   });
 
   it("records immutable platform refs and resolves the recorded SHA through the CLI", () => {

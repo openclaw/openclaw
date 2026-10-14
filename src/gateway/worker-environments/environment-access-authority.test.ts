@@ -63,6 +63,9 @@ describe("worker environment startup authority", () => {
       };
       const nodeTunnelManager = {
         status: () => "stopped" as const,
+        observeProcesses: vi.fn(async () => {
+          throw new Error("Process observation is not configured in this fixture");
+        }),
         start: vi.fn(async (request: Parameters<WorkerEnvironmentNodeTunnel["start"]>[0]) => ({
           ...nodeHandle,
           environmentId: request.environmentId,

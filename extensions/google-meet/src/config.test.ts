@@ -1,28 +1,19 @@
-// Google Meet tests cover config plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig, resolveGoogleMeetGatewayOperationTimeoutMs } from "./config.js";
 
-const GOOGLE_MEET_ENV_KEYS = [
-  "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
-  "GOOGLE_MEET_CLIENT_ID",
-  "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
-  "GOOGLE_MEET_CLIENT_SECRET",
-  "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
-  "GOOGLE_MEET_REFRESH_TOKEN",
-  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN",
-  "GOOGLE_MEET_ACCESS_TOKEN",
-  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
-  "GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
-  "OPENCLAW_GOOGLE_MEET_DEFAULT_MEETING",
-  "GOOGLE_MEET_DEFAULT_MEETING",
-  "OPENCLAW_GOOGLE_MEET_PREVIEW_ACK",
-  "GOOGLE_MEET_PREVIEW_ACK",
-] as const;
-
 function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
-  for (const key of GOOGLE_MEET_ENV_KEYS) {
-    vi.stubEnv(key, undefined);
+  for (const suffix of [
+    "CLIENT_ID",
+    "CLIENT_SECRET",
+    "REFRESH_TOKEN",
+    "ACCESS_TOKEN",
+    "ACCESS_TOKEN_EXPIRES_AT",
+    "DEFAULT_MEETING",
+    "PREVIEW_ACK",
+  ]) {
+    vi.stubEnv(`OPENCLAW_GOOGLE_MEET_${suffix}`, undefined);
+    vi.stubEnv(`GOOGLE_MEET_${suffix}`, undefined);
   }
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
@@ -36,31 +27,19 @@ describe("google meet config", () => {
   });
 
   it("keeps realtime.provider as the transcription compatibility fallback", () => {
-    const custom = resolveGoogleMeetConfig({
-      realtime: {
-        provider: "custom-stt",
-      },
-    });
+    const custom = resolveGoogleMeetConfig({ realtime: { provider: "custom-stt" } });
     expect(custom.realtime.provider).toBe("custom-stt");
     expect(custom.realtime.transcriptionProvider).toBe("custom-stt");
 
-    const google = resolveGoogleMeetConfig({
-      realtime: {
-        provider: "google",
-      },
-    });
+    const google = resolveGoogleMeetConfig({ realtime: { provider: "google" } });
     expect(google.realtime.provider).toBe("google");
     expect(google.realtime.transcriptionProvider).toBe("openai");
   });
 
   it("preserves an empty realtime intro message for silent joins", () => {
-    expect(
-      resolveGoogleMeetConfig({
-        realtime: {
-          introMessage: "",
-        },
-      }).realtime.introMessage,
-    ).toBe("");
+    expect(resolveGoogleMeetConfig({ realtime: { introMessage: "" } }).realtime.introMessage).toBe(
+      "",
+    );
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
@@ -84,10 +63,10 @@ describe("google meet config", () => {
     });
   });
 
-  it.each(["0x10"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
+  it("ignores non-decimal env numeric fallbacks", () => {
     const config = resolveGoogleMeetConfigFromTestEnv({
       OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "0x10",
     });
 
     expect(config.oauth).toEqual({ accessToken: "access-token" });
@@ -150,31 +129,25 @@ describe("google meet gateway operation timeout", () => {
   });
 
   it("adds operation grace to normal transport timeouts", () => {
-    expect(resolveGoogleMeetGatewayOperationTimeoutMs(resolveGoogleMeetConfig({}))).toBe(60_000);
+    expect(operationTimeout({})).toBe(60_000);
     expect(
-      resolveGoogleMeetGatewayOperationTimeoutMs(
-        resolveGoogleMeetConfig({
-          chrome: { joinTimeoutMs: 120_000 },
-          voiceCall: { requestTimeoutMs: 30_000 },
-        }),
-      ),
+      operationTimeout({
+        chrome: { joinTimeoutMs: 120_000 },
+        voiceCall: { requestTimeoutMs: 30_000 },
+      }),
     ).toBe(150_000);
   });
 
   it("caps overflowed transport timeout grace", () => {
-    expect(
-      resolveGoogleMeetGatewayOperationTimeoutMs(
-        resolveGoogleMeetConfig({
-          chrome: { joinTimeoutMs: Number.MAX_VALUE },
-        }),
-      ),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(
-      resolveGoogleMeetGatewayOperationTimeoutMs(
-        resolveGoogleMeetConfig({
-          voiceCall: { requestTimeoutMs: Number.MAX_VALUE },
-        }),
-      ),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(operationTimeout({ chrome: { joinTimeoutMs: Number.MAX_VALUE } })).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(operationTimeout({ voiceCall: { requestTimeoutMs: Number.MAX_VALUE } })).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 });
+
+function operationTimeout(config: unknown) {
+  return resolveGoogleMeetGatewayOperationTimeoutMs(resolveGoogleMeetConfig(config));
+}

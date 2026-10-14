@@ -12,8 +12,11 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: fixture.forbiddenSqlite,
 }));
-vi.mock("./openclaw-state-lease-storage.js", () => ({
+vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenSqlite,
+}));
+vi.mock("./openclaw-state-lease-storage.js", () => ({
   prepareLeaseDatabase: fixture.forbiddenSqlite,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   verifyOpenClawStateLeaseOwnership: () => {
@@ -46,6 +49,25 @@ beforeEach(() => {
 afterEach(() => {
   expect(fixture.forbiddenSqlite).not.toHaveBeenCalled();
   vi.useRealTimers();
+});
+
+it("keeps a lease with a worker expiry 30 days ahead alive", async () => {
+  fixture.expiresAt = Date.now() + 30 * 24 * 60 * 60_000;
+  await withOpenClawStateLease(
+    {
+      scope: "projects.checkout",
+      key: "synthetic-clock-skew",
+      database: { scope: "shared" },
+      leaseMs: 1_000,
+      waitMs: 0,
+    },
+    async (lease) => {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(lease.signal.aborted).toBe(false);
+      lease.assertOwned();
+    },
+  );
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it.each(["live", "expired", "renewed"] as const)(

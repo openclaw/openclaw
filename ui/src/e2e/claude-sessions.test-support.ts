@@ -1,3 +1,32 @@
+import type { Locator } from "playwright";
+import { expect } from "vitest";
+
+export async function expectTranscriptLayoutCommitted(thread: Locator) {
+  // CSS can fill the slot before ResizeObserver commits. Wait for the
+  // layout owner's inline size and padding writes, not computed centering.
+  await expect
+    .poll(() =>
+      thread.evaluate((element) => {
+        const slot = element.parentElement;
+        if (!(element instanceof HTMLElement) || !slot) {
+          return false;
+        }
+        const slotBox = slot.getBoundingClientRect();
+        const slotStyle = getComputedStyle(slot);
+        return (
+          slotBox.width > 0 &&
+          slotBox.height > 0 &&
+          Number.parseFloat(element.style.width) === slotBox.width &&
+          Number.parseFloat(element.style.height) === slotBox.height &&
+          element.style.paddingTop === slotStyle.paddingTop &&
+          element.style.paddingBottom === slotStyle.paddingBottom &&
+          element.getBoundingClientRect().width === slotBox.width
+        );
+      }),
+    )
+    .toBe(true);
+}
+
 export function resumableClaudeCatalog() {
   return {
     catalogs: [

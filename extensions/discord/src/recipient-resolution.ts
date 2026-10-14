@@ -20,11 +20,6 @@ export async function parseAndResolveRecipient(
   accountId?: string,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<DiscordRecipient> {
-  if (!cfg) {
-    throw new Error(
-      "Discord recipient resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
   const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
   const resolved = await parseAndResolveDiscordTarget(

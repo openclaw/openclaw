@@ -1,8 +1,14 @@
 // Feishu tests cover tool account routing plugin behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
+import { registerFeishuBitableTools } from "./bitable.js";
+import { registerFeishuChatTools } from "./chat.js";
+import { registerFeishuDocTools } from "./docx.js";
+import { registerFeishuDriveTools } from "./drive.js";
+import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 import type { FeishuToolsConfig } from "./types.js";
+import { registerFeishuWikiTools } from "./wiki.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
@@ -19,13 +25,6 @@ const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) =
 vi.mock("./client.js", () => ({
   createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
 }));
-
-let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
-let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
-let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
-let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
-let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
-let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
 
 function createConfig(params: {
   topTools?: FeishuToolsConfig;
@@ -110,21 +109,6 @@ function lastClientAppId(): string | undefined {
 }
 
 describe("feishu tool account routing", () => {
-  beforeAll(async () => {
-    ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
-      await import("./bitable.js").then(
-        async ({ registerFeishuBitableTools: registerFeishuBitableToolsLocal }) => ({
-          registerFeishuBitableTools: registerFeishuBitableToolsLocal,
-          ...(await import("./drive.js")),
-          ...(await import("./perm.js")),
-          ...(await import("./wiki.js")),
-        }),
-      ));
-    ({ registerFeishuWikiTools } = await import("./wiki.js"));
-    ({ registerFeishuChatTools } = await import("./chat.js"));
-    ({ registerFeishuDocTools } = await import("./docx.js"));
-  });
-
   afterAll(() => {
     vi.doUnmock("./client.js");
     vi.resetModules();

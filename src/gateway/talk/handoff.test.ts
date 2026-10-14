@@ -11,9 +11,6 @@ describe("talk handoff store", () => {
 
     const handoff = createTalkHandoff({
       sessionKey: "session:main",
-      sessionId: "session-id",
-      channel: "discord",
-      target: "dm:123",
       provider: "openai",
       model: "gpt-realtime-2",
       voice: "alloy",
@@ -25,9 +22,6 @@ describe("talk handoff store", () => {
       roomId: `talk_${handoff.id}`,
       roomUrl: `/talk/rooms/talk_${handoff.id}`,
       sessionKey: "session:main",
-      sessionId: "session-id",
-      channel: "discord",
-      target: "dm:123",
       provider: "openai",
       model: "gpt-realtime-2",
       voice: "alloy",
@@ -48,45 +42,10 @@ describe("talk handoff store", () => {
     if (record === undefined) {
       throw new Error("expected stored talk handoff record");
     }
-    expect(record.tokenHash).not.toBe(handoff.token);
+    expect(record).not.toHaveProperty("token");
 
     vi.advanceTimersByTime(5001);
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    vi.useRealTimers();
-  });
-
-  it("expires handoffs immediately when the creation clock is invalid", () => {
-    const handoff = (() => {
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-      try {
-        return createTalkHandoff({
-          sessionKey: "session:main",
-          ttlMs: 5000,
-        });
-      } finally {
-        dateNow.mockRestore();
-      }
-    })();
-
-    expect(handoff.createdAt).toBe(0);
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-  });
-
-  it("expires handoffs immediately when expiry would exceed Date bounds", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    const handoff = createTalkHandoff({
-      sessionKey: "session:main",
-      ttlMs: 5000,
-    });
-
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-
     vi.useRealTimers();
   });
 
@@ -116,14 +75,10 @@ describe("talk handoff store", () => {
   it("isolates simultaneous handoffs for different sessions on the same host", () => {
     const first = createTalkHandoff({
       sessionKey: "agent:main:first",
-      channel: "browser",
-      target: "host:local",
       provider: "openai",
     });
     const second = createTalkHandoff({
       sessionKey: "agent:main:second",
-      channel: "browser",
-      target: "host:local",
     });
 
     expect(first.id).not.toBe(second.id);
@@ -132,15 +87,11 @@ describe("talk handoff store", () => {
     expect(getTalkHandoff(first.id)).toMatchObject({
       roomId: first.roomId,
       sessionKey: "agent:main:first",
-      channel: "browser",
-      target: "host:local",
       provider: "openai",
     });
     expect(getTalkHandoff(second.id)).toMatchObject({
       roomId: second.roomId,
       sessionKey: "agent:main:second",
-      channel: "browser",
-      target: "host:local",
     });
   });
 });

@@ -5,6 +5,18 @@ import Testing
 
 @MainActor
 struct RealtimeTalkRelaySessionTests {
+    @Test func `realtime recovery has a bounded retry budget that resets after a stable session`() {
+        #expect(RealtimeTalkRecovery.restartAttempt(
+            previousRapidRestarts: 1,
+            activeDuration: 5) == 2)
+        #expect(RealtimeTalkRecovery.restartAttempt(
+            previousRapidRestarts: 2,
+            activeDuration: 31) == 1)
+        #expect(RealtimeTalkRecovery.restartDelayNanoseconds(attempt: 1) == 500_000_000)
+        #expect(RealtimeTalkRecovery.restartDelayNanoseconds(attempt: 2) == 2_000_000_000)
+        #expect(RealtimeTalkRecovery.restartDelayNanoseconds(attempt: 3) == nil)
+    }
+
     @Test(arguments: [false, true])
     func `voice selection is opt in and replacement carries its change id`(
         supportsVoiceSelection: Bool) async throws

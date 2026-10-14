@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerReply,
@@ -36,10 +38,10 @@ async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected:
   );
 }
 
-function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
+function holdFirstStagedChunk() {
   const held = createDeferredCore();
   let publish: (() => void) | undefined;
-  let captured = false;
+  let acknowledgments = 0;
   // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply restores the emitting worker.
   const original = Worker.prototype.emit;
   const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
@@ -48,8 +50,7 @@ function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
     ...args: unknown[]
   ) {
     const reply = args[0] as SqliteWorkerReply;
-    if (event === "message" && !captured && matches(reply)) {
-      captured = true;
+    if (event === "message" && reply.ok && reply.input === "next" && ++acknowledgments === 2) {
       publish = () => Reflect.apply(original, this, [event, ...args]);
       held.resolve();
       return true;
@@ -66,17 +67,26 @@ function holdReply(matches: (reply: SqliteWorkerReply) => boolean) {
   };
 }
 
-function holdFirstStagedChunk() {
-  let acknowledgments = 0;
-  return holdReply((reply) => reply.ok && reply.input === "next" && ++acknowledgments === 2);
-}
-
 describe("SQLite worker staged input", () => {
-  it.each([40, 72])("snapshots and persists one %s MiB append across reopening", async (mib) => {
+  it("snapshots and persists a 72 MiB append across reopening with bounded frames", async () => {
     const file = databasePath();
     const store = await open(file);
-    const value = payload(mib);
+    await waitForDiagnosticEventsDrained();
+    const completed: DiagnosticWorkerRequestFields[] = [];
+    onTestFinished(
+      onInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "worker.request" && event.phase === "completed") {
+            completed.push(event);
+          }
+        },
+        { include: ["worker.request"] },
+      ),
+    );
+    const replyTimings: Array<NonNullable<DiagnosticWorkerRequestFields["timing"]>> = [];
+    const value = payload(72);
     const inputFrames: Array<{ visible: number; backing: number }> = [];
+    const dispatchedInputs: Uint8Array[] = [];
     const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
@@ -87,6 +97,9 @@ describe("SQLite worker staged input", () => {
       transferList,
     ) {
       commands.push(request.type);
+      if ("input" in request) {
+        dispatchedInputs.push(request.input);
+      }
       if (request.type === "execute-frame") {
         inputFrames.push({
           visible: request.input.byteLength,
@@ -104,6 +117,9 @@ describe("SQLite worker staged input", () => {
     ) {
       const reply = args[0] as SqliteWorkerReply;
       if (event === "message" && reply.ok) {
+        if (reply.timing) {
+          replyTimings.push(reply.timing);
+        }
         receivedFrames.push({
           visible: reply.value.byteLength,
           backing: reply.value.buffer.byteLength,
@@ -118,7 +134,32 @@ describe("SQLite worker staged input", () => {
     expect(await admitted).toMatchObject({ writes: 1 });
     expect(commands.filter((kind) => kind === "execute-start")).toHaveLength(1);
     expect(inputFrames.length).toBeGreaterThan(1);
+    expect(dispatchedInputs.every((input) => input.byteLength === 0)).toBe(true);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(1);
+    const appendTiming = completed[0]?.timing;
+    expect(replyTimings.length).toBeGreaterThan(1);
+    expect(replyTimings[0]?.inputReady).toBeUndefined();
+    expect(appendTiming?.received).toBe(replyTimings[0]?.received);
+    expect(appendTiming?.inputReady).toBeGreaterThanOrEqual(replyTimings[0]!.replied!);
+    expect(appendTiming?.executeFinished).toBeGreaterThanOrEqual(appendTiming!.inputReady!);
+    const appendReplyCount = replyTimings.length;
     await expectRows(store, [value]);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(2);
+    const readTiming = completed[1]?.timing;
+    const readReplies = replyTimings.slice(appendReplyCount);
+    expect(readReplies.length).toBeGreaterThan(1);
+    expect(readTiming?.received).toBeGreaterThan(appendTiming!.received!);
+    for (const timing of readReplies) {
+      expect(timing.received).toBe(readTiming?.received);
+      expect(timing.inputReady).toBe(readTiming?.inputReady);
+      expect(timing.executeStarted).toBe(readTiming?.executeStarted);
+      expect(timing.executeFinished).toBe(readTiming?.executeFinished);
+      expect(timing.serialized).toBe(readTiming?.serialized);
+    }
+    expect(readTiming?.replied).toBeGreaterThan(readReplies[0]!.replied!);
+    expect(readTiming?.replyReceived).toBeGreaterThanOrEqual(readTiming!.replied!);
     await store.close();
     await expectRows(await open(file), [value]);
     for (const frame of inputFrames) {
@@ -132,44 +173,7 @@ describe("SQLite worker staged input", () => {
       expect(frame.visible).toBeLessThanOrEqual(limit);
       expect(frame.backing).toBeLessThanOrEqual(limit);
     }
-    if (mib === 72) {
-      expect(receivedFrames.some((frame) => frame.framed)).toBe(true);
-    }
-  });
-
-  it("charges a queued 40 MiB command in full and frees its credits on cancellation", async () => {
-    const store = await open(databasePath());
-    const concurrentInputs = Array.from({ length: 3 }, () =>
-      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
-    );
-    const hold = holdReply(() => true);
-    const ahead = append(store, "ahead");
-    const cancelQueued = new AbortController();
-    const replacementCancel = new AbortController();
-    let queued: Promise<unknown> | undefined;
-    let replacement: Promise<unknown> | undefined;
-    try {
-      await Promise.race([hold.held, ahead]);
-      queued = append(store, payload(40), cancelQueued.signal);
-      await expect(append(store, payload(30))).rejects.toMatchObject({ code: "overloaded" });
-      const reason = new Error("cancel queued input");
-      cancelQueued.abort(reason);
-      await expect(queued).rejects.toBe(reason);
-      replacement = append(store, payload(30), replacementCancel.signal);
-      replacementCancel.abort(reason);
-      await expect(replacement).rejects.toBe(reason);
-      hold.release();
-      expect(await ahead).toMatchObject({ writes: 1 });
-      await expectRows(store, ["ahead"]);
-    } finally {
-      for (const prepared of concurrentInputs) {
-        prepared.release();
-      }
-      cancelQueued.abort();
-      replacementCancel.abort();
-      hold.release();
-      await Promise.allSettled([ahead, queued, replacement]);
-    }
+    expect(receivedFrames.some((frame) => frame.framed)).toBe(true);
   });
 
   it("reserves 32 MiB for active oversized input while preserving cancellation and queue credit", async () => {

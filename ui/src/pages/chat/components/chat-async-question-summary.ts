@@ -1,32 +1,20 @@
 import { html, nothing } from "lit";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
-
-function draftForAnswer(
-  question: AsyncQuestions["questions"][number],
-  answer: string,
-): QuestionDraft {
-  const values = answer ? answer.split(", ") : [];
-  const selected =
-    values.length > 0 && values.every((value) => question.options?.includes(value))
-      ? new Set(values)
-      : new Set<string>();
-  return { selected, freeText: selected.size > 0 ? "" : answer };
-}
 
 export function parseGeneratedAsyncAnswer(
   question: AsyncQuestions,
   message: string,
 ): Map<string, QuestionDraft> | null {
+  if (!message.startsWith("> ")) {
+    return null;
+  }
   let offset = 0;
   const answers = new Map<string, QuestionDraft>();
-  for (let index = 0; index < question.questions.length; index += 1) {
-    const current = question.questions[index];
-    if (!current) {
-      return null;
-    }
+  for (const [index, current] of question.questions.entries()) {
     const prefix = `${quoteQuestion(current.title)}\n\n`;
     if (!message.startsWith(prefix, offset)) {
       return null;
@@ -46,7 +34,11 @@ export function parseGeneratedAsyncAnswer(
     if (!answer.trim()) {
       return null;
     }
-    answers.set(String(index), draftForAnswer(current, answer));
+    const values = answer.split(", ");
+    const selected = values.every((value) => current.options?.includes(value))
+      ? new Set(values)
+      : new Set<string>();
+    answers.set(String(index), { selected, freeText: selected.size > 0 ? "" : answer });
     offset = answerEnd + (separator ? 2 : 0);
   }
   return offset === message.length ? answers : null;
@@ -90,7 +82,7 @@ export function renderAsyncQuestionSummary(
             ? "chat.asyncQuestions.failed"
             : queued.sendState === "unconfirmed"
               ? "chat.queue.deliveryUnconfirmed"
-              : queued.sendState === "waiting-reconnect"
+              : isChatSendReconnecting(queued.sendState, presentation.connected)
                 ? "chat.queue.states.waitingForReconnect"
                 : queued.sendState === "sending"
                   ? "chat.asyncQuestions.sending"
@@ -110,7 +102,7 @@ export function renderAsyncQuestionSummary(
               <div>
                 ${
                   answers
-                    ? questionDraftValues(answers.get(String(index))).join(", ")
+                    ? questionDraftValues(answers.get(String(index)), {}).join(", ")
                     : t(
                         reopening
                           ? "chat.asyncQuestions.reopening"

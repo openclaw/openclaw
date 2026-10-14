@@ -22,21 +22,6 @@ export default definePluginEntry({
     );
     let scheduler: TeamReportsScheduler | undefined;
     let store: TeamReportsStore | undefined;
-    let generation = 0;
-    let retired = false;
-    let stopping: Promise<void> | undefined;
-    let startingStore: Promise<void> | undefined;
-    const stop = () => {
-      generation++;
-      const current = scheduler;
-      scheduler = undefined;
-      store = undefined;
-      const pendingStart = startingStore;
-      return (stopping ??= (async () => {
-        await pendingStart?.catch(() => undefined);
-        await current?.stop();
-      })());
-    };
     const requireScheduler = () => {
       if (!scheduler) {
         throw new Error(
@@ -54,90 +39,60 @@ export default definePluginEntry({
 
     api.registerService({
       id: "team-reports",
+      apiVersion: 2,
       async start(ctx) {
-        if (retired) {
-          throw new Error("Team Reports runtime has been retired");
-        }
-        const currentGeneration = ++generation;
-        await stopping;
-        if (retired || currentGeneration !== generation) {
-          return;
-        }
-        stopping = undefined;
         const config = parseTeamReportsConfig(
           ctx.config.plugins?.entries?.["team-reports"]?.config ?? api.pluginConfig,
           ctx.config.gateway?.controlUi?.basePath,
         );
         const resolved = await resolveTeamReportsConfig(config, ctx.config);
-        if (retired || currentGeneration !== generation) {
-          return;
-        }
         const policy = ctx.config.plugins?.entries?.["team-reports"]?.llm;
         const summaryOptions = { ...config.summaries };
         if (policy?.allowModelOverride !== true) {
           delete summaryOptions.model;
         }
-        startingStore = (async () => {
-          if (!api.runtimeSource) {
-            throw new Error(
-              "Team Reports requires an OpenClaw host with runtime entrypoint metadata",
-            );
-          }
-          const nextStore = await createTeamReportsStore({
-            stateDir: ctx.stateDir,
-            workerModuleUrl: new URL(
-              `./src/store.worker${path.extname(api.runtimeSource)}`,
-              pathToFileURL(api.runtimeSource),
-            ),
-          });
-          if (retired || currentGeneration !== generation) {
-            await nextStore.close();
-            return;
-          }
-          const runner = new TeamReportsRunner(
-            new URL(
-              `./src/run.worker${path.extname(api.runtimeSource)}`,
-              pathToFileURL(api.runtimeSource),
-            ),
+        if (!api.runtimeSource) {
+          throw new Error(
+            "Team Reports requires an OpenClaw host with runtime entrypoint metadata",
           );
-          const nextScheduler = new TeamReportsScheduler({
-            config: { ...config, summaries: summaryOptions },
-            resolved,
-            store: nextStore,
-            llm: { complete: (params) => api.runtime.llm.complete(params) },
-            context: ctx,
-            runReports: (params) => runner.run(params),
-            closeRunner: () => runner.close(),
-          });
-          try {
-            await nextScheduler.start();
-            if (retired || currentGeneration !== generation) {
-              await nextScheduler.stop();
-              return;
-            }
-            store = nextStore;
-            scheduler = nextScheduler;
-          } catch (error) {
-            await nextScheduler.stop();
-            throw error;
-          }
-        })();
-        await startingStore;
-      },
-      stop,
-    });
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "team-reports-service",
-      cleanup: ({ reason, sessionKey, runId }) => {
-        if (
-          sessionKey === undefined &&
-          runId === undefined &&
-          (reason === "disable" || reason === "restart")
-        ) {
-          retired = true;
-          return stop();
         }
-        return undefined;
+        const nextStore = await createTeamReportsStore({
+          stateDir: ctx.stateDir,
+          workerModuleUrl: new URL(
+            `./src/store.worker${path.extname(api.runtimeSource)}`,
+            pathToFileURL(api.runtimeSource),
+          ),
+        });
+        const runner = new TeamReportsRunner(
+          new URL(
+            `./src/run.worker${path.extname(api.runtimeSource)}`,
+            pathToFileURL(api.runtimeSource),
+          ),
+        );
+        const nextScheduler = new TeamReportsScheduler({
+          config: { ...config, summaries: summaryOptions },
+          resolved,
+          store: nextStore,
+          llm: { complete: (params) => api.runtime.llm.complete(params) },
+          context: ctx,
+          runReports: (params) => runner.run(params),
+          closeRunner: () => runner.close(),
+        });
+        try {
+          await nextScheduler.start();
+          store = nextStore;
+          scheduler = nextScheduler;
+        } catch (error) {
+          await nextScheduler.stop();
+          throw error;
+        }
+      },
+      async stop() {
+        // The host joins startup before stopping this service; the scheduler drains admitted work.
+        const current = scheduler;
+        scheduler = undefined;
+        store = undefined;
+        await current?.stop();
       },
     });
     api.registerHttpRoute({

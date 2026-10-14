@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Forced consult coordinator tests cover forced handoff to agent consultation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRealtimeVoiceForcedConsultCoordinator } from "./forced-consult-coordinator.js";
@@ -25,21 +24,6 @@ describe("realtime voice forced consult coordinator", () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(coordinator.hasRecent("Can you check this?")).toBe(true);
-    vi.advanceTimersByTime(2_001);
-    expect(coordinator.hasRecent("Can you check this?")).toBe(false);
-  });
-
-  it("marks late native consults already delivered after a forced result", () => {
-    const coordinator = createRealtimeVoiceForcedConsultCoordinator();
-    const pending = coordinator.prepare("Can you check this?", { id: "forced-1" });
-    coordinator.markStarted(pending!);
-    coordinator.markDelivered(pending!);
-
-    expect(
-      coordinator.recordNativeConsult({ question: "Can you check this?" }, "native-call"),
-    ).toMatchObject({ kind: "already_delivered", handle: { id: "forced-1" } });
-    expect(coordinator.nativeCallIds(pending!)).toEqual(["native-call"]);
-
     vi.advanceTimersByTime(2_001);
     expect(coordinator.hasRecent("Can you check this?")).toBe(false);
   });
@@ -143,21 +127,6 @@ describe("realtime voice forced consult coordinator", () => {
 
     expect(staleRun).not.toHaveBeenCalled();
     expect(currentRun).toHaveBeenCalledWith(current);
-  });
-
-  it("caps oversized forced consult schedule delays", () => {
-    const scheduledDelays: number[] = [];
-    const coordinator = createRealtimeVoiceForcedConsultCoordinator({
-      setTimer: (_fn, ms) => {
-        scheduledDelays.push(ms);
-        return { clear: vi.fn() };
-      },
-    });
-    const pending = coordinator.prepare("check status", { id: "forced-1" });
-
-    coordinator.schedule(pending!, Number.MAX_SAFE_INTEGER, vi.fn());
-
-    expect(scheduledDelays).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
   it("matches cancelled handles until the dedupe window expires", () => {

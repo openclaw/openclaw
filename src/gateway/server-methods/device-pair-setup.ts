@@ -3,15 +3,21 @@ import {
   errorShape,
   validateDevicePairSetupCodeParams,
   validateDevicePairSetupStatusParams,
+  type DevicePairSetupCodeResult,
   type DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { quoteCliArg } from "../../cli/quote-cli-arg.js";
 import { readDevicePairSetupCompletion } from "../../infra/device-bootstrap.js";
 import { registerDevicePairingJoinCode } from "../../infra/device-pairing-join-code.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { channelToNpmTag, resolveEffectiveUpdateChannel } from "../../infra/update-channels.js";
+import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
+import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
   decodePairingSetupCode,
   encodePairingSetupCode,
-  resolveConfiguredPairingPublicUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -20,8 +26,11 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { VERSION } from "../../version.js";
 import { isLoopbackHost } from "../net.js";
 import { respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -35,12 +44,11 @@ type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   for (const candidate of payload.urls ?? [payload.url]) {
     const parsed = new URL(candidate);
-    if (parsed.protocol === "wss:") {
-      parsed.protocol = "https:";
-      return parsed;
-    }
-    if (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname)) {
-      parsed.protocol = "http:";
+    if (
+      parsed.protocol === "wss:" ||
+      (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+    ) {
+      parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
       return parsed;
     }
   }
@@ -49,8 +57,36 @@ function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   );
 }
 
+async function resolveJoinPackage(): Promise<{ packageSpec: string; versionNote?: string }> {
+  const status = currentUpdateCheckLifecycle().installStatus?.status ?? {
+    installKind: await resolveUpdateInstallKind(
+      await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
+      { timeoutMs: 1_000 },
+    ).catch(() => "unknown" as const),
+  };
+  const versionNote =
+    "The machine needs a matching Gateway build; the exact npm release could not be confirmed.";
+  if (status.installKind === "package" || status.installKind === "host") {
+    const exact = await fetchNpmPackageTargetStatus({ target: VERSION, timeoutMs: 1_000 });
+    if (exact.version === VERSION) {
+      return { packageSpec: `openclaw@${VERSION}` };
+    }
+  }
+  const channel = resolveEffectiveUpdateChannel({
+    currentVersion: VERSION,
+    ...status,
+  }).channel;
+  const tag = channelToNpmTag(channel);
+  const fallback = await fetchNpmPackageTargetStatus({ target: tag, timeoutMs: 1_000 });
+  return {
+    packageSpec: fallback.version ? `openclaw@${tag}` : "openclaw",
+    versionNote,
+  };
+}
+
 export const devicePairSetupHandlers: GatewayRequestHandlers = {
-  "device.pair.setupCode": async ({ params, respond, context }) => {
+  "device.pair.setupCode": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(
         params,
@@ -75,13 +111,22 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
+      const joinContext = params.joinUrl === true ? captureOpenClawStateWorkerContext() : undefined;
+      const authority = readGatewayRequestMutationAuthority(options);
+      const assertJoinCurrent = joinContext
+        ? () => {
+            joinContext.admission.assertCurrent();
+            authority.assertCurrent();
+            if (context.getRuntimeConfig() !== config) {
+              throw new Error("Device pairing setup configuration changed.");
+            }
+          }
+        : undefined;
+      assertJoinCurrent?.();
       const requestPublicUrl = params.publicUrl;
-      const configuredPublicUrl =
-        params.preferRemoteUrl === true ? undefined : resolveConfiguredPairingPublicUrl(config);
-      const publicUrl = requestPublicUrl ?? configuredPublicUrl;
       const resolved = await resolvePairingSetupFromConfig(config, {
         env: process.env,
-        publicUrl,
+        publicUrl: requestPublicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
         useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
         localTlsFingerprint: context.gatewayTlsFingerprint,
@@ -99,25 +144,43 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         runCommandWithTimeout: async (argv, runOpts) =>
           await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
       });
+      assertJoinCurrent?.();
       if (!resolved.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
         return;
       }
       const setupCode = encodePairingSetupCode(resolved.payload);
       let joinUrl: string | undefined;
+      let joinCommands:
+        | Pick<
+            DevicePairSetupCodeResult,
+            "command" | "serviceCommand" | "installedCommand" | "versionNote"
+          >
+        | undefined;
       if (params.joinUrl === true) {
         const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
-        const shortcode = registerDevicePairingJoinCode({
+        const { packageSpec, versionNote } = await resolveJoinPackage();
+        assertJoinCurrent?.();
+        const shortcode = await registerDevicePairingJoinCode({
           payload: resolved.payload,
           expiresAtMs: resolved.expiresAtMs,
+          context: joinContext,
+          assertCurrent: assertJoinCurrent,
         });
         const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
         parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
         parsedJoinUrl.search = "";
         parsedJoinUrl.hash = "";
         joinUrl = parsedJoinUrl.toString();
+        const target = quoteCliArg(joinUrl);
+        const serviceCommand = `npx -y ${packageSpec} connect ${target} --service`;
+        joinCommands = {
+          command: `${serviceCommand} --session-host`,
+          serviceCommand,
+          installedCommand: `openclaw connect ${target} --service --session-host`,
+          ...(versionNote ? { versionNote } : {}),
+        };
       }
-      // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;
       // QR rendering is optional output; keep the usable setup code if encoding fails.
       const renderedQr = includeQr
@@ -125,13 +188,14 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         : undefined;
       const qrDataUrl =
         renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
+      assertJoinCurrent?.();
       respond(
         true,
         {
           setupId: resolved.setupId,
           expiresAtMs: resolved.expiresAtMs,
           setupCode,
-          ...(joinUrl ? { joinUrl } : {}),
+          ...(joinUrl ? { joinUrl, ...joinCommands } : {}),
           ...(qrDataUrl ? { qrDataUrl } : {}),
           gatewayUrl: resolved.payload.url,
           ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),

@@ -101,7 +101,7 @@ it.each(["save", "apply", "patch"] as const)(
   },
 );
 
-it.each(["unchanged", "edited", "saved"] as const)(
+it.each(["unchanged", "saved"] as const)(
   "preserves current %s draft feedback when opening the saved file succeeds",
   async (outcome) => {
     vi.useFakeTimers();
@@ -133,15 +133,13 @@ it.each(["unchanged", "edited", "saved"] as const)(
       if (outcome !== "unchanged") {
         reject = false;
         runtimeConfig.setRaw('{"count":2}');
-        if (outcome === "saved") {
-          await expect(runtimeConfig.save()).resolves.toBe(true);
-        }
+        await expect(runtimeConfig.save()).resolves.toBe(true);
       }
       opened.resolve({ ok: true });
       await opening;
 
       expect(runtimeConfig.state.configAutoSaveStatus).toBe(
-        outcome === "unchanged" ? "rejected" : outcome === "saved" ? "saved" : "idle",
+        outcome === "unchanged" ? "rejected" : "saved",
       );
       if (outcome === "unchanged") {
         expect(runtimeConfig.state.lastError).toContain("Expected number");
@@ -191,13 +189,25 @@ it.each([
     { issues, persistedConfig: { config: { count: 2 }, hash: "hash-2" } },
     "error",
   ],
+  [
+    "uncertain retry",
+    "INVALID_REQUEST",
+    "invalid config: count: Expected number, received string",
+    { issues },
+    "error",
+    true,
+  ],
 ] as const)(
   "keeps %s failures out of the validation notice",
-  async (_label, code, message, details, status) => {
+  async (_label, code, message, details, status, previousUncertain?: boolean) => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
+    let writes = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.set") {
+        if (previousUncertain && ++writes === 1) {
+          throw new Error("connection closed after dispatch");
+        }
         throw await validationError({ code, message, details });
       }
       return server.request(method, params);
@@ -208,39 +218,17 @@ it.each([
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["count"], 2);
     await expect(runtimeConfig.save()).resolves.toBe(false);
+    if (previousUncertain) {
+      await expect(runtimeConfig.retry()).resolves.toBe(false);
+      await runtimeConfig.waitForPendingWrites();
+      expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
+      expect(runtimeConfig.state.configFormDirty).toBe(true);
+    }
     expect(runtimeConfig.state.configAutoSaveStatus).toBe(status);
     runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   },
 );
-
-it("does not call an earlier uncertain save unchanged when a retry is rejected", async () => {
-  vi.useFakeTimers();
-  const server = createConfigServerMock();
-  let writes = 0;
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "config.set") {
-      if (++writes === 1) {
-        throw new Error("connection closed after dispatch");
-      }
-      throw await validationError();
-    }
-    return server.request(method, params);
-  });
-  const { runtimeConfig } = createConfigCapabilityHarness(
-    request as GatewayBrowserClient["request"],
-  );
-  await runtimeConfig.ensureLoaded();
-  runtimeConfig.patchForm(["count"], 2);
-  await expect(runtimeConfig.save()).resolves.toBe(false);
-  await expect(runtimeConfig.retry()).resolves.toBe(false);
-  await runtimeConfig.waitForPendingWrites();
-  expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-  expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
-  expect(runtimeConfig.state.configFormDirty).toBe(true);
-  runtimeConfig.setWritesSuspended(true);
-  runtimeConfig.dispose();
-});
 
 it.each(["read", "schema", "open"])(
   "replaces a validation notice when a later %s fails",

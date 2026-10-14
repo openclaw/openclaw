@@ -109,9 +109,6 @@ const formatInventoryHuman = (inventory: PluginExtensionInventoryEntry[]) =>
     inventory,
   );
 
-/**
- * Runs the plugin-extension import boundary check.
- */
 async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   const actual = await collectPluginExtensionImportBoundaryInventory();
 
@@ -123,8 +120,6 @@ async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   return 1;
 }
 
-async function main(): Promise<void> {
+runAsScript(import.meta.url, async () => {
   process.exitCode = await runPluginExtensionImportBoundaryCheck();
-}
-
-runAsScript(import.meta.url, main);
+});

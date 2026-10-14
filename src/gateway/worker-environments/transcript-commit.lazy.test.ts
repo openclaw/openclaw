@@ -1,8 +1,10 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -47,7 +49,7 @@ async function createFixture() {
       import("../../agents/sessions/session-manager.js"),
       import("../../config/sessions/session-accessor.js"),
       import("../../state/openclaw-state-db.js"),
-      import("./transcript-commit-store.js"),
+      import("./transcript-commit-ledger.js"),
       import("../../config/io.js"),
       import("./transcript-commit.js"),
       import("../../state/openclaw-agent-db.js"),
@@ -60,7 +62,7 @@ async function createFixture() {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { mainKey: "main", store: storePath },
   };
   await accessor.upsertSessionEntryCore(
@@ -84,7 +86,7 @@ async function createFixture() {
       config.clearRuntimeConfigSnapshot();
       await reconcile.waitForSessionTranscriptIndexReconcilesInStateDir(root);
       await agentState.closeOpenClawAgentDatabasesAsync(root);
-      stateCache.closeOpenClawStateDatabaseByPath(database.path);
+      await stateCache.closeOpenClawStateDatabaseByPathAsync(database.path);
       await fs.rm(root, { recursive: true, force: true });
     },
   };
@@ -109,7 +111,58 @@ describe("worker transcript runtime loading", () => {
     vi.resetModules();
   });
 
-  it.each(["current", "revoked", "loader-failed"] as const)(
+  it("awaits the pending receipt before transcript effects and terminal persistence before replying", async () => {
+    const began = createDeferredCore();
+    const releaseBegin = createDeferredCore();
+    const completing = createDeferredCore();
+    const releaseComplete = createDeferredCore();
+    const begin = fixture.store.begin.bind(fixture.store);
+    const complete = fixture.store.complete.bind(fixture.store);
+    vi.spyOn(fixture.store, "begin").mockImplementation(async (...args) => {
+      const result = await begin(...args);
+      began.resolve();
+      await releaseBegin.promise;
+      return result;
+    });
+    vi.spyOn(fixture.store, "complete").mockImplementation(async (...args) => {
+      completing.resolve();
+      await releaseComplete.promise;
+      return await complete(...args);
+    });
+    let replied = false;
+    const pending = fixture.committer
+      .commit({
+        identity: IDENTITY,
+        sessionTarget: fixture.target,
+        request: createRequest(),
+        assertCurrent: () => undefined,
+      })
+      .then((result) => {
+        replied = true;
+        return result;
+      });
+    try {
+      await awaitGateBeforeSettlement(began.promise, pending, "commit settled before begin");
+      expect(fixture.readEntries()).toEqual([]);
+      expect(replied).toBe(false);
+      releaseBegin.resolve();
+      await awaitGateBeforeSettlement(
+        completing.promise,
+        pending,
+        "commit settled before completion",
+      );
+      expect(fixture.readEntries()).toHaveLength(1);
+      expect(replied).toBe(false);
+      releaseComplete.resolve();
+      await expect(pending).resolves.toMatchObject({ ok: true });
+    } finally {
+      releaseBegin.resolve();
+      releaseComplete.resolve();
+      await pending;
+    }
+  });
+
+  it.each(["current", "revoked"] as const)(
     "loads before authority checks or reservations: %s",
     async (scenario) => {
       const loadStarted = createDeferredCore();
@@ -119,9 +172,6 @@ describe("worker transcript runtime loading", () => {
       vi.doMock("./transcript-commit.runtime.js", async (importOriginal) => {
         loadStarted.resolve();
         await releaseLoad.promise;
-        if (scenario === "loader-failed") {
-          throw failure;
-        }
         return await importOriginal();
       });
       const begin = vi.spyOn(fixture.store, "begin");
@@ -157,11 +207,7 @@ describe("worker transcript runtime loading", () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(fixture.readEntries()).toHaveLength(1);
         } else {
-          if (scenario === "loader-failed") {
-            await expect(commit).rejects.toMatchObject({ cause: failure });
-          } else {
-            await expect(commit).rejects.toBe(failure);
-          }
+          await expect(commit).rejects.toBe(failure);
           expect(begin).not.toHaveBeenCalled();
           expect(fixture.readEntries()).toEqual([]);
         }

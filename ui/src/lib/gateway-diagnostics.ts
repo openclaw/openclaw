@@ -1,28 +1,17 @@
-import type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
+import type { getCommandLaneDiagnostics } from "../../../src/process/command-lane-diagnostics.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
 export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
 
-export type CommandLaneDynamicSummary = {
-  laneCount: number;
-  activeCount: number;
-  queuedCount: number;
-  queuedLaneCount: number;
-};
+export type CommandLaneDiagnostics = ReturnType<typeof getCommandLaneDiagnostics>;
+export type CommandLaneDynamicSummary = NonNullable<CommandLaneDiagnostics["dynamic"]>;
 
-export type CommandLaneDiagnostics = {
-  lanes: CommandLaneSnapshot[];
-  dynamic: CommandLaneDynamicSummary | null;
-};
-
-type GatewayDiagnosticsSnapshot = {
+type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
   status: StatusSummary;
   health: HealthSnapshot;
   models: unknown[];
   heartbeat: unknown;
-  lanes: CommandLaneSnapshot[];
-  dynamic: CommandLaneDynamicSummary | null;
 };
 
 export async function loadCommandLaneDiagnostics(

@@ -3,7 +3,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
@@ -76,26 +76,6 @@ export function buildScopeUpgradeInboxEntry(params: {
     severity:
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
     state: params.state,
-  };
-}
-
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
-  }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
   };
 }
 

@@ -5,7 +5,6 @@
 export {
   discoverMantleModels,
   generateBearerTokenFromIam,
-  getCachedIamToken,
   MANTLE_IAM_TOKEN_MARKER,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,

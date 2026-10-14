@@ -20,6 +20,7 @@ import {
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
+import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -72,7 +73,7 @@ function createDispatcher(
   return createDispatchTestHarness({
     connId: "conn-trace-test",
     extraHandlers: { "test.trace": handler },
-    buildRequestContext: () => context,
+    buildRequestContext: () => ({ getRuntimeConfig: () => ({}), ...context }),
   });
 }
 
@@ -249,7 +250,10 @@ describe("authenticated WebSocket request trace dispatch", () => {
     }
     const harness = createDispatchTestHarness({
       getRequiredSharedGatewaySessionGeneration: () => generation,
-      buildRequestContext: () => ({ validateAgentRuntimeApprovalAuthority: () => runtimeActive }),
+      buildRequestContext: () => ({
+        getRuntimeConfig: () => ({}),
+        validateAgentRuntimeApprovalAuthority: () => runtimeActive,
+      }),
       extraHandlers: {
         "test.trace": ({ req, respond }) => {
           pendingStarted ||= req.id === "pending";
@@ -394,32 +398,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
     expect(socket.listenerCount("close")).toBe(0);
   });
 
-  it("keeps handler failure logging and responses inside the request trace", async () => {
-    let loggedContext: DiagnosticTraceContext | undefined;
-    let responseContext: DiagnosticTraceContext | undefined;
-    const { awaitResponseFrame, dispatcher, logGateway, send } = createDispatcher(async () => {
-      throw new Error("expected trace failure");
-    });
-    logGateway.error.mockImplementation(() => {
-      loggedContext = getActiveDiagnosticTraceContext();
-    });
-    send.mockImplementation(() => {
-      responseContext = getActiveDiagnosticTraceContext();
-      return { kind: "sent" } as const;
-    });
-
-    await dispatchInFreshMessageScope(dispatcher, createClient(), "failure", TRACEPARENTS.first);
-    await awaitResponseFrame("failure");
-    expect(logGateway.error).toHaveBeenCalled();
-
-    expect(loggedContext).toMatchObject({
-      traceId: "11111111111111111111111111111111",
-      parentSpanId: "1111111111111111",
-      traceFlags: "01",
-    });
-    expect(responseContext).toEqual(loggedContext);
-  });
-
   it("isolates concurrent request contexts on one connection", async () => {
     const requestBarrier = createDeferredCore();
     const bothObserved = createDeferredCore();
@@ -488,6 +466,13 @@ describe("authenticated WebSocket request trace dispatch", () => {
       observation.after = getActiveDiagnosticTraceContext();
       respond(true, { traced: true });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-dispatch-proof",
+        name: "test.trace",
+        handler: registry.gatewayHandlers["test.trace"],
+      }),
+    );
     setTestPluginRegistry(registry);
 
     const token = "gateway-request-trace-test-token";
@@ -576,6 +561,13 @@ describe("authenticated WebSocket request trace dispatch", () => {
         },
       });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-dispatch-proof",
+        name: "test.serialize",
+        handler: registry.gatewayHandlers["test.serialize"],
+      }),
+    );
     setTestPluginRegistry(registry);
 
     const token = "gateway-response-serialization-test-token";

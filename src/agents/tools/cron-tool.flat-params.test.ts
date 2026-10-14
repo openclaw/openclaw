@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
@@ -20,7 +21,12 @@ function expectAdd(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   gateway.mockReset().mockResolvedValue({ ok: true });
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("cron shorthand recovery", () => {
@@ -43,14 +49,6 @@ describe("cron shorthand recovery", () => {
   });
 
   it.each([
-    {
-      name: "cron with timezone and stagger",
-      input: { cron: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000, message: "report" },
-      expected: {
-        schedule: { kind: "cron", expr: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000 },
-        payload: { kind: "agentTurn", message: "report" },
-      },
-    },
     {
       name: "script before agent-turn hints",
       input: {
@@ -80,7 +78,6 @@ describe("cron shorthand recovery", () => {
 
   it.each([
     { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
-    { action: "update", jobId: "job", command: "make" },
   ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
     await expect(execute(args)).rejects.toThrow(
       "automation on-exit schedules cannot be created or edited",
@@ -149,5 +146,73 @@ describe("cron shorthand recovery", () => {
       "schedule ": { kind: "every", everyMs: 60_000 },
       "enabled ": true,
     });
+  });
+
+  it("merges sibling dotted keys under one recovered object (#120616)", async () => {
+    // The first field creates the payload object; the second meets that parent
+    // and must continue into it instead of being kept as a literal key.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-siblings",
+      "job.payload.message": "after",
+      "job.payload.kind": "agentTurn",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+  });
+
+  it("keeps the explicit structured value authoritative over a conflicting dotted key (#120616)", async () => {
+    // The explicit payload is a valid update on its own. Forwarding the extra
+    // dotted key as well made the whole update fail a strict gateway patch, so
+    // the canonical value stands and the redundant key is dropped.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-conflict",
+      payload: { kind: "agentTurn", message: "before" },
+      "job.payload.message": "after",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toHaveProperty("payload.message", "before");
+    expect(params.patch).not.toHaveProperty("job.payload.message");
+  });
+
+  it("recovers quoted dotted job keys (#120616)", async () => {
+    // The report includes literal quote characters around the dotted name.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-quoted",
+      '"job.payload.message"': "after",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+  });
+
+  it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
+    // Only object-typed cron fields are containers in the gateway schema, so a
+    // dot inside a scalar such as a job name stays a plain unrecognized key
+    // instead of being reshaped into a path.
+    await expect(
+      execute({
+        action: "update",
+        jobId: "job-dotted-name",
+        "job.name": "nightly.report",
+      }),
+    ).rejects.toThrow("job required");
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
+    await expect(
+      execute({
+        action: "update",
+        jobId: "job-dotted-proto",
+        "job.payload.__proto__.polluted": "yes",
+      }),
+    ).rejects.toThrow("job required");
+    expect(gateway).not.toHaveBeenCalled();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });

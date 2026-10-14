@@ -295,7 +295,7 @@ describe("queued delivery evidence", () => {
     ).toBe(false);
   });
 
-  it("credits an ambiguous single-payload send only when requested", () => {
+  it("does not credit an ambiguous single-payload send as delivered", () => {
     const result = {
       payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
       deliveryStatus: {
@@ -303,15 +303,7 @@ describe("queued delivery evidence", () => {
         payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
       },
     };
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, { includeSuppressedOutcomes: false }),
-    ).toEqual([]);
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, {
-        includeAmbiguousSinglePayloadFailure: true,
-        includeSuppressedOutcomes: false,
-      }),
-    ).toEqual(["/tmp/proof.png"]);
+    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual([]);
   });
 });
 

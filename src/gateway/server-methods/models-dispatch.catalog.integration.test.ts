@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { text as readText } from "node:stream/consumers";
 import { describeImageWithModel } from "openclaw/plugin-sdk/media-understanding";
@@ -9,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 
-it("dispatches a newly discovered model and preserves an admitted turn when discovery withdraws it", async () => {
+it("dispatches a discovered model outside the agent workspace and preserves it after withdrawal", async () => {
   const state = await createOpenClawTestState({
     label: "models-dispatch-catalog",
     env: {
@@ -149,7 +150,7 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
           heartbeat: { every: "0m" },
           modelPolicy: { allow: [`${provider}/*`] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -190,13 +191,21 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
       expect(discovered.models).toEqual(
         expect.arrayContaining([expect.objectContaining({ provider, id: model, available: true })]),
       );
-      const session = await client.request<{ ok: boolean; key: string }>("sessions.create", {
+      const outsideCwd = state.path("outside-workspace");
+      await fs.mkdir(outsideCwd, { recursive: true });
+      const session = await client.request<{
+        ok: boolean;
+        key: string;
+        entry: { spawnedCwd: string };
+      }>("sessions.create", {
         agentId: "main",
         key: "agent:main:catalog-dispatch",
         label: "Catalog dispatch",
         model: modelRef,
+        cwd: outsideCwd,
       });
       expect(session.ok).toBe(true);
+      expect(session.entry.spawnedCwd).toBe(outsideCwd);
       const started = await client.request<{ runId: string; status: string }>("chat.send", {
         sessionKey: session.key,
         message: "Reply with the catalog dispatch marker.",
@@ -290,7 +299,8 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
         { timeoutMs: 35_000 },
       );
       expect(unavailable).toMatchObject({ status: "error" });
-      expect(unavailable.error).toContain("The selected model is unavailable from the provider");
+      expect(unavailable.error).toContain("This model was not found");
+      expect(unavailable.error).toContain("Choose another model");
       expect(requests).toHaveLength(2);
     } finally {
       releaseInference.resolve();

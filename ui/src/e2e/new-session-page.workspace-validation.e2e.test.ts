@@ -1,10 +1,11 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
@@ -79,7 +80,7 @@ type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
 
 async function chooseCustomFolder(page: Page, gateway: MockGateway) {
   const trigger = page.locator("#new-session-project-trigger");
-  const place = page.locator("wa-popover.new-session-page__project-popover");
+  const place = page.locator(".oc-popover.new-session-page__project-popover");
   await trigger.click();
   await place.getByRole("button", { name: "Browse folders" }).click();
   await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
@@ -131,7 +132,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
       await page.locator("#new-session-checkout-trigger").click();
       await checkout
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
@@ -172,7 +173,9 @@ suite.define(() => {
       await expect
         .poll(() => name.evaluate((input) => document.activeElement === input))
         .toBe(true);
-      await expect.poll(() => checkout.getAttribute("open")).not.toBeNull();
+      await expect
+        .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
       await name.fill("picker-inputs");
       await checkout
         .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
@@ -186,10 +189,14 @@ suite.define(() => {
       await page.mouse.down();
       await page.mouse.move(box!.x - 12, box!.y + box!.height / 2, { steps: 6 });
       await page.mouse.up();
-      await expect.poll(() => checkout.getAttribute("open")).not.toBeNull();
+      await expect
+        .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
 
       await name.press("Enter");
-      await expect.poll(() => checkout.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
+        .toBe(false);
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.className))
         .toContain("new-session-page__message");
@@ -276,7 +283,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("worktrees.branches");
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator("wa-popover.new-session-page__checkout-popover");
+      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
       await trigger.click();
       await place
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
@@ -340,7 +347,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator("wa-popover.new-session-page__checkout-popover");
+      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
       await trigger.click();
       await place
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
@@ -389,7 +396,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator("wa-popover.new-session-page__checkout-popover");
+      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
       await trigger.click();
       await place
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
@@ -455,7 +462,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await chooseCustomFolder(page, gateway);
       const whereTrigger = page.locator("#new-session-where-trigger");
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await whereTrigger.click();
       await where.getByRole("button", { name: "aws", exact: true }).click();
@@ -480,7 +487,7 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       await checkoutTrigger.click();
-      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
       expect(await checkout.locator('[data-value="checkout"]').isDisabled()).toBe(true);
       await checkoutBaseRefInput(checkout).waitFor();
       await checkout.getByLabel("Name", { exact: true }).waitFor();
@@ -541,9 +548,9 @@ suite.define(() => {
       await gateway.waitForRequest("worktrees.branches");
 
       const message = page.locator(".new-session-page__message");
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
+      const whereSelect = page.locator(".oc-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
-      const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
+      const projectSelect = page.locator(".oc-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
       await message.fill("preserve this replacement draft");
       await page.locator("#new-session-checkout-trigger").click();
@@ -590,9 +597,7 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
       await expect
-        .poll(() =>
-          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
+        .poll(() => projectSelect.evaluate((element) => element.matches(":popover-open")))
         .toBe(false);
       await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "target-repo",
@@ -608,7 +613,7 @@ suite.define(() => {
       expect(await whereSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
       await page.keyboard.press("Escape");
       await page.locator("#new-session-checkout-trigger").click();
-      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
       await expect
         .poll(() => checkoutBaseRefInput(checkout).getAttribute("placeholder"))
         .toBe("beta");
@@ -621,9 +626,7 @@ suite.define(() => {
         entries: [],
       });
       await expect
-        .poll(() =>
-          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
+        .poll(() => projectSelect.evaluate((element) => element.matches(":popover-open")))
         .toBe(false);
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
     });
@@ -645,7 +648,10 @@ suite.define(() => {
             return digest(algorithm, data);
           };
         });
-        const chatModule = await holdModuleResponse(page, /\/assets\/route-entry-[^/]+\.js/);
+        const chatModule = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+        );
         try {
           const sessionKey = "agent:main:late-recovery-scope";
           const gateway = await installMockGateway(page, {
@@ -666,12 +672,7 @@ suite.define(() => {
             // The provisional route cannot adopt selection while its preview module is blocked.
             await expect
               .poll(() =>
-                page.locator("openclaw-app").evaluate((element) => {
-                  const app = element as HTMLElement & {
-                    runtime: { context: ApplicationContext };
-                  };
-                  return app.runtime.context.gateway.snapshot.sessionKey;
-                }),
+                evaluateControlUiContext(page, (context) => context.gateway.snapshot.sessionKey),
               )
               .toBe("agent:main:main");
             await chatModule.request;
@@ -787,12 +788,10 @@ suite.define(() => {
         if (change === "process restarts") {
           await gateway.setGatewayBootId("different-gateway-process");
         } else {
-          const hello = await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            return app.runtime.context.gateway.snapshot.hello;
-          });
+          const hello = await evaluateControlUiContext(
+            page,
+            (context) => context.gateway.snapshot.hello,
+          );
           await gateway.setMethodResponse("connect", {
             ...hello,
             auth: {

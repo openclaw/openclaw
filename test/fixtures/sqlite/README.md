@@ -52,3 +52,28 @@ Fixture contract:
 - 73 application tables
 - 103 named indexes
 - zero `STRICT` tables
+
+## Legacy agent-deletion upgrade fixture
+
+`openclaw-state-v2026.9.9.sql` and `openclaw-agent-v2026.9.9.sql` preserve
+synthetic databases produced and closed by the v2026.9.9 writers at
+`bcfc88812a35243893585dbeca87ca41b48272ca`. They contain shared schema 19 and
+agent schema 24, including an unfinished deletion with no `phase` column.
+
+The shared catalog has 221 objects; the agent catalog has 132. These are the
+actual writer-created catalogs, including first-use tables, rather than current
+schemas relabeled with old version numbers. The tagged shared and agent DDL
+blobs are `856050a460099db81928a15b9e859490451930f9` and
+`f487190069e23ceaa32f68f8706883be0527d990`. The existing schema-v24 fixture is a
+later additive shape and cannot substitute for this published-version fixture.
+
+The dump restores settled rows before installing triggers. SQLite reconstructs
+FTS shadow tables from their original virtual-table DDL and logical FTS rows.
+Restoration was verified against the original catalogs and retained writer rows,
+with integrity and foreign-key checks passing.
+
+Only producer-specific config diagnostics, config-health observations, and the
+config last-touched timestamp were omitted. Journal paths use `__FIXTURE_ROOT__`;
+the historical transcript's cwd uses a synthetic path with its byte count
+updated. The helper changes the synthetic agent name to reuse the same schema
+for two independent databases. No candidate storage owner initializes the fixture.

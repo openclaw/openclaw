@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -32,7 +31,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -56,7 +54,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -85,7 +82,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
                   : {}),
               }
             : undefined;
-          const token = consumeGitHubSetupHandoff({ name: params.secretName });
+          const token = await consumeGitHubSetupHandoff({ name: params.secretName });
           if (!token) {
             throw new Error("temporary GitHub credential is unavailable");
           }
@@ -116,7 +113,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           });
         }
         if (previousIdentity?.kind === "oauth") {
-          context.githubOAuthService?.retireProfile(previousIdentity.profileId);
+          await context.githubOAuthService?.retireProfileAsync(previousIdentity.profileId);
         }
         respond(
           true,
@@ -143,7 +140,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -175,25 +171,18 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     "tools.github.authorize.poll",
     validateToolsGitHubAuthorizePollParams,
     async ({ params, respond, context }) => {
-      try {
-        const service = context.githubOAuthService;
-        if (!service) {
-          throw new Error("GitHub authorization lifecycle is unavailable.");
-        }
-        respond(true, await service.pollAuthorization(params.requestId));
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization polling failed"),
-        );
+      const service = context.githubOAuthService;
+      if (!service) {
+        throw new Error("GitHub authorization lifecycle is unavailable.");
       }
+      respond(true, await service.pollAuthorization(params.requestId));
     },
+    () => errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization polling failed"),
   ),
   "tools.github.authorize.cancel": defineValidatedGatewayHandler(
     "tools.github.authorize.cancel",
     validateToolsGitHubAuthorizeCancelParams,
-    ({ params, respond, context }) => {
+    async ({ params, respond, context }) => {
       const service = context.githubOAuthService;
       if (!service) {
         respond(
@@ -203,7 +192,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { cancelled: service.cancelAuthorization(params.requestId) });
+      respond(true, { cancelled: await service.cancelAuthorizationAsync(params.requestId) });
     },
   ),
 };

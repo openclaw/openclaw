@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectStalePluginRuntimeSymlinkHealthFindings,
   removeStalePluginRuntimeSymlinks,
@@ -163,6 +163,72 @@ describe("plugin runtime symlink health findings", () => {
       expect(await fs.readFile(path.join(liveLink, "package.json"), "utf8")).toBe(
         '{"name":"live-runtime"}\n',
       );
+    },
+  );
+
+  it.each(["symlink", "file", "target"] as const)(
+    "preserves a %s restored during dangling alias inspection",
+    async (replacement) => {
+      if (!(await canCreateDirectorySymlink(tempDir))) {
+        return;
+      }
+      const packageRoot = path.join(tempDir, "prefix", "node_modules", "openclaw");
+      const staleLink = path.join(path.dirname(packageRoot), "runtime");
+      const originalLink = path.join(tempDir, "original-alias");
+      const missingTarget = path.join(tempDir, "plugin-runtime-deps", "missing");
+      const liveTarget = path.join(tempDir, "live-package");
+      const contents = '{"name":"replacement-package"}\n';
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(liveTarget);
+      await fs.writeFile(path.join(liveTarget, "package.json"), contents);
+      await fs.symlink(missingTarget, staleLink, "dir");
+
+      const stat = fs.stat.bind(fs);
+      let replaced = false;
+      const inspection = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        try {
+          return await stat(...args);
+        } catch (error) {
+          if (String(args[0]) === staleLink && !replaced) {
+            expect(error).toMatchObject({ code: "ENOENT" });
+            replaced = true;
+            if (replacement === "target") {
+              await fs.mkdir(missingTarget, { recursive: true });
+              await fs.writeFile(path.join(missingTarget, "package.json"), contents);
+            } else {
+              // Retain the old inode so the replacement cannot reuse its identity.
+              await fs.rename(staleLink, originalLink);
+              if (replacement === "symlink") {
+                await fs.symlink(liveTarget, staleLink, "dir");
+              } else {
+                await fs.writeFile(staleLink, contents);
+              }
+            }
+          }
+          throw error;
+        }
+      });
+      try {
+        const result = await removeStalePluginRuntimeSymlinks(packageRoot);
+        expect(replaced).toBe(true);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining(`Failed to remove stale plugin-runtime symlink ${staleLink}:`),
+        ]);
+        if (replacement === "file") {
+          expect(await fs.readFile(staleLink, "utf8")).toBe(contents);
+        } else {
+          expect(await fs.readlink(staleLink)).toBe(
+            replacement === "target" ? missingTarget : liveTarget,
+          );
+          expect(await fs.readFile(path.join(staleLink, "package.json"), "utf8")).toBe(contents);
+        }
+        if (replacement !== "target") {
+          expect(await fs.readlink(originalLink)).toBe(missingTarget);
+        }
+      } finally {
+        inspection.mockRestore();
+      }
     },
   );
 });

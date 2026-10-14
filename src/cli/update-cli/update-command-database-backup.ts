@@ -4,16 +4,22 @@ import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  prepareOpenClawStateDatabaseRemoval,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
@@ -30,6 +36,7 @@ export async function captureUpdateDatabases(params: {
   context: OwnedManagedUpdateContext | undefined;
   assertCurrent: () => void;
 }) {
+  const assertCurrent = params.assertCurrent;
   const startedAt = Date.now();
   const { execution, context, transaction } = params;
   const env = context?.env ?? execution.opts.run!.env;
@@ -58,6 +65,34 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
+      if (maintenance) {
+        // Settle the writer checkpoint before capture, while leaving POSIX
+        // snapshot workers free to read the source database.
+        if (process.platform === "win32") {
+          try {
+            const exclusion = await prepareOpenClawStateDatabaseRemoval(
+              resolveOpenClawStateSqlitePath(env),
+              params.assertCurrent,
+            );
+            exclusion.release();
+          } catch (error) {
+            // A busy native probe still permits a snapshot for manual recovery;
+            // drainage and cleanup uncertainty must retain their failure.
+            if (
+              !(error instanceof Error) ||
+              error instanceof AggregateError ||
+              !isSqliteLockError(error.cause)
+            ) {
+              throw error;
+            }
+            unavailable = "another SQLite connection is active";
+          }
+        } else {
+          await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+        }
+        params.assertCurrent();
+        maintenance.assertCurrent();
+      }
       let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
       if (execution.updateInstallKind === "git" && !execution.switchToGit) {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
@@ -71,8 +106,13 @@ export async function captureUpdateDatabases(params: {
         stateDir: resolveStateDir(env),
         config: source.config,
         env,
+        // Under confirmed custody no writer can race a raw family copy. A native
+        // source open would rebuild an exited writer's WAL index, changing the
+        // recorded generation and disabling automatic restoration.
+        preserveSourceArtifacts: maintenance !== null && unavailable === undefined,
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
+        postgresOffline: maintenance !== null && unavailable === undefined,
       });
       params.assertCurrent();
       maintenance?.assertCurrent();
@@ -104,10 +144,12 @@ export async function captureUpdateDatabases(params: {
   params.assertCurrent();
   const restorable =
     maintenance !== null &&
+    unavailable === undefined &&
     backup.databases.every((entry) => typeof backup.sourceGenerations[entry.path] === "string");
   if (!restorable) {
+    transaction.databaseBackupRoot = undefined;
     backup.warnings.push(
-      `Automatic database restoration is disabled because ${unavailable ? `the Gateway could not be confirmed stopped during capture: ${unavailable}` : "a source database changed or its write generation could not be captured"}. Snapshots remain available at ${backup.directory}; later writes must be preserved.`,
+      `Automatic database restoration is disabled because ${unavailable ? `the Gateway could not be confirmed stopped during capture: ${unavailable}` : "a source database changed or its write generation could not be captured"}. Snapshots remain available at ${backup.directory} even after successful activation; later writes must be preserved.`,
     );
   }
   const step: UpdateStepResult = {
@@ -117,7 +159,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts.`,
+      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,
@@ -125,7 +167,8 @@ export async function captureUpdateDatabases(params: {
     ],
     warnings: backup.warnings,
   };
-  execution.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+  await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
+  assertCurrent();
   return { backup: restorable ? backup : undefined, step };
 }
 
@@ -139,8 +182,9 @@ export async function restoreFailedUpdateDatabases(params: {
   assertRollbackSafe?: () => Promise<void>;
   progress?: Progress;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const startedAt = Date.now();
-  const refuse = (reason: string) => {
+  const refuse = async (reason: string) => {
     params.backup.restoreRefusal ??= reason;
     params.result.reason = "state-migrated-no-rollback";
     params.result.rollbackOutcome = { status: "not-attempted", reason };
@@ -153,7 +197,8 @@ export async function restoreFailedUpdateDatabases(params: {
       stderrTail: `${reason}. Current databases were preserved. Keep the retained snapshots at ${params.backup.directory}; run openclaw doctor from the candidate version to inspect recovery before downgrading.`,
     };
     params.result.steps.push(step);
-    params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+    await reportUpdateStepCompletion(params.progress, { ...step, index: 0, total: 0 });
+    assertCurrent();
     return false;
   };
   params.assertCurrent();
@@ -165,14 +210,14 @@ export async function restoreFailedUpdateDatabases(params: {
       throw error;
     }
     params.result.recovery = { serviceRestartSafe: false, reason: "source-rollback-failed" };
-    return refuse(formatErrorMessage(error));
+    return await refuse(formatErrorMessage(error));
   }
   params.assertCurrent();
   if (params.backup.restoreRefusal) {
-    return refuse(params.backup.restoreRefusal);
+    return await refuse(params.backup.restoreRefusal);
   }
   if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
-    return refuse("Migration receipt belongs to a different database backup");
+    return await refuse("Migration receipt belongs to a different database backup");
   }
   try {
     const migratedPaths = await restoreUpdateDatabaseBackup({
@@ -180,7 +225,7 @@ export async function restoreFailedUpdateDatabases(params: {
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
     });
     if (migratedPaths === null) {
-      return refuse(
+      return await refuse(
         params.backup.restoreRefusal ?? "databases changed after migration; the writer is unknown",
       );
     }
@@ -199,7 +244,8 @@ export async function restoreFailedUpdateDatabases(params: {
       ],
     };
     params.result.steps.push(step);
-    params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+    await reportUpdateStepCompletion(params.progress, { ...step, index: 0, total: 0 });
+    assertCurrent();
     return true;
   } catch (cause) {
     // A partly restored shared ledger must never be reopened by candidate

@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findConfiguredProviderModel } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +15,7 @@ import {
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
-import { mergeModelMediaInput, resolveConfiguredFallbackReasoning } from "./model.compat.js";
+import { mergeModelMediaInput, resolveMergedConfiguredModelReasoning } from "./model.compat.js";
 import {
   clampModelMaxTokensToContextWindow,
   hasConfiguredModelRouteSupport,
@@ -29,11 +30,7 @@ import {
   resolveProviderModelInput,
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
-import {
-  normalizeResolvedModel,
-  type ProviderRuntimeHooks,
-  resolveProviderRequestTimeoutMs,
-} from "./model.provider-hooks.js";
+import { normalizeResolvedModel, type ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
@@ -48,9 +45,11 @@ export function buildConfiguredFallbackModel(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
-  const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
+  const { provider, modelId, cfg } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
+    floorSeconds: true,
+  });
   const configuredModel = findConfiguredProviderModel(
     providerConfig,
     provider,
@@ -66,20 +65,12 @@ export function buildConfiguredFallbackModel(params: {
     staticCatalogModel?.mediaInput,
     configuredModel?.mediaInput,
   );
-  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
-  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers);
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
   const resolvedParams = mergeConfiguredRuntimeModelParams({
-    cfg,
-    provider,
-    modelId,
+    ...params,
     discoveredParams: staticCatalogModel?.params,
     providerParams: providerConfig?.params,
     configuredParams: configuredModel?.params,
@@ -91,19 +82,15 @@ export function buildConfiguredFallbackModel(params: {
   const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   const staticCatalogBaseUrl = normalizeOptionalString(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
-    provider,
-    modelId,
+    ...params,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       providerConfiguredApi ??
       manifestAliasTransport?.api ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       resolveConfiguredProviderDefaultApi({
-        provider,
+        ...params,
         providerConfig,
-        cfg,
-        workspaceDir,
-        runtimeHooks,
       }) ??
       "openai-responses",
     baseUrl:
@@ -111,9 +98,6 @@ export function buildConfiguredFallbackModel(params: {
       providerConfiguredBaseUrl ??
       manifestAliasBaseUrl ??
       staticCatalogBaseUrl,
-    cfg,
-    workspaceDir,
-    runtimeHooks,
   });
   if (
     !hasConfiguredModelRouteSupport({
@@ -128,19 +112,13 @@ export function buildConfiguredFallbackModel(params: {
   const fallbackCompat = resolveCatalogOwnedModelCompat({
     ...(staticCatalogModel ? { catalogRoute: staticCatalogModel } : {}),
     catalogCompat: staticCatalogModel?.compat,
-    configuredRoute: {
-      api: fallbackTransport.api,
-      baseUrl: fallbackTransport.baseUrl,
-    },
+    configuredRoute: fallbackTransport,
     configuredCompat: configuredModel?.compat,
   });
   if (
     configuredModel &&
     shouldSuppressConfiguredModel({
-      provider,
-      modelId,
-      cfg,
-      workspaceDir,
+      ...params,
       baseUrl: fallbackTransport.baseUrl,
     })
   ) {
@@ -161,10 +139,10 @@ export function buildConfiguredFallbackModel(params: {
     capability: "llm",
     transport: "stream",
   });
-  const fallbackReasoning = resolveConfiguredFallbackReasoning({
+  const fallbackReasoning = resolveMergedConfiguredModelReasoning({
     provider,
     compat: fallbackCompat,
-    reasoning: metadataModel?.reasoning,
+    configuredReasoning: metadataModel?.reasoning,
   });
   const configuredFallbackMaxTokens = configuredModel?.maxTokens ?? providerConfig?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
@@ -175,10 +153,7 @@ export function buildConfiguredFallbackModel(params: {
     resolvedFallbackContextWindow,
   );
   return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
+    ...params,
     model: attachModelProviderRequestRouteFacts(
       attachModelProviderLocalService(
         attachModelProviderRequestTransport(
@@ -199,11 +174,9 @@ export function buildConfiguredFallbackModel(params: {
               ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
               : {}),
             cost: mergeConfiguredModelCost({
-              provider,
-              cfg,
+              ...params,
               configuredModel,
               catalogCost: staticCatalogModel?.cost,
-              providerMetadataOwners: params.providerMetadataOwners,
             }),
             contextWindow: resolvedFallbackContextWindow,
             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
@@ -231,6 +204,5 @@ export function buildConfiguredFallbackModel(params: {
       ),
       params.providerMetadataOwners,
     ),
-    runtimeHooks,
   });
 }

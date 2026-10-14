@@ -240,30 +240,14 @@ describe("GPT-Live werift audio peer", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("flushes a short reordered tail after the 80 ms window", async () => {
-    const { decodeOrder, onError, packet, testPeer } = await createInboundAudioHarness();
-    vi.useFakeTimers();
-    for (const sequenceNumber of [40, 42, 43, 44]) {
-      testPeer.handleInboundRtp(packet(sequenceNumber));
-    }
-    await vi.advanceTimersByTimeAsync(79);
-    expect(decodeOrder).toEqual([40]);
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(decodeOrder).toEqual([40, "plc", 42, 43, 44]);
-    expect(onError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
+  it("retires buffered RTP across rollover and delayed PCM at clear", async () => {
+    const scenario = {
       first: 65_534,
       buffered: [0, 2],
       retired: [65_535, 0, 1, 2],
       next: 3,
       expected: [254, "plc", 0, "plc", 2],
-    },
-    { first: 10, buffered: [], retired: [10], next: 11, expected: [10] },
-  ])("retires buffered RTP $buffered and delayed PCM at clear", async (scenario) => {
+    };
     const { decode, decodeOrder, onAudio, onError, packet, peer, testPeer } =
       await createInboundAudioHarness();
     let cleared = false;
@@ -278,7 +262,7 @@ describe("GPT-Live werift audio peer", () => {
     }
     expect(decodeOrder).toEqual([scenario.first & 0xff]);
     expect(onAudio).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(scenario.buffered.length > 0 ? 1 : 0);
+    expect(vi.getTimerCount()).toBe(1);
 
     peer.clearOutputAudio();
     // Advance Opus/sequence state while discarding output, rather than
@@ -300,7 +284,9 @@ describe("GPT-Live werift audio peer", () => {
     expect(onAudio.mock.calls[1]?.[0]).toEqual(Buffer.alloc((480 - 7) * 2));
 
     testPeer.handleInboundRtp(packet(scenario.next + 2));
-    await vi.advanceTimersByTimeAsync(80);
+    await vi.advanceTimersByTimeAsync(79);
+    expect(decodeOrder).toEqual([...scenario.expected, scenario.next]);
+    await vi.advanceTimersByTimeAsync(1);
     expect(decodeOrder).toEqual([...scenario.expected, scenario.next, "plc", scenario.next + 2]);
     expect(onAudio).toHaveBeenCalledTimes(4);
     expect(onError).not.toHaveBeenCalled();
@@ -332,30 +318,21 @@ describe("GPT-Live werift audio peer", () => {
     expect(onAudio).toHaveBeenCalledTimes(scenario.expected.length);
   });
 
-  it("keeps unusable decoder state fatal with media recovery enabled", async () => {
+  it.each([
+    ["unusable decoder state", "InvalidState", true],
+    ["invalid packet without media recovery", "InvalidPacket", false],
+  ] as const)("keeps %s fatal", async (_label, code, recovery) => {
     const { OpusError, OpusErrorCode } = await import("libopus-wasm");
-    const error = new OpusError(OpusErrorCode.InvalidState, "invalid decoder state", "decode");
+    const error = new OpusError(OpusErrorCode[code], "decode failed", "decode");
     const onMediaError = vi.fn();
     const { onAudio, onError, packet, testPeer } = await createInboundAudioHarness({
-      onMediaError,
+      ...(recovery ? { onMediaError } : {}),
       decodeFailure: { sequence: 41, error },
     });
     testPeer.handleInboundRtp(packet(40));
     testPeer.handleInboundRtp(packet(41));
     expect(onError).toHaveBeenCalledExactlyOnceWith(error);
     expect(onMediaError).not.toHaveBeenCalled();
-    expect(onAudio).toHaveBeenCalledOnce();
-  });
-
-  it("preserves fatal packet handling when onMediaError is absent", async () => {
-    const { OpusError, OpusErrorCode } = await import("libopus-wasm");
-    const error = new OpusError(OpusErrorCode.InvalidPacket, "invalid packet", "decode");
-    const { onAudio, onError, packet, testPeer } = await createInboundAudioHarness({
-      decodeFailure: { sequence: 41, error },
-    });
-    testPeer.handleInboundRtp(packet(40));
-    testPeer.handleInboundRtp(packet(41));
-    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
     expect(onAudio).toHaveBeenCalledOnce();
   });
 

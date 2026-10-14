@@ -3,6 +3,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
+import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
@@ -16,10 +17,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
-import type {
-  StagedUpdateCandidateAdmission,
-  UpdateInitializationAdmission,
-} from "./update-command-initialization-types.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
@@ -35,9 +33,12 @@ export type UpdateTargetSelection =
 export type InitializedUpdate = UpdateInitializationAdmission &
   UpdateTargetSelection & {
     executor: UpdateCommandExecutor;
-    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
+    registerRun: (
+      run: NonNullable<UpdateCommandOptions["run"]>,
+      disposePresentation: () => void,
+    ) => Promise<void>;
     stagedPackage?: StagedPackageInstallUpdate;
-    candidateAdmission?: StagedUpdateCandidateAdmission;
+    candidateAdmission?: UpdateCandidateAdmissionResult;
     downgradeConfirmed?: boolean;
     callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   };

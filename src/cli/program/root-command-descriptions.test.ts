@@ -1,5 +1,6 @@
 // Root help renders catalog placeholders while command help and completion use
 // registered Commander commands. Keep those user-facing descriptions aligned.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
@@ -75,7 +76,6 @@ const JSON_NOT_APPLICABLE = {
       "users",
       "node",
       "sandbox",
-      "fleet",
       "worktrees",
       "cron",
       "dns",
@@ -136,7 +136,6 @@ const JSON_NOT_APPLICABLE = {
       "node run",
       "connect",
       "worker",
-      "fleet logs",
       "proxy start",
       "proxy run",
       "webhooks gmail run",
@@ -183,11 +182,6 @@ const JSON_NOT_APPLICABLE = {
       "skills install",
       "skills update",
       "sandbox recreate",
-      "fleet start",
-      "fleet stop",
-      "fleet restart",
-      "fleet upgrade",
-      "fleet rm",
       "dns setup",
       "proxy purge",
       "pairing approve",
@@ -217,8 +211,14 @@ const JSON_NOT_APPLICABLE = {
   },
 } as const;
 
-// Route-first commands own JSON output before Commander registration.
-const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents", "update admit"]);
+// These commands own JSON output without an optional --json flag.
+const JSON_OUTPUT_WITHOUT_FLAG = new Set([
+  "agents",
+  "update admit",
+  "update migrate",
+  "update restore",
+  "update finish",
+]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
@@ -244,7 +244,7 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   if (path === "config set") {
     return false;
   }
-  return hasOwnJsonOption(command) || JSON_OUTPUT_ROUTE_FIRST.has(path);
+  return hasOwnJsonOption(command) || JSON_OUTPUT_WITHOUT_FLAG.has(path);
 }
 
 function requiredCommandArgs(command: Command): string[] {
@@ -417,13 +417,13 @@ describe("root command descriptions", () => {
       "remove stale JSON N/A entries after adding output support",
     ).toEqual([]);
 
-    const staleRouteFirstSupport = [...JSON_OUTPUT_ROUTE_FIRST].filter((path) => {
+    const staleAlwaysJsonSupport = [...JSON_OUTPUT_WITHOUT_FLAG].filter((path) => {
       const command = registered.get(path);
       return !command || hasOwnJsonOption(command);
     });
     expect(
-      staleRouteFirstSupport,
-      "route-first JSON entries must exist and remain absent from Commander options",
+      staleAlwaysJsonSupport,
+      "always-JSON entries must exist and remain absent from Commander options",
     ).toEqual([]);
   });
 
@@ -441,7 +441,12 @@ describe("root command descriptions", () => {
       context.command.action(async () => {
         throw failure;
       });
-      const args = [...requiredCommandArgs(context.command), "--json"];
+      const args = [
+        ...requiredCommandArgs(context.command),
+        // Conditional alternatives are not represented by Commander's mandatory options.
+        ...(path === "database port" ? ["--to", "sqlite"] : []),
+        "--json",
+      ];
 
       await expect(context.command.parseAsync(args, { from: "user" }), path).rejects.toBe(failure);
     }

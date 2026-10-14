@@ -132,7 +132,7 @@ bare spec installs through npm. Raw `@openclaw/*`
 specs that match bundled plugins also resolve to the bundled copy before npm
 fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
 external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
-`git:`, or `npm-pack:` for deterministic source selection. See
+`git:`, or `npm-pack:` to select the source explicitly. See
 [`openclaw plugins`](/cli/plugins#install) for the full command contract.
 
 For npm installs, unpinned specs and `@latest` choose the newest stable
@@ -221,7 +221,7 @@ Key policy rules:
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
   separate: legacy Codex model refs are legacy config that doctor repairs,
   while the bundled `codex` plugin owns Codex app-server runtime for
-  canonical `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
+  current `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
   legacy `codex/*` refs.
 
 When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
@@ -351,9 +351,17 @@ TypeScript entry ...`, the package was published without the JavaScript files
 OpenClaw needs at runtime. Update or reinstall after the publisher ships
 compiled JavaScript, or disable/uninstall the plugin until then.
 
-### Trusted plugin state refused
+<a id="trusted-plugin-state-refused" />
 
-If a plugin fails with `openKeyedStore is only available for trusted plugins`,
+### Plugin runtime trust refused
+
+Every loaded plugin can use its own keyed and blob state and channel ingress
+queues, including local paths and linked installs. Trust remains required for
+hook agent turns and Gateway scope elevation.
+Provenance warnings and `plugins inspect` still report unverified sources;
+they do not block plugin-scoped storage or queues.
+
+If a plugin fails with `dispatchHookAgentTurn is only available for trusted plugins`,
 compare the error's `registryPath` with `plugin.trust.registryPath` from:
 
 ```bash
@@ -367,6 +375,9 @@ Matching executable versions and config files does not establish matching
 registry databases. Inspection loads into the CLI process, so compare both paths.
 Doctor also checks the installed service environment when a local Gateway is
 unreachable; if that environment cannot be verified, it says so.
+
+If the plugin needs a trust-gated capability, use the applicable remedy below.
+`--link` and `--force` do not grant trust for those capabilities.
 
 | Reason                  | Remedy                                                                                                                                                                                                               |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

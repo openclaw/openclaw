@@ -80,15 +80,18 @@ struct RootTabsPresentationTests {
         #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
     }
 
-    @Test func `overview session metrics exclude archived and internal sessions`() {
+    @Test func `overview session metrics exclude snoozed archived and internal sessions`() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
         let visible = CommandCenterTab.visibleOverviewSessions([
             Self.sessionEntry(key: "main"),
             Self.sessionEntry(key: "onboarding"),
             Self.sessionEntry(key: "agent:main:onboarding"),
             Self.sessionEntry(key: "archived", archived: true),
-        ])
+            Self.sessionEntry(key: "snoozed", snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+            Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
+        ], now: now)
 
-        #expect(visible.map(\.key) == ["main"])
+        #expect(visible.map(\.key) == ["main", "expired"])
     }
 
     @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
@@ -436,24 +439,6 @@ struct RootTabsPresentationTests {
             isCaptureInFlight: false))
     }
 
-    @Test func `chat view model rebuilds only when its transport owner changes`() {
-        #expect(!IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-b",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "work"))
-    }
-
     @Test func `localized QR status matcher accepts positional placeholders`() {
         #expect(SettingsProTab.localizedFormat(
             "qr loaded. connecting to %1$@:%2$@...",
@@ -591,20 +576,30 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test func `iOS sidebar moves pinned sessions ahead of the remaining inventory`() {
-        let sections = ChatSessionSidebarModel.sections(
+    @Test(arguments: ["recent", "agent:main:later", "later"])
+    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(
+                    key: "agent:main:later",
+                    snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+                Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
             ],
-            currentSessionKey: "recent",
-            excludesMainSession: true,
-            query: "")
+            query: "",
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            now: now)
 
         let layout = RootSidebar.sessionLayout(sections)
 
         #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
         #expect(layout.sections.map(\.id) == ["recent"])
+        #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
@@ -755,123 +750,14 @@ struct RootTabsPresentationTests {
             },
             retryDelays: [.zero],
             sleep: { _ in
-                guard subscribeAttempts == 1 else {
+                guard subscribeAttempts < 3 else {
                     throw CancellationError()
                 }
                 isVisible = false
             })
 
-        #expect(subscribeAttempts == 2)
-        #expect(declarations == [true, false])
-    }
-
-    @Test func `sidebar invalidates a confirmed same-route observer after resubscription`() async {
-        let route = "same-operator-route"
-        var subscribeAttempts = 0
-        var confirmation: (route: String, visible: Bool)? = (route, true)
-        var declarations: [Bool] = []
-
-        await RootSidebarModel.consumeSubscribedSessionEvents(
-            makeStream: {
-                AsyncStream { continuation in
-                    continuation.finish()
-                }
-            },
-            subscribe: {
-                subscribeAttempts += 1
-            },
-            onEvent: { _ in false },
-            invalidateObserverDeclaration: {
-                confirmation = nil
-            },
-            observerVisibility: { true },
-            declareObserverVisibility: { visible in
-                guard confirmation?.route != route || confirmation?.visible != visible else { return }
-                declarations.append(visible)
-                confirmation = (route, visible)
-            },
-            retryDelays: [.zero],
-            sleep: { _ in
-                guard subscribeAttempts == 1 else {
-                    throw CancellationError()
-                }
-            })
-
-        #expect(subscribeAttempts == 2)
-        #expect(declarations == [true, true])
-        #expect(confirmation?.route == route)
-        #expect(confirmation?.visible == true)
-    }
-
-    @Test func `sidebar rejects an old visibility acknowledgement after same-route resubscription`() async {
-        let route = "same-operator-route"
-        var subscribeAttempts = 0
-        var generation: UInt64 = 0
-        var confirmation: RootSidebarModel.SessionObserverDeclaration<String>?
-        var firstAcknowledgementGeneration: UInt64?
-        var rejectedOldAcknowledgement = false
-        var declarations: [Bool] = []
-
-        await RootSidebarModel.consumeSubscribedSessionEvents(
-            makeStream: {
-                AsyncStream { continuation in
-                    continuation.finish()
-                }
-            },
-            subscribe: {
-                subscribeAttempts += 1
-            },
-            onEvent: { _ in false },
-            invalidateObserverDeclaration: {
-                generation &+= 1
-                confirmation = nil
-
-                if let firstAcknowledgementGeneration {
-                    let oldAcknowledgement = RootSidebarModel.confirmedSessionObserverDeclaration(
-                        route: route,
-                        visible: true,
-                        generation: firstAcknowledgementGeneration,
-                        currentGeneration: generation,
-                        currentVisibility: true)
-                    rejectedOldAcknowledgement = oldAcknowledgement == nil
-                    if let oldAcknowledgement {
-                        confirmation = oldAcknowledgement
-                    }
-                }
-            },
-            observerVisibility: { true },
-            declareObserverVisibility: { visible in
-                let declaration = RootSidebarModel.SessionObserverDeclaration(
-                    route: route,
-                    visible: visible,
-                    generation: generation)
-                guard confirmation != declaration else { return }
-                declarations.append(visible)
-
-                if subscribeAttempts == 1 {
-                    firstAcknowledgementGeneration = generation
-                } else {
-                    confirmation = RootSidebarModel.confirmedSessionObserverDeclaration(
-                        route: route,
-                        visible: visible,
-                        generation: generation,
-                        currentGeneration: generation,
-                        currentVisibility: true)
-                }
-            },
-            retryDelays: [.zero],
-            sleep: { _ in
-                guard subscribeAttempts == 1 else {
-                    throw CancellationError()
-                }
-            })
-
-        #expect(subscribeAttempts == 2)
-        #expect(rejectedOldAcknowledgement)
-        #expect(declarations == [true, true])
-        #expect(confirmation?.route == route)
-        #expect(confirmation?.visible == true)
-        #expect(confirmation?.generation == 2)
+        #expect(subscribeAttempts == 3)
+        #expect(declarations == [true, false, false])
     }
 
     @Test func `sidebar observer identity restarts for foreground and background transitions`() {
@@ -1002,6 +888,7 @@ struct RootTabsPresentationTests {
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
+        snoozedUntil: Double? = nil,
         pinned: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
@@ -1033,6 +920,7 @@ struct RootTabsPresentationTests {
             contextTokens: contextTokens,
             pinned: pinned,
             archived: archived,
+            snoozedUntil: snoozedUntil,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,
             worktree: worktree)

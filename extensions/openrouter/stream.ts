@@ -46,14 +46,14 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!apiKey) {
     return options;
   }
-  const headers = new Headers((options as { headers?: HeadersInit } | undefined)?.headers);
+  const headers = new Headers(options?.headers);
   if (!headers.has("authorization")) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
   return {
     ...options,
     headers: Object.fromEntries(headers.entries()),
-  } as Parameters<StreamFn>[2];
+  };
 }
 
 function createOpenRouterAuthHeaderWrapper(
@@ -83,11 +83,7 @@ function isEnabledReasoningValue(value: unknown): boolean {
     if (reasoning.enabled === false) {
       return false;
     }
-    const effort = reasoning.effort;
-    if (typeof effort === "string") {
-      const normalized = effort.trim().toLowerCase();
-      return normalized !== "" && normalized !== "off" && normalized !== "none";
-    }
+    return typeof reasoning.effort !== "string" || isEnabledReasoningValue(reasoning.effort);
   }
   return true;
 }

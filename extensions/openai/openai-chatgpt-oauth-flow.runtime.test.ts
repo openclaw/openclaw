@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { lookup } from "node:dns/promises";
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
 import { EventEmitter, once } from "node:events";

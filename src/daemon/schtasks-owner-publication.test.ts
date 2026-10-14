@@ -2,20 +2,23 @@ import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
-  makeSpawnSyncResult,
   resetSchtasksBaseMocks,
   withWindowsEnv,
 } from "./test-helpers/schtasks-fixtures.js";
 
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const readWindowsProcessStartTime = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
+);
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
@@ -40,6 +43,10 @@ vi.mock("node:child_process", async (original) => ({
   spawnSync,
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTime,
+}));
 vi.mock("../utils.js", async (original) => ({
   ...(await original<typeof import("../utils.js")>()),
   sleep: async (ms: number) => {
@@ -93,6 +100,7 @@ function taskkillPids() {
 beforeEach(() => {
   resetSchtasksBaseMocks();
   readGatewayOwnerLease.mockReset();
+  readWindowsProcessStartTime.mockReset().mockReturnValue(null);
   spawnSync.mockReset();
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
@@ -161,6 +169,9 @@ it.each(["snapshot", "per-pid"])(
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const legacy = acquireGatewayStateOwner({ databasePath });
       let forced = false;
+      readWindowsProcessStartTime.mockImplementation(() =>
+        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+      );
       let firstSnapshot = true;
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,
@@ -197,9 +208,6 @@ it.each(["snapshot", "per-pid"])(
             signal: null,
           };
         }
-        if (args?.some((arg) => arg.includes("$process.StartTime"))) {
-          return makeSpawnSyncResult({ stdout: forced ? "" : "2026-09-27T00:00:00.000Z" });
-        }
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;
           return {
@@ -235,3 +243,59 @@ it.each(["snapshot", "per-pid"])(
     });
   },
 );
+
+it("stops the exact overdue state holder before lease publication without a listener or task argv", async () => {
+  await withPreparedGatewayTask(async ({ env }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    let stopped = false;
+    vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => pid === 4242 && !stopped);
+    readWindowsProcessStartTime.mockReturnValue(100);
+    inspectPortUsageMock.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const custody = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      payload: {
+        pid: 4242,
+        startTime: 100,
+        ownerId: "stuck-startup",
+        role: "gateway",
+        createdAt: new Date(-300_001).toISOString(),
+        configPath: "fixture-config",
+      },
+    });
+    spawnSync.mockImplementation((command, args) => {
+      const executable = command.toLowerCase();
+      if (executable.endsWith("taskkill.exe") && args?.includes("/F")) {
+        stopped = true;
+        custody.release();
+      }
+      const output = executable.endsWith("tasklist.exe")
+        ? stopped
+          ? "No tasks"
+          : '"node.exe","4242","Console","1","1 K"'
+        : "[]";
+      return {
+        pid: 0,
+        output: [null, output, ""],
+        stdout: output,
+        stderr: "",
+        status: 0,
+        signal: null,
+      };
+    });
+    try {
+      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+      expect(taskkillPids()).toEqual([4242, 4242]);
+      const successor = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(env),
+      });
+      successor.release();
+    } finally {
+      custody.release();
+    }
+  });
+});

@@ -38,7 +38,7 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
     const clearAbort = () => params.signal?.removeEventListener("abort", onAbort);
     const onAbort = () => {
       clearAbort();
-      reject(toErrorObject(params.signal?.reason, "Port probe aborted"));
+      reject(toErrorObject(params.signal?.reason, "Port check aborted"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const tester = net
@@ -49,17 +49,14 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
       })
       .once("listening", () => {
         const address = tester.address();
-        if (!address || typeof address === "string") {
-          tester.close(() => {
-            clearAbort();
-            reject(new Error("expected TCP listener address"));
-          });
-          return;
-        }
         // Binding succeeded; close immediately so the real server can claim the same port.
         tester.close(() => {
           clearAbort();
-          resolve(params.port === 0 ? address.port : undefined);
+          if (!address || typeof address === "string") {
+            reject(new Error("expected TCP listener address"));
+          } else {
+            resolve(params.port === 0 ? address.port : undefined);
+          }
         });
       })
       .listen(listenOptions);

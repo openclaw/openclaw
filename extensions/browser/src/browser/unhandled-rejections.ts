@@ -1,19 +1,11 @@
-/**
- * Browser-specific unhandled rejection filter for benign Playwright dialog
- * races.
- */
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const PLAYWRIGHT_DIALOG_METHODS = new Set([
-  "Page.handleJavaScriptDialog",
-  "Dialog.handleJavaScriptDialog",
-]);
+const PLAYWRIGHT_DIALOG_METHODS = ["Page.handleJavaScriptDialog", "Dialog.handleJavaScriptDialog"];
 
 const NO_DIALOG_MESSAGE = "no dialog is showing";
 
-/** Detects Playwright "no dialog is showing" races that can escape as rejections. */
 function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
   for (const candidate of collectErrorGraphCandidates(reason, (current) => [
     current.cause,
@@ -32,20 +24,18 @@ function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
     }
 
     const method = readStringField(error, "method");
-    if (method && PLAYWRIGHT_DIALOG_METHODS.has(method)) {
+    if (
+      PLAYWRIGHT_DIALOG_METHODS.some(
+        (playwrightMethod) => method === playwrightMethod || message.includes(playwrightMethod),
+      )
+    ) {
       return true;
-    }
-    for (const playwrightMethod of PLAYWRIGHT_DIALOG_METHODS) {
-      if (message.includes(playwrightMethod)) {
-        return true;
-      }
     }
   }
 
   return false;
 }
 
-/** Installs the Browser unhandled-rejection filter and returns its disposer. */
 export function registerBrowserUnhandledRejectionHandler(): () => void {
   return registerUnhandledRejectionHandler(isPlaywrightDialogRaceUnhandledRejection);
 }

@@ -4,11 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -27,7 +36,6 @@ import {
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
   resolveTsdownBuildPlan,
-  resolveStagedDeclarationConcurrency,
   resolveTsdownCleanOutputRoots,
   runTsdownBuild,
   runTsdownBuildInvocation as runTsdownBuildInvocationImpl,
@@ -35,12 +43,12 @@ import {
 } from "../../scripts/tsdown-build.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForFile,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 
 beforeEach(() => {
@@ -55,6 +63,79 @@ const { createTempDir } = fixture;
 afterEach(() => fixture.cleanup());
 const runTsdownBuildInvocation = (...args: Parameters<typeof runTsdownBuildInvocationImpl>) =>
   fixture.track(runTsdownBuildInvocationImpl(...args));
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function receiptFixtureScript(lines: string[]) {
+  return [
+    fixtureReceiptClientSource(receipts.endpoint),
+    "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    ...lines,
+  ].join("\n");
+}
+
+async function fixtureEventBeforeSettlement(
+  record: string,
+  text: string,
+  operation: Promise<unknown>,
+  signal: AbortSignal,
+) {
+  await withinTest(
+    Promise.race([
+      receipts.waitFor(record, text),
+      operation.then(() => {
+        // Receipt and process output use separate pipes. The fixture writes this
+        // record before it can exit or let the owning operation settle.
+        if (
+          !fs.existsSync(record) ||
+          !(text === ""
+            ? Number(fs.readFileSync(record, "utf8")) > 0
+            : fs.readFileSync(record, "utf8").includes(text))
+        ) {
+          throw new Error(
+            text === "" ? `timeout waiting for pid in ${record}` : `timeout waiting for ${record}`,
+          );
+        }
+      }),
+    ]),
+    signal,
+  );
+}
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // The product owns these child handles, and deliberate parent death or rescue
+  // SIGKILL leaves no test-owned exit event. Only test cancellation bounds reaping.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
+}
+
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 const TEST_PHYSICAL_MEMORY_BYTES = 16 * GiB;
@@ -167,13 +248,39 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
+  it.each([...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS])(
+    "honors --dts for the single %s declaration selection",
+    (group) => {
+      const results = resolveTsdownBuildInvocations({
+        args: ["--config", "tsdown.config.ts", "--filter", group, "--dts"],
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(filtersOf(results)).toEqual([group]);
+      expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+    },
+  );
+
+  it.each([{ watch: [] }, { watch: ["--watch"] }])(
+    "keeps --no-dts out of canonical config construction (watch=$watch)",
+    ({ watch }) => {
+      const results = resolveTsdownBuildInvocations({
+        args: ["--config", "tsdown.config.ts", "--no-dts", ...watch],
+        env: {},
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    },
+  );
+
   it("serializes an explicit declaration subset in dependency order", () => {
     const args = [
       "--config",
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
-      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.toReversed().flatMap((group) => ["--filter", group]),
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.toReversed().flatMap((group) => ["--filter", group]),
       "--filter",
       TSDOWN_PACKAGE_CONFIG_GROUP,
       "--format",
@@ -183,7 +290,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(filtersOf(results)).toEqual([
       TSDOWN_PACKAGE_CONFIG_GROUP,
       TSDOWN_UNIFIED_CONFIG_GROUP,
-      ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
     ]);
     for (const result of results) {
       expect(result.args).toEqual(expect.arrayContaining(["--config", "tsdown.config.ts"]));
@@ -203,29 +310,87 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it.each([
-    ["short", ["-w"]],
-    ["short assigned", ["-w=src"]],
-  ])("keeps an explicit-config %s watch in one owning process", (_label, watchArgs) => {
-    const args = ["-c", "tsdown.config.ts", ...watchArgs];
-    const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+  it.each<[string, string[], TsdownInvocationParams]>([
+    ["short watch", ["-c", "tsdown.config.ts", "-w"], { env: {}, ...NO_MEMORY_LIMIT }],
+    ["assigned short watch", ["-c", "tsdown.config.ts", "-w=src"], { env: {}, ...NO_MEMORY_LIMIT }],
+    [
+      "config-free positional watch",
+      ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"],
+      { env: {}, cgroupMemoryLimitBytes: 4 * GiB },
+    ],
+    [
+      "custom config",
+      ["-c", "custom.tsdown.config.ts", "--clean"],
+      {
+        platform: "linux",
+        nodeExecPath: "/usr/bin/node",
+        env: {},
+        cgroupMemoryLimitBytes: 4 * GiB,
+      },
+    ],
+  ])("keeps %s in one owning process", (_name, args, params) => {
+    const { invocations, heapShortfall } = resolveTsdownBuildPlan({ args, ...params });
+    expect(heapShortfall).toBeNull();
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]?.args.slice(-args.length)).toEqual(args);
+    if (args[1] === "tsdown.config.ts") {
+      expect(
+        invocations[0]?.args.filter((_arg, index, all) => all[index - 1] === "--filter"),
+      ).toEqual([
+        TSDOWN_PACKAGE_CONFIG_GROUP,
+        TSDOWN_UNIFIED_CONFIG_GROUP,
+        ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+      ]);
+    }
+    if (args.includes("--clean")) {
+      expect(invocations[0]?.args.indexOf("--clean")).toBeGreaterThan(
+        invocations[0]?.args.indexOf("--no-clean") ?? -1,
+      );
+    }
+  });
 
-    expect(results).toHaveLength(1);
-    expect(results[0]?.args.slice(-args.length)).toEqual(args);
+  it.each([{ extra: [] }, { extra: ["--watch"] }])(
+    "rejects overlapping full and SDK declaration selections $extra",
+    ({ extra }) => {
+      expect(() =>
+        resolveTsdownBuildInvocations({
+          args: [
+            "--config",
+            "tsdown.config.ts",
+            ...extra,
+            ...[
+              ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+              ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+            ].flatMap((group) => ["--filter", group]),
+          ],
+          env: {},
+          ...NO_MEMORY_LIMIT,
+        }),
+      ).toThrow("full declarations already include the SDK");
+    },
+  );
+
+  it("admits the full declaration writer while retaining the SDK-only selection", () => {
+    for (const group of [
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+      ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+    ]) {
+      const plan = resolveTsdownBuildPlan({
+        args: ["--config", "tsdown.config.ts", "--filter", group],
+        env: {},
+        cgroupMemoryLimitBytes: 4 * GiB,
+      });
+      expect(Boolean(plan.heapShortfall?.fatal)).toBe(
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((name) => name === group),
+      );
+      expect(filtersOf(plan.invocations)).toEqual([group]);
+    }
   });
 
   it("rejects default watch mode before splitting long-lived watchers", () => {
     expect(() =>
       resolveTsdownBuildInvocations({ args: ["--watch=src"], env: {}, ...NO_MEMORY_LIMIT }),
     ).toThrow("watch mode requires an explicit --config/-c or --no-config selector");
-  });
-
-  it("keeps a config-free positional watcher in one owning process without full-build admission", () => {
-    const args = ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"];
-    const plan = resolveTsdownBuildPlan({ args, env: {}, cgroupMemoryLimitBytes: 4 * GiB });
-    expect(plan.heapShortfall).toBeNull();
-    expect(plan.invocations).toHaveLength(1);
-    expect(plan.invocations[0]?.args.slice(-args.length)).toEqual(args);
   });
 
   it("freezes one heap budget for the complete default plan", () => {
@@ -260,24 +425,6 @@ describe("resolveTsdownBuildInvocation", () => {
       expect(invocation.args.slice(-args.length)).toEqual(args);
       expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
     }
-  });
-
-  it("keeps custom configs in one invocation without full-build admission", () => {
-    const args = ["-c", "custom.tsdown.config.ts", "--clean"];
-    const result = resolveTsdownBuildPlan({
-      args,
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env: {},
-      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
-    });
-
-    expect(result.invocations[0]?.args.indexOf("--clean")).toBeGreaterThan(
-      result.invocations[0]?.args.indexOf("--no-clean") ?? -1,
-    );
-    expect(result.heapShortfall).toBeNull();
-    expect(result.invocations).toHaveLength(1);
-    expect(result.invocations[0]?.args.slice(-args.length)).toEqual(args);
   });
 
   it("applies admission to explicit and implicit unified plans", () => {
@@ -582,34 +729,6 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it("keeps a parsed zero-byte cgroup limit bounded", () => {
-    expect(
-      resolveTestNodeOptions({
-        cgroupMemoryLimitPaths: ["/test/memory.max"],
-        fs: createMemoryFileSystem(new Map([["/test/memory.max", "0\n"]])),
-      }),
-    ).toBe("--max-old-space-size=1");
-  });
-
-  it("uses Node's constrained-memory result as a canonical candidate", () => {
-    expect(
-      resolveTestNodeOptions({ constrainedMemoryBytes: 5 * GiB, cgroupMemoryLimitPaths: [] }),
-    ).toBe("--max-old-space-size=4352");
-  });
-
-  it("does not gate macOS builds on Node's instantaneous free-page count", () => {
-    const plan = resolveTsdownBuildPlan({
-      platform: "darwin",
-      env: {},
-      cgroupMemoryLimitPaths: [],
-      constrainedMemoryBytes: 0,
-      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
-      physicalMemoryBytes: 16 * GiB,
-    });
-    expect(plan.maxOldSpaceMb).toBe(12288);
-    expect(plan.heapShortfall).toBeNull();
-  });
-
   it("caps finite cgroups by host MemAvailable and preserves zero", () => {
     const memory = {
       env: {},
@@ -633,19 +752,6 @@ describe("resolveTsdownBuildInvocation", () => {
       limitBytes: 0,
       availableBytes: 0,
     });
-  });
-
-  it("caps an oversized cgroup limit by physical memory", () => {
-    const memory = {
-      env: {},
-      cgroupMemoryLimitBytes: 64 * GiB,
-      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
-      physicalMemoryBytes: 4 * GiB,
-    };
-    const plan = resolveTsdownBuildPlan(memory);
-    expect(plan.maxOldSpaceMb).toBe(3328);
-    expect(plan.heapShortfall?.fatal).toBe(true);
-    expect(readProcessMemoryCapacity(memory).capacityBytes).toBe(4 * GiB);
   });
 
   it("keeps raw capacity unknown without a physical bound", () => {
@@ -697,7 +803,48 @@ describe("resolveTsdownBuildInvocation", () => {
     heap: number,
     capacity?: number,
     admitted?: boolean,
+    fatal?: boolean,
   ][] = [
+    [
+      "keeps a parsed zero-byte cgroup limit bounded",
+      {
+        cgroupMemoryLimitPaths: ["/test/memory.max"],
+        fs: createMemoryFileSystem(new Map([["/test/memory.max", "0\n"]])),
+      },
+      1,
+    ],
+    [
+      "uses Node's constrained-memory result as a canonical candidate",
+      { constrainedMemoryBytes: 5 * GiB, cgroupMemoryLimitPaths: [] },
+      4352,
+    ],
+    [
+      "does not gate macOS builds on Node's instantaneous free-page count",
+      {
+        platform: "darwin",
+        env: {},
+        cgroupMemoryLimitPaths: [],
+        constrainedMemoryBytes: 0,
+        procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+        physicalMemoryBytes: 16 * GiB,
+      },
+      12288,
+      undefined,
+      true,
+    ],
+    [
+      "caps an oversized cgroup limit by physical memory",
+      {
+        env: {},
+        cgroupMemoryLimitBytes: 64 * GiB,
+        procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+        physicalMemoryBytes: 4 * GiB,
+      },
+      3328,
+      4 * GiB,
+      undefined,
+      true,
+    ],
     [
       "uses the tightest finite cgroup ancestor even when the leaf is bounded",
       cgroupMemory("0::/parent/leaf\n", "", [
@@ -812,13 +959,19 @@ describe("resolveTsdownBuildInvocation", () => {
       4352,
     ],
   ];
-  it.each(memoryCases)("%s", (_name, memory, heap, capacity, admitted) => {
+  it.each(memoryCases)("%s", (_name, memory, heap, capacity, admitted, fatal) => {
     expect(resolveTestNodeOptions(memory)).toBe(`--max-old-space-size=${heap}`);
     if (capacity !== undefined) {
       expect(readProcessMemoryCapacity(memory).capacityBytes).toBe(capacity);
     }
-    if (admitted) {
-      expect(resolveTsdownBuildPlan(memory).heapShortfall).toBeNull();
+    if (admitted || fatal !== undefined) {
+      const plan = resolveTsdownBuildPlan(memory);
+      expect(plan.maxOldSpaceMb).toBe(heap);
+      if (admitted) {
+        expect(plan.heapShortfall).toBeNull();
+      } else {
+        expect(plan.heapShortfall?.fatal).toBe(fatal);
+      }
     }
   });
 
@@ -1021,7 +1174,6 @@ describe("resolveTsdownBuildInvocation", () => {
         const declarationFiles = [
           "dist/plugin-sdk/core.d.ts",
           "dist/plugin-sdk/nested/types.d.cts",
-          "dist-runtime/extensions/demo/index.d.ts",
           "packages/media-understanding-common/dist/index.d.mts",
           "packages/media-understanding-common/dist/nested/types.d.ts",
         ];
@@ -1038,6 +1190,7 @@ describe("resolveTsdownBuildInvocation", () => {
           "dist-runtime/stale.js",
           "dist-runtime/control-ui/index.html",
           "dist-runtime/extensions/demo/index.js",
+          "dist-runtime/extensions/demo/index.d.ts",
           "dist-runtime/extensions/demo/node_modules/staged/index.js",
           "packages/agent-core/dist/stale.js",
           "packages/net-policy/dist/stale.js",
@@ -1445,7 +1598,7 @@ describe("runTsdownBuildInvocation", () => {
               await completion;
               if (pid !== undefined && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForDead(pid, 2_000);
+                await waitForForeignProcessExit(pid, signal);
               }
             } finally {
               signal.removeEventListener("abort", abort);
@@ -1482,6 +1635,20 @@ describe("runTsdownBuildInvocation", () => {
     }
     return supervisor;
   }
+
+  it("recognizes ineffective dynamic imports split across output chunks", () => {
+    const marker = "[INEFFECTIVE_DYNAMIC_IMPORT]";
+    const output = `${marker} synthetic.ts\n`;
+    for (let split = 1; split < marker.length; split += 1) {
+      const scanner = createTsdownOutputScanner({ maxCaptureBytes: 7 });
+      scanner.append(Buffer.from(output.slice(0, split)));
+      scanner.append(Buffer.from(output.slice(split)));
+      expect(scanner.finish(), `split at ${split}`).toMatchObject({
+        captured: output.slice(-7),
+        hasIneffectiveDynamicImport: true,
+      });
+    }
+  });
 
   it("streams output while bounding capture and classifying build diagnostics", () =>
     fixture.run(async () => {
@@ -1537,17 +1704,18 @@ describe("runTsdownBuildInvocation", () => {
 
   it.skipIf(process.platform === "win32")(
     "reports cleanup rejecting a successful compiler with a remaining descendant",
-    () =>
+    ({ signal }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-tsdown-close-");
         const childPidPath = path.join(rootDir, "child.pid");
-        const childScript = [
+        const childScript = receiptFixtureScript([
           `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
           "process.send('ready');",
-        ].join("");
+        ]);
         const parentScript = [
-          `const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+          `const child = require('node:child_process').spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
           // Readiness owns the race: the compiler exits only once its same-group
           // descendant is running, without that descendant holding output pipes.
           "child.once('message', () => { child.disconnect(); child.unref(); process.exit(0); });",
@@ -1559,8 +1727,9 @@ describe("runTsdownBuildInvocation", () => {
         });
         let childPid: number | undefined;
         try {
-          childPid = await waitForPidFile(childPidPath, 2_000);
-          expect(await completion).toMatchObject({
+          await fixtureEventBeforeSettlement(childPidPath, "", completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+          expect(await withinTest(completion, signal)).toMatchObject({
             status: 1,
             signal: null,
             timedOut: false,
@@ -1578,7 +1747,7 @@ describe("runTsdownBuildInvocation", () => {
               finalStatus: 1,
             }),
           );
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await fixture.verifyCleanup(async () => {
             try {
@@ -1589,7 +1758,7 @@ describe("runTsdownBuildInvocation", () => {
                 : undefined;
               if (childPid !== undefined && isProcessAlive(childPid)) {
                 process.kill(childPid, "SIGKILL");
-                await waitForDead(childPid, 2_000);
+                await waitForForeignProcessExit(childPid, signal);
               }
             }
           });
@@ -1682,18 +1851,19 @@ describe("runTsdownBuildInvocation", () => {
         const parentPidPath = path.join(rootDir, "parent.pid");
         const termPath = path.join(rootDir, "child.term");
         // Allocate the marker before readiness; filesystem setup must not consume termination grace.
-        const childScript = [
+        const childScript = receiptFixtureScript([
           "const fs = require('node:fs');",
           `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
-          "process.on('SIGTERM', () => fs.writeSync(termFd, 'SIGTERM', 0));",
+          `process.on('SIGTERM', () => { fs.writeSync(termFd, 'SIGTERM', 0); sendReceipt(${JSON.stringify(termPath)}, "SIGTERM"); });`,
           `fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.ppid));`,
           `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
-        ].join("");
+        ]);
         const parentScript = [
           "const { spawn } = require('node:child_process');",
           "process.on('SIGTERM', () => process.exit(0));",
-          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
         const output = createWriteSink();
@@ -1702,28 +1872,26 @@ describe("runTsdownBuildInvocation", () => {
 
         try {
           // The descendant publishes its PID only after installing its SIGTERM handler.
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(childPidPath, "", supervisor.completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           expect(isProcessAlive(childPid)).toBe(true);
           supervisor.advance(250);
-          await vi.waitUntil(() => fs.readFileSync(termPath, "utf8") === "SIGTERM", {
-            timeout: 2_000,
-            interval: 5,
-          });
+          await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await vi.waitUntil(() => !isProcessAlive(parentPid), { timeout: 2_000, interval: 5 });
+          await waitForForeignProcessExit(parentPid, signal);
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           supervisor.advance(1);
           supervisor.resume();
-          const result = await supervisor.completion;
+          const result = await withinTest(supervisor.completion, signal);
 
           expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
           expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
           expect(output.chunks.join("")).toContain("timeout after 250ms");
           expect(output.chunks.join("")).toContain('"cleanup":"timeout"');
           expect(output.chunks.join("")).toContain("forcing SIGKILL");
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await supervisor.dispose(childPid);
         }
@@ -1741,26 +1909,31 @@ describe("runTsdownBuildInvocation", () => {
         const childPidPath = path.join(rootDir, "child.pid");
         const parentPidPath = path.join(rootDir, "parent.pid");
         // Allocate markers before readiness; their contents record signal and released cleanup.
-        const childScript = [
+        const childScript = receiptFixtureScript([
           "const fs = require('node:fs');",
           `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
           `const cleanupFd = fs.openSync(${JSON.stringify(cleanupPath)}, 'wx');`,
           "process.on('SIGTERM', () => {",
           "  fs.writeSync(termFd, 'SIGTERM', 0);",
-          "  setInterval(() => {",
+          `  const release = fs.watch(${JSON.stringify(rootDir)}, () => {`,
           `    if (!fs.existsSync(${JSON.stringify(releasePath)})) return;`,
+          "    release.close();",
           "    fs.writeSync(cleanupFd, 'clean', 0);",
           "    process.exit(0);",
-          "  }, 5);",
+          "  });",
+          // Install the release observer before acknowledging TERM, so the test's
+          // subsequent file creation cannot outrun watcher registration.
+          `  sendReceipt(${JSON.stringify(termPath)}, "SIGTERM");`,
           "});",
           `fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.ppid));`,
           `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
-        ].join("");
+        ]);
         const parentScript = [
           "const { spawn } = require('node:child_process');",
           "process.on('SIGTERM', () => process.exit(0));",
-          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
         const output = createWriteSink();
@@ -1769,20 +1942,18 @@ describe("runTsdownBuildInvocation", () => {
 
         try {
           // The descendant publishes its PID only after installing its SIGTERM handler.
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(childPidPath, "", supervisor.completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           supervisor.advance(250);
-          await vi.waitUntil(() => fs.readFileSync(termPath, "utf8") === "SIGTERM", {
-            timeout: 2_000,
-            interval: 5,
-          });
+          await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await vi.waitUntil(() => !isProcessAlive(parentPid), { timeout: 2_000, interval: 5 });
+          await waitForForeignProcessExit(parentPid, signal);
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("");
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           fs.writeFileSync(releasePath, "release");
-          const result = await supervisor.completion;
+          const result = await withinTest(supervisor.completion, signal);
 
           expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
@@ -1791,7 +1962,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(1);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           supervisor.resume();
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await supervisor.dispose(childPid);
         }
@@ -1800,7 +1971,7 @@ describe("runTsdownBuildInvocation", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans process-group descendants before forwarding parent SIGTERM",
-    () =>
+    ({ signal }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-tsdown-parent-signal-");
         const childPidPath = path.join(rootDir, "child.pid");
@@ -1808,26 +1979,28 @@ describe("runTsdownBuildInvocation", () => {
         const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
         let childPid = 0;
         let runner: ReturnType<typeof spawn> | undefined;
-        let runnerClosed: Promise<unknown> | undefined;
+        let runnerClosed: Promise<unknown[]> | undefined;
 
         try {
-          const childScript = [
+          const childScript = receiptFixtureScript([
             "const fs = require('node:fs');",
             "process.on('SIGTERM', () => {});",
             `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+            `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
             "setInterval(() => {}, 1000);",
-          ].join("");
-          const parentScript = [
+          ]);
+          const parentScript = receiptFixtureScript([
             "const { spawn } = require('node:child_process');",
-            `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+            `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
             `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+            `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
             "process.on('SIGTERM', () => process.exit(0));",
             "setInterval(() => {}, 1000);",
-          ].join("");
+          ]);
           const runnerScript = [
             `import { runTsdownBuildInvocation } from ${JSON.stringify(scriptUrl)};`,
             "const result = await runTsdownBuildInvocation(",
-            `  { command: process.execPath, args: ['-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
+            `  { command: process.execPath, args: ['--input-type=module', '-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
             "  { env: { ...process.env, OPENCLAW_TSDOWN_HEARTBEAT_MS: '0' } },",
             "); process.exitCode = result.status ?? 1;",
           ].join("\n");
@@ -1838,17 +2011,15 @@ describe("runTsdownBuildInvocation", () => {
           });
 
           runnerClosed = fixture.track(once(runner, "close"));
-          await waitForFile(readyPath, 2_000);
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(readyPath, "ready", runnerClosed, signal);
+          await fixtureEventBeforeSettlement(childPidPath, "", runnerClosed, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           expect(isProcessAlive(childPid)).toBe(true);
 
           runner.kill("SIGTERM");
 
-          await expect(waitForChildClose(runner)).resolves.toEqual({
-            code: 143,
-            signal: null,
-          });
-          await waitForDead(childPid, 2_000);
+          await expect(withinTest(runnerClosed, signal)).resolves.toEqual([143, null]);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await fixture.verifyCleanup(async () => {
             if (runner?.pid && isProcessAlive(runner.pid)) {
@@ -1857,109 +2028,10 @@ describe("runTsdownBuildInvocation", () => {
             await runnerClosed;
             if (childPid && isProcessAlive(childPid)) {
               process.kill(childPid, "SIGKILL");
-              await waitForDead(childPid, 2_000);
+              await waitForForeignProcessExit(childPid, signal);
             }
           });
         }
       }),
   );
-});
-
-describe("staged declaration admission", () => {
-  const groups = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.map((name) => ({
-    name,
-    maxOldSpaceMb: 12288,
-  }));
-  const capacity = {
-    platform: "linux",
-    availableParallelism: 2,
-    availableMemoryBytes: 25.5 * GiB,
-    physicalMemoryBytes: 32 * GiB,
-    procMemTotalBytes: 32 * GiB,
-    cgroupMemoryLimitPaths: ["/test/memory.max"],
-    constrainedMemoryBytes: 0,
-    processResidentMemoryBytes: 0,
-    fs: createMemoryFileSystem(
-      new Map([
-        ["/test/memory.max", `${32 * GiB}`],
-        ["/test/memory.current", "0"],
-      ]),
-    ),
-    env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "49152" },
-  };
-  it("keeps unknown available memory serial", () => {
-    expect(
-      resolveStagedDeclarationConcurrency(groups, {
-        ...capacity,
-        availableMemoryBytes: Number.NaN,
-      }),
-    ).toBe(1);
-  });
-
-  const usageCases: [string, string, string, string, number][] = [
-    ["invalid v2 usage", "memory.high", "memory.current", "invalid", 1],
-    ["charged v2 usage", "memory.max", "memory.current", `${8 * GiB}`, 1],
-    ["readable v1 usage", "memory.limit_in_bytes", "memory.usage_in_bytes", "0", 2],
-  ];
-  it.each(usageCases)(
-    "requires observed remaining capacity for %s",
-    (_name, limit, usage, value, expected) => {
-      const facts = {
-        ...capacity,
-        cgroupMemoryLimitPaths: [`/test/${limit}`],
-        fs: createMemoryFileSystem(
-          new Map([
-            [`/test/${limit}`, `${32 * GiB}`],
-            [`/test/${usage}`, value],
-          ]),
-        ),
-      };
-      expect(resolveStagedDeclarationConcurrency(groups, facts)).toBe(expected);
-      expect(resolveTsdownBuildPlan({ ...facts, env: {} }).maxOldSpaceMb).toBe(12288);
-      expect(resolveTsdownBuildPlan(facts).maxOldSpaceMb).toBe(49152);
-    },
-  );
-
-  it("does not let known leaf usage conceal unknown ancestor usage", () => {
-    const facts = {
-      ...capacity,
-      cgroupMemoryLimitPaths: ["/test/leaf/memory.max", "/test/memory.max"],
-      fs: createMemoryFileSystem(
-        new Map([
-          ["/test/leaf/memory.max", `${32 * GiB}`],
-          ["/test/leaf/memory.current", "0"],
-          ["/test/memory.max", `${64 * GiB}`],
-        ]),
-      ),
-    };
-    expect(resolveStagedDeclarationConcurrency(groups, facts)).toBe(1);
-    expect(resolveTsdownBuildPlan({ ...facts, env: {} }).maxOldSpaceMb).toBe(12288);
-  });
-
-  it("keeps unknown declaration groups serial", () => {
-    expect(
-      resolveStagedDeclarationConcurrency(
-        [groups[0]!, { name: "unknown-declaration", maxOldSpaceMb: 12288 }],
-        capacity,
-      ),
-    ).toBe(1);
-  });
-
-  it("does not use an explicit heap to conceal an unresolved cgroup", () => {
-    expect(
-      resolveStagedDeclarationConcurrency(groups, {
-        ...capacity,
-        cgroupMemoryLimitPaths: undefined,
-        fs: createMemoryFileSystem(
-          new Map([
-            ["/proc/self/cgroup", "0::/hidden.slice/openclaw.service\n"],
-            [
-              "/proc/self/mountinfo",
-              "29 23 0:26 /different.slice /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
-            ],
-          ]),
-        ),
-      }),
-    ).toBe(1);
-  });
 });

@@ -5,23 +5,32 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
+import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
+import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
   readTranscriptMessages,
 } from "../../sessions/user-turn-transcript.test-support.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -30,6 +39,8 @@ import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.
 import { expireStaleReplyOperation } from "./reply-run-registry.state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const mocks = vi.hoisted(() => ({
   executeAgentTurn: vi.fn(),
@@ -93,6 +104,8 @@ function createStalledRun(
     isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
+    originatingChannel?: string;
+    skillLibraryAuthoring?: FollowupRun["run"]["skillLibraryAuthoring"];
   } = {},
 ): StalledRun {
   const followupRun = createTestFollowupRun({
@@ -101,12 +114,14 @@ function createStalledRun(
     messageProvider: "telegram",
     senderId: "traveler",
   });
-  followupRun.originatingChannel = "telegram";
-  followupRun.originatingTo = "12345";
+  followupRun.originatingChannel = options.originatingChannel ?? "telegram";
+  followupRun.originatingTo = options.originatingChannel ? undefined : "12345";
   followupRun.operatorAuthority = options.operatorAuthority;
   followupRun.queuedFollowupReplyDisposition = options.queuedFollowupReplyDisposition;
+  followupRun.run.skillLibraryAuthoring = options.skillLibraryAuthoring;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
+  setRuntimeConfigSnapshot(followupRun.run.config);
   const transcriptTarget = createSqliteTranscriptTarget({
     dir: followupRun.run.workspaceDir,
     sessionId: "stalled-session",
@@ -184,9 +199,11 @@ function createQueuedRequest(from: { senderId: string; to: string }): FollowupRu
 
 describe("runReplyAgent stalled turn continuation", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     replyRunTesting.resetReplyRunRegistry();
-    clearSessionQueues([queueKey]);
-    drainedRuns.mockClear();
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
+    drainedRuns.mockReset();
     mocks.executeFollowups = false;
     executionStarted = createDeferred();
     mocks.preflight.mockReset().mockResolvedValue(undefined);
@@ -206,35 +223,10 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   afterEach(() => {
-    clearSessionQueues([queueKey]);
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
     replyRunTesting.resetReplyRunRegistry();
-  });
-
-  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = createStalledRun();
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    expect(getFollowupQueueDepth(queueKey)).toBe(1);
-    // The lane stays dormant until the stalled owner releases the session.
-    expect(drainedRuns).not.toHaveBeenCalled();
-
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.stalledTurnRecovery).toBe(true);
-    expect(recovery?.prompt).toContain("previous turn stopped making progress");
-    // Replay safety: the inbound request is not re-sent or re-persisted.
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["followup", "collect"] as const)(
@@ -303,8 +295,58 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingTo: "12345",
       run: { senderId: "traveler" },
     });
+    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
+    expect(recovery?.transcriptPrompt).toBeUndefined();
+    expect(recovery?.images).toBeUndefined();
+    expect(recovery?.abortSignal).toBeUndefined();
+    expect(recovery?.run.sessionKey).toBe(queueKey);
+    expect(stalled.recorder.hasPersisted()).toBe(true);
+    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+    ]);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
+  });
+
+  it("queues node-loss recovery once ahead of newer input without absorbing that input", async () => {
+    const drained = createDeferred();
+    drainedRuns.mockImplementation(async () => {
+      if (drainedRuns.mock.calls.length === 2) {
+        drained.resolve();
+      }
+    });
+    const interrupted = createStalledRun();
+    const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+      true,
+    );
+    await executionStarted.promise;
+    const guidance = `${new WorkerNodeLostError().message} Continue the interrupted request from the transcript.`;
+    const otherIngress = createReplyOperation({
+      sessionId: "other-ingress",
+      sessionKey: "agent:main:telegram:direct:other",
+      resetTriggered: false,
+    });
+    try {
+      expect(interrupted.runState.continueStalledTurn?.(guidance, otherIngress)).toBe(false);
+      expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    } finally {
+      otherIngress.complete();
+    }
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(true);
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(false);
+    expect(queued.currentInboundContext).toBeUndefined();
+    expect(queued.stalledTurnRecovery).toBeUndefined();
+
+    expireStaleReplyOperation(interrupted.operation, "stuck_recovery");
+    await settleStalledOwner(interrupted);
+    await drained.promise;
+    const [recovery, newer] = drainedRuns.mock.calls.map(([run]) => run);
+    expect(recovery).toMatchObject({ stalledTurnRecovery: true, transcriptPrompt: undefined });
+    expect(recovery?.prompt).toContain(guidance);
+    expect(newer).toBe(queued);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
   it("leaves dispatch responsible for a stall before the request reaches the transcript", async () => {
@@ -354,23 +396,95 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).not.toHaveBeenCalled();
   });
 
-  it("leaves the notice with a Web UI chat.send turn whose reply owner never queued", async () => {
-    // The Gateway's chat.send reply owner delivers only follow-ups it deferred itself.
-    const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
+  it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {
+    mocks.executeFollowups = true;
+    const settled = createDeferred();
+    mocks.followupSettled = settled.resolve;
+    const context = createGatewayRequestContext(makeContextParams());
     const chatSendOwner = createChatSendLateFollowupDisposition({
       runId: "chat-send-run",
       originatingChannel: "webchat",
-      logGateway: { info: vi.fn() } as never,
-      deliver: gatewayDeliver,
+      logGateway: context.logGateway,
+      deliver: createChatSendLateReplyFinalizer({
+        terminalEntry: undefined,
+        accountId: undefined,
+        context,
+        session: {
+          agentId: "main",
+          backingSessionId: "stalled-session",
+          cfg: {},
+          clientRunId: "chat-send-run",
+          sessionKey: queueKey,
+          sessionLoadOptions: { agentId: "main" },
+        },
+      }),
     });
     const stalled = createStalledRun({
+      originatingChannel: "webchat",
       queuedFollowupReplyDisposition: { kind: "deliver", deliver: chatSendOwner.deliver },
+    });
+    await stallBeforeOutput(stalled);
+    executeAgentTurnMock.mockImplementationOnce(async ({ replyOperation }) => {
+      expireStaleReplyOperation(replyOperation, "stuck_recovery");
+      return { runId: "recovery-run", outcome: { kind: "aborted", reason: "user" } };
+    });
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    await settleStalledOwner(stalled);
+    await settled.promise;
+
+    expect(drainedRuns).toHaveBeenCalledOnce();
+    expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    const chatEvents = vi
+      .mocked(context.broadcast)
+      .mock.calls.filter(([event]) => event === "chat")
+      .map(([, payload]) => payload);
+    expect(chatEvents).toEqual([
+      expect.objectContaining({
+        state: "error",
+        errorMessage:
+          "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+      }),
+    ]);
+  });
+
+  it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
+    const stalled = createStalledRun({
+      skillLibraryAuthoring: {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: () => {
+          throw new Error("Personal authoring cannot move to a replacement run.");
+        },
+        invoke: vi.fn(),
+      },
+    });
+    await stallBeforeOutput(stalled);
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
+    const recovery = drainedRuns.mock.calls[0]?.[0];
+    expect(recovery?.disableTools).toBeUndefined();
+    const authoring = recovery?.run.skillLibraryAuthoring;
+    // Personal-only means the Workshop cannot fall back to the workspace tool.
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
+
+  it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
+    const stalled = createStalledRun({
+      queuedFollowupReplyDisposition: { kind: "drop", reason: "source-unavailable" },
     });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(false);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
-
     await settleStalledOwner(stalled);
     expect(drainedRuns).not.toHaveBeenCalled();
   });

@@ -3,6 +3,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureEffectAuthority } from "../../shared/effect-authority.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import {
   normalizeHeadersInitForFetch,
@@ -36,8 +37,8 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -79,6 +80,8 @@ export type GuardedFetchOptions = {
   /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
   rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
+  /** Header/body inactivity budget; does not impose a whole-stream or connect deadline. */
+  streamTimeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
   policy?: SsrFPolicy;
@@ -199,21 +202,21 @@ function assertExplicitProxySupportsPinnedDns(
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
   timeoutMs?: number,
+  streamTimeoutMs?: number,
 ): Dispatcher | null {
-  if (!dispatcherPolicy) {
+  if (!dispatcherPolicy && streamTimeoutMs === undefined) {
     return null;
   }
+  const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
-  if (dispatcherPolicy.mode === "direct") {
-    return createHttp1Agent(
-      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
-      timeoutMs,
-    );
+  if (!dispatcherPolicy || dispatcherPolicy.mode === "direct") {
+    return createHttp1Agent({ ...streamTimeouts, connect: dispatcherPolicy?.connect }, timeoutMs);
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
     return createHttp1EnvHttpProxyAgent(
       {
+        ...streamTimeouts,
         ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
         ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
       },
@@ -224,7 +227,7 @@ function createPolicyDispatcherWithoutPinnedDns(
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
   const requestTls = dispatcherPolicy.proxyTls;
   return createHttp1ProxyAgent(
-    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    { ...streamTimeouts, uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
     timeoutMs,
   );
 }
@@ -285,8 +288,6 @@ function isAmbientGlobalFetch(params: {
     params.fetchImpl === params.globalFetch
   );
 }
-
-export { retainSafeHeadersForCrossOriginRedirect as retainSafeHeadersForCrossOriginRedirectHeaders } from "./redirect-headers.js";
 
 async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
@@ -392,8 +393,6 @@ function rewriteRedirectInit(params: {
   };
 }
 
-export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
-
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
     params as GuardedFetchOptions & {
@@ -419,6 +418,7 @@ async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
   const assertCurrent = captureGuardedFetchRequestAuthority();
+  const effect = captureEffectAuthority();
   if (
     params.allowCrossOriginUnsafeRedirectReplay === true &&
     params.rejectCrossOriginUnsafeRedirectReplay === true
@@ -546,8 +546,9 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs =
-        params.timeoutMs !== undefined ? params.timeoutMs : globalUndiciStreamTimeoutMs;
+      const timeoutMs = params.timeoutMs;
+      const streamTimeoutMs = params.streamTimeoutMs;
+      const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -556,7 +557,7 @@ async function fetchWithSsrFGuardInternal(
       }
 
       if (canUseTrustedEnvProxy) {
-        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        dispatcher = createHttp1EnvHttpProxyAgent(streamTimeouts, timeoutMs);
       } else if (canUseManagedProxy) {
         if (shouldCheckManagedProxyBypass) {
           const pinned = await resolvePinnedHostname();
@@ -565,9 +566,16 @@ async function fetchWithSsrFGuardInternal(
             managedProxyBypass: params.managedProxyBypass,
             resolvedAddresses: pinned.addresses,
           })
-            ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
+            ? createPinnedDispatcher(
+                pinned,
+                dispatcherPolicy,
+                policyForUrl,
+                timeoutMs,
+                streamTimeoutMs,
+              )
             : createHttp1EnvHttpProxyAgent(
                 {
+                  ...streamTimeouts,
                   // An explicitly proxied loopback must not inherit Undici's ambient bypass list.
                   noProxy: "",
                   // Target certificate trust belongs to the tunneled endpoint,
@@ -579,20 +587,28 @@ async function fetchWithSsrFGuardInternal(
                 timeoutMs,
               );
         } else {
-          dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+          dispatcher = createHttp1EnvHttpProxyAgent(streamTimeouts, timeoutMs);
         }
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(
+          dispatcherPolicy,
+          timeoutMs,
+          streamTimeoutMs,
+        );
       } else if (canUseMockedFetchWithoutDns) {
         // Test-installed fetch mocks should stay hermetic. Host/IP policy still runs;
         // real fetches continue through pinned DNS below.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
         await resolvePinnedHostname();
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(
+          dispatcherPolicy,
+          timeoutMs,
+          streamTimeoutMs,
+        );
       } else {
         const pinned = await resolvePinnedHostname();
         if (
@@ -605,25 +621,32 @@ async function fetchWithSsrFGuardInternal(
             origin: parsedUrl.origin,
             addresses: [...pinned.addresses].toSorted(),
             timeoutMs: timeoutMs ?? null,
+            streamTimeoutMs: timeoutMs ?? streamTimeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
           });
           dispatcherLease = params.dispatcherPool.acquire({
             key,
-            groupKey: parsedUrl.origin,
             createDispatcher: () =>
               createPinnedDispatcher(
                 pinned,
                 familyConnect ? { mode: "direct", connect: familyConnect } : undefined,
                 policyForUrl,
                 timeoutMs,
+                streamTimeoutMs,
               ),
           });
           dispatcher = dispatcherLease
             ? dispatcherLease.dispatcher
-            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
+            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs, streamTimeoutMs);
         } else {
-          dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
+          dispatcher = createPinnedDispatcher(
+            pinned,
+            dispatcherPolicy,
+            policyForUrl,
+            timeoutMs,
+            streamTimeoutMs,
+          );
         }
       }
 
@@ -641,12 +664,6 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const beforeRequestResult: unknown = params.beforeRequest?.();
-      if (isPromiseLike(beforeRequestResult)) {
-        void Promise.resolve(beforeRequestResult).catch(() => undefined);
-        throw new TypeError("beforeRequest must be synchronous.");
-      }
-      assertCurrent?.();
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
@@ -665,12 +682,24 @@ async function fetchWithSsrFGuardInternal(
         },
       };
       // Only transport rejection belongs here, not policy or capture failures.
+      let initiated = false;
       try {
-        response = shouldUseRuntimeFetch
-          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        response = await effect.initiate(() => {
+          const beforeRequestResult: unknown = params.beforeRequest?.();
+          if (isPromiseLike(beforeRequestResult)) {
+            void Promise.resolve(beforeRequestResult).catch(() => undefined);
+            throw new TypeError("beforeRequest must be synchronous.");
+          }
+          assertCurrent?.();
+          initiated = true;
+          return shouldUseRuntimeFetch
+            ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+            : captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        });
       } catch (error) {
-        void captureAdmission.capture?.({ ...captureParams, error });
+        if (initiated) {
+          void captureAdmission.capture?.({ ...captureParams, error });
+        }
         throw error;
       }
       params.onResponse?.(response.status);

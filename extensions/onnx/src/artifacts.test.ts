@@ -43,6 +43,8 @@ describe("ONNX artifact installation", () => {
   let root: string;
   let destination: string;
   let target: string;
+  const download = (signal = new AbortController().signal) => downloadModel(root, model, signal);
+  const verify = () => verifyModel(root, model);
   beforeEach(() => {
     root = tempDirs.make("models-");
     destination = path.join(root, model.id);
@@ -56,8 +58,8 @@ describe("ONNX artifact installation", () => {
         await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
       }),
     );
-    await downloadModel(root, model, new AbortController().signal);
-    await verifyModel(root, model);
+    await download();
+    await verify();
     expect(await readModelArtifact(root, model, file)).toEqual(bytes);
     expect(await fs.readFile(target)).toEqual(bytes);
     expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
@@ -66,7 +68,7 @@ describe("ONNX artifact installation", () => {
     }
     expect(release).toHaveBeenCalledOnce();
     vi.mocked(fetchWithSsrFGuard).mockClear();
-    await downloadModel(root, model, new AbortController().signal);
+    await download();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
@@ -77,8 +79,8 @@ describe("ONNX artifact installation", () => {
       await fs.mkdir(aliasTarget);
       await fs.symlink(aliasTarget, destination);
       mockDownload(bytes);
-      await downloadModel(root, model, new AbortController().signal);
-      await verifyModel(root, model);
+      await download();
+      await verify();
       expect(await fs.readFile(path.join(aliasTarget, file.name))).toEqual(bytes);
       expect(await fs.readdir(aliasTarget)).toEqual(["model.onnx"]);
       expect((await fs.lstat(destination)).isSymbolicLink()).toBe(true);
@@ -92,8 +94,8 @@ describe("ONNX artifact installation", () => {
       await fs.chmod(root, 0o775);
       await fs.chmod(destination, 0o775);
       mockDownload(bytes);
-      await downloadModel(root, model, new AbortController().signal);
-      await verifyModel(root, model);
+      await download();
+      await verify();
       expect((await fs.stat(root)).mode & 0o777).toBe(0o775);
       expect((await fs.stat(destination)).mode & 0o777).toBe(0o775);
       expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
@@ -106,7 +108,7 @@ describe("ONNX artifact installation", () => {
     { name: "oversized download", body: Buffer.alloc(bytes.length + 1), error: /pinned size/ },
   ])("removes partial files and releases a $name", async ({ body, error }) => {
     const { response, release } = mockDownload(body);
-    await expect(downloadModel(root, model, new AbortController().signal)).rejects.toThrow(error);
+    await expect(download()).rejects.toThrow(error);
     expect(await fs.readdir(destination)).toEqual([]);
     expect(response.body?.locked).toBe(false);
     expect(release).toHaveBeenCalledOnce();
@@ -128,7 +130,7 @@ describe("ONNX artifact installation", () => {
         { highWaterMark: 0 },
       ),
     );
-    await expect(downloadModel(root, model, controller.signal)).rejects.toBe(reason);
+    await expect(download(controller.signal)).rejects.toBe(reason);
     expect(await fs.readdir(destination)).toEqual([]);
     expect(response.body?.locked).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
@@ -143,14 +145,14 @@ describe("ONNX artifact installation", () => {
         throw failure;
       }),
     );
-    await expect(downloadModel(root, model, new AbortController().signal)).rejects.toBe(failure);
+    await expect(download()).rejects.toBe(failure);
     expect(await fs.readdir(destination)).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
   });
 
   it.each([
     { name: "verified", winner: bytes, accepted: true },
-    { name: "mismatched", winner: Buffer.from("keep this"), accepted: false },
+    { name: "mismatched", winner: Buffer.alloc(bytes.length), accepted: false },
   ])("preserves a $name artifact published by a competing writer", async ({ winner, accepted }) => {
     const { release } = mockDownload(
       bytes,
@@ -158,11 +160,11 @@ describe("ONNX artifact installation", () => {
         await fs.writeFile(target, winner, { flag: "wx" });
       }),
     );
-    const download = downloadModel(root, model, new AbortController().signal);
+    const operation = download();
     if (accepted) {
-      await download;
+      await operation;
     } else {
-      await expect(download).rejects.toThrow("model-integrity");
+      await expect(operation).rejects.toThrow("model-integrity");
     }
     expect(await fs.readFile(target)).toEqual(winner);
     expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
@@ -177,7 +179,7 @@ describe("ONNX artifact installation", () => {
       await fs.writeFile(external, bytes);
       await (kind === "symlink" ? fs.symlink(external, target) : fs.link(external, target));
       vi.mocked(fetchWithSsrFGuard).mockClear();
-      await downloadModel(root, model, new AbortController().signal);
+      await download();
       expect(await fs.readFile(target)).toEqual(bytes);
       expect((await fs.lstat(target)).isSymbolicLink()).toBe(kind === "symlink");
       expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -188,9 +190,7 @@ describe("ONNX artifact installation", () => {
     await fs.mkdir(destination);
     await fs.writeFile(target, "keep this");
     vi.mocked(fetchWithSsrFGuard).mockClear();
-    await expect(downloadModel(root, model, new AbortController().signal)).rejects.toThrow(
-      "model-integrity",
-    );
+    await expect(download()).rejects.toThrow("model-integrity");
     expect(await fs.readFile(target, "utf8")).toBe("keep this");
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
@@ -198,14 +198,13 @@ describe("ONNX artifact installation", () => {
   it.each([
     { name: "missing", data: undefined, code: "model-missing" },
     { name: "empty", data: Buffer.alloc(0), code: "model-integrity" },
-    { name: "wrong hash", data: Buffer.alloc(bytes.length), code: "model-integrity" },
     { name: "oversized", data: Buffer.alloc(bytes.length + 1), code: "model-integrity" },
   ])("reports a $name installed artifact", async ({ data, code }) => {
     await fs.mkdir(destination);
     if (data !== undefined) {
       await fs.writeFile(target, data);
     }
-    await expect(verifyModel(root, model)).rejects.toThrow(code);
+    await expect(verify()).rejects.toThrow(code);
   });
 
   it.each(["grows", "shrinks"])("rejects an artifact that %s after admission", async (change) => {
@@ -224,7 +223,7 @@ describe("ONNX artifact installation", () => {
     });
     const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
     try {
-      await expect(verifyModel(root, model)).rejects.toThrow("model-integrity");
+      await expect(verify()).rejects.toThrow("model-integrity");
     } finally {
       openSpy.mockRestore();
       statSpy.mockRestore();
@@ -244,7 +243,7 @@ describe("ONNX artifact installation", () => {
     });
     const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
     try {
-      await expect(verifyModel(root, model)).rejects.toBe(failure);
+      await expect(verify()).rejects.toBe(failure);
     } finally {
       openSpy.mockRestore();
       closeSpy.mockRestore();

@@ -18,6 +18,96 @@ import {
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("session roster refresh", () => {
+  it("reuses conditional sidebar rows while accepting fresh facets and query replacements", async () => {
+    const row = {
+      key: "agent:main:one",
+      sessionId: "one",
+      label: "Original",
+      kind: "direct" as const,
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ...sessionsResult([row], 1), rowsRevision: "first" });
+    const { sessions } = createSessionCapabilityHarness(request);
+    const query = { agentId: "main", rowMode: "sidebar" as const, archivedFilter: "all" as const };
+    const stop = sessions.subscribeList(query, () => {});
+    try {
+      await sessions.refreshList({ ...query, force: true });
+      request.mockResolvedValue({
+        ...sessionsResult([], 2),
+        count: 1,
+        rowsRevision: "first",
+        rowsUnchanged: true,
+        totalCount: 17,
+        owners: [{ actor: { type: "human", id: "owner" }, label: "Fresh facet" }],
+      });
+      await sessions.refreshList({ ...query, force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ ifRowsRevision: "first" }),
+      );
+      expect(sessions.listSnapshot(query).result).toMatchObject({
+        sessions: [row],
+        count: 1,
+        totalCount: 17,
+        owners: [{ actor: { type: "human", id: "owner" }, label: "Fresh facet" }],
+      });
+      request.mockResolvedValue({
+        ...sessionsResult([{ ...row, label: "Renamed" }], 3),
+        rowsRevision: "next",
+      });
+      await sessions.refreshList({ ...query, force: true });
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Renamed");
+      request.mockResolvedValue({ ...sessionsResult([], 2), rowsRevision: "empty" });
+      await sessions.refreshList({ ...query, ownerId: "different", force: true });
+      expect(request.mock.calls.at(-1)?.[1]).not.toHaveProperty("ifRowsRevision");
+    } finally {
+      stop();
+      sessions.dispose();
+    }
+  });
+
+  it.each(["primary", "managed"] as const)(
+    "keeps the %s startup retry alive past three minutes and cancels it on disposal",
+    async (owner) => {
+      vi.useFakeTimers();
+      const pending = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent is preparing its database",
+        retryable: true,
+        retryAfterMs: 7_000,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      });
+      const request = vi.fn().mockRejectedValue(pending);
+      const { sessions } = createSessionCapabilityHarness(request);
+      const query = {
+        agentId: "main",
+        ...(owner === "managed" ? { archivedFilter: "all" as const } : {}),
+      };
+      const stop = sessions.subscribeList(query, () => {});
+      try {
+        await sessions.refreshList({ ...query, force: true });
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        await vi.advanceTimersByTimeAsync(6_999);
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(180_000);
+        const reads = request.mock.calls.length;
+        expect(reads).toBeGreaterThan(20);
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        stop();
+        sessions.dispose();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(request).toHaveBeenCalledTimes(reads);
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { recover: false, explicit: false },
     { recover: true, explicit: false },
@@ -645,25 +735,6 @@ describe("session roster refresh", () => {
       laterList.resolve(sessionsResult([], 3));
       sessions.dispose();
       await Promise.all([initial, first, second, later]);
-    }
-  });
-
-  it("returns a failed replacement outcome while preserving the previous roster", async () => {
-    const previous = sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(previous)
-      .mockRejectedValueOnce(new Error("Roster unavailable"));
-    const { sessions } = createSessionCapabilityHarness(request);
-    try {
-      await sessions.refresh({ agentId: "main", search: "draft", force: true });
-      const admitted = sessions.state.result;
-      expect(admitted).toStrictEqual(previous);
-      await expect(sessions.refreshReplacement()).resolves.toBeNull();
-      expect(sessions.state.result).toBe(admitted);
-      expect(sessions.state.error).toBe("Roster unavailable");
-    } finally {
-      sessions.dispose();
     }
   });
 

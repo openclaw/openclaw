@@ -11,12 +11,12 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
 let stateDir: string;
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -60,7 +60,7 @@ describe("channel pairing account isolation", () => {
       code: alpha.code,
       created: false,
     });
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toMatchObject([
       { id: "shared-sender", code: alpha.code, meta: { name: "Alpha sender", accountId: "alpha" } },
     ]);

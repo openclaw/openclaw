@@ -7,6 +7,7 @@ export { buildAssistantMessage } from "../agents/stream-message-shared.js";
 export {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export { transformTransportMessages } from "../agents/transport-message-transform.js";
@@ -38,6 +39,5 @@ export {
   parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
   withProviderAcceptanceObserver,
-  type ProviderAcceptance,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

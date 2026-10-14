@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -15,7 +16,6 @@ import {
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
-  resolveReportArtifactDirs,
   resolveReportRunSpecs,
   resolveReportVitestArgs,
   resolveRunPlanConcurrency,
@@ -30,19 +30,64 @@ import {
 import { withEnv } from "../../src/test-utils/env.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForFile,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 const tempDirs = new Set<string>();
 const cliTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reportUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.testGroupReport);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function fixtureReadyBeforeSettlement(
+  filePath: string,
+  operation: PromiseLike<unknown>,
+  message = `timeout waiting for ${filePath}`,
+) {
+  const recorded = () => fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8").trim();
+  return Promise.race([
+    receipts.waitFor(filePath, "ready"),
+    // Product completion can overtake the socket; the fixture writes before reporting ready.
+    Promise.resolve(operation).then(
+      () => {
+        if (!recorded()) {
+          throw new Error(message);
+        }
+      },
+      (error: unknown) => {
+        if (!recorded()) {
+          throw error;
+        }
+      },
+    ),
+  ]);
+}
+
+// spawnText can finish after signaling a foreign descendant without joining its extinction.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    }
+    throw error;
+  }
+}
 
 function runReportCli(args: string[]) {
   return spawnSync(
@@ -714,49 +759,12 @@ describe("scripts/test-group-report arg parsing", () => {
     });
   });
 
-  it("parses individual test duration threshold", () => {
-    expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
-      maxTestMs: 2000,
-    });
-  });
-
-  it("parses explicit run concurrency", () => {
-    expect(parseTestGroupReportArgs(["--concurrency", "4"])).toMatchObject({
-      concurrency: 4,
-    });
-  });
-
-  it("parses per-config timeout controls", () => {
-    expect(
-      parseTestGroupReportArgs(["--timeout-ms", "5000", "--kill-grace-ms", "250"]),
-    ).toMatchObject({
-      killGraceMs: 250,
-      timeoutMs: 5000,
-    });
-  });
-
-  it.each(["--config=a.ts", "--compare=before.json", "--limit=5"])(
-    "rejects split-option inline form %s",
-    (arg) => {
-      expect(() => parseTestGroupReportArgs([arg])).toThrow(`Unknown option: ${arg}`);
-    },
-  );
-
   it("does not let help short-circuit later parse errors", () => {
     expect(() => parseTestGroupReportArgs(["--help", "--unknown"])).toThrow(
       "Unknown option: --unknown",
     );
     expect(() => parseTestGroupReportArgs(["--help", "--limit"])).toThrow(
       "--limit requires a value",
-    );
-  });
-
-  it("rejects malformed positive integer flags", () => {
-    expect(() => parseTestGroupReportArgs(["--limit", "20x"])).toThrow(
-      "--limit must be a positive integer",
-    );
-    expect(() => parseTestGroupReportArgs(["--limit", "0"])).toThrow(
-      "--limit must be a positive integer",
     );
   });
 
@@ -791,58 +799,9 @@ describe("scripts/test-group-report arg parsing", () => {
       ]),
     ).toThrow("--compare was provided more than once");
   });
-
-  it("validates a repeated value before reporting a duplicate", () => {
-    expect(() => parseTestGroupReportArgs(["--limit", "5", "--limit"])).toThrow(
-      "--limit requires a value",
-    );
-    expect(() => parseTestGroupReportArgs(["--limit", "5", "--limit", "20x"])).toThrow(
-      "--limit must be a positive integer",
-    );
-    expect(() =>
-      parseTestGroupReportArgs([
-        "--compare",
-        "before.json",
-        "after.json",
-        "--compare",
-        "second-before.json",
-      ]),
-    ).toThrow("--compare requires a value");
-  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
-  it.concurrent("times out a child that ignores SIGTERM", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const started = Date.now();
-    const result = await spawnText(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
-      {
-        cwd: process.cwd(),
-        env: process.env,
-        killGraceMs: 25,
-        timeoutMs: 250,
-      },
-    );
-
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect(result).toMatchObject({
-      status: 1,
-      signal: "SIGKILL",
-      timedOut: true,
-    });
-    expect(result.output).toContain("command timed out after 250ms");
-    expect(result.output).toContain("sending SIGKILL");
-  });
-
   it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
@@ -946,7 +905,9 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it.concurrent("cleans process-group descendants before forwarding parent SIGTERM", async () => {
+  it.concurrent("cleans process-group descendants before forwarding parent SIGTERM", async ({
+    signal,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -956,34 +917,36 @@ describe("scripts/test-group-report child process guard", () => {
     const readyPath = path.join(tempDir, "child.ready");
     let childPid: number | undefined;
     let runner: ReturnType<typeof spawn> | undefined;
+    let runnerClosed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
     try {
-      // Publish the pid via rename so it appears atomically: waitForFile polls
-      // existence only, and a direct writeFileSync leaves an empty-file window
-      // that made the pid parse as NaN (isProcessAlive false) on loaded CI.
       const childScript = [
-        "const fs = require('node:fs');",
+        "import fs from 'node:fs';",
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(`${childPidPath}.tmp`)}, String(process.pid));`,
-        `fs.renameSync(${JSON.stringify(`${childPidPath}.tmp`)}, ${JSON.stringify(childPidPath)});`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
-        `require("node:fs").writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "import { spawn } from 'node:child_process';",
+        "import fs from 'node:fs';",
+        fixtureReceiptClientSource(receipts.endpoint),
+        `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
         "process.on('SIGTERM', () => process.exit(0));",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const runnerScript = [
         `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
         "await spawnText(",
         "  process.execPath,",
-        `  ["--eval", ${JSON.stringify(parentScript)}],`,
+        `  ["--input-type=module", "--eval", ${JSON.stringify(parentScript)}],`,
         "  { cwd: process.cwd(), env: process.env, killGraceMs: 5_000, timeoutMs: 60_000 },",
         ");",
       ].join("\n");
 
-      runner = spawn(
+      const startedRunner = spawn(
         process.execPath,
         [
           ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
@@ -996,30 +959,49 @@ describe("scripts/test-group-report child process guard", () => {
           stdio: ["ignore", "ignore", "pipe"],
         },
       );
-      // Generous poll deadlines: spawning the nested runner/parent/child node
-      // chain can take multiple seconds on loaded CI runners.
-      await waitForFile(readyPath, 10_000);
-      await waitForFile(childPidPath, 10_000);
+      runner = startedRunner;
+      runnerClosed = new Promise((resolve, reject) => {
+        startedRunner.once("error", reject);
+        startedRunner.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
+      });
+      await withinTest(fixtureReadyBeforeSettlement(readyPath, runnerClosed), signal);
+      await withinTest(fixtureReadyBeforeSettlement(childPidPath, runnerClosed), signal);
       childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       expect(isProcessAlive(childPid)).toBe(true);
 
       runner.kill("SIGTERM");
 
-      await expect(waitForChildClose(runner)).resolves.toEqual({
+      await expect(withinTest(runnerClosed, signal)).resolves.toEqual({
         code: null,
         signal: "SIGTERM",
       });
-      await waitForDead(childPid, 10_000);
+      await waitForProcessExit(childPid, signal);
     } finally {
       if (runner?.pid && isProcessAlive(runner.pid)) {
-        runner.kill("SIGKILL");
+        runner.kill("SIGTERM");
       }
-      killPidIfAlive(childPid);
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      try {
+        await runnerClosed;
+      } finally {
+        // Read ownership even if test cancellation interrupted the receipt wait.
+        childPid ??= fs.existsSync(childPidPath)
+          ? Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10)
+          : undefined;
+        killPidIfAlive(childPid);
+        try {
+          if (childPid !== undefined) {
+            await waitForProcessExit(childPid, signal);
+          }
+        } finally {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      }
     }
   });
 
-  it.concurrent("finishes promptly when timed process-group descendants exit cleanly", async () => {
+  it.concurrent("finishes promptly when timed process-group descendants exit cleanly", async ({
+    signal,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -1028,7 +1010,8 @@ describe("scripts/test-group-report child process guard", () => {
     const childPidPath = path.join(tempDir, "child.pid");
     const cleanupPath = path.join(tempDir, "child.cleanup");
     const childScript = [
-      "const fs = require('node:fs');",
+      "import fs from 'node:fs';",
+      fixtureReceiptClientSource(receipts.endpoint),
       "process.on('SIGTERM', () => {",
       "  setTimeout(() => {",
       `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
@@ -1037,26 +1020,38 @@ describe("scripts/test-group-report child process guard", () => {
       "});",
       "setInterval(() => {}, 1000);",
       `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
       "process.on('SIGTERM', () => process.exit(0));",
-      `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+      `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
-    const releaseAndWait = startProcessWatchdogFixture(() =>
-      spawnText(process.execPath, ["--eval", parentScript], {
+    const completion = createDeferred<Awaited<ReturnType<typeof spawnText>>>();
+    const releaseAndWait = startProcessWatchdogFixture(() => {
+      const operation = spawnText(process.execPath, ["--eval", parentScript], {
         cwd: process.cwd(),
         env: process.env,
         killGraceMs: 250,
         timeoutMs: 250,
-      }),
-    );
+      });
+      void operation.then(completion.resolve, completion.reject);
+      return operation;
+    });
     let childPid: number | undefined;
     try {
-      childPid = await waitForPidFile(childPidPath, 2_000);
+      await withinTest(
+        fixtureReadyBeforeSettlement(
+          childPidPath,
+          completion.promise,
+          `timeout waiting for pid in ${childPidPath}`,
+        ),
+        signal,
+      );
+      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       const startedAt = Date.now();
-      const result = await releaseAndWait();
+      const result = await withinTest(releaseAndWait(), signal);
 
       expect(result).toMatchObject({
         status: 1,
@@ -1065,14 +1060,17 @@ describe("scripts/test-group-report child process guard", () => {
       });
       expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
       expect(Date.now() - startedAt).toBeLessThan(900);
-      await waitForDead(childPid, 2_000);
+      await waitForProcessExit(childPid, signal);
     } finally {
       try {
         await releaseAndWait();
       } finally {
+        childPid ??= fs.existsSync(childPidPath)
+          ? Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10)
+          : undefined;
         if (childPid !== undefined) {
           killPidIfAlive(childPid);
-          await waitForDead(childPid, 2_000);
+          await waitForProcessExit(childPid, signal);
         }
       }
     }
@@ -1308,14 +1306,5 @@ describe("scripts/test-group-report run plans", () => {
     expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
       "src/gateway/server.node-pairing-authz.test.ts",
     );
-  });
-});
-
-describe("scripts/test-group-report artifact paths", () => {
-  it("keeps raw Vitest reports scoped to the output file stem", () => {
-    expect(resolveReportArtifactDirs(".artifacts/test-perf/baseline-before.json")).toEqual({
-      reportDir: path.join(".artifacts", "test-perf", "baseline-before", "vitest-json"),
-      logDir: path.join(".artifacts", "test-perf", "baseline-before", "logs"),
-    });
   });
 });

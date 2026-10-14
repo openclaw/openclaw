@@ -236,8 +236,8 @@ final class PairingApprovalPanelController {
         self.applyFittingFrame()
         // Approval is a security decision: bring the app forward like the old
         // NSAlert flow so the prompt is keyboard-actionable immediately.
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        AppActivation.shared.activate()
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         // No initial focus ring (matches NSAlert); Tab starts keyboard
         // navigation, Command-Return approves a single request, Esc snoozes.
         panel.makeFirstResponder(nil)

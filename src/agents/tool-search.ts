@@ -5,10 +5,12 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
-import type { ToolDefinition } from "./sessions/index.js";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "./runtime/internal-hooks.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
-  addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
   resolveCatalog,
@@ -188,7 +190,8 @@ function formatToolSearchBatchResponse(
     payload = render();
     ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
   }
-  return textResult(text, payload);
+  const result = textResult(text, payload);
+  return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
@@ -199,10 +202,6 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
@@ -220,23 +219,6 @@ export function applyToolSearchCatalog(params: {
 
 export { applyToolSchemaDirectoryCatalog };
 
-/** Move client-provided tools into an existing Tool Search catalog. */
-export function addClientToolsToToolSearchCatalog(params: {
-  tools: ToolDefinition[];
-  config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  if (config.mode === "directory") {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  return addClientToolsToToolCatalog({ ...params, enabled: config.enabled });
-}
-
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
@@ -246,7 +228,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
           Type.Union([Type.String(), Type.Null()], {
@@ -362,23 +344,25 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
-          // Invocation results need identity, not another copy of the discovery metadata.
-          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
-          const wrappedResult = {
-            ...formatToolSearchControlResult(
-              { tool: { id, name, source }, result: callResult.result },
-              runtime,
-              { parentToolCallId: toolCallId },
-            ),
-            details: callResult,
-          };
-          const failureKind = resolveToolResultFailureKind(callResult.result);
-          if (!failureKind) {
-            return wrappedResult;
+          const { details: _details, ...modelResult } = callResult.result;
+          const images = callResult.result.content.filter((block) => block.type === "image");
+          if (images.length > 0) {
+            modelResult.content = modelResult.content.filter((block) => block.type !== "image");
           }
+          // Invocation results need identity, not another copy of the discovery metadata.
+          // Keep the full target result in details; forward its already-projected images as content.
+          const controlResult = formatToolSearchControlResult(
+            { tool: { id, name, source }, result: modelResult },
+            runtime,
+            { parentToolCallId: toolCallId, images },
+          );
+          const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the
           // outer lifecycle reads its own canonical failure marker from details.
-          return { ...wrappedResult, details: { ...callResult, status: failureKind } };
+          return copyInternalToolResultState(controlResult, {
+            ...controlResult,
+            details: failureKind ? { ...callResult, status: failureKind } : callResult,
+          });
         } catch (error) {
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
         }

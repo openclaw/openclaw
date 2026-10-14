@@ -2,11 +2,12 @@ import path from "node:path";
 import * as timers from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -28,8 +29,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
-import * as coordination from "./session-accessor.sqlite-worker-coordination.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
 import { getSessionTranscriptReconcileWorkerPoolSnapshot } from "./session-transcript-reconcile-pool.js";
 import {
@@ -55,6 +56,11 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 type TerminalType = Extract<
   SessionTranscriptReconcileWorkerMessage,
@@ -84,23 +90,18 @@ function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.ProcessEnv): s
 
 function observeCanonicalWriterLeases() {
   const leases = new Map<string, string>();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        const facts = request.facts;
-        if (
-          request.stage === "open" &&
-          isRecord(facts) &&
-          typeof facts.databasePath === "string" &&
-          typeof facts.leaseId === "string"
-        ) {
-          leases.set(facts.databasePath, facts.leaseId);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = workerProbe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
   return { leases, restore: () => spy.mockRestore() };
 }
 
@@ -218,28 +219,30 @@ describe("session transcript reconcile worker lifecycle", () => {
   it("queues dirty agents behind one reusable fleet worker and releases each database lease", async () => {
     const stateDir = tempDirs.make("openclaw-reconcile-fleet-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const agents = Array.from({ length: 8 }, (_, index) => ({ agentId: `fleet-${index}`, env }));
     const sessionId = "fleet-session";
     const canonical = observeCanonicalWriterLeases();
     const hostLeases: string[] = [];
     const allQueued = createDeferred();
     let queued = 0;
-    const coordinate = coordination.withSqliteWorkerLifecycleCoordination;
-    const coordinated = vi
-      .spyOn(coordination, "withSqliteWorkerLifecycleCoordination")
-      .mockImplementation((context, actorId, run, settleFailure, mode) =>
-        coordinate(
-          context,
-          actorId,
-          (binding) => {
-            const pending = run(binding);
-            if (actorId.startsWith("transcript:disk:") && ++queued === agents.length) {
-              allQueued.resolve();
-            }
-            return pending;
-          },
-          settleFailure,
-          mode,
+    const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
+    const operationSpy = vi
+      .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
+      .mockImplementation((run, owner) =>
+        runOperation(
+          (operation) =>
+            run({
+              ...operation,
+              startTask: (...args) => {
+                const pending = operation.startTask(...args);
+                if (args[0].mode === "disk" && ++queued === agents.length) {
+                  allQueued.resolve();
+                }
+                return pending;
+              },
+            }),
+          owner,
         ),
       );
     try {
@@ -253,6 +256,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             touchSessionEntry: false,
           },
         );
+        await waitForSessionTranscriptIndexReconcile(options);
+        // Leave only the native fixture lease before queuing cold publication workers.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         openOpenClawAgentDatabase(options)
           .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
           .run();
@@ -267,7 +273,9 @@ describe("session transcript reconcile worker lifecycle", () => {
       for (const options of agents) {
         startSessionTranscriptIndexReconcile(options);
       }
-      const completion = Promise.all(agents.map(waitForSessionTranscriptIndexReconcile));
+      const completion = Promise.all(
+        agents.map((agent) => waitForSessionTranscriptIndexReconcile(agent)),
+      );
       try {
         await fence.paused;
         await allQueued.promise;
@@ -276,7 +284,6 @@ describe("session transcript reconcile worker lifecycle", () => {
           workers: 1,
           workersCreated: before.workersCreated + 1,
           activeTasks: 1,
-          pendingTasks: agents.length,
         });
       } finally {
         fence.release();
@@ -308,10 +315,13 @@ describe("session transcript reconcile worker lifecycle", () => {
         hostLeases.toSorted(),
       );
       const idleLeases = retainedLeases.filter((lease) => !hostLeases.includes(lease));
-      expect(idleLeases).toHaveLength(1);
-      expect([...canonical.leases.values()]).toContain(idleLeases[0]);
+      // Planner leases are released while the four most recent canonical executors stay idle.
+      expect(idleLeases).toHaveLength(4);
+      for (const lease of idleLeases) {
+        expect([...canonical.leases.values()]).toContain(lease);
+      }
     } finally {
-      coordinated.mockRestore();
+      operationSpy.mockRestore();
       canonical.restore();
       await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
       await closeOpenClawAgentDatabasesAsync();
@@ -325,6 +335,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     const root = tempDirs.make("openclaw-reconcile-scope-");
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const first = { agentId: "main", env };
     const later = { agentId: "later", env };
     const unrelated = {
@@ -335,15 +346,11 @@ describe("session transcript reconcile worker lifecycle", () => {
     const operationSpy = vi.spyOn(reconcilePool, "runSessionTranscriptReconcileOperation");
     const startDeferred = (options: OpenClawAgentDatabaseOptions) => {
       const release = createDeferred();
-      operationSpy.mockImplementationOnce((generation, run, owner) =>
-        runOperation(
-          generation,
-          async (operation) => {
-            await release.promise;
-            return run(operation);
-          },
-          owner,
-        ),
+      operationSpy.mockImplementationOnce((run, owner) =>
+        runOperation(async (operation) => {
+          await release.promise;
+          return run(operation);
+        }, owner),
       );
       startSessionTranscriptIndexReconcile(options);
       return release;
@@ -379,7 +386,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       releaseUnrelated.resolve();
       await Promise.all([
         scopedWait,
-        ...[first, later, unrelated].map(waitForSessionTranscriptIndexReconcile),
+        ...[first, later, unrelated].map((agent) => waitForSessionTranscriptIndexReconcile(agent)),
       ]);
       for (const options of [first, later, unrelated]) {
         await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
@@ -398,6 +405,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       sessionId: "active-transcript-test",
       sessionKey: "agent:main:active-transcript-test",
     };
+    setRuntimeConfigSnapshot({});
     try {
       const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
       for (const target of [scope, secondScope]) {
@@ -459,11 +467,13 @@ describe("session transcript reconcile worker lifecycle", () => {
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
         });
         expect(changes.mock.results[0]?.value).toBe(false);
         expect(facts).toHaveBeenCalledWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
           facts: { kind: "unchanged" },
         });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
@@ -485,8 +495,8 @@ describe("session transcript reconcile worker lifecycle", () => {
         }
       }
       expect(changes.mock.calls).toEqual([
-        [{ storePath: database.path, sessionKey: scope.sessionKey }],
-        [{ storePath: database.path, sessionKey: secondScope.sessionKey }],
+        [{ storePath: database.path, sessionKey: scope.sessionKey, scope: "transcript" }],
+        [{ storePath: database.path, sessionKey: secondScope.sessionKey, scope: "transcript" }],
       ]);
     } finally {
       await closeOpenClawAgentDatabasesAsync();
@@ -499,6 +509,7 @@ describe("session transcript reconcile worker lifecycle", () => {
   it("awaits pending-pass backoff while coalescing writes and keeping ready sessions available", async () => {
     const stateDir = tempDirs.make("openclaw-reconcile-backoff-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const databaseOptions = { agentId: "main", env };
     const scope = {
       ...databaseOptions,
@@ -524,6 +535,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         });
       }
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(databaseOptions));
       const database = openOpenClawAgentDatabase(databaseOptions);
       // Each active pass additionally retains the canonical publication actor until idle retirement.
       const baselineLeaseCount = countAgentDatabaseLeases(database.path, env);
@@ -613,6 +625,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async (explicitClose) => {
       const stateDir = tempDirs.make("openclaw-reconcile-retained-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const databaseOptions = { agentId: "main" };
         const scope = {
@@ -720,6 +733,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async (mode) => {
       const stateDir = tempDirs.make("openclaw-reconcile-startup-release-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const options = { agentId: "main" };
         const scope = {
@@ -736,28 +750,26 @@ describe("session transcript reconcile worker lifecycle", () => {
           });
           await waitForSessionTranscriptIndexReconcile(options);
           const database = openOpenClawAgentDatabase(options);
-          if (mode !== "clean") {
+          if (mode === "clean") {
+            // Admit the initial status once; the measured clean read needs no write grants.
+            await reconcileSessionTranscriptIndexes(options);
+          } else {
             database.db
               .prepare(
                 "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
               )
               .run(scope.sessionId);
           }
-          const createAdmission = admission.createSqliteWorkerOperationAdmission;
           const admissions: string[] = [];
-          const admissionSpy = vi
-            .spyOn(admission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === "transaction" || request.stage === "commit") {
-                  admissions.push(request.stage);
-                  if (mode === `preflight-${request.stage}`) {
-                    throw new Error(mode);
-                  }
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admissionSpy = workerProbe.admission(admission, (request, grant, admit) => {
+            if (request.stage === "transaction" || request.stage === "commit") {
+              admissions.push(request.stage);
+              if (mode === `preflight-${request.stage}`) {
+                throw new Error(mode);
+              }
+            }
+            admit(request, grant);
+          });
           const createWorker = vi.fn().mockImplementationOnce(() => {
             throw new Error("worker-create");
           });
@@ -816,6 +828,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async ({ expectedTerminal, failAfterFirstPlan }) => {
       const stateDir = tempDirs.make("openclaw-transcript-worker-cleanup-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const primarySessionId = "cleanup-primary";
         const primaryScope = {
@@ -853,6 +866,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             );
           }
           await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
+          await closeOpenClawAgentDatabaseByPathAsync(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+          );
 
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const databasePath = database.path;

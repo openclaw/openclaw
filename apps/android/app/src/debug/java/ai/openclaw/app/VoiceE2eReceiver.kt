@@ -168,16 +168,17 @@ class VoiceE2eService : Service() {
     try {
       withTimeout(timeoutMs) {
         while (!runtime.isConnected.value) {
-          voiceE2eTerminalGatewayFailure(runtime.gatewayConnectionProblem.value)?.let { error(it) }
+          voiceE2eTerminalGatewayFailure(runtime.gatewayConnectionDisplay.value.problem)?.let { error(it) }
           delay(100L)
         }
       }
     } catch (err: TimeoutCancellationException) {
+      val display = runtime.gatewayConnectionDisplay.value
       throw IllegalStateException(
         voiceE2eGatewayTimeoutMessage(
           timeoutMs = timeoutMs,
-          statusText = runtime.statusText.value,
-          problem = runtime.gatewayConnectionProblem.value,
+          statusText = display.statusText,
+          problem = display.problem,
         ),
         err,
       )

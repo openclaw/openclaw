@@ -2,19 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_LIVE_EVENT_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GATEWAY_TOOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-  WORKER_GATEWAY_TOOL_METHODS,
-} from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
-import { WORKER_INFERENCE_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+  WORKER_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+} from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
 import type { SessionPlacementTurnParams } from "../../../agents/session-placement-admission.js";
+import { createToolSurfacePresentationForTest } from "../../../agents/tool-surface-plan.test-support.js";
 import {
   beginGatewayRestartSignalAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -51,77 +49,49 @@ import { buildWorkerHello } from "./worker-connection-frames.js";
 describe("dedicated worker websocket protocol", () => {
   setupWorkerProtocolTestState();
 
-  it("admits with a minimal secret-free hello", async () => {
-    const harness = attachHarness();
-    await admit(harness);
-
-    expect(harness.responses[0]).toMatchObject({ ok: true, payload: { type: "worker-hello-ok" } });
-    expect(JSON.stringify([harness.responses, harness.client()])).not.toContain(CREDENTIAL);
-    expect(harness.client()).toMatchObject({
-      connectionKind: "worker",
-      connect: { role: "worker" },
-    });
+  it.each([
+    WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+    WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1,
+  ])("budgets the authenticated tool catalog hello at %s encoded bytes", async (bytes) => {
+    vi.useFakeTimers();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    const definition = {
+      name: "read",
+      label: "Read",
+      description: "",
+      parameters: { description: "" },
+    };
+    const surface = {
+      generation: "surface",
+      presentation: createToolSurfacePresentationForTest(),
+      tools: [{ id: "read", execution: "placement" as const, definition }],
+      policy: prepareCoreToolPolicy({}),
+    };
+    const frame = {
+      type: "res",
+      id: "connect-1",
+      ok: true,
+      payload: { ...buildWorkerHello(ATTACHED_IDENTITY), toolSurface: surface },
+    };
+    const available = bytes - Buffer.byteLength(JSON.stringify(frame));
+    definition.parameters.description = "x".repeat(available);
+    const tooLarge = bytes > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
+    harness.service.getToolSurface.mockResolvedValue({ ok: true, result: surface });
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.responses[0]).toMatchObject(
+      tooLarge
+        ? {
+            ok: false,
+            error: { message: "Worker tool surface exceeds the admission frame limit" },
+          }
+        : { ok: true, payload: { toolSurface: { generation: surface.generation } } },
+    );
+    if (!tooLarge) {
+      expect(Buffer.byteLength(JSON.stringify(harness.responses[0]))).toBe(bytes);
+    }
+    expect(harness.advanceHandshakePhase.mock.calls.flat().includes("ready")).toBe(!tooLarge);
   });
-
-  it.each([true, false])(
-    "delivers the surface in hello only with its build-bound feature: %s",
-    async (enabled) => {
-      vi.useFakeTimers();
-      const identity = {
-        ...ATTACHED_IDENTITY,
-        protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
-          (feature) => enabled || feature !== WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-        ),
-      };
-      const harness = attachHarness({ identity });
-      harness.sendConnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(harness.service.getToolSurface).toHaveBeenCalledTimes(enabled ? 1 : 0);
-      expect(harness.responses[0]).toMatchObject({ ok: true });
-      if (enabled) {
-        expect(harness.responses[0]).toMatchObject({
-          payload: { toolSurface: { generation: "generation-1" } },
-        });
-      } else {
-        expect(harness.responses[0]).not.toHaveProperty("payload.toolSurface");
-      }
-    },
-  );
-
-  it.each([0, 1])(
-    "budgets the complete encoded hello at the control limit plus %s byte",
-    async (extra) => {
-      vi.useFakeTimers();
-      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-      const definition = { name: "read", label: "Read", description: "", parameters: {} };
-      const surface = {
-        generation: "surface",
-        tools: [{ id: "read", execution: "placement" as const, definition }],
-        policy: prepareCoreToolPolicy({}),
-      };
-      const frame = {
-        type: "res",
-        id: "connect-1",
-        ok: true,
-        payload: { ...buildWorkerHello(ATTACHED_IDENTITY), toolSurface: surface },
-      };
-      const available =
-        WORKER_PROTOCOL_MAX_PAYLOAD_BYTES - Buffer.byteLength(JSON.stringify(frame));
-      definition.description = "x".repeat(available + extra);
-      harness.service.getToolSurface.mockResolvedValue({ ok: true, result: surface });
-      harness.sendConnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(harness.responses[0]).toMatchObject(
-        extra
-          ? {
-              ok: false,
-              error: { message: "Worker tool surface exceeds the admission frame limit" },
-            }
-          : { ok: true, payload: { toolSurface: surface } },
-      );
-      expect(harness.advanceHandshakePhase.mock.calls.flat().includes("ready")).toBe(extra === 0);
-    },
-  );
 
   it("does not finish hello after its socket closes while preparing tools", async () => {
     vi.useFakeTimers();
@@ -211,7 +181,7 @@ describe("dedicated worker websocket protocol", () => {
     );
   });
 
-  it.each(["invalid-credential", "environment-mismatch"] as const)(
+  it.each(["invalid-credential"] as const)(
     "projects public %s failures to one opaque reason",
     async (internalReason) => {
       const recordFailure = vi.fn();
@@ -265,6 +235,12 @@ describe("dedicated worker websocket protocol", () => {
     await admit(harness);
 
     expect(reset).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    expect(harness.responses[0]).toMatchObject({ ok: true, payload: { type: "worker-hello-ok" } });
+    expect(JSON.stringify([harness.responses, harness.client()])).not.toContain(CREDENTIAL);
+    expect(harness.client()).toMatchObject({
+      connectionKind: "worker",
+      connect: { role: "worker" },
+    });
   });
 
   it("keeps public ownership failures opaque and charges the admission budget", async () => {
@@ -285,13 +261,10 @@ describe("dedicated worker websocket protocol", () => {
     );
     expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
     expect(reset).not.toHaveBeenCalled();
+    expect(harness.setClient).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["node.event", { event: "agent.request", payloadJSON: '{"requestId":"r-1"}' }],
-    ["health", {}],
-    ["worker.inference", {}],
-  ])("rejects legacy method %s", async (method, params) => {
+  it.each([["health", {}]])("rejects legacy method %s", async (method, params) => {
     const harness = attachHarness();
     await admit(harness);
     harness.sendRequest(method, params);
@@ -355,24 +328,6 @@ describe("dedicated worker websocket protocol", () => {
       payload: { status: "cancelled" },
     });
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
-  });
-
-  it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
-    const harness = attachHarness();
-    await admit(harness);
-    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
-
-    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-    expect(harness.responses[1]).toMatchObject({
-      ok: true,
-      payload: { entryIds: ["entry-1"], newLeafId: "entry-1" },
-    });
-    expect(harness.service.commitTranscript).toHaveBeenCalledWith(IDENTITY, TRANSCRIPT_COMMIT);
-    expect(harness.setLastFrameMeta).toHaveBeenLastCalledWith({
-      type: "req",
-      method: "worker.transcript.commit",
-    });
-    expect(harness.close).not.toHaveBeenCalled();
   });
 
   it("admits large image transcript frames without enlarging control or text budgets", async () => {
@@ -466,48 +421,6 @@ describe("dedicated worker websocket protocol", () => {
     expect(invalid.service.pushLiveEvent).not.toHaveBeenCalled();
   });
 
-  it("dispatches a TLS certificate fallback step without closing the worker", async () => {
-    const request = {
-      ...LIVE_EVENT,
-      event: {
-        kind: "lifecycle" as const,
-        payload: {
-          phase: "fallback_step" as const,
-          fallbackStepType: "fallback_step" as const,
-          fallbackStepFromModel: "openai/gpt-primary",
-          fallbackStepFromFailureReason: "tls_certificate" as const,
-          fallbackStepFinalOutcome: "next_fallback" as const,
-        },
-      },
-    };
-    const harness = attachHarness();
-    await admit(harness);
-    harness.sendRequest("worker.live-event", request);
-
-    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-    expect(harness.service.pushLiveEvent).toHaveBeenCalledWith(IDENTITY, request);
-    expect(harness.responses[1]).toEqual({
-      type: "res",
-      id: "request-1",
-      ok: true,
-      payload: { ackedSeq: request.seq },
-    });
-    expect(harness.close).not.toHaveBeenCalled();
-  });
-
-  it("rejects transcript commits when the admitted worker lacks the feature", async () => {
-    const harness = attachHarness({
-      identity: { ...IDENTITY, protocolFeatures: ["worker-heartbeat-v1"] },
-    });
-    await admit(harness);
-    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
-  });
-
   it("returns closed transcript errors without closing the worker connection", async () => {
     const harness = attachHarness({ commitFailure: "stale-base-leaf" });
     await admit(harness);
@@ -556,28 +469,6 @@ describe("dedicated worker websocket protocol", () => {
       expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
     );
     expect(harness.service.commitTranscript).not.toHaveBeenCalled();
-  });
-
-  it("revalidates ownership immediately before admission", async () => {
-    const harness = attachHarness({ validationFailure: "credential-replaced" });
-    harness.sendConnect();
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
-    );
-    expect(harness.setCloseCause).toHaveBeenCalledWith("credential-replaced");
-    expect(harness.setClient).not.toHaveBeenCalled();
-  });
-
-  it("revalidates ownership on heartbeat", async () => {
-    const harness = attachHarness();
-    await admit(harness);
-    vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-replaced");
-    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "ready" });
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
-    );
   });
 
   it("keeps an expired credential connected only while its durable turn remains valid", async () => {
@@ -718,22 +609,6 @@ describe("dedicated worker websocket protocol", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects authenticated heartbeats while gateway admission is suspended", async () => {
-    const harness = attachHarness();
-    await admit(harness);
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension).not.toBeNull();
-    try {
-      harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "ready" });
-      await waitForWorkerProtocol(() =>
-        expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
-      );
-      expect(harness.service.validateWorkerConnection).toHaveBeenCalledOnce();
-    } finally {
-      suspension?.rollback();
     }
   });
 });

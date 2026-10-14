@@ -10,7 +10,7 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const { createFixture, mocks } = await vi.hoisted(
+const { createFixture, createPromptAssemblyResult, mocks } = await vi.hoisted(
   async () => await import("./attempt-prompt-phase.test-support.js"),
 );
 vi.mock("../../../plugins/providers.runtime-core.js", () => ({
@@ -155,7 +155,7 @@ describe("embedded Tool Search prompt parity", () => {
               await input.prepareSystemPrompt(sessionRuntime.state.systemPromptText),
             );
           }
-          return { hookCtx: {}, transcriptLeafId: null };
+          return createPromptAssemblyResult(input);
         });
         let submittedPrompt = "";
         mocks.submitPrompt.mockImplementation(async () => {
@@ -176,7 +176,7 @@ describe("embedded Tool Search prompt parity", () => {
         }
         expect(submittedPrompt.includes("fixture_allowed")).toBe(toolsAllow?.length !== 0);
         if (toolsAllow?.length === 0) {
-          expect(submittedPrompt).not.toContain("Call tool_call");
+          expect(submittedPrompt).not.toContain("Call dispatch_action");
           expect(submittedPrompt).not.toContain("openclaw.tools.call");
           expect(submittedPrompt).not.toContain("Call a unique deferred tool name directly");
         }

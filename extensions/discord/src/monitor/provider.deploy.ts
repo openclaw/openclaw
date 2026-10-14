@@ -111,47 +111,32 @@ function installDeployRestLogging(params: {
   for (const method of Object.keys(original) as RestMethodName[]) {
     const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
+      ...params,
       method,
       original,
-      runtime: params.runtime,
-      accountId: params.accountId,
-      startupStartedAt: params.startupStartedAt,
       timeoutMs: typeof timeout === "number" ? timeout : undefined,
-      shouldLogVerbose: params.shouldLogVerbose,
     }) as RequestClient[typeof method];
   }
   return () => {
-    params.rest.get = original.get;
-    params.rest.post = original.post;
-    params.rest.put = original.put;
-    params.rest.patch = original.patch;
-    params.rest.delete = original.delete;
+    Object.assign(params.rest, original);
   };
 }
 
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
-  enabled: boolean;
-  accountId?: string;
-  startupStartedAt?: number;
+  accountId: string;
+  startupStartedAt: number;
   shouldLogVerbose: () => boolean;
 }) {
-  if (!params.enabled) {
-    return;
-  }
-  const startupStartedAt = params.startupStartedAt ?? Date.now();
-  const accountId = params.accountId ?? "default";
+  const { accountId } = params;
   const restoreDeployRestLogging = installDeployRestLogging({
+    ...params,
     rest: params.client.rest,
-    runtime: params.runtime,
-    accountId,
-    startupStartedAt,
-    shouldLogVerbose: params.shouldLogVerbose,
   });
   try {
     try {
-      await params.client.deployCommands({ mode: "reconcile" });
+      await params.client.deployCommands();
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(

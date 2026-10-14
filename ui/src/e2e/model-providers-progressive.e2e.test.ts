@@ -1,11 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
@@ -245,11 +246,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -336,11 +334,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -462,14 +457,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         models: currentModels,
         defaultModels: { automaticUtilityModel: "fixture/current" },
       });
-      await page.evaluate(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app) {
-          throw new Error("Application is unavailable");
-        }
-        app.runtime.context.gateway.connect();
+      await evaluateControlUiContext(page, (application) => {
+        application.gateway.connect();
       });
       await gateway.waitForRequest("config.get", { after: configReads });
       await gateway.emitGatewayEvent("models.snapshot", {
@@ -483,12 +472,10 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.rejectDeferred("config.get", { message: "Current config is unavailable." });
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { context: ApplicationContext } }
-            >("openclaw-app");
-            return app?.runtime.context.runtimeConfig.state.lastError;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.lastError,
+          ),
         )
         .toContain("Current config is unavailable.");
       if (recordVisuals) {
@@ -579,7 +566,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   });
 
   it.each(["snapshot", "ordinary"] as const)(
-    "opens the Models route from %s catalog publication while auth is pending",
+    "opens the Models route from %s catalog publication and refreshes after overlapping reads",
     async (publicationKind) => {
       const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -612,7 +599,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await page.locator('a[href="/settings/model-providers"]').first().click();
         }
-        await gateway.waitForRequest("models.list");
+        // Appearance can start a prepared-only read before navigation. Release the
+        // held catalog only after the Models page has admitted its own projection.
+        const routeCatalogRequests = async () =>
+          (await gateway.getRequests("models.list")).filter(
+            (request) => asNullableRecord(request.params)?.preparedOnly !== true,
+          );
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(1);
         const publication = {
           target: {},
           scope: { agentId: "main" },
@@ -634,7 +627,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
         await expect.poll(() => preparedRow.textContent()).toContain("Prepared model");
         expect(await preparedRow.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("models.list")).toHaveLength(1);
+        expect(await routeCatalogRequests()).toHaveLength(1);
 
         await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
@@ -644,19 +637,25 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await gateway.resolveDeferred("models.list", { models: [older] });
         }
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
-        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
 
-        await gateway.deferNext("models.list");
-        await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
-        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        const beforeRefresh = await gateway.deferNext("models.list", { refresh: true });
+        await page.locator(".model-providers__refresh-button").click();
+        const refreshed = await gateway.waitForRequest("models.list", {
+          after: beforeRefresh,
+          match: { refresh: true },
+        });
+        expect(refreshed.params).toMatchObject({ agentId: "main", refresh: true });
         await gateway.resolveDeferred("models.list", {
           models: [prepared, added],
           defaultModels: { automaticUtilityModel: "fixture/added" },
         });
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
+        }
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
           .toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
       } finally {
         await context.close();
@@ -752,11 +751,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           if (moduleState === "cached") {
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
           }
-          await page.evaluate(async () => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { router: ApplicationRouter } }
-            >("openclaw-app");
-            const route = app?.runtime.router.getRoute("model-providers");
+          await evaluateControlUiContext(page, async (application) => {
+            const route = (application.router as ApplicationRouter).getRoute("model-providers");
             if (!route) {
               throw new Error("Models route is unavailable");
             }

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -150,12 +151,12 @@ describe("command-execution-startup", () => {
   });
 
   it.each([
-    { commandPath: ["gateway"], asyncReads: 2 },
-    { commandPath: ["gateway", "run"], asyncReads: 2 },
-    { commandPath: ["doctor"], asyncReads: 0 },
+    { commandPath: ["gateway"], ownsPreparation: true },
+    { commandPath: ["gateway", "run"], ownsPreparation: true },
+    { commandPath: ["doctor"], ownsPreparation: false },
   ])(
-    "routes fresh $commandPath snapshots through their host preparation",
-    async ({ commandPath, asyncReads }) => {
+    "prepares fresh $commandPath snapshots asynchronously with the correct host scope",
+    async ({ commandPath, ownsPreparation }) => {
       const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
       const configPath = path.join(root, "openclaw.json");
       const env = {
@@ -227,10 +228,10 @@ describe("command-execution-startup", () => {
             pluginRegistry: { scope: "all" },
           },
         });
-        expect(prepare).toHaveBeenCalledTimes(asyncReads);
+        expect(prepare).toHaveBeenCalledTimes(2);
         expect(runtime.captureManagedConfigSnapshotPreparation(configPath)).toBeNull();
         const captured = captures[0];
-        if (asyncReads > 0) {
+        if (ownsPreparation) {
           if (!captured) {
             throw new Error("Gateway bootstrap did not own snapshot preparation");
           }

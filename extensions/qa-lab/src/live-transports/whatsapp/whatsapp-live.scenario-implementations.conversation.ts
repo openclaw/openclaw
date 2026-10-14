@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { toQaError } from "../../errors.js";
-import type {
-  WhatsAppQaMessageScenarioRun,
-  WhatsAppQaScenarioImplementation,
-} from "./whatsapp-live.contracts.js";
+import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import {
   resolveWhatsAppQaNoReplyTarget,
   waitForDistinctWhatsAppSutMessages,
@@ -14,45 +11,37 @@ import {
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
+  waitForWhatsAppQuotedMessage,
 } from "./whatsapp-live.observations.js";
+import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
-function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
-  const token = `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}_${randomUUID().slice(0, 8).toUpperCase()}`;
-  const input =
-    target === "group"
-      ? `openclawqa reply with only this exact marker: ${token}`
-      : `Reply with only this exact marker: ${token}`;
-  return {
-    configMode: "allowlist",
-    expectReply: true,
-    input,
-    matchText: token,
-    target,
-    verify: (reply, context) => {
-      requireWhatsAppTriggerMessageId(context);
-      if (reply.quoted?.messageId !== context.sent.messageId) {
-        throw new Error(
-          `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
-        );
-      }
-    },
-  };
+function createWhatsAppQuoteReplyScenario(target: "dm" | "group") {
+  return createWhatsAppMessageScenario({
+    posture: "user-path",
+    configOverrides: { replyToMode: "all" },
+    ...(target === "group" ? { requiresGroupJid: true } : {}),
+    marker: `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}`,
+    buildRun: (token) => ({
+      input: `${target === "group" ? "openclawqa reply" : "Reply"} with only this exact marker: ${token}`,
+      target,
+      verify: (reply, context) => {
+        requireWhatsAppTriggerMessageId(context);
+        if (reply.quoted?.messageId !== context.sent.messageId) {
+          throw new Error(
+            `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
+          );
+        }
+      },
+    }),
+  });
 }
 
 export const whatsappConversationScenarios = {
-  whatsappQaCanaryScenario: {
+  whatsappQaCanaryScenario: createWhatsAppMessageScenario({
     posture: "user-path",
-    buildRun: () => {
-      const token = `WHATSAPP_QA_ECHO_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_ECHO",
+    buildRun: (token) => ({ input: `Reply with only this exact marker: ${token}` }),
+  }),
 
   whatsappQaMentionGatingScenario: {
     posture: "user-path",
@@ -105,7 +94,7 @@ export const whatsappConversationScenarios = {
     },
   },
 
-  whatsappQaBroadcastGroupFanoutScenario: {
+  whatsappQaBroadcastGroupFanoutScenario: createWhatsAppMessageScenario({
     posture: "user-path",
     configOverrides: {
       broadcast: {
@@ -115,8 +104,8 @@ export const whatsappConversationScenarios = {
       groupPolicy: "open",
     },
     requiresGroupJid: true,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_BROADCAST_TOKEN_${randomUUID().slice(0, 8).toUpperCase()}`;
+    marker: "WHATSAPP_QA_BROADCAST_TOKEN",
+    buildRun: (token) => {
       const mainMarker = `${token}_MAIN`;
       const secondMarker = `${token}_SECOND`;
       return {
@@ -133,13 +122,12 @@ export const whatsappConversationScenarios = {
           return "broadcast fanout produced main and qa-second replies";
         },
         configMode: "open",
-        expectReply: true,
         input: `openclawqa broadcast fanout check ${token}`,
         matchText: mainMarker,
         target: "group",
       };
     },
-  },
+  }),
 
   whatsappQaGroupActivationAlwaysScenario: {
     posture: "user-path",
@@ -184,7 +172,7 @@ export const whatsappConversationScenarios = {
 
           if (activationProbeError && restoreError) {
             throw new Error(
-              `activation always probe failed; additionally failed to restore mention mode: ${formatErrorMessage(restoreError)}`,
+              `activation always check failed; additionally failed to restore mention mode: ${formatErrorMessage(restoreError)}`,
               { cause: activationProbeError },
             );
           }
@@ -247,22 +235,12 @@ export const whatsappConversationScenarios = {
             throw new Error("WhatsApp driver did not return a quoted trigger message id.");
           }
           const quotedTriggerMessageId = quotedTrigger.messageId;
-          await waitForScenarioObservedMessage(context, {
-            diagnosticChecks: [
-              {
-                label: "containsTriggerMarker",
-                match: (message) => message.text.includes(triggerMarker),
-              },
-              {
-                label: "quotesTrigger",
-                match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-              },
-            ],
-            match: (message) =>
-              message.text.includes(triggerMarker) &&
-              message.quoted?.messageId === quotedTriggerMessageId,
+          await waitForWhatsAppQuotedMessage(context, {
             observedAfter: quotedStartedAt,
             timeoutMs: 60_000,
+            textMarker: triggerMarker,
+            quotedMessageId: quotedTriggerMessageId,
+            diagnosticLabels: ["containsTriggerMarker", "quotesTrigger"],
           });
           return "quoted reply to bot triggered a group response without an explicit mention";
         },
@@ -275,46 +253,27 @@ export const whatsappConversationScenarios = {
     },
   },
 
-  whatsappQaTopLevelReplyShapeScenario: {
+  whatsappQaTopLevelReplyShapeScenario: createWhatsAppMessageScenario({
     posture: "user-path",
     configOverrides: {
       replyToMode: "off",
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_TOP_LEVEL_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker: ${token}`,
-        matchText: token,
-        target: "dm",
-        verify: (reply) => {
-          if (reply.quoted?.messageId) {
-            throw new Error(
-              `expected top-level WhatsApp reply without quote metadata, got quoted message ${reply.quoted.messageId}`,
-            );
-          }
-        },
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_TOP_LEVEL",
+    buildRun: (token) => ({
+      input: `Reply with only this exact marker: ${token}`,
+      verify: (reply) => {
+        if (reply.quoted?.messageId) {
+          throw new Error(
+            `expected top-level WhatsApp reply without quote metadata, got quoted message ${reply.quoted.messageId}`,
+          );
+        }
+      },
+    }),
+  }),
 
-  whatsappQaReplyToMessageScenario: {
-    posture: "user-path",
-    configOverrides: {
-      replyToMode: "all",
-    },
-    buildRun: () => buildWhatsAppQuoteReplyRun("dm"),
-  },
+  whatsappQaReplyToMessageScenario: createWhatsAppQuoteReplyScenario("dm"),
 
-  whatsappQaGroupReplyToMessageScenario: {
-    posture: "user-path",
-    configOverrides: {
-      replyToMode: "all",
-    },
-    requiresGroupJid: true,
-    buildRun: () => buildWhatsAppQuoteReplyRun("group"),
-  },
+  whatsappQaGroupReplyToMessageScenario: createWhatsAppQuoteReplyScenario("group"),
 
   whatsappQaReplyToModeBatchedScenario: {
     posture: "user-path",

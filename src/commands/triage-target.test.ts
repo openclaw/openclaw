@@ -5,8 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
-import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import {
   resolveExecPreparedRunEnvironment,
   resolvePreparedExecEnvironment,
@@ -22,6 +20,7 @@ import { pinRuntimePaths, resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   getInstallationTarget,
@@ -37,7 +36,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as agentExec from "./agent-exec.js";
 import { renderTriagePrompt } from "./triage-prompt.js";
-import { triageCommand } from "./triage.js";
 
 const mocks = vi.hoisted(() => ({
   collectDoctorFindings: vi.fn(),
@@ -330,10 +328,11 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         payloads: [{ text: "fixture completed" }],
         meta: { durationMs: 1 },
       }));
+      mocks.agentCommand.mockReset().mockImplementation(runAgent);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const target = resolveInstallationTarget();
       const result = await withInstallationTarget(target, () =>
-        agentExec.agentExecCommand("inspect", { cwd: state.workspaceDir }, runtime, { runAgent }),
+        agentExec.agentExecCommand("inspect", { cwd: state.workspaceDir }, runtime),
       );
       expect(result.exitCode).toBe(1);
       expect(result.envelope.error?.message).toContain("saved prompt");
@@ -344,7 +343,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         "inspect",
         { cwd: state.workspaceDir },
         runtime,
-        { runAgent },
       );
       expect(ordinary.exitCode).toBe(0);
       expect(runAgent).toHaveBeenCalledOnce();
@@ -355,40 +353,23 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
       layout: "split" as const,
       fails: false,
       workspaceSelector: "custom",
-      automatic: false,
       route: "ordinary agent exec",
     },
     {
       layout: "home" as const,
       fails: false,
       workspaceSelector: "default",
-      automatic: false,
       route: "ordinary agent exec",
     },
     {
       layout: "split" as const,
       fails: true,
       workspaceSelector: "default",
-      automatic: false,
       route: "ordinary agent exec",
-    },
-    {
-      layout: "split" as const,
-      fails: false,
-      workspaceSelector: "custom",
-      automatic: true,
-      route: "automatic shared OAuth recovery",
-    },
-    {
-      layout: "home" as const,
-      fails: true,
-      workspaceSelector: "default",
-      automatic: true,
-      route: "automatic shared OAuth recovery",
     },
   ])(
     "keeps the $layout installation and $workspaceSelector workspace addressable ($route, fails=$fails)",
-    async ({ layout, fails, workspaceSelector, automatic }) => {
+    async ({ layout, fails, workspaceSelector }) => {
       const previousSnapshot = getRuntimeConfigSnapshot();
       const temporaryRoot = os.tmpdir();
       // Clear inherited credentials and selectors through the tracked helper. Only
@@ -405,12 +386,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         NODE_ENV: "test",
         OPENAI_API_KEY: secret,
         OPENCLAW_WORKSPACE_DIR: undefined,
-        ...(automatic
-          ? {
-              OPENCLAW_SERVICE_REPAIR_POLICY: "update",
-              OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1",
-            }
-          : {}),
       });
       try {
         await withEnvAsync(syntheticEnv, async () => {
@@ -424,9 +399,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
             },
             async (state) => {
               vi.spyOn(process, "cwd").mockReturnValue(state.workspaceDir);
-              const executionRoot = automatic
-                ? state.path("owned installation")
-                : state.workspaceDir;
+              const executionRoot = state.workspaceDir;
               await fs.mkdir(executionRoot, { recursive: true });
               const defaultWorkspaceDir =
                 workspaceSelector === "custom"
@@ -442,7 +415,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 Object.getOwnPropertyDescriptor(stream, "isTTY"),
               );
               for (const stream of [process.stdin, process.stdout]) {
-                Object.defineProperty(stream, "isTTY", { configurable: true, value: !automatic });
+                Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
               }
               try {
                 const config: OpenClawConfig = {
@@ -453,7 +426,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                     entries: {
                       diagnostic: {
                         model: "fixture/diagnostic-model",
-                        ...(automatic ? {} : { runtime: { type: "acp" as const } }),
+                        runtime: { type: "acp" as const },
                       },
                     },
                   },
@@ -461,55 +434,14 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   plugins: { enabled: false },
                   gateway: { auth: { mode: "token", token: secret } },
                 };
-                await state.writeConfig(config);
-                const agentDir = state.statePath("agents", "diagnostic", "agent");
-                const profileId = "fixture:subscription";
-                const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
-                if (automatic) {
-                  auth.saveAuthProfileStore({
-                    version: 1,
-                    profiles: {
-                      [profileId]: {
-                        type: "oauth",
-                        provider: "fixture",
-                        access: "synthetic-shared-oauth-access",
-                        refresh: "synthetic-shared-oauth-refresh",
-                        expires: Date.now() + 3_600_000,
-                      },
-                    },
-                  });
-                  vi.spyOn(repairRuntime, "prepareUpdateRepairInference").mockResolvedValue({
-                    ok: true,
-                    route: {
-                      runner: "embedded",
-                      agentId: "diagnostic",
-                      agentDir,
-                      provider: "fixture",
-                      model: "diagnostic-model",
-                      modelLabel: "fixture/diagnostic-model",
-                      authProfileId: profileId,
-                      runConfig: config,
-                      sourceConfig: config,
-                    },
-                    modelFallbacks: [],
-                  });
-                  mocks.runEmbeddedAgentEntry.mockImplementation(
-                    async (params: {
-                      selection: { provider: string; model: string };
-                      runCandidate: (
-                        provider: string,
-                        model: string,
-                        options: { agentHarnessRuntimeOverride: string },
-                      ) => Promise<unknown>;
-                    }) => {
-                      const { provider, model } = params.selection;
-                      const result = await params.runCandidate(provider, model, {
-                        agentHarnessRuntimeOverride: "openclaw",
-                      });
-                      return { result, provider, model, terminal: { outcome: { status: "ok" } } };
-                    },
+                const validatedConfig = validateConfigObjectRaw(config);
+                if (!validatedConfig.ok) {
+                  throw new Error(
+                    `Invalid triage fixture config: ${JSON.stringify(validatedConfig.issues)}`,
                   );
                 }
+                await state.writeConfig(config);
+
                 const originalConfig = await fs.readFile(state.configPath, "utf8");
                 const archivePath = state.statePath("logs", "support", "installation.zip");
                 const archive = await new JSZip()
@@ -559,8 +491,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 let runStateDir = "";
                 let shellLookup = "";
                 let childTarget: ChildTarget | undefined;
-                const controller = new AbortController();
-                const assertCurrent = vi.fn();
                 const runFailure = new Error("synthetic run failure");
                 const inspectRun = async (opts: {
                   prompt: string;
@@ -581,27 +511,23 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   expect(prompt).not.toContain(defaultWorkspaceDir);
                   expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(8 * 1024);
                   runStateDir = await fs.realpath(resolveStateDir());
-                  if (automatic) {
-                    expect(runStateDir).toBe(state.stateDir);
-                    expect(process.env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("update");
-                    expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("1");
-                  } else {
-                    expect(runStateDir).not.toBe(state.stateDir);
-                    expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(executionRoot);
-                  }
+
+                  expect(runStateDir).not.toBe(state.stateDir);
+                  expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(executionRoot);
+
                   const runConfig = opts.config;
                   expect(runConfig.agents?.entries?.diagnostic?.workspace).toBe(executionRoot);
                   expect(runConfig.agents?.entries?.diagnostic?.model).toBe(
                     "fixture/diagnostic-model",
                   );
-                  if (!automatic) {
-                    const sessionStore = resolveSessionStorePathCore(runConfig.session?.store, {
-                      agentId: String(opts.agentId),
-                    });
-                    expect(sessionStore).toBe(
-                      path.join(runStateDir, "agents", "diagnostic", "sessions", "sessions.json"),
-                    );
-                  }
+
+                  const sessionStore = resolveSessionStorePathCore(runConfig.session?.store, {
+                    agentId: String(opts.agentId),
+                  });
+                  expect(sessionStore).toBe(
+                    path.join(runStateDir, "agents", "diagnostic", "sessions", "sessions.json"),
+                  );
+
                   expect(opts.sessionId).toEqual(expect.any(String));
                   // Exercise the same preparation and projection used by built-in exec;
                   // no installation selectors are supplied by the probe itself.
@@ -627,21 +553,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   );
                   shellLookup = shell.stdout;
                   childTarget = await inspectChildTarget(toolEnv, executionRoot);
-                  if (automatic) {
-                    const runSignal = opts.abortSignal!;
-                    expect(runSignal.aborted).toBe(false);
-                    const checksBefore = assertCurrent.mock.calls.length;
-                    opts.assertSourceCurrent?.();
-                    expect(assertCurrent.mock.calls.length).toBeGreaterThan(checksBefore);
-                    expect(prompt).toContain("## Triggering failure");
-                    expect(prompt).toContain("openclaw health --json");
-                    if (fails) {
-                      controller.abort(runFailure);
-                      expect(runSignal.aborted).toBe(true);
-                      expect(runSignal.reason).toBe(runFailure);
-                      runSignal.throwIfAborted();
-                    }
-                  }
+
                   if (fails) {
                     throw runFailure;
                   }
@@ -650,33 +562,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                     meta: { durationMs: 1 },
                   };
                 };
-                if (automatic) {
-                  mocks.runEmbeddedAgent.mockImplementation(
-                    async (opts: RunEmbeddedAgentParams) => {
-                      expect(opts.agentDir).toBe(agentDir);
-                      expect(opts.authProfileId).toBe(profileId);
-                      expect(opts.authProfileIdSource).toBe("user");
-                      expect(opts.sessionPersistence).toBe("detached");
-                      expect(opts.sessionManager?.getSessionTarget()).toBeUndefined();
-                      expect(opts.cwd).toBe(executionRoot);
-                      expect(opts.workspaceDir).toBe(executionRoot);
-                      expect(
-                        auth.loadAuthProfileStoreForRuntime(opts.agentDir, {
-                          readOnly: true,
-                          externalCli: { mode: "none" },
-                        }).profiles[profileId],
-                      ).toMatchObject({ type: "oauth", access: "synthetic-shared-oauth-access" });
-                      return inspectRun({
-                        prompt: opts.prompt,
-                        config: opts.config!,
-                        agentId: opts.agentId,
-                        sessionId: opts.sessionId,
-                        abortSignal: opts.abortSignal,
-                        assertSourceCurrent: opts.preparedRunAdmission?.assertSourceCurrent,
-                      });
-                    },
-                  );
-                }
+
                 mocks.agentCommand.mockImplementation(async (opts) =>
                   inspectRun({
                     prompt: opts.message,
@@ -688,67 +574,37 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   }),
                 );
 
-                const run = automatic
-                  ? triageCommand(
-                      runtime,
-                      {},
-                      {
-                        failure: {
-                          kind: "update",
-                          phase: "restart-unhealthy",
-                          error: `Synthetic startup failure; Authorization: Bearer ${secret}`,
-                          installationRoot: executionRoot,
-                          expectedVersion: marker,
-                          gateway: "verify-running",
-                        },
-                        signal: controller.signal,
-                        assertCurrent,
-                      },
-                    )
-                  : withInstallationTarget(target, () =>
-                      agentExec.agentExecCommand(
-                        renderTriagePrompt({
-                          findings,
-                          bundle: { kind: "available", path: archivePath },
-                          redaction: { env: process.env, stateDir: state.stateDir },
-                        }),
-                        { cwd: executionRoot },
-                        runtime,
-                      ),
-                    );
-                if (automatic) {
-                  if (fails) {
-                    await expect(run).rejects.toMatchObject({ code: 1 });
-                  } else {
-                    await run;
-                  }
-                } else {
-                  expect(await run).toMatchObject({ exitCode: fails ? 1 : 0 });
-                }
+                expect(getRuntimeConfigSnapshot()).toBeNull();
+                const run = withInstallationTarget(target, () =>
+                  agentExec.agentExecCommand(
+                    renderTriagePrompt({
+                      findings,
+                      bundle: { kind: "available", path: archivePath },
+                      redaction: { env: process.env, stateDir: state.stateDir },
+                    }),
+                    { cwd: executionRoot },
+                    runtime,
+                  ),
+                );
+                expect(await run).toMatchObject({ exitCode: fails ? 1 : 0 });
 
                 expect(runtime.error.mock.calls).toEqual(fails ? [["synthetic run failure"]] : []);
-                expect(runtime.exit.mock.calls).toEqual(fails && automatic ? [[1]] : []);
+                expect(runtime.exit).not.toHaveBeenCalled();
                 expect(getInstallationTarget()).toBeUndefined();
                 expect(observedTargets).toEqual({ repair: target });
-                if (automatic) {
-                  expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
-                  expect(execSpy).not.toHaveBeenCalled();
-                  expect(mocks.agentCommand).not.toHaveBeenCalled();
-                } else {
-                  expect(mocks.agentCommand).toHaveBeenCalledOnce();
-                  expect(execSpy).toHaveBeenCalledOnce();
-                  expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
-                  expect(execSpy.mock.calls[0]?.[1].cwd).toBe(executionRoot);
-                }
+
+                expect(mocks.agentCommand).toHaveBeenCalledOnce();
+                expect(execSpy).toHaveBeenCalledOnce();
+                expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
+                expect(execSpy.mock.calls[0]?.[1].cwd).toBe(executionRoot);
+
                 expect(process.env.OPENCLAW_STATE_DIR).toBe(originalSelectors.stateDir);
                 expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalSelectors.configPath);
                 expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(originalSelectors.workspaceDir);
+
                 expect(getRuntimeConfigSnapshot()).toBeNull();
-                if (automatic) {
-                  expect((await fs.stat(runStateDir)).isDirectory()).toBe(true);
-                } else {
-                  await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
-                }
+                await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+
                 expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
                 expect(await fs.readFile(archivePath)).toEqual(archive);
                 expect(await fs.readFile(workspaceMarkerPath, "utf8")).toBe(marker);

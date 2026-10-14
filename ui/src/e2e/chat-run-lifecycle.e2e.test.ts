@@ -3,14 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  pauseVirtualClock,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -95,10 +91,15 @@ suite.define(() => {
     const failedAlert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
     await failedAlert
-      .locator(".chat-error__content > strong")
-      .getByText(renderedDiagnostic)
+      .locator("summary strong")
+      .getByText("Couldn't finish this reply. Check the conversation before trying again.")
       .waitFor();
-    expect(await failedAlert.locator("details").count()).toBe(0);
+    expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
+    await failedAlert.locator("summary").click();
+    await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
+    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+      renderedDiagnostic,
+    );
     expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -169,20 +170,18 @@ suite.define(() => {
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const refreshedSession = await currentPage.evaluate(async (key) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context?: ApplicationContext } }
-      >("openclaw-app");
-      const sessions = app?.runtime?.context?.sessions;
-      if (!sessions) {
-        throw new Error("Session capability is missing");
-      }
-      await sessions.refresh({ agentId: "main", force: true });
-      return sessions.state.result?.sessions.find((row) => row.key === key);
-    }, sessionKey);
+    const refreshedSession = await evaluateControlUiContext(
+      currentPage,
+      async (application, key) => {
+        const sessions = application.sessions;
+        await sessions.refresh({ agentId: "main", force: true });
+        return sessions.state.result?.sessions.find((row) => row.key === key);
+      },
+      sessionKey,
+    );
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await operationLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13s");
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
     await captureMockStopProof(currentPage, "completed-work-heading");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -190,7 +189,7 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await operationLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
     await operationLabel.click();
     await expect
@@ -291,7 +290,7 @@ suite.define(() => {
       ],
       inFlightRun: {
         runId: "run-reconnected",
-        text: "Saved opening. Still working after reconnect.",
+        text: "Still working after reconnect.",
       },
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
@@ -337,14 +336,7 @@ suite.define(() => {
 
     await gateway.setOnline(false);
     await expect
-      .poll(() =>
-        currentPage.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      )
+      .poll(() => currentPage.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
       .toBe("reconnecting");
     await stop.waitFor({ state: "visible" });
     expect(await stop.isEnabled()).toBe(true);
@@ -540,6 +532,10 @@ suite.define(() => {
     await captureMockStopProof(currentPage, "stopped-live");
     await interrupted.waitFor({ state: "visible" });
     expect(await interrupted.count()).toBe(1);
+    expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
+    expect(await currentPage.locator(".agent-chat__run-status-announcement").textContent()).toBe(
+      "Interrupted",
+    );
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {
@@ -671,14 +667,8 @@ suite.define(() => {
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
       // A newer sidebar read may publish while Stop's history is still pending.
-      await currentPage.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app?.runtime?.context) {
-          throw new Error("Control UI context is unavailable");
-        }
-        await app.runtime.context.sessions.refreshList({ force: true });
+      await evaluateControlUiContext(currentPage, async (application) => {
+        await application.sessions.refreshList({ force: true });
       });
       await gateway.resolveDeferred("chat.history");
       await currentPage
@@ -717,14 +707,14 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
     await currentPage.locator(".agent-chat__input textarea").fill("keep working");
-    // The working timer starts at the send click; pause first so the elapsed
-    // reading is exactly the fastForward below, not inflated by real time.
-    await pauseVirtualClock(currentPage);
+    // Fix wall time without freezing the mock ACK and rendering timers.
+    const startedAt = Date.now();
+    await currentPage.clock.setFixedTime(startedAt);
     await currentPage.getByRole("button", { name: "Send message" }).click();
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
 
-    await currentPage.clock.fastForward(177_000);
+    await currentPage.clock.setFixedTime(startedAt + 177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
@@ -766,7 +756,7 @@ suite.define(() => {
       const runId = params.idempotencyKey as string;
 
       await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-      const mainSession = currentPage.locator(".nav-item--home");
+      const mainSession = currentPage.locator(".sidebar-footer-bar__home");
       // Home mirrors session rows: active-run state rings the leading glyph.
       const mainSessionRunIndicator = mainSession
         .locator(".session-glyph")
@@ -813,7 +803,9 @@ suite.define(() => {
           });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
+          expect(
+            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
+          ).toContain(diagnostic);
           expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(
             0,
           );
@@ -966,7 +958,7 @@ suite.define(() => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSession = currentPage.locator(".sidebar-footer-bar__home");
     // Home mirrors session rows: active-run state rings the leading glyph.
     const mainSessionRunIndicator = mainSession
       .locator(".session-glyph")

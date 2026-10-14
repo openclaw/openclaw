@@ -87,14 +87,6 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function dedupeCompatibilityNotices(
-  notices: readonly PluginCompatibilityHealthNotice[],
-): PluginCompatibilityHealthNotice[] {
-  return dedupeByKey(notices, (entry) =>
-    JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
-  );
-}
-
 function mergePluginRecords(
   installed: readonly PluginHealthRecord[],
   runtime: readonly PluginHealthRecord[],
@@ -138,10 +130,10 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.channelPluginFailures ?? []),
       ...(runtime.channelPluginFailures ?? []),
     ]),
-    compatibilityNotices: dedupeCompatibilityNotices([
-      ...(installed.compatibilityNotices ?? []),
-      ...(runtime.compatibilityNotices ?? []),
-    ]),
+    compatibilityNotices: dedupeByKey(
+      [...(installed.compatibilityNotices ?? []), ...(runtime.compatibilityNotices ?? [])],
+      (entry) => JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
+    ),
     // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
     // cannot confirm it, so it never contributes here.
     runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
@@ -156,28 +148,20 @@ function hasDependencyIssue(plugin: PluginHealthRecord): boolean {
   );
 }
 
-function shouldSuppressChannelPluginDiagnostic(
-  diagnostic: PluginDiagnosticRecord,
-  channelPluginFailures: readonly ChannelPluginFailureRecord[],
-): boolean {
-  if (!isChannelPluginFailureDiagnostic(diagnostic)) {
-    return false;
-  }
-  // Only suppress when the failure is actually reported in the channel
-  // section; otherwise the diagnostic must still count as a problem.
-  return channelPluginFailures.some(
-    (failure) =>
-      failure.message === diagnostic.message &&
-      (failure.pluginId == null ||
-        diagnostic.pluginId == null ||
-        failure.pluginId === diagnostic.pluginId),
-  );
-}
-
 function getReportableDiagnostics(snapshot: StatusPluginHealthSnapshot): PluginDiagnosticRecord[] {
   const channelPluginFailures = snapshot.channelPluginFailures ?? [];
+  // Only suppress when the failure is actually reported in the channel
+  // section; otherwise the diagnostic must still count as a problem.
   return snapshot.diagnostics.filter(
-    (entry) => !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures),
+    (diagnostic) =>
+      !isChannelPluginFailureDiagnostic(diagnostic) ||
+      !channelPluginFailures.some(
+        (failure) =>
+          failure.message === diagnostic.message &&
+          (failure.pluginId == null ||
+            diagnostic.pluginId == null ||
+            failure.pluginId === diagnostic.pluginId),
+      ),
   );
 }
 
@@ -195,30 +179,20 @@ export function isChannelPluginFailureDiagnostic(diagnostic: PluginDiagnosticRec
   return diagnostic.level === "error" && diagnostic.code === "channel-setup-failure";
 }
 
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export function formatCompactPluginHealthLine(
   snapshot: StatusPluginHealthSnapshot,
 ): string | undefined {
-  const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
-  const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
-  const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
-  const quarantines = snapshot.contextEngineQuarantines.length;
-  const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
-  const channelPluginFailures = snapshot.channelPluginFailures?.length ?? 0;
-
-  const parts = [
-    loadErrors > 0 ? formatCount(loadErrors, "plugin error") : null,
-    quarantines > 0 ? formatCount(quarantines, "context engine quarantine") : null,
-    runtimeToolQuarantines > 0
-      ? formatCount(runtimeToolQuarantines, "runtime tool quarantine")
-      : null,
-    channelPluginFailures > 0 ? formatCount(channelPluginFailures, "channel plugin failure") : null,
-    dependencyIssues > 0 ? formatCount(dependencyIssues, "dependency issue") : null,
-    diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
-  ].filter((part): part is string => Boolean(part));
+  const counts: Array<[number, string]> = [
+    [snapshot.plugins.filter((plugin) => plugin.status === "error").length, "plugin error"],
+    [snapshot.contextEngineQuarantines.length, "context engine quarantine"],
+    [snapshot.runtimeToolQuarantines?.length ?? 0, "runtime tool quarantine"],
+    [snapshot.channelPluginFailures?.length ?? 0, "channel plugin failure"],
+    [snapshot.plugins.filter(hasDependencyIssue).length, "dependency issue"],
+    [countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors, "diagnostic error"],
+  ];
+  const parts = counts
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`);
 
   return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }

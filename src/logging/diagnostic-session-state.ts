@@ -21,7 +21,7 @@ export type ToolCallRecord = {
   argsHash: string;
   toolCallId?: string;
   runId?: string;
-  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
+  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure" | "argument-validation";
   resultHash?: string;
   // Keep the raw result identity while this bounded identity survives alias
   // merges and lets the no-progress owner ignore diagnostic drift.
@@ -205,6 +205,14 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
     diagnosticSessionStates.get(key) ??
     (ref.sessionId ? findStateEntryBySessionId(ref.sessionId)?.[1] : undefined)
   );
+}
+
+/** Renews this observation and invalidates recovery captured before the progress. */
+export function touchDiagnosticSessionState(state: SessionState): void {
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
 }
 
 /** Retires collector observations without resetting independent tool-loop or poll policy. */

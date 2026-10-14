@@ -24,7 +24,7 @@ When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
 selection. Use provider/model `agentRuntime.id: "codex"` to require a registered
-Codex harness. Unsupported routes/auth fail closed unless the harness declares
+Codex harness. Unsupported routes/auth are rejected unless the harness declares
 an exact-request fallback before execution. Codex runtime failures are not
 retried through another runtime.
 
@@ -88,9 +88,10 @@ diagnostics, and the names of omitted requester-scoped servers, without opening
 connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
 `${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
 for its own transport.
-`resolveConfiguredMcpTransport` applies the shared runtime rule: an explicit
-`transport` takes precedence over a legacy CLI `type` alias. Transport support and
-the default for servers without either field remain the caller's responsibility.
+Read the returned server's `transport` field. Doctor normalizes operator config,
+and bundle loading translates external `type` fields before this boundary.
+Transport support and the default for servers without `transport` remain the
+harness's responsibility.
 
 ## Runtime strictness
 
@@ -125,7 +126,7 @@ To request Codex for embedded runs:
 }
 ```
 
-If you want a CLI backend for one canonical model, put the runtime on that
+If you want a CLI backend for one standard model ID, put the runtime on that
 model entry:
 
 ```json
@@ -152,7 +153,6 @@ Per-agent overrides use the same model-scoped shape:
   "agents": {
     "entries": {
       "codex-only": {
-        "default": true,
         "model": "openai/gpt-6-astra",
         "models": {
           "openai/gpt-6-astra": {

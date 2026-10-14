@@ -1,4 +1,3 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -26,8 +25,6 @@ type SessionScopedOperationsHost = {
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
 };
-
-const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
 
 function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
   const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
@@ -88,46 +85,38 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     return result;
   };
 
-  const requestCurrent = async <T>(
-    request: (client: GatewayBrowserClient) => Promise<T>,
-  ): Promise<T | null> => {
+  const requestCurrent = async <T>(method: string, params: unknown): Promise<T | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
     }
-    const result = await request(scope.client);
+    const result = await scope.client.request<T>(method, params);
     return host.connection.isCurrent(scope) ? result : null;
   };
 
   const listFiles: SessionCapability["listFiles"] = (key, options = {}) =>
-    requestCurrent((client) =>
-      client.request<SessionWorkspaceListResult | null>("sessions.files.list", {
-        sessionKey: key,
-        path: options.path ?? "",
-        search: options.search ?? "",
-        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-      }),
-    );
+    requestCurrent<SessionWorkspaceListResult>("sessions.files.list", {
+      sessionKey: key,
+      path: options.path ?? "",
+      search: options.search ?? "",
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const getFile: SessionCapability["getFile"] = (key, path, options = {}) =>
-    requestCurrent((client) =>
-      client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
-        sessionKey: key,
-        path,
-        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-      }),
-    );
+    requestCurrent<SessionWorkspaceGetResult>("sessions.files.get", {
+      sessionKey: key,
+      path,
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const setFile: SessionCapability["setFile"] = (key, path, content, options) =>
-    requestCurrent((client) =>
-      client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
-        sessionKey: key,
-        path,
-        content,
-        expectedHash: options.expectedHash,
-        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-      }),
-    );
+    requestCurrent<SessionWorkspaceSetResult>("sessions.files.set", {
+      sessionKey: key,
+      path,
+      content,
+      expectedHash: options.expectedHash,
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
     const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
@@ -158,22 +147,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         agentId,
         ...(includeApprovals ? { includeApprovals: true } : {}),
         ...(mode ? { mode } : {}),
-      })
-      .catch((error: unknown) => {
-        if (
-          error instanceof AggregateError &&
-          error.errors[0] instanceof GatewayProtocolRequestTimeoutError &&
-          error.errors[0].requestSent &&
-          !disposed &&
-          host.connection.isCurrent(scope) &&
-          !retiredFailedSubscriptionRecoveries.has(error)
-        ) {
-          // Failed compensation cannot prove privileged observers were removed;
-          // closing their owning socket invokes authoritative Gateway cleanup.
-          retiredFailedSubscriptionRecoveries.add(error);
-          scope.client.forceReconnect("session subscription recovery failed");
-        }
-        throw error;
       });
     ownedSubscriptions.add(subscription);
     if (disposed || !host.connection.isCurrent(scope)) {
@@ -185,14 +158,15 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
 
   const requestCommittedMutation = async <T>(
     disconnectedError: string,
-    request: (client: GatewayBrowserClient) => Promise<T>,
+    method: string,
+    params: unknown,
     agentId?: string | null,
   ): Promise<T> => {
     const scope = host.connection.capture();
     if (!scope) {
       throw new Error(disconnectedError);
     }
-    const result = await request(scope.client);
+    const result = await scope.client.request<T>(method, params);
     // The gateway response commits destructive work; refresh is connection-scoped
     // best effort and must never turn that commit into uncertainty or a retry.
     if (host.connection.isCurrent(scope)) {
@@ -202,46 +176,34 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   };
 
   const rewind: SessionCapability["rewind"] = (key, entryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsRewindResult>(
       "Session rewind requires an active Gateway connection",
-      (client) =>
-        client.request<SessionsRewindResult>("sessions.rewind", {
-          ...buildTranscriptMutationParams(key, options.agentId),
-          entryId,
-        }),
+      "sessions.rewind",
+      { ...buildTranscriptMutationParams(key, options.agentId), entryId },
       options.agentId,
     );
 
   const forkAtMessage: SessionCapability["forkAtMessage"] = (key, entryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsForkResult>(
       "Session fork requires an active Gateway connection",
-      (client) =>
-        client.request<SessionsForkResult>("sessions.fork", {
-          ...buildTranscriptMutationParams(key, options.agentId),
-          entryId,
-        }),
+      "sessions.fork",
+      { ...buildTranscriptMutationParams(key, options.agentId), entryId },
       options.agentId,
     );
 
   const listBranches: SessionCapability["listBranches"] = async (key, options = {}) =>
-    (await requestCurrent(
-      async (client) =>
-        (
-          await client.request<SessionsBranchesListResult>(
-            "sessions.branches.list",
-            buildTranscriptMutationParams(key, options.agentId),
-          )
-        ).branches,
-    )) ?? [];
+    (
+      await requestCurrent<SessionsBranchesListResult>(
+        "sessions.branches.list",
+        buildTranscriptMutationParams(key, options.agentId),
+      )
+    )?.branches ?? [];
 
   const switchBranch: SessionCapability["switchBranch"] = (key, leafEntryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsBranchesSwitchResult>(
       "Session branch switch requires an active Gateway connection",
-      (client) =>
-        client.request<SessionsBranchesSwitchResult>("sessions.branches.switch", {
-          ...buildTranscriptMutationParams(key, options.agentId),
-          leafEntryId,
-        }),
+      "sessions.branches.switch",
+      { ...buildTranscriptMutationParams(key, options.agentId), leafEntryId },
       options.agentId,
     );
 

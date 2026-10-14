@@ -14,6 +14,7 @@ import {
   createMockPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
@@ -44,6 +45,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 function createLoopRelayParams(sessionFile: string, workspaceDir: string) {
   const params = createParams(sessionFile, workspaceDir);
   params.config = { tools: { loopDetection: { enabled: true } } };
+  setRuntimeConfigSnapshot(params.config);
   return params;
 }
 
@@ -60,23 +62,6 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
-  it("refuses to run when managed-only hooks would silently discard its enforcing relay", async () => {
-    const sessionFile = path.join(tempDir, "managed-hooks-only.jsonl");
-    const workspaceDir = path.join(tempDir, "managed-hooks-only-workspace");
-    const harness = createStartedThreadHarness(async (method) =>
-      method === "configRequirements/read"
-        ? { requirements: { allowManagedHooksOnly: true } }
-        : undefined,
-    );
-
-    await expect(
-      runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
-        nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-      }),
-    ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
-    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
-  });
-
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
     const sessionFile = path.join(tempDir, "managed-review-endpoint.jsonl");
     const workspaceDir = path.join(tempDir, "managed-review-endpoint-workspace");
@@ -425,7 +410,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
             tool_input: { command: "python3 -c 'print(\"x\")'" },
           },
         }),
-      ).resolves.toMatchObject({ exitCode: 0 });
+      ).rejects.toThrow("Codex session generation is no longer current");
 
       firstHarness.close();
       const secondHarness = sameExecutionSession

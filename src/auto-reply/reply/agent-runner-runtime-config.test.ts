@@ -5,7 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
 function makeRun(
@@ -48,7 +48,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("buildEmbeddedRunBaseParams runtime config", () => {
+describe("buildEmbeddedRunExecutionParams runtime config", () => {
   it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
     const staleSnapshot: OpenClawConfig = {
       models: {
@@ -78,12 +78,13 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     };
     setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
 
-    const resolved = await buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run: makeRun(resolvedRunConfig),
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: {},
+      sessionCtx: {},
+      hasRepliedRef: undefined,
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);
@@ -93,26 +94,35 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     const run = makeRun({});
     run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
 
-    const resolved = await buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: {},
+      sessionCtx: {},
+      hasRepliedRef: undefined,
     });
 
     expect(resolved.toolBindings).toEqual(run.toolBindings);
   });
 
-  it("keeps a current-turn default reset explicit for hook precedence", async () => {
-    const resolved = await buildEmbeddedRunBaseParams({
-      run: makeRun({}, "default"),
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
-      authProfile: {},
-    });
+  it.each([
+    { thinkLevelOverride: undefined, thinkLevelExplicit: false },
+    { thinkLevelOverride: "high" as const, thinkLevelExplicit: true },
+    { thinkLevelOverride: "default" as const, thinkLevelExplicit: true },
+  ])(
+    "carries current-turn thinking authority: $thinkLevelOverride",
+    async ({ thinkLevelOverride, thinkLevelExplicit }) => {
+      const resolved = await buildEmbeddedRunExecutionParams({
+        run: makeRun({}, thinkLevelOverride),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        runId: "run-1",
+        sessionCtx: {},
+        hasRepliedRef: undefined,
+      });
 
-    expect(resolved).toMatchObject({ thinkLevel: "medium", thinkLevelExplicit: true });
-  });
+      expect(resolved).toMatchObject({ thinkLevel: "medium", thinkLevelExplicit });
+    },
+  );
 });

@@ -238,7 +238,7 @@ export type ResponseResource = {
   status: "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
   model: string;
   output: OutputItem[];
-  usage: Usage;
+  usage?: Usage;
   error?: { code: string; message: string } | undefined;
   // Provider content filters are failures, not incomplete output.
   incomplete_details?: { reason: "max_output_tokens" } | undefined;

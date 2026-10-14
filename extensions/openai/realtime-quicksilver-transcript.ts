@@ -96,10 +96,7 @@ export class OpenAIQuicksilverTranscript {
     this.partialRole = undefined;
   }
 
-  consume(): {
-    context: RealtimeVoiceAgentConsultTranscriptEntry[];
-    publication: RealtimeVoiceAgentConsultTranscriptEntry[];
-  } {
+  consume() {
     const snapshot = { context: this.entries, publication: this.consumePublication() };
     this.clear();
     return snapshot;

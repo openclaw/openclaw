@@ -20,6 +20,20 @@ function createFactory() {
   });
 }
 
+it("leaves explicit homes cold until a catalog request admits them", async () => {
+  commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
+  const factory = createFactory();
+  await factory.start();
+  expect(factory.hasActiveWork()).toBe(false);
+  expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+
+  const source = (await factory.homesForAgent("main"))[0]!;
+  await factory.forRequest("main", source).initialize();
+  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+  await factory.stop();
+  expect(factory.hasActiveWork()).toBe(false);
+});
+
 it("retires the resident refresh loop when its catalog owner stops", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });

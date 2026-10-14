@@ -2,7 +2,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import {
   buildAuthChoiceGroups,
@@ -19,17 +18,11 @@ const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
 type KeepCurrentAuthChoice = typeof KEEP_CURRENT_AUTH_CHOICE;
 type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
 type AuthChoiceOrBack = PromptAuthChoiceResult | typeof BACK_VALUE;
-type PromptAuthChoiceGroupedParams = {
+type PromptAuthChoiceGroupedParams = Parameters<typeof buildAuthChoiceGroups>[0] & {
   prompter: WizardPrompter;
-  includeSkip: boolean;
-  assistantVisibleOnly?: boolean;
   allowedChoices?: ReadonlySet<string>;
   additionalGroups?: readonly AuthChoiceGroup[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   allowKeepCurrentProvider?: boolean;
-  detectedProviderIds?: ReadonlySet<string>;
 };
 
 export function isKeepCurrentAuthChoice(value: unknown): value is KeepCurrentAuthChoice {
@@ -93,7 +86,6 @@ export async function promptAuthChoiceGrouped(
     (group) => group.options.length > 0,
   );
   const availableGroups = [...availableBuiltInGroups, ...additionalGroups];
-  const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
   const isDetectedGroup = (group: AuthChoiceGroup) =>
     [...(params.detectedProviderIds ?? [])].some((provider) =>
       groupMatchesProvider(group, provider),
@@ -174,7 +166,7 @@ export async function promptAuthChoiceGrouped(
       showingMore = true;
       continue;
     }
-    const group = groupById.get(selection);
+    const group = availableGroups.findLast((candidate) => candidate.value === selection);
     if (!group || group.options.length === 0) {
       if (!showingMore) {
         await params.prompter.note(

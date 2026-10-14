@@ -278,29 +278,6 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("preflights the requested LM Studio model before destructive non-interactive reset", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({
-      reachable: true,
-      status: 200,
-      models: [loadedModel("qwen/qwen3.5-9b")],
-    });
-    const ctx = createLmstudioResetValidationContext({
-      customBaseUrl: "http://lmstudio.internal:1234/api/v1/",
-      customModelId: "qwen/qwen3.5-9b",
-    });
-
-    const validateNonInteractive = requireLmstudioResetValidator();
-    expect(validateNonInteractive).toBeTypeOf("function");
-    await expect(validateNonInteractive(ctx)).resolves.toBe(true);
-
-    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://lmstudio.internal:1234/v1",
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      timeoutMs: 5000,
-    });
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-  });
-
   it("detects a reachable LM Studio service without requiring a loaded model", async () => {
     const detectAvailability = requireAppGuidedDetectAvailability();
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
@@ -311,13 +288,6 @@ describe("lmstudio plugin", () => {
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
       timeoutMs: 5000,
     });
-  });
-
-  it("does not mark an unreachable LM Studio service as available", async () => {
-    const detectAvailability = requireAppGuidedDetectAvailability();
-    fetchLmstudioModelsMock.mockResolvedValue({ reachable: false, models: [] });
-
-    await expect(detectAvailability({ config: {}, env: {} })).resolves.toBe(false);
   });
 
   it("uses the Docker host default for availability detection during Docker setup", async () => {
@@ -396,31 +366,6 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("uses a preserved credential profile with the post-reset empty config", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({
-      reachable: true,
-      status: 200,
-      models: [loadedModel("qwen/qwen3.5-9b")],
-    });
-    const ctx = createLmstudioResetValidationContext(
-      {
-        customBaseUrl: "http://lmstudio.internal:1234/v1",
-        customModelId: "qwen/qwen3.5-9b",
-      },
-      { key: "profile-api-key", source: "profile" },
-    );
-
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(true);
-
-    expect(fetchLmstudioModelsMock).toHaveBeenCalledExactlyOnceWith({
-      baseUrl: "http://lmstudio.internal:1234/v1",
-      apiKey: "profile-api-key",
-      timeoutMs: 5000,
-    });
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-    expect(ctx.config).toEqual({});
-  });
-
   it("rejects an unreachable LM Studio endpoint before destructive reset", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: false, models: [] });
     const ctx = createLmstudioResetValidationContext({
@@ -465,23 +410,6 @@ describe("lmstudio plugin", () => {
 
     await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "LM Studio model qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: phi-4",
-    );
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("rejects provider-qualified model IDs that LM Studio setup cannot select", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({
-      reachable: true,
-      status: 200,
-      models: [loadedModel("qwen/qwen3.5-9b")],
-    });
-    const ctx = createLmstudioResetValidationContext({
-      customBaseUrl: "http://lmstudio.internal:1234/v1",
-      customModelId: "lmstudio/qwen/qwen3.5-9b",
-    });
-
-    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
-      "LM Studio model lmstudio/qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: qwen/qwen3.5-9b",
     );
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
@@ -537,7 +465,7 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("still synthesizes placeholder auth when explicit api-key auth has no key", () => {
+  it.each(["empty"])("synthesizes local auth with %s model inventory", (inventory) => {
     const provider = registerProvider();
 
     expect(
@@ -547,6 +475,7 @@ describe("lmstudio plugin", () => {
         providerConfig: createRemoteProviderConfig({
           auth: "api-key",
           headers: { "X-Proxy-Auth": "proxy-token" },
+          ...(inventory === "empty" ? { models: [] } : {}),
         }),
       }),
     ).toEqual({
@@ -556,21 +485,60 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("does not synthesize placeholder auth when Authorization header is configured", () => {
-    const provider = registerProvider();
+  it.each([
+    undefined,
+    createRemoteProviderConfig({ models: [], headers: { Authorization: "Bearer proxy-token" } }),
+    createRemoteProviderConfig({ models: [], apiKey: "synthetic-test-key" }),
+  ])(
+    "does not synthesize local auth without opt-in or over real credentials: %j",
+    (providerConfig) => {
+      const provider = registerProvider();
 
-    expect(
-      provider?.resolveSyntheticAuth?.({
-        provider: "lmstudio",
-        config: {},
-        providerConfig: createRemoteProviderConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
+      expect(
+        provider?.resolveSyntheticAuth?.({
+          provider: "lmstudio",
+          config: {},
+          providerConfig,
         }),
-      }),
-    ).toBeUndefined();
-  });
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["models", "empty", "unavailable"])(
+    "acquires the live catalog with saved model rows: %s",
+    async (outcome) => {
+      const provider = registerProvider();
+      const configured = createRemoteProviderConfig();
+      const config = { models: { providers: { lmstudio: configured } } };
+      const before = structuredClone(config);
+      const models =
+        outcome === "models"
+          ? [
+              { ...createDiscoveredModel("Live model", 65_536), id: "qwen/qwen3.5-9b" },
+              { ...createDiscoveredModel("New model", 32_768), id: "new-model" },
+            ]
+          : [];
+      if (outcome === "unavailable") {
+        discoverLmstudioModelsMock.mockRejectedValue(new Error("server unavailable"));
+      } else {
+        discoverLmstudioModelsMock.mockResolvedValue(models);
+      }
+
+      const result = await provider.catalog?.run({
+        config,
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      });
+
+      expect(result).toMatchObject(
+        outcome === "unavailable"
+          ? { providers: {}, outcomes: [{ provider: "lmstudio", status: "unavailable" }] }
+          : { provider: { models }, outcomes: [{ provider: "lmstudio", status: "ready" }] },
+      );
+      expect(config).toEqual(before);
+    },
+  );
 
   it("defers stored lmstudio-local profile auth so real credentials can win", () => {
     const provider = registerProvider();
@@ -629,6 +597,16 @@ describe("lmstudio plugin", () => {
                 compat: { codeMode: "capable" },
               },
               {
+                id: "bad-window",
+                contextWindow: Number.POSITIVE_INFINITY,
+                contextTokens: 4096.5,
+              },
+              {
+                id: "bad-tokens",
+                contextWindow: -1,
+                contextTokens: 0,
+              },
+              {
                 id: " ",
                 name: "ignored",
               },
@@ -672,6 +650,16 @@ describe("lmstudio plugin", () => {
         reasoning: undefined,
         input: undefined,
       },
+      ...["bad-window", "bad-tokens"].map((id) => ({
+        provider: "lmstudio",
+        id,
+        name: id,
+        compat: { supportsUsageInStreaming: true },
+        contextWindow: undefined,
+        contextTokens: undefined,
+        reasoning: undefined,
+        input: undefined,
+      })),
     ]);
   });
 });

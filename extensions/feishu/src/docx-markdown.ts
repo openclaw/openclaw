@@ -20,15 +20,8 @@ const MAX_BREAK_PROBES = 32;
 const STABLE_LINE_CONTAINER_TYPES = new Set(["list", "blockquote", "code"]);
 
 function resolveRemoteImageUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value ?? "");
+  return url?.protocol === "http:" || url?.protocol === "https:" ? value : undefined;
 }
 
 function collectMarkdownImages(root: FeishuMarkdownNode): DocxMarkdownImage[] {
@@ -70,28 +63,15 @@ function splitSourceAtOffsets(source: string, offsets: number[]): string[] {
   return chunks;
 }
 
-function headingOffsets(source: string, root: FeishuMarkdownNode): number[] {
+function blockStartOffsets(
+  root: FeishuMarkdownNode,
+  include: (node: FeishuMarkdownNode, offset: number) => boolean = () => true,
+): number[] {
   const offsets: number[] = [];
   for (const node of root.children ?? []) {
-    if (node.type !== "heading" || node.depth === undefined || node.depth > 2) {
-      continue;
-    }
     const offset = node.position?.start.offset;
-    // Preserve the existing ATX-only chunking contract; setext headings were
-    // never request boundaries and may depend on nearby reference definitions.
-    if (offset !== undefined && source[offset] === "#") {
+    if (offset !== undefined && include(node, offset)) {
       offsets.push(offset);
-    }
-  }
-  return offsets;
-}
-
-function blockBreakOffsets(root: FeishuMarkdownNode): number[] {
-  const offsets: number[] = [];
-  for (const block of root.children ?? []) {
-    const blockStart = block.position?.start.offset;
-    if (blockStart !== undefined && blockStart > 0) {
-      offsets.push(blockStart);
     }
   }
   return offsets;
@@ -139,20 +119,13 @@ function nearestOffset(offsets: readonly number[], target: number, sourceLength:
     .toSorted((left, right) => Math.abs(left - target) - Math.abs(right - target) || left - right);
 }
 
-function isStableParagraphBreak(source: string, offset: number): boolean {
-  const before = parseFeishuMarkdown(source.slice(0, offset)).children?.at(-1);
-  const after = parseFeishuMarkdown(source.slice(offset)).children?.[0];
-  return before?.type === "paragraph" && after?.type === "paragraph";
-}
-
-function isStableContainerBreak(source: string, offset: number, containerType: string): boolean {
+function isStableBreak(source: string, offset: number, blockType: string): boolean {
   const before = parseFeishuMarkdown(source.slice(0, offset)).children;
   const after = parseFeishuMarkdown(source.slice(offset)).children;
   return (
-    before?.length === 1 &&
-    after?.length === 1 &&
-    before[0]?.type === containerType &&
-    after[0]?.type === containerType
+    (blockType === "paragraph" || (before?.length === 1 && after?.length === 1)) &&
+    before?.at(-1)?.type === blockType &&
+    after?.[0]?.type === blockType
   );
 }
 
@@ -189,17 +162,7 @@ function splitTableAtRow(
 }
 
 function isFencedCodeSource(source: string): boolean {
-  const firstLineEnd = source.indexOf("\n");
-  const firstLine = source.slice(0, firstLineEnd === -1 ? source.length : firstLineEnd);
-  let indent = 0;
-  while (indent < firstLine.length && firstLine[indent] === " ") {
-    indent += 1;
-  }
-  if (indent > 3) {
-    return false;
-  }
-  const marker = firstLine.slice(indent);
-  return marker.startsWith("```") || marker.startsWith("~~~");
+  return /^ {0,3}(?:`{3}|~{3})/.test(source);
 }
 
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {
@@ -212,10 +175,19 @@ export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {
 
 export function createDocxMarkdownPlan(markdown: string): DocxMarkdownPlan {
   const root = parseFeishuMarkdown(markdown);
+  // Only ATX headings are request boundaries; setext headings can depend on nearby definitions.
+  const headingOffsets = blockStartOffsets(
+    root,
+    (node, offset) =>
+      node.type === "heading" &&
+      node.depth !== undefined &&
+      node.depth <= 2 &&
+      markdown[offset] === "#",
+  );
   return {
     // Reparse split chunks so references cannot cross independent request boundaries.
     // The unchanged whole input can reuse its already parsed tree.
-    chunks: splitSourceAtOffsets(markdown, headingOffsets(markdown, root)).map((chunk) =>
+    chunks: splitSourceAtOffsets(markdown, headingOffsets).map((chunk) =>
       chunk === markdown
         ? { markdown, images: collectMarkdownImages(root) }
         : createDocxMarkdownChunk(chunk),
@@ -230,7 +202,7 @@ export function splitDocxMarkdownBySize(markdown: string, maxChars: number): str
 
   const root = parseFeishuMarkdown(markdown);
   const target = Math.min(markdown.length - 1, Math.max(1, maxChars));
-  const splitOffset = nearestOffset(blockBreakOffsets(root), target, markdown.length)[0];
+  const splitOffset = nearestOffset(blockStartOffsets(root), target, markdown.length)[0];
   if (splitOffset !== undefined) {
     return [markdown.slice(0, splitOffset), markdown.slice(splitOffset)];
   }
@@ -244,7 +216,7 @@ export function splitDocxMarkdownBySize(markdown: string, maxChars: number): str
   )
     // Keep reparsing bounded for hostile, whitespace-heavy input.
     .slice(0, MAX_BREAK_PROBES)
-    .find((offset) => isStableParagraphBreak(markdown, offset));
+    .find((offset) => isStableBreak(markdown, offset, "paragraph"));
   if (paragraphOffset !== undefined) {
     return [markdown.slice(0, paragraphOffset), markdown.slice(paragraphOffset)];
   }
@@ -267,7 +239,7 @@ export function splitDocxMarkdownBySize(markdown: string, maxChars: number): str
   if (containerType && STABLE_LINE_CONTAINER_TYPES.has(containerType)) {
     const containerOffset = nearestOffset(lineBreakOffsets(markdown), target, markdown.length)
       .slice(0, MAX_BREAK_PROBES)
-      .find((offset) => isStableContainerBreak(markdown, offset, containerType));
+      .find((offset) => isStableBreak(markdown, offset, containerType));
     if (containerOffset !== undefined) {
       return [markdown.slice(0, containerOffset), markdown.slice(containerOffset)];
     }

@@ -1,9 +1,34 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDispatchWrapperTrustPlan } from "../infra/dispatch-wrapper-resolution.js";
 import type { ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { buildExecAutoReviewInputForShellCommand } from "../plugin-sdk/agent-harness-exec-review-runtime.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import * as completionRuntime from "./simple-completion-runtime.js";
+
+type ReviewerFixtures = Pick<
+  typeof completionRuntime,
+  "acquireSimpleCompletionModelForAgent" | "completeWithPreparedSimpleCompletionModel"
+>;
+const reviewerFixtures = new WeakMap<object, ReviewerFixtures>();
+
+function reviewerFixture(cfg: object | undefined): ReviewerFixtures {
+  const fixture = cfg && reviewerFixtures.get(cfg);
+  if (!fixture) {
+    throw new Error("missing configured stress reviewer fixture");
+  }
+  return fixture;
+}
+
+beforeEach(() => {
+  vi.spyOn(completionRuntime, "acquireSimpleCompletionModelForAgent").mockImplementation((params) =>
+    reviewerFixture(params.cfg).acquireSimpleCompletionModelForAgent(params),
+  );
+  vi.spyOn(completionRuntime, "completeWithPreparedSimpleCompletionModel").mockImplementation(
+    (params) => reviewerFixture(params.cfg).completeWithPreparedSimpleCompletionModel(params),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 const baselineInput: ExecAutoReviewInput = {
   command: "git status",
@@ -42,16 +67,17 @@ function createStressReviewer(params: {
     [Symbol.asyncDispose]: async () => {},
   }));
   const complete = vi.fn(params.complete);
+  const cfg = {};
+  reviewerFixtures.set(cfg, {
+    acquireSimpleCompletionModelForAgent:
+      prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+    completeWithPreparedSimpleCompletionModel:
+      complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+  });
   const reviewer = createModelExecAutoReviewer({
-    cfg: {},
+    cfg,
     signal: params.signal,
     ...(params.timeoutMs === undefined ? {} : { reviewer: { timeoutMs: params.timeoutMs } }),
-    deps: {
-      acquireSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-    },
   });
   return { reviewer, prepare, complete };
 }
@@ -538,15 +564,14 @@ describe("exec auto-review concurrency stress", () => {
         }
         return modelResponse("allow", "low");
       });
-      const reviewer = createModelExecAutoReviewer({
-        cfg: {},
-        deps: {
-          acquireSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-          completeWithPreparedSimpleCompletionModel:
-            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-        },
+      const cfg = {};
+      reviewerFixtures.set(cfg, {
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
       });
+      const reviewer = createModelExecAutoReviewer({ cfg });
       return { reviewer, prepare, complete };
     });
 

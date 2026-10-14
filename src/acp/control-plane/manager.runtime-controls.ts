@@ -193,7 +193,7 @@ export async function applyManagerRuntimeControls(params: {
   });
   assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
-  const runtimeMode = normalizeText(options.runtimeMode);
+  const runtimeMode = options.runtimeMode;
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
   const thinkingConfigKey = options.thinking
     ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)

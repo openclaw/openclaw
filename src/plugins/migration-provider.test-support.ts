@@ -165,7 +165,7 @@ module.exports = {
     config: {
       agents: {
         defaults: { workspace: path.join(root, "workspace") },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       plugins: {
         allow: [id],

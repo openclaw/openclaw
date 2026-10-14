@@ -16,15 +16,7 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 describe("Talk catalog provider discovery", () => {
   it("includes configured realtime candidates missing from the active registry", async () => {
     const { cfg, env } = createVoiceProviderFixture();
-    cfg.plugins = {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        "voice-call": {
-          config: { realtime: { providers: { "configured-voice": { ready: true } } } },
-        },
-      },
-    };
+    cfg.talk = { realtime: { providers: { "configured-voice": { ready: true } } } };
     await withEnvAsync(env, async () => {
       const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
       const result = await callGatewayHandler(
@@ -50,9 +42,13 @@ describe("Talk catalog provider discovery", () => {
           },
         },
       });
-      expect(listRealtimeVoiceProviders(cfg)).toEqual(
-        registry.realtimeVoiceProviders.map((entry) => entry.provider),
-      );
+      expect(listRealtimeVoiceProviders(cfg).map((provider) => provider.id)).toEqual([
+        "active-voice",
+        "configured-voice",
+      ]);
+      expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
+        "active-voice",
+      ]);
     });
   });
 });

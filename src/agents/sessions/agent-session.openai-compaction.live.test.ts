@@ -8,12 +8,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  disposeOpenClawAgentDatabaseByPath,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
+import { useLiveTestRuntimeConfig } from "../live-test-helpers.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
@@ -78,9 +77,6 @@ function createResourceLoader(): ResourceLoader {
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -167,13 +163,12 @@ async function createLiveSession() {
   });
   const contextChunk = buildContextChunk(STRESS_PROFILE.chunkChars);
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "medium",
-    noTools: "all",
+    tools: [],
     resourceLoader: createResourceLoader(),
-    authStorage,
     modelRegistry,
     sessionManager,
     settingsManager,
@@ -265,6 +260,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         process.stderr.write(`[openai-checkpoint-live] stage=${stage} phase=started\n`);
         const runId = randomUUID();
         const runConfig = structuredClone(config);
+        using _ = useLiveTestRuntimeConfig(runConfig);
         const admission = prepareSystemAgentRunAdmission(
           runConfig,
           runId,
@@ -309,8 +305,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         }
       };
       const reopen = async () => {
-        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
-        disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
         return SessionManager.open(sessionTarget, workspaceDir);
       };
       try {
@@ -383,8 +378,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           `[openai-checkpoint-live] budget=${modelDefinition.contextTokens} compactions=${checkpointCount} replayTokens=${replayUsage.totalTokens} sqliteReplay=passed toolMarker=preserved\n`,
         );
       } finally {
-        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
-        disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
       }
     },
     10 * 60 * 1000,

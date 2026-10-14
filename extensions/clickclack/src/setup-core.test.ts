@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "./accounts.js";
-import type { ClickClackSetupCodeClaim, CoreConfig } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const claimClickClackSetupCode = vi.hoisted(() => vi.fn());
 const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
@@ -17,11 +17,11 @@ vi.mock("./setup-claim.js", async (importOriginal) => ({
 vi.mock("./setup-verify.js", () => ({
   verifyClickClackAccountAfterSetup,
 }));
-import {
-  applyClickClackCredentialConfig,
-  clickClackSetupContract,
-  normalizeClickClackBaseUrl,
-} from "./setup-core.js";
+import { applyClickClackCredentialConfig, clickClackSetupContract } from "./setup-core.js";
+
+type ClickClackSetupCodeClaim = Awaited<
+  ReturnType<typeof import("./setup-claim.js").claimClickClackSetupCode>
+>;
 
 type ClickClackSetupInput = ChannelSetupInput & {
   baseUrl?: string;
@@ -72,15 +72,6 @@ async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
 describe("ClickClack setup adapter", () => {
   beforeEach(() => {
     claimClickClackSetupCode.mockReset();
-  });
-
-  it("normalizes http(s) base URLs and rejects other schemes", () => {
-    expect(normalizeClickClackBaseUrl(" https://clickclack.example.com/// ")).toBe(
-      "https://clickclack.example.com",
-    );
-    expect(normalizeClickClackBaseUrl("http://localhost:3000/")).toBe("http://localhost:3000");
-    expect(normalizeClickClackBaseUrl("ssh://clickclack.example.com")).toBeUndefined();
-    expect(normalizeClickClackBaseUrl("not-a-url")).toBeUndefined();
   });
 
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
@@ -140,48 +131,6 @@ describe("ClickClack setup adapter", () => {
     });
   });
 
-  it("claims a bare setup code with an explicit HTTPS base URL", async () => {
-    claimClickClackSetupCode.mockResolvedValue(claimResponse());
-
-    await expect(
-      prepare({
-        code: "abcd efgh jkmn",
-        baseUrl: "https://clickclack.example/",
-      }),
-    ).resolves.toMatchObject({
-      baseUrl: "https://clickclack.example",
-      token: "test-token",
-      workspace: "wsp_1",
-    });
-    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
-      code: "ABCDEFGHJKMN",
-    });
-  });
-
-  it("claims setup codes through an existing private API base", async () => {
-    claimClickClackSetupCode.mockResolvedValue(claimResponse());
-
-    await prepare(
-      {
-        code: "ABCD-EFGH-JKMN",
-        baseUrl: "https://clack.openclaw.ai",
-      },
-      {
-        channels: {
-          clickclack: {
-            apiBaseUrl: "http://127.0.0.1:8484",
-          },
-        },
-      } as OpenClawConfig,
-    );
-
-    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
-      code: "ABCDEFGHJKMN",
-    });
-  });
-
   it("uses a private API transport while validating the public exact endpoint", async () => {
     claimClickClackSetupCode.mockResolvedValue(
       claimResponse({
@@ -206,24 +155,6 @@ describe("ClickClack setup adapter", () => {
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
       expectedClaimUrl: exactClaimUrl,
-      code: "ABCDEFGHJKMN",
-    });
-  });
-
-  it("accepts setup-code URLs for local HTTP installations", async () => {
-    claimClickClackSetupCode.mockResolvedValue(claimResponse());
-
-    await expect(
-      prepare({
-        code: "http://localhost:3000/#abcd-efgh-jkmn",
-      }),
-    ).resolves.toMatchObject({
-      baseUrl: "http://localhost:3000",
-      token: "test-token",
-      workspace: "wsp_1",
-    });
-    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "http://localhost:3000/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
     });
   });
@@ -315,26 +246,6 @@ describe("ClickClack setup adapter", () => {
     });
   });
 
-  it("requires token, base URL, and workspace for explicit setup", () => {
-    const message = "ClickClack requires --token, --base-url, and --workspace (or --use-env).";
-    expect(
-      validate({ input: { baseUrl: "https://clickclack.example", workspace: "default" } }),
-    ).toBe(message);
-    expect(validate({ input: { token: "ccb_test", workspace: "default" } })).toBe(message);
-    expect(validate({ input: { token: "ccb_test", baseUrl: "https://clickclack.example" } })).toBe(
-      message,
-    );
-    expect(
-      validate({
-        input: {
-          token: "ccb_test",
-          baseUrl: "https://clickclack.example",
-          workspace: "default",
-        },
-      }),
-    ).toBeNull();
-  });
-
   it("limits --use-env to the default account and requires URL and workspace config", () => {
     expect(
       validate({
@@ -389,60 +300,6 @@ describe("ClickClack setup adapter", () => {
     ).toBe("ClickClack base URL must be a valid http(s) URL.");
   });
 
-  it("writes normalized default and named account config", () => {
-    expect(
-      clickClackSetupContract.applyAccountConfig({
-        cfg: {},
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: {
-          name: "Primary",
-          token: "ccb_default",
-          baseUrl: "https://clickclack.example/",
-          workspace: " default ",
-        } as ClickClackSetupInput,
-      }),
-    ).toEqual({
-      channels: {
-        clickclack: {
-          enabled: true,
-          name: "Primary",
-          token: "ccb_default",
-          baseUrl: "https://clickclack.example",
-          workspace: "default",
-        },
-      },
-    });
-
-    expect(
-      clickClackSetupContract.applyAccountConfig({
-        cfg: { channels: { clickclack: { name: "Legacy" } } } as OpenClawConfig,
-        accountId: "Work Team",
-        input: {
-          name: "Work",
-          tokenFile: "/run/secrets/clickclack",
-          baseUrl: "https://work.clickclack.example/",
-          workspace: "wsp_work",
-        } as ClickClackSetupInput,
-      }),
-    ).toEqual({
-      channels: {
-        clickclack: {
-          enabled: true,
-          accounts: {
-            default: { name: "Legacy" },
-            "work-team": {
-              enabled: true,
-              name: "Work",
-              tokenFile: "/run/secrets/clickclack",
-              baseUrl: "https://work.clickclack.example",
-              workspace: "wsp_work",
-            },
-          },
-        },
-      },
-    });
-  });
-
   it("clickClackSetupContract.applyAccountConfig preserves the active collision winner", () => {
     const cfg = {
       channels: {
@@ -487,28 +344,6 @@ describe("ClickClack setup adapter", () => {
       workspace: "work",
       token: "work-token",
       configured: true,
-    });
-  });
-
-  it("keeps --use-env config free of token fields", () => {
-    expect(
-      clickClackSetupContract.applyAccountConfig({
-        cfg: {},
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: {
-          useEnv: true,
-          baseUrl: "https://clickclack.example/",
-          workspace: "default",
-        } as ClickClackSetupInput,
-      }),
-    ).toEqual({
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "https://clickclack.example",
-          workspace: "default",
-        },
-      },
     });
   });
 

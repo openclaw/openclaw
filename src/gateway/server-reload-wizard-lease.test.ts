@@ -2,7 +2,10 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -56,11 +59,12 @@ vi.mock("../agents/context.js", () => ({
 }));
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: vi.fn(),
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: vi.fn(() => Symbol("model-replacement")),
   rejectPendingPreparedModelRuntimeReplacement: vi.fn(),
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
 }));
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
@@ -103,6 +107,7 @@ async function createReloadFixture(
     gateway: { reload: {} },
     channels: { whatsapp: { enabled: true, selfChatMode: false } },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(initialConfig);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -209,7 +214,12 @@ describe("channel reload with a retained wizard waiting for the lifecycle lease"
       const releasePlugin = createDeferred();
       const reloadPlugins = vi.fn<ManagedGatewayConfigReloaderParams["reloadPlugins"]>(
         async (params) => {
-          params.prepareConfigEffects({ pluginIds: new Set(["fixture"]), channels: new Set() });
+          params
+            .prepareConfigEffects({
+              pluginIds: new Set(["fixture"]),
+              channels: new Set(),
+            })
+            .retire();
           await params.commitRuntime();
           pluginCommitted.resolve();
           await releasePlugin.promise;

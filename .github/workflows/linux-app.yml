@@ -4,8 +4,13 @@ on:
   pull_request:
     paths:
       - "apps/linux/**"
+      - "scripts/lib/openclaw-bun.json"
+      - "scripts/stage-openclaw-bun.sh"
+      - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
+      - "!apps/linux/README.md"
+      - "!apps/linux/omarchy/README.md"
   workflow_dispatch:
 
 concurrency:
@@ -23,7 +28,8 @@ jobs:
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Source runtime staging includes the canonical package/declaration build.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,6 +67,7 @@ jobs:
             mesa-utils \
             openbox \
             patchelf \
+            unzip \
             pciutils \
             procps \
             psmisc \
@@ -93,8 +100,13 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Test native dashboard authentication bridge
-        run: node --test apps/linux/scripts/test-native-control-auth.mjs
+      - name: Test native dashboard authentication and runtime boundaries
+        run: |
+          node --test \
+            apps/linux/scripts/test-native-control-auth.mjs \
+            apps/linux/scripts/test-runtime-boundary.mjs \
+            apps/linux/scripts/test-stage-runtime.mjs \
+            apps/linux/scripts/test-stage-package.mjs
 
       - name: Test packaged runtime ABI scanner
         run: |
@@ -105,6 +117,11 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s apps/linux/tests -p 'test_desktop_sharing_reports.py'
+
+      - name: Test native first-run accessibility role matching
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_first_run.py'
 
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
@@ -121,7 +138,11 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
-        run: cargo +stable build --locked
+        run: |
+          node ../scripts/stage-runtime.mjs
+          # The native fixture supplies its CLI at the same build-time boundary.
+          python3 ../tests/stage_onboarding_runtime.py target/desktop-runtime
+          cargo +stable build --locked
 
       - name: Test native inline browser
         id: inline-browser
@@ -154,6 +175,7 @@ jobs:
             --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch" \
             2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/run.log"
           mkdir -p "${RUNNER_TEMP}/linux-gateway-switch/onboarding"
+          node scripts/run-node-package-bin.mts vite build --config apps/linux/tests/fixtures/vite.onboarding.config.ts
           xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-onboarding \
@@ -364,10 +386,10 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
-    name: Test Windows power lifecycle
-    # Match the optional Windows desktop-test bundle runner.
+    name: Test Windows desktop
+    # Match the regular Windows installer build runner.
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -379,6 +401,12 @@ jobs:
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -395,6 +423,23 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
-      - name: Verify desktop sharing process ownership on Windows
+      - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop desktop_node_process::tests::job_joins_a_real_command_wrapper_and_its_descendant -- --nocapture
+        run: |
+          node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          cargo +stable test --locked --bin openclaw-desktop
+
+      - name: Build Windows installer without publishing
+        working-directory: apps/linux/src-tauri
+        env:
+          # Cold Windows declarations can exceed the package builder's 45-minute default.
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-windows-desktop
+          retention-days: 14
+          if-no-files-found: error
+          path: apps/linux/src-tauri/target/release/bundle/nsis/*.exe

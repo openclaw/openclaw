@@ -14,7 +14,7 @@ import { sleep } from "../../utils/sleep.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
@@ -87,15 +87,7 @@ export function workerWorkspaceRsyncRemoteCommand(
   prepared: PreparedWorkerSsh,
   port = prepared.port,
 ): string {
-  return workerSshRemoteCommand([
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-  ]);
+  return workerSshRemoteCommand(workerSshCommandPrefix(prepared, port));
 }
 
 type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
@@ -159,25 +151,6 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
     throw new Error("Worker workspace rsync receiver bundle hash is invalid");
   }
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
-}
-
-export function workerWorkspaceSshArgv(
-  prepared: PreparedWorkerSsh,
-  remoteArgv: readonly string[],
-  port = prepared.port,
-): string[] {
-  return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-    "--",
-    prepared.sshTarget,
-    workerSshRemoteCommand(remoteArgv),
-  ];
 }
 
 export async function resolveRemoteWorkspaceManifest(
@@ -276,14 +249,15 @@ export async function probeWorkspaceGitMode(params: {
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }
+  const commandOptions = {
+    ...params.commandOptions,
+    env: { ...params.commandOptions.env, GIT_NO_LAZY_FETCH: "1" },
+  };
   const [gitRootResult, gitBaseResult] = await Promise.all([
-    params.runTask(
-      ["git", "-C", params.localPath, "rev-parse", "--show-toplevel"],
-      params.commandOptions,
-    ),
+    params.runTask(["git", "-C", params.localPath, "rev-parse", "--show-toplevel"], commandOptions),
     params.runTask(
       ["git", "-C", params.localPath, "rev-parse", "--verify", "--quiet", "HEAD"],
-      params.commandOptions,
+      commandOptions,
     ),
   ]);
   if (!workerWorkspaceCommandSucceeded(gitRootResult)) {
@@ -304,11 +278,11 @@ export async function probeWorkspaceGitMode(params: {
 
 export async function resolveWorkerWorkspaceGitAuthor(
   request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
-  runTask: (argv: string[]) => Promise<SpawnResult>,
+  runTask: (argv: string[], options: Pick<CommandOptions, "env">) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
   const read = async (key: "name" | "email") => {
-    const result = await runTask([...git, `user.${key}`]);
+    const result = await runTask([...git, `user.${key}`], { env: { GIT_NO_LAZY_FETCH: "1" } });
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
   const [name, email] = await Promise.all([

@@ -6,6 +6,7 @@ import { listAgentEntriesWithSource, readAgentRosterProperty } from "../agents/a
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
@@ -117,7 +118,10 @@ function canPinLegacyPrimary(previous: OpenClawConfig, primary: string): boolean
   );
 }
 
-function deferSeparation(cfg: OpenClawConfig): { config: OpenClawConfig; changes: string[] } {
+function deferSeparation(cfg: OpenClawConfigWithLegacyRoster): {
+  config: OpenClawConfigWithLegacyRoster;
+  changes: string[];
+} {
   if (!hasUtilityModelSeparationMigrationMarker(cfg)) {
     return { config: cfg, changes: [] };
   }
@@ -128,16 +132,16 @@ function deferSeparation(cfg: OpenClawConfig): { config: OpenClawConfig; changes
 
 /** Preserve the previous config's implicit primary before separating utility selection. */
 export function materializeUtilityModelSeparation(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfigWithLegacyRoster,
   previousConfig: unknown = cfg,
-): { config: OpenClawConfig; changes: string[] } {
+): { config: OpenClawConfigWithLegacyRoster; changes: string[] } {
   if (!canMaterialize(cfg)) {
     return { config: cfg, changes: [] };
   }
   let config = cfg;
   const changes: string[] = [];
   if (isRecord(previousConfig) && !hasUtilityModelSeparationMigrationMarker(previousConfig)) {
-    const previous: OpenClawConfig = previousConfig;
+    const previous: OpenClawConfigWithLegacyRoster = previousConfig;
     if (!canMaterialize(previous)) {
       return { config: cfg, changes: [] };
     }

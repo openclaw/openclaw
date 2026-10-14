@@ -1,12 +1,9 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
 
-export class PollController implements ReactiveController {
+export class PollController implements SolidController {
   private timer: ReturnType<typeof globalThis.setInterval> | null = null;
   private running = false;
   private readonly handleVisibilityChange = () => {
-    if (!this.running) {
-      return;
-    }
     if (!this.isVisible()) {
       this.clearTimer();
     } else if (this.startTimer()) {
@@ -15,7 +12,7 @@ export class PollController implements ReactiveController {
   };
 
   constructor(
-    host: ReactiveControllerHost,
+    host: SolidControllerHost,
     private readonly intervalMs: number,
     private readonly tick: () => void,
     private readonly autoStart = true,
@@ -62,11 +59,8 @@ export class PollController implements ReactiveController {
     if (this.timer !== null || !this.isVisible()) {
       return false;
     }
-    this.timer = globalThis.setInterval(() => {
-      if (this.isVisible()) {
-        this.tick();
-      }
-    }, this.intervalMs);
+    // Visibility events own suspension; a tick already queued at hide may finish.
+    this.timer = globalThis.setInterval(() => this.tick(), this.intervalMs);
     return true;
   }
 

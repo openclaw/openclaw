@@ -18,6 +18,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import {
   input,
   makeChatPageHost,
@@ -30,12 +31,12 @@ import {
   buildPendingInputItems,
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
-import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
+import { listStoredChatOutboxes, loadChatComposerState } from "./composer-persistence.ts";
 import {
   admitChatSubmission,
   reduceChatSessionProjection,
@@ -80,6 +81,25 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it.each([
+    ["queued", "Agent update received · waiting for delivery."],
+    ["cancelled", "This agent update was cancelled before delivery."],
+    ["interrupted", "Delivery interrupted. This saved agent update is not scheduled to retry."],
+  ] as const)("describes a %s agent update without asking the user to resend it", (state, text) => {
+    const items = buildPendingInputItems([
+      {
+        ...input,
+        state,
+        message: {
+          role: "user",
+          content: "The mobile fixes are merged.",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      },
+    ]);
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([text]);
+  });
+
   it.each(["held", "failed", "waiting-reconnect"] as const)(
     "describes interrupted input with a %s browser owner accurately",
     (sendState) => {
@@ -169,7 +189,7 @@ describe("server-owned pending input display", () => {
   it.each(["pending", "pending-first", "consumed", "canonical", "canonical-first"])(
     "keeps a %s delivered source retired when its terminal is replayed",
     async (receipt) => {
-      const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+      const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
       const runId = "consumed-delivery";
       const canonical = {
         role: "user",
@@ -213,7 +233,7 @@ describe("server-owned pending input display", () => {
   );
 
   it("keeps a local delivery fallback when custody belongs to a replaced physical session", async () => {
-    const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+    const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     applyChatPendingInputs(host, page);
     host.currentSessionId = "replacement-session";
 
@@ -307,14 +327,14 @@ describe("server-owned pending input display", () => {
           (_, index) => `source-${String(index).padStart(2, "0")}`,
         ),
       }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     ]);
     await loadChatHistory(host);
     expect(host.chatMessages).toEqual([]);
     expect(host.request.mock.calls.findLast(([method]) => method === "chat.history")).toEqual([
       "chat.history",
       expect.objectContaining({ inputRunIds: ["source-50"] }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     ]);
   });
 
@@ -352,7 +372,7 @@ describe("server-owned pending input display", () => {
           "z-live-queue",
         ],
       }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     ]);
     expect(getChatPendingInputs(host)?.queuedInputs).toEqual([]);
   });
@@ -417,7 +437,7 @@ describe("server-owned pending input display", () => {
         expect.objectContaining({
           inputRunIds: ["consumed-source", "unrelated-source"],
         }),
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
       expect(getChatPendingInputs(host)?.page.items).toEqual([]);
       expect(host.chatRunId).toBe("aggregate-run");
@@ -836,7 +856,7 @@ describe("server-owned pending input display", () => {
         ),
       ).toBe(true);
       expect(
-        loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
+        loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
       expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);

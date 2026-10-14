@@ -183,6 +183,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${locations.local.plist}`,
+            sourcePath: locations.local.plist,
             scope: "user",
             marker: "openclaw",
           },
@@ -190,6 +191,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${locations.global.plist}`,
+            sourcePath: locations.global.plist,
             scope: "system",
             marker: "openclaw",
           },
@@ -197,6 +199,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${systemPlist}`,
+            sourcePath: systemPlist,
             scope: "system",
             marker: "openclaw",
           },
@@ -353,7 +356,13 @@ it.each([
         if (scenario.loaded === "system") {
           expect(
             inventory.renderGatewayServiceCleanupHints([
-              { platform: "darwin", label, detail: `plist: ${systemPlist}`, scope: "system" },
+              {
+                platform: "darwin",
+                label,
+                detail: `plist: ${systemPlist}`,
+                sourcePath: systemPlist,
+                scope: "system",
+              },
             ]),
           ).toContain(`sudo launchctl bootout system/${label}`);
         }
@@ -380,6 +389,7 @@ it.each([false, true])(
       scope: "user" as const,
       label: "custom-sibling.service",
       detail: "unit: /synthetic/custom-sibling.service",
+      sourcePath: "/synthetic/custom-sibling.service",
     };
     vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
       services: [sibling, sibling],

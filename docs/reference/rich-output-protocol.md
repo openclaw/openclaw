@@ -114,6 +114,21 @@ Rules:
 - Block-form inline HTML embed shortcodes do not render.
 - The web UI strips the shortcode from visible text and renders the embed inline.
 
+For a YouTube video, supply its URL directly; no HTML widget, download, or
+rehosting is needed:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+The Control UI renders a thumbnail card and loads the YouTube player when the user
+presses **Play**. This dedicated card does not require
+`gateway.controlUi.allowExternalEmbedUrls`; it does not allow arbitrary external
+pages or YouTube iframes inside `show_widget`. In strict embed mode it offers a
+watch link instead. Use regular YouTube links on other surfaces. See
+[YouTube videos](/web/control-ui/chat#youtube-videos) for supported URLs and the
+privacy behavior.
+
 ## Stored rendering shape
 
 The normalized/stored assistant content block is a structured `canvas` item:

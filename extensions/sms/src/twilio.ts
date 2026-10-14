@@ -5,6 +5,7 @@ import {
   formatErrorMessage,
   PlatformMessageNotDispatchedError,
 } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -12,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
@@ -40,12 +41,6 @@ type ParsedTwilioApiError = {
   message?: string;
 };
 
-type TwilioApiResponse = {
-  ok: boolean;
-  status: number;
-  text: string;
-};
-
 type TwilioMessagePayload = {
   sid?: string;
   to?: string;
@@ -55,32 +50,9 @@ type TwilioMessagePayload = {
 
 const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
-export type TwilioIncomingPhoneNumber = {
-  sid: string;
-  phoneNumber: string;
-  smsUrl: string;
-  smsMethod: string;
-  voiceUrl: string;
-};
-
-export type TwilioMessageLogEntry = {
-  sid: string;
-  direction: string;
-  status: string;
-  to: string;
-  from: string;
-  errorCode: string;
-  body: string;
-  dateCreated: string;
-  dateSent: string;
-};
-
-export type TwilioMessagingService = {
-  sid: string;
-  inboundRequestUrl: string;
-  inboundMethod: string;
-  useInboundWebhookOnNumber: boolean;
-};
+export type TwilioIncomingPhoneNumber = ReturnType<typeof parseTwilioIncomingPhoneNumber>;
+export type TwilioMessageLogEntry = ReturnType<typeof parseTwilioMessageLogEntry>;
+export type TwilioMessagingService = ReturnType<typeof parseTwilioMessagingService>;
 
 function firstString(value: unknown): string {
   if (Array.isArray(value)) {
@@ -116,32 +88,26 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   if (!text.trim()) {
     return {};
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      throw new Error("Twilio SMS send returned malformed JSON.");
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      sid: typeof record.sid === "string" ? record.sid : undefined,
-      to: typeof record.to === "string" ? record.to : undefined,
-      from: typeof record.from === "string" ? record.from : undefined,
-      status: typeof record.status === "string" ? record.status : undefined,
-    };
+    parsed = JSON.parse(text);
   } catch (cause) {
-    if (cause instanceof Error && cause.message === "Twilio SMS send returned malformed JSON.") {
-      throw cause;
-    }
     throw new Error("Twilio SMS send returned malformed JSON.", { cause });
   }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Twilio SMS send returned malformed JSON.");
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    sid: typeof record.sid === "string" ? record.sid : undefined,
+    to: typeof record.to === "string" ? record.to : undefined,
+    from: typeof record.from === "string" ? record.from : undefined,
+    status: typeof record.status === "string" ? record.status : undefined,
+  };
 }
 
 function requestSearch(req: IncomingMessage): string {
-  try {
-    return new URL(req.url ?? "/", "http://localhost").search;
-  } catch {
-    return "";
-  }
+  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
 }
 
 function stripUrlFragment(url: string): string {
@@ -319,24 +285,6 @@ export function respondTwiml(res: ServerResponse, statusCode: number, body = "")
   res.end(body || "<Response></Response>");
 }
 
-function twilioApiUrl(accountSid: string, path: string, query?: URLSearchParams): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const url = new URL(`${TWILIO_ACCOUNTS_URL}/${encodeURIComponent(accountSid)}${normalizedPath}`);
-  if (query) {
-    url.search = query.toString();
-  }
-  return url.toString();
-}
-
-function twilioMessagingUrl(path: string, query?: URLSearchParams): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const url = new URL(`${TWILIO_MESSAGING_URL}${normalizedPath}`);
-  if (query) {
-    url.search = query.toString();
-  }
-  return url.toString();
-}
-
 function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
@@ -373,13 +321,23 @@ function assertTwilioRequestCredentialsAvailable(account: ResolvedSmsAccount): v
 }
 
 async function requestTwilioApi(params: {
-  url: string;
+  path: string;
+  api: "accounts" | "messaging";
+  query?: URLSearchParams;
+  operation?: string;
   account: ResolvedSmsAccount;
-  allowedHostname: string;
   init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-}): Promise<TwilioApiResponse> {
+}): Promise<string> {
+  const baseUrl =
+    params.api === "accounts"
+      ? `${TWILIO_ACCOUNTS_URL}/${encodeURIComponent(params.account.accountSid)}`
+      : TWILIO_MESSAGING_URL;
+  const url = new URL(`${baseUrl}${params.path}`);
+  if (params.query) {
+    url.search = params.query.toString();
+  }
   const init = {
     ...params.init,
     headers: {
@@ -387,48 +345,56 @@ async function requestTwilioApi(params: {
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;
-  if (params.fetchImpl) {
-    assertTwilioRequestCredentialsAvailable(params.account);
-    const response = await params.fetchImpl(params.url, init);
-    return {
-      ok: response.ok,
-      status: response.status,
-      text: await readTwilioApiResponseText(response),
-    };
-  }
-
-  let requestDispatched = false;
-  const guarded = await fetchWithSsrFGuard({
-    url: params.url,
-    init,
-    beforeRequest: () => {
-      if (requestDispatched) {
-        assertSmsCredentialOwnerAvailable(params.account);
-        return;
-      }
+  let response: Response;
+  let release: (() => Promise<void>) | undefined;
+  const fetchImpl = params.fetchImpl;
+  if (fetchImpl) {
+    response = await captureEffectAuthority().initiate(() => {
       assertTwilioRequestCredentialsAvailable(params.account);
-      // A later callback means the preceding request returned a redirect response.
-      requestDispatched = true;
-    },
-    auditContext: "sms-twilio-api",
-    policy: { allowedHostnames: [params.allowedHostname] },
-    requireHttps: true,
-    timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
-  });
-  try {
-    return {
-      ok: guarded.response.ok,
-      status: guarded.response.status,
-      text: await readTwilioApiResponseText(guarded.response),
-    };
-  } finally {
-    await guarded.release();
+      return fetchImpl(url.toString(), init);
+    });
+  } else {
+    let requestDispatched = false;
+    ({ response, release } = await fetchWithSsrFGuard({
+      url: url.toString(),
+      init,
+      beforeRequest: () => {
+        if (requestDispatched) {
+          assertSmsCredentialOwnerAvailable(params.account);
+          return;
+        }
+        assertTwilioRequestCredentialsAvailable(params.account);
+        // A later callback means the preceding request returned a redirect response.
+        requestDispatched = true;
+      },
+      auditContext: "sms-twilio-api",
+      policy: {
+        allowedHostnames: [
+          params.api === "accounts" ? TWILIO_API_HOSTNAME : TWILIO_MESSAGING_HOSTNAME,
+        ],
+      },
+      requireHttps: true,
+      timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
+    }));
   }
+  let ok: boolean;
+  let status: number;
+  let text: string;
+  try {
+    ({ ok, status } = response);
+    text = await readTwilioApiResponseText(response);
+  } finally {
+    if (release) {
+      await release();
+    }
+  }
+  if (!ok) {
+    throw new TwilioSmsApiError(status, text, params.operation);
+  }
+  return text;
 }
 
-function parseTwilioIncomingPhoneNumber(
-  record: Record<string, unknown>,
-): TwilioIncomingPhoneNumber {
+function parseTwilioIncomingPhoneNumber(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     phoneNumber: firstTrimmedString(record.phone_number ?? record.phoneNumber),
@@ -438,7 +404,7 @@ function parseTwilioIncomingPhoneNumber(
   };
 }
 
-function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMessageLogEntry {
+function parseTwilioMessageLogEntry(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     direction: firstTrimmedString(record.direction),
@@ -452,7 +418,7 @@ function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMess
   };
 }
 
-function parseTwilioMessagingService(record: Record<string, unknown>): TwilioMessagingService {
+function parseTwilioMessagingService(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     inboundRequestUrl: firstTrimmedString(record.inbound_request_url ?? record.inboundRequestUrl),
@@ -468,27 +434,11 @@ function parseTwilioListPayload<T>(
   key: string,
   parseEntry: (record: Record<string, unknown>) => T,
 ): T[] {
-  if (!text.trim()) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return [];
-  }
-  const items = (parsed as Record<string, unknown>)[key];
+  const items = asNullableObjectRecord(safeParseJson<unknown>(text))?.[key];
   if (!Array.isArray(items)) {
     return [];
   }
-  return items
-    .filter((item): item is Record<string, unknown> =>
-      Boolean(item && typeof item === "object" && !Array.isArray(item)),
-    )
-    .map(parseEntry);
+  return items.filter(isRecord).map(parseEntry);
 }
 
 export async function listTwilioIncomingPhoneNumbers(params: {
@@ -501,21 +451,16 @@ export async function listTwilioIncomingPhoneNumbers(params: {
   if (params.phoneNumber) {
     query.set("PhoneNumber", params.phoneNumber);
   }
-  const response = await requestTwilioApi({
+  const text = await requestTwilioApi({
     account: params.account,
-    url: twilioApiUrl(params.account.accountSid, "/IncomingPhoneNumbers.json", query),
-    allowedHostname: TWILIO_API_HOSTNAME,
+    path: "/IncomingPhoneNumbers.json",
+    api: "accounts",
+    query,
+    operation: "phone-number lookup",
     fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
-  if (!response.ok) {
-    throw new TwilioSmsApiError(response.status, response.text, "phone-number lookup");
-  }
-  return parseTwilioListPayload(
-    response.text,
-    "incoming_phone_numbers",
-    parseTwilioIncomingPhoneNumber,
-  );
+  return parseTwilioListPayload(text, "incoming_phone_numbers", parseTwilioIncomingPhoneNumber);
 }
 
 export async function retrieveTwilioMessagingService(params: {
@@ -524,26 +469,19 @@ export async function retrieveTwilioMessagingService(params: {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TwilioMessagingService> {
-  const response = await requestTwilioApi({
+  const text = await requestTwilioApi({
     account: params.account,
-    url: twilioMessagingUrl(`/Services/${encodeURIComponent(params.serviceSid)}`),
-    allowedHostname: TWILIO_MESSAGING_HOSTNAME,
+    path: `/Services/${encodeURIComponent(params.serviceSid)}`,
+    api: "messaging",
+    operation: "messaging-service lookup",
     fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
-  if (!response.ok) {
-    throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch {
+  const parsed = safeParseJson<unknown>(text);
+  if (!isRecord(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
-  }
-  return parseTwilioMessagingService(parsed as Record<string, unknown>);
+  return parseTwilioMessagingService(parsed);
 }
 
 export async function listTwilioMessages(params: {
@@ -562,17 +500,16 @@ export async function listTwilioMessages(params: {
     query.set("From", params.from);
   }
   query.set("PageSize", String(params.pageSize ?? 5));
-  const response = await requestTwilioApi({
+  const text = await requestTwilioApi({
     account: params.account,
-    url: twilioApiUrl(params.account.accountSid, "/Messages.json", query),
-    allowedHostname: TWILIO_API_HOSTNAME,
+    path: "/Messages.json",
+    api: "accounts",
+    query,
+    operation: "message lookup",
     fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
-  if (!response.ok) {
-    throw new TwilioSmsApiError(response.status, response.text, "message lookup");
-  }
-  return parseTwilioListPayload(response.text, "messages", parseTwilioMessageLogEntry);
+  return parseTwilioListPayload(text, "messages", parseTwilioMessageLogEntry);
 }
 
 export async function sendSmsViaTwilio(params: {
@@ -625,17 +562,14 @@ export async function sendSmsViaTwilio(params: {
     body,
   } satisfies RequestInit;
   await params.onPlatformSendDispatch?.();
-  const response = await requestTwilioApi({
+  const text = await requestTwilioApi({
     account: params.account,
-    url: twilioApiUrl(params.account.accountSid, "/Messages.json"),
-    allowedHostname: TWILIO_API_HOSTNAME,
+    path: "/Messages.json",
+    api: "accounts",
     init,
     fetchImpl: params.fetchImpl,
   });
-  if (!response.ok) {
-    throw new TwilioSmsApiError(response.status, response.text);
-  }
-  const payload = parseTwilioSuccessPayload(response.text);
+  const payload = parseTwilioSuccessPayload(text);
   const sid = payload.sid?.trim();
   if (!sid) {
     throw new Error("Twilio SMS send response did not include a Message SID.");

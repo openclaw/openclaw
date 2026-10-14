@@ -2,6 +2,7 @@ import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { RouteId } from "../app-routes.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
 type RouteTransitionOptions = {
   document: Document;
@@ -37,9 +38,7 @@ function waitForChatRouteReady(document: Document) {
 
 async function navigateAndAnimate(options: RouteTransitionOptions) {
   const { document, navigate, prefersReducedMotion, router, signal, to } = options;
-  const outlet = document.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
-    "openclaw-router-outlet",
-  );
+  const outlet = document.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
   const chatReady = waitForChatRouteReady(document);
   let canceled = false;
   let animation: Animation | undefined;
@@ -73,7 +72,7 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     await Promise.race([
       (async () => {
         await navigation;
-        await outlet?.updateComplete;
+        await outlet?.settlePresentation();
         await chatReady.ready;
       })(),
       cancellation,

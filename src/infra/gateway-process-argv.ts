@@ -12,7 +12,7 @@ import {
 } from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
-import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 
 function normalizeProcArg(arg: string): string {

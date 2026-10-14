@@ -4,6 +4,7 @@ export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: b
 type ModelRequestBodyState = {
   enabled?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
+  onEncoded?: (encoded: EncodedModelRequestBody, payload: unknown) => void;
   onBytes?: (bytes: number) => void;
 };
 
@@ -15,20 +16,27 @@ export function modelRequestBodyState(
   const value =
     Reflect.get(options, REQUEST_BODY) ?? (inheritFrom && Reflect.get(inheritFrom, REQUEST_BODY));
   // SAFETY: Only this module writes the private symbol, always with ModelRequestBodyState.
-  let state = value as ModelRequestBodyState | undefined;
-  if (!state) {
-    state = {};
-  }
+  const state = (value as ModelRequestBodyState | undefined) ?? {};
   Reflect.set(options, REQUEST_BODY, state);
   return state;
 }
 
-export function serializeModelRequestBody(payload: unknown): EncodedModelRequestBody {
+export function serializeModelRequestBody(
+  payload: unknown,
+  onSerializedPayload?: (payload: unknown) => void,
+): EncodedModelRequestBody {
   const json = JSON.stringify(payload);
+  const serialized: unknown = json === undefined ? undefined : JSON.parse(json);
+  // Preserve the wire fact even when the observer changes its detached parsed value.
+  const stream =
+    typeof serialized === "object" &&
+    serialized !== null &&
+    "stream" in serialized &&
+    serialized.stream === true;
+  onSerializedPayload?.(serialized);
   return {
     body: new TextEncoder().encode(json),
-    // Preserve toJSON/getter semantics when carrying the guarded-fetch stream fact.
-    stream: json !== undefined && JSON.parse(json)?.stream === true,
+    stream,
   };
 }
 
@@ -44,6 +52,7 @@ export function prepareModelRequestBody(options: object | undefined) {
   state.enabled = true;
   return async (payload: unknown) => {
     const encoded = state.encode ? await state.encode(payload) : serializeModelRequestBody(payload);
+    state.onEncoded?.(encoded, payload);
     state.onBytes?.(encoded.body.byteLength);
     encodedBodyStreams.set(encoded.body, encoded.stream);
     return { body: encoded.body, headers: { "content-type": "application/json" } };

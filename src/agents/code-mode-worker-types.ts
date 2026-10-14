@@ -23,6 +23,7 @@ type CodeModeBridgeMethod =
   | "agentSpawn"
   | "agentWait"
   | "skillsList"
+  | "skillsSearch"
   | "skillsRead"
   | "sleep"
   | "swarmNote";
@@ -67,6 +68,14 @@ export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
   /** Only interactive, non-replay cells can hand full final JSON to the run store. */
   retainFinalValue?: boolean;
 };
+
+export type CodeModeNodeInput = (
+  | (Omit<
+      Extract<CodeModeWorkerPayload<never>, { kind: "exec" }>,
+      "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
+    > & { initialization: SharedArrayBuffer })
+  | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
+) & { progress: SharedArrayBuffer; inlineHost: boolean };
 
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }

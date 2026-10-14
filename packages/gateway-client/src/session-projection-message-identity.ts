@@ -23,10 +23,6 @@ export type SessionMessageIdentity = {
   externalSource: string | null;
 };
 
-export function readSessionProjectionString(value: unknown): string | null {
-  return normalizeNullableString(value);
-}
-
 function readPositiveSafeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
@@ -42,7 +38,7 @@ export function readSessionMessageSequence(
 
 /** Run ownership normalizes a user-turn suffix without changing its persisted send key. */
 export function normalizeSessionProjectionRunId(value: unknown): string | null {
-  const runId = readSessionProjectionString(value);
+  const runId = normalizeNullableString(value);
   return runId?.endsWith(":user") ? runId.slice(0, -":user".length) || null : runId;
 }
 
@@ -52,16 +48,16 @@ export function readSessionMessageIdentity(
   envelope?: SessionMessageEnvelope,
 ): SessionMessageIdentity | null {
   const record = readRecord(message);
-  const role = readSessionProjectionString(record?.role)?.toLowerCase();
+  const role = normalizeNullableString(record?.role)?.toLowerCase();
   if (!record || !role) {
     return null;
   }
   const metadata = readRecord(record["__openclaw"]);
-  const importedFrom = readSessionProjectionString(metadata?.importedFrom);
-  const cliSessionId = readSessionProjectionString(metadata?.cliSessionId);
-  const externalId = readSessionProjectionString(metadata?.externalId);
+  const importedFrom = normalizeNullableString(metadata?.importedFrom);
+  const cliSessionId = normalizeNullableString(metadata?.cliSessionId);
+  const externalId = normalizeNullableString(metadata?.externalId);
   const position = readRecord(metadata?.transcriptPosition);
-  const positionSource = readSessionProjectionString(position?.source);
+  const positionSource = normalizeNullableString(position?.source);
   const hasCanonicalPosition =
     positionSource !== null &&
     positionSource.length <= 128 &&
@@ -71,24 +67,24 @@ export function readSessionMessageIdentity(
   // Reader-owned placement keeps a local row native when CLI history enriches its provenance.
   const isImported = !hasCanonicalPosition && Boolean(importedFrom || cliSessionId || externalId);
   const idempotencyKey =
-    readSessionProjectionString(metadata?.idempotencyKey) ??
-    readSessionProjectionString(record.idempotencyKey) ??
-    readSessionProjectionString(envelope?.idempotencyKey) ??
-    readSessionProjectionString(envelope?.clientRunId);
+    normalizeNullableString(metadata?.idempotencyKey) ??
+    normalizeNullableString(record.idempotencyKey) ??
+    normalizeNullableString(envelope?.idempotencyKey) ??
+    normalizeNullableString(envelope?.clientRunId);
   const persistedRunId = normalizeSessionProjectionRunId(idempotencyKey);
   const envelopeRunId = normalizeSessionProjectionRunId(envelope?.runId);
   const metadataRunId = normalizeSessionProjectionRunId(metadata?.runId);
   const fallbackRunId = normalizeSessionProjectionRunId(
     readRecord(record.openclawStreamFallback)?.runId,
   );
-  const mirroredMessage = readSessionProjectionString(metadata?.mirrorOrigin) !== null;
+  const mirroredMessage = normalizeNullableString(metadata?.mirrorOrigin) !== null;
   // CLI persistence namespaces assistant send keys; the suffix is the
   // originating Gateway run identity consumed by every projection layer.
   const isCliAssistant =
-    role === "assistant" && readSessionProjectionString(record.api)?.toLowerCase() === "cli";
+    role === "assistant" && normalizeNullableString(record.api)?.toLowerCase() === "cli";
   const canonicalPersistedRunId =
     isCliAssistant && persistedRunId?.startsWith("cli-assistant:")
-      ? readSessionProjectionString(persistedRunId.slice("cli-assistant:".length))
+      ? normalizeNullableString(persistedRunId.slice("cli-assistant:".length))
       : persistedRunId;
   const runId =
     role === "assistant"
@@ -99,8 +95,7 @@ export function readSessionMessageIdentity(
       : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId);
   return {
     role,
-    id:
-      readSessionProjectionString(metadata?.id) ?? readSessionProjectionString(envelope?.messageId),
+    id: normalizeNullableString(metadata?.id) ?? normalizeNullableString(envelope?.messageId),
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
     sendId: role === "user" ? (persistedRunId ?? runId) : null,
@@ -119,18 +114,18 @@ export function readAssistantStreamSegmentIdentity(
   message: unknown,
 ): { itemId: string; runId?: string } | undefined {
   const record = readRecord(message);
-  if (readSessionProjectionString(record?.role)?.toLowerCase() !== "assistant") {
+  if (normalizeNullableString(record?.role)?.toLowerCase() !== "assistant") {
     return undefined;
   }
   const fallback = readRecord(record?.openclawStreamFallback);
-  const itemId = readSessionProjectionString(fallback?.itemId);
+  const itemId = normalizeNullableString(fallback?.itemId);
   if (!itemId) {
     return undefined;
   }
   const runId =
     readSessionMessageIdentity(message)?.runId ??
-    readSessionProjectionString(record?.runId) ??
-    readSessionProjectionString(fallback?.runId);
+    normalizeNullableString(record?.runId) ??
+    normalizeNullableString(fallback?.runId);
   return { itemId, ...(runId ? { runId } : {}) };
 }
 
@@ -153,7 +148,7 @@ export function sameAssistantPersistenceReceipt(
 /** Local turns have no durable transcript metadata beyond their own optional send key. */
 export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
   const record = readRecord(message);
-  const role = readSessionProjectionString(record?.role)?.toLowerCase();
+  const role = normalizeNullableString(record?.role)?.toLowerCase();
   if (role !== "user" && role !== "assistant") {
     return false;
   }

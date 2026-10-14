@@ -211,3 +211,28 @@ export function createParticipationTestRuntime(
   });
   return { runtime, store, execute };
 }
+
+export function createTestRealtimeEngine(
+  transport: { stop(): Promise<void> },
+  speak: ReturnType<typeof vi.fn>,
+) {
+  const health = {
+    realtimeTranscriptLines: 0,
+    recentRealtimeTranscript: [],
+    providerConnected: true,
+    realtimeReady: true,
+    audioInputActive: true,
+    audioOutputActive: false,
+    lastInputBytes: 0,
+    lastOutputBytes: 0,
+    suppressedInputBytes: 0,
+    recentTalkEvents: [],
+    bridgeClosed: false,
+  };
+  return {
+    getHealth: () => health,
+    providerId: "test",
+    speak,
+    stop: () => transport.stop(),
+  };
+}

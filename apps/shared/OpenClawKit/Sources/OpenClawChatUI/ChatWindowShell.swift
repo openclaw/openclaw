@@ -4,16 +4,27 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Window-local presentation commands shared with the app menu. Gateway/session
-/// operations remain on the chat view model owned by that same window.
+/// Window-local presentation commands and sidebar actions. Each window retains
+/// its own Gateway connection; menu views consume that admitted source.
 @MainActor
 @Observable
 public final class OpenClawChatWindowCommands {
+    var sessionMenuActions = ChatSessionSidebarActions()
     public var isCommandPalettePresented = false
     var composerFocusRequest = 0
     var findRequest = 0
 
     public init() {}
+
+    public func setSessionMenuConnection(_ connection: OpenClawSessionMenuConnection?) {
+        self.sessionMenuActions.refreshTask?.cancel()
+        self.sessionMenuActions = ChatSessionSidebarActions(connection: connection)
+        self.sessionMenuActions.refresh()
+    }
+
+    public func refreshSessionMenus() {
+        self.sessionMenuActions.refresh()
+    }
 }
 
 extension EnvironmentValues {
@@ -98,6 +109,7 @@ public struct OpenClawChatWindowShell: View {
                 query: self.$sessionQuery,
                 groups: self.$sessionGroups,
                 previews: self.sessionPreviews,
+                menuActions: self.windowCommands.sessionMenuActions,
                 additionalAttentionRequests: self.attentionRequests)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {

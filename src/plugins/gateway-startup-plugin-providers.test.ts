@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,7 +8,11 @@ import { loadGatewayPlugins } from "../gateway/server-plugins.js";
 import { collectConfiguredAgentModelProviderIds } from "./gateway-startup-plugin-providers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
-import { disposePluginRegistryInstances, resetPluginRuntimeStateForTest } from "./runtime.js";
+import {
+  disposePluginRegistryInstances,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+} from "./runtime.js";
 
 function createManifestRecord(
   plugin: Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>,
@@ -101,6 +106,61 @@ describe("selected CLI backend Gateway startup", () => {
     getPluginLoaderCacheState().clear();
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
+  });
+
+  it("services queued I/O between registrations without publishing a partial registry", async () => {
+    const root = tempDirs.make("openclaw-incremental-startup-");
+    vi.stubEnv("OPENCLAW_HOME", root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    const ids = ["first", "second"];
+    const paths = ids.map((id) => {
+      const dir = path.join(root, id);
+      mkdirSync(dir);
+      writeFileSync(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({ id, configSchema: { type: "object", additionalProperties: false } }),
+      );
+      writeFileSync(
+        path.join(dir, "index.cjs"),
+        `module.exports = { id: "${id}", register(api) {
+          api.registerService({ id: "${id}", start() {} });
+          process.emit("openclaw-test-incremental-startup", "${id}");
+        } };`,
+      );
+      return dir;
+    });
+    const events: string[] = [];
+    const previous = getActivePluginRegistry();
+    const observedRegistries: unknown[] = [];
+    const onRegistration = (id: string) => {
+      events.push(id);
+      // This event-loop turn is the behavior under test, not an elapsed-time assertion.
+      void nextTurn().then(() => {
+        events.push("io");
+        observedRegistries.push(getActivePluginRegistry());
+      });
+    };
+    process.on("openclaw-test-incremental-startup", onRegistration);
+    try {
+      const loaded = await loadGatewayPlugins({
+        cfg: { plugins: { allow: ids, load: { paths }, slots: { memory: "none" } } },
+        autoEnabledReasons: {},
+        baseMethods: [],
+        pluginIds: ids,
+        loadIntent: "startup",
+      });
+      try {
+        expect(events).toEqual(["first", "io", "second", "io"]);
+        expect(observedRegistries).toEqual([previous, previous]);
+        expect(loaded.pluginRegistry.services.map(({ service }) => service.id)).toEqual(ids);
+      } finally {
+        loaded.retireGatewayRuntimeBindings();
+        await disposePluginRegistryInstances(loaded.pluginRegistry);
+      }
+    } finally {
+      process.off("openclaw-test-incremental-startup", onRegistration);
+    }
   });
 
   it.each([
@@ -218,13 +278,12 @@ describe("selected CLI backend Gateway startup", () => {
     };
     writeFileSync(configPath, JSON.stringify(config));
 
-    const loaded = loadGatewayPlugins({
+    const loaded = await loadGatewayPlugins({
       cfg: config,
       autoEnabledReasons: {},
       workspaceDir,
       baseMethods: [],
       loadIntent: "startup",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     });
     try {
       expect(loaded.pluginRegistry.diagnostics.filter((entry) => entry.level === "error")).toEqual(

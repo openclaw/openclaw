@@ -1,7 +1,14 @@
 import { render } from "lit";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -33,10 +40,29 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
 }
 
 export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const props = createComposerProps(overrides);
   render(renderChatComposer(props), container);
   return { container, props };
+}
+
+export function createComposerContainer() {
+  const gateway = createApplicationGateway().gateway;
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  onTestFinished(() => runtimeConfig.dispose());
+  const context: Pick<ApplicationContext, "gateway" | "agentSelection" | "runtimeConfig"> = {
+    gateway,
+    runtimeConfig,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      intentRevision: 0,
+      set: () => {},
+      setScope: () => {},
+      subscribe: () => () => {},
+    },
+  };
+  // SAFETY: Disconnected composer and transcript fixtures only consume these capabilities.
+  return createApplicationContextProvider(context as ApplicationContext);
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {

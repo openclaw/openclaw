@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayDispatchStartupTrace } from "./startup-trace.js";
 
 function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
@@ -22,13 +23,48 @@ describe("CLI startup trace", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "reports successful CLI bootstrap milestones only for canaries (%s)",
-    async (canary) => {
+  it.each(["gateway", "status"])(
+    "reports foreground Gateway bootstrap before it settles, with tracing disabled (%s)",
+    async (command) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const trace = createGatewayDispatchStartupTrace(["node", "openclaw", command], "entry");
+      trace.setLineFormatter((message) => message);
+      const pending = createDeferredCore<string>();
+      const loading = trace.measure("run-main-import", () => pending.promise);
+      const messages = () => stderr.mock.calls.map(([line]) => String(line));
+      expect(messages()).toEqual(
+        command === "gateway"
+          ? [expect.stringMatching(/startup phase: entry.run-main-import starting total=\d+\.\dms/)]
+          : [],
+      );
+      pending.resolve("loaded");
+      await expect(loading).resolves.toBe("loaded");
+      expect(messages()).toHaveLength(command === "gateway" ? 2 : 0);
+      if (command === "gateway") {
+        expect(messages()[1]).toMatch(/startup phase: entry.run-main-import \d+\.\dms total=/);
+      }
+    },
+  );
+
+  it.each([
+    { gateway: false, markers: 2 },
+    { gateway: true, markers: 0 },
+    { gateway: true, markers: 1 },
+    { gateway: true, markers: 2 },
+    { gateway: true, markers: 3 },
+  ])(
+    "reports CLI milestones only to a supporting updater ($gateway, $markers)",
+    async ({ gateway, markers }) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
       const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
       const trace = createGatewayDispatchStartupTrace(
-        ["node", "openclaw", "gateway", "run", ...(canary ? ["--update-canary"] : [])],
+        [
+          "node",
+          "openclaw",
+          ...(gateway ? ["gateway", "run"] : ["agent"]),
+          ...Array.from({ length: markers }, () => "--update-canary"),
+        ],
         "cli.main",
       );
       trace.mark("argv");
@@ -43,7 +79,7 @@ describe("CLI startup trace", () => {
         }),
       ).rejects.toThrow("bootstrap failed");
       expect(stderr.mock.calls.map(([line]) => String(line))).toEqual(
-        canary
+        gateway && markers >= 2
           ? [
               "openclaw-update-canary-progress: cli.main.argv\n",
               "openclaw-update-canary-progress: cli.main.gateway-run-imports\n",

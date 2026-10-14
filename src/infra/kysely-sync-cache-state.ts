@@ -4,7 +4,13 @@
 // independent of the Kysely value graph.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type SqlStatement,
+} from "./sql-connection.js";
 
 export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteKyselyCacheState"),
@@ -49,11 +55,7 @@ export function registerNodeSqliteDisposeCallback(
 ): () => void {
   const owner: StatementCacheOwner = db;
   installStatementInvalidation(owner);
-  const callbacks = (owner[disposeCallbacksSymbol] ??= new Set());
-  callbacks.add(callback);
-  return () => {
-    callbacks.delete(callback);
-  };
+  return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
 }
 
 export function disposeNodeSqliteDependents(
@@ -172,11 +174,14 @@ function queryFitsStatementCache(sql: string, parameters: readonly SQLInputValue
 // The callback must consume the statement synchronously; active-use protection
 // ends when it returns. Only the existing database owner enables retention.
 export function executeWithCachedStatement<Result>(
-  db: DatabaseSync,
+  db: EngineConnection,
   sql: string,
   parameters: readonly SQLInputValue[],
-  execute: (statement: StatementSync) => Result,
+  execute: (statement: SqlStatement) => Result,
 ): Result {
+  if (isPostgresSqlConnection(db)) {
+    return execute(db.prepare(sql));
+  }
   const owner: StatementCacheOwner = db;
   if (
     !owner[statementCacheEnabledSymbol] ||

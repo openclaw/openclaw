@@ -3,11 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { assert, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -16,7 +16,7 @@ import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture, dirs } = installFreshUpdateFixture();
@@ -72,7 +72,7 @@ it.each([false, true])(
       ...(await prepare(opts)),
       timeoutMs: 30_000,
     }));
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
       value: { nodeRunner: process.execPath },
     });

@@ -3,22 +3,13 @@
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
-  MigrationDetection,
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
-  MigrationProviderPlugin,
   MigrationSummary,
 } from "./plugin-entry.js";
 
-export type {
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
-};
+export type { MigrationItem, MigrationPlan, MigrationProviderContext, MigrationSummary };
 
 /** Shared migration failure reason when an item lacks required paths. */
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
@@ -396,11 +387,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
 /** Redacts likely secret values while preserving SecretRef-like objects for operator context. */
 export function redactMigrationValue(value: unknown): unknown {
   return redactMigrationValueInternal(value, new WeakSet<object>());
-}
-
-/** Redacts sensitive fields from one migration item before report/output serialization. */
-export function redactMigrationItem(item: MigrationItem): MigrationItem {
-  return redactMigrationValue(item) as MigrationItem;
 }
 
 /** Redacts sensitive fields from a full migration plan before report/output serialization. */

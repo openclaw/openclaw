@@ -7,7 +7,6 @@ import type {
 } from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
-  WorkerHeartbeatParams,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -16,17 +15,12 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { workerProtocolObject } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
-const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "credential-replaced",
-  "owner-epoch-mismatch",
-]);
-
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
 export function isFencedCloseReason(
   reason: WorkerProtocolCloseReason,
 ): reason is WorkerFencedReason {
-  return FENCED_CLOSE_REASONS.has(reason);
+  return reason === "credential-replaced" || reason === "owner-epoch-mismatch";
 }
 
 export type WorkerConnectionState =
@@ -52,9 +46,6 @@ export type WorkerConnectionOptions = {
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
   createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
-  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
-  /** The connect frame was written; this does not establish admission. */
-  onAdmissionRequestSent?: () => void;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 

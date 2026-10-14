@@ -7,7 +7,12 @@ import {
   resolveServicePrefixedOrChatAllowTarget,
 } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeIMessageHandleValue } from "./normalize.js";
+import {
+  IMESSAGE_CHAT_TARGET_PREFIXES,
+  IMESSAGE_CHAT_TARGET_PREFIX_RE,
+  IMESSAGE_SERVICE_PREFIXES as SERVICE_PREFIXES,
+  normalizeIMessageHandleInput,
+} from "./normalize.js";
 import { normalizeBareIMessageChatIdentifier } from "./target-identifiers.js";
 
 export type IMessageService = "imessage" | "sms" | "auto";
@@ -17,15 +22,6 @@ export type IMessageTarget =
   | { kind: "handle"; to: string; service: IMessageService; serviceExplicit?: boolean };
 
 export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
-
-const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
-const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
-const CHAT_IDENTIFIER_PREFIXES = ["chat_identifier:", "chatidentifier:", "chatident:"];
-const SERVICE_PREFIXES: Array<{ prefix: string; service: IMessageService }> = [
-  { prefix: "imessage:", service: "imessage" },
-  { prefix: "sms:", service: "sms" },
-  { prefix: "auto:", service: "auto" },
-];
 
 function parseServicePrefixedBareChatIdentifier(params: {
   trimmed: string;
@@ -44,30 +40,7 @@ function parseServicePrefixedBareChatIdentifier(params: {
 }
 
 export function normalizeIMessageHandle(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  for (const { prefix } of SERVICE_PREFIXES) {
-    if (lowered.startsWith(prefix)) {
-      return normalizeIMessageHandle(trimmed.slice(prefix.length));
-    }
-  }
-
-  for (const [kind, prefixes] of [
-    ["chat_id", CHAT_ID_PREFIXES],
-    ["chat_guid", CHAT_GUID_PREFIXES],
-    ["chat_identifier", CHAT_IDENTIFIER_PREFIXES],
-  ] as const) {
-    for (const prefix of prefixes) {
-      if (lowered.startsWith(prefix)) {
-        return `${kind}:${trimmed.slice(prefix.length).trim()}`;
-      }
-    }
-  }
-
-  return normalizeIMessageHandleValue(trimmed) ?? trimmed.replace(/\s+/g, "");
+  return normalizeIMessageHandleInput(raw, "sender");
 }
 
 export function parseIMessageTarget(raw: string): IMessageTarget {
@@ -89,9 +62,7 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     trimmed,
     lower,
     servicePrefixes: SERVICE_PREFIXES,
-    chatIdPrefixes: CHAT_ID_PREFIXES,
-    chatGuidPrefixes: CHAT_GUID_PREFIXES,
-    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+    ...IMESSAGE_CHAT_TARGET_PREFIXES,
     parseTarget: parseIMessageTarget,
   });
   if (servicePrefixed) {
@@ -104,9 +75,7 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
   const chatTarget = parseChatTargetPrefixesOrThrow({
     trimmed,
     lower,
-    chatIdPrefixes: CHAT_ID_PREFIXES,
-    chatGuidPrefixes: CHAT_GUID_PREFIXES,
-    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+    ...IMESSAGE_CHAT_TARGET_PREFIXES,
   });
   if (chatTarget) {
     return chatTarget;
@@ -130,9 +99,7 @@ export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
     return true;
   }
   return (
-    CHAT_ID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
-    CHAT_GUID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
-    CHAT_IDENTIFIER_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+    IMESSAGE_CHAT_TARGET_PREFIX_RE.test(lower) ||
     Boolean(normalizeBareIMessageChatIdentifier(trimmed))
   );
 }
@@ -161,9 +128,7 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
     lower,
     servicePrefixes: SERVICE_PREFIXES,
     parseAllowTarget: parseIMessageAllowTarget,
-    chatIdPrefixes: CHAT_ID_PREFIXES,
-    chatGuidPrefixes: CHAT_GUID_PREFIXES,
-    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+    ...IMESSAGE_CHAT_TARGET_PREFIXES,
   });
   if (servicePrefixed) {
     return servicePrefixed;

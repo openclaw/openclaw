@@ -10,7 +10,8 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import { createTranscriptSessionId } from "../../transcripts/capture.js";
 import * as transcriptCapture from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import * as configuredStartStatus from "../../transcripts/configured-start-status.js";
@@ -199,7 +200,7 @@ describe("occupancy-driven transcript lifecycle", () => {
   it("keeps admitted history with its original agent after the room is reassigned", async () => {
     const h = harness();
     const configFor = (agentId: string): OpenClawConfig => ({
-      agents: { list: [{ id: "agent-a", default: true }, { id: "agent-b" }] },
+      agents: { entries: { "agent-a": {}, "agent-b": {} } },
       bindings: [{ agentId, match: { channel: "room", peer: { kind: "channel", id: "voice" } } }],
     });
     await h.run(
@@ -207,6 +208,10 @@ describe("occupancy-driven transcript lifecycle", () => {
         await first.start().settled;
         h.watches[0]!.onOccupied();
         const original = await h.started(1);
+        expect(await h.store.readSession(original.session.sessionId)).toMatchObject({
+          source: { agentId: "agent-a", accountId: "default" },
+          metadata: { agentId: "agent-a" },
+        });
         await original.onUtterance({ text: "Agent A's meeting" });
         await first.stop();
         const saved = await h.store.readSession(original.session.sessionId);

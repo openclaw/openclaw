@@ -2,12 +2,13 @@ import { normalizeURL } from "nostr-tools/utils";
 import {
   buildChannelInboundEventContext,
   logInboundDrop,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { BuzzBus } from "./buzz-bus.js";
 import type { BuzzConfigInput } from "./config-schema.js";
 import {
@@ -37,7 +38,7 @@ export async function handleBuzzInbound(params: {
   const channelId = parseBuzzTarget(message.channelId);
   const target = buildBuzzTarget(channelId);
   const textForAgent = formatBuzzMessageForAgent(message);
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg,
     channel: "buzz",
     accountId: account.accountId,
@@ -147,6 +148,7 @@ export async function handleBuzzInbound(params: {
 
   const senderName = bus.directory.resolveSenderName(message.senderPubkey);
   const roomName = bus.directory.resolveRoomName(channelId);
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg, route });
   const body = buildEnvelope({
     channel: "Buzz",
     from: senderName,

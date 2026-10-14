@@ -31,7 +31,7 @@ const { createConfigIoContext } = await import("./io.context.js");
 const { resolveConfigWidePluginMetadataSnapshot, resolveConfigWidePluginManifestRegistry } =
   await import("./io.plugin-metadata.js");
 
-const { migratePersistedImplicitMainRoster } = await import("./legacy.roster.js");
+const { createCanonicalAgentConfigFixture } = await import("../test-utils/config-roster.js");
 const { validateConfigObjectWithPlugins, validateConfigObjectWithPluginsAsync } =
   await import("./validation.js");
 
@@ -53,6 +53,7 @@ function manifestRecord(id: string, source: string, channels: string[] = []): Pl
     name: id,
     description: "test plugin",
     version: "1.0.0",
+    configSchema: { type: "object", additionalProperties: false },
   });
 }
 
@@ -112,6 +113,7 @@ describe("config IO plugin metadata snapshots", () => {
       const config: OpenClawConfig = {
         agents: { entries: { ops: { workspace: "/srv/ops" } } },
         logging: { level: "info" },
+        plugins: { allow: ["prepared"] },
       };
       const prepared = manifestRecord("prepared", "/srv/ops/prepared");
       const snapshot = workspaceSnapshot(
@@ -140,7 +142,7 @@ describe("config IO plugin metadata snapshots", () => {
             }),
       );
 
-      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({ ok: true });
       expect(loader.getSnapshot()).toBe(snapshot);
       expect(mocks.resolvePluginMetadataSnapshotInput).not.toHaveBeenCalled();
     },
@@ -148,6 +150,7 @@ describe("config IO plugin metadata snapshots", () => {
 
   it("discovers the new workspace when reload changes legacy default ownership", async () => {
     const legacyConfig = (defaultAgent: "ops" | "research") => ({
+      plugins: { allow: ["new-workspace-plugin"] },
       agents: {
         defaults: { workspace: "/srv/base" },
         entries: {
@@ -156,7 +159,7 @@ describe("config IO plugin metadata snapshots", () => {
         },
       },
     });
-    const config = migratePersistedImplicitMainRoster(legacyConfig("ops")).config as OpenClawConfig;
+    const config = createCanonicalAgentConfigFixture(legacyConfig("ops")).config;
     const policyHash = resolveInstalledPluginIndexPolicyHash(config, {});
     const initial = workspaceSnapshot("/srv/base", [], [], policyHash);
     setGatewayPluginMetadataSnapshot(initial, { config, env: {} });
@@ -168,7 +171,7 @@ describe("config IO plugin metadata snapshots", () => {
     mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
       ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
     );
-    const nextConfig = legacyConfig("research");
+    const nextConfig = createCanonicalAgentConfigFixture(legacyConfig("research")).config;
     const loader = createConfigIoContext({
       env: {},
       observe: false,
@@ -181,7 +184,7 @@ describe("config IO plugin metadata snapshots", () => {
       }),
     );
 
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
     expect(
       mocks.resolvePluginMetadataSnapshotInput.mock.calls.map(([params]) => params.workspaceDir),

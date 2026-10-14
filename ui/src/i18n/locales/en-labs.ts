@@ -3,10 +3,12 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    configure: "Configure",
+    configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
       description:
-        "Enable experimental features powered by Decision models. Requires a Decision model, set globally or per agent. No features use this setting yet.",
+        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -26,6 +28,16 @@ const enLabs = {
       title: "Tool Search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
+    },
+    advisor: {
+      title: "Advisor",
+      description:
+        "Every few tool calls or minutes of agent work, Advisor reviews the conversation on the session's own model. If it spots avoidable work (drifting from the request, repeated or stalled tool calls), it offers one short correction to the active run, or the next turn when steering is unavailable. Adds model calls.",
+    },
+    chatBubbles: {
+      title: "Speech bubbles",
+      description:
+        "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
     customPluginUi: {
       title: "Custom plugin UI",

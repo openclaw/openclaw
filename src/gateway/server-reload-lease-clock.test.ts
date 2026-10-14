@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import * as leaseStorage from "../state/openclaw-state-lease-storage.js";
+import * as leaseStorage from "../state/openclaw-state-lease-worker-storage.js";
 import { createPluginLifecycleLeaseTestClock } from "./config-reload.test-support.js";
 
 afterEach(() => vi.useRealTimers());

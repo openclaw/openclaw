@@ -12,7 +12,7 @@ function createSwarmTools(options: NonNullable<Parameters<typeof createOpenClawT
     disablePluginTools: true,
     wrapBeforeToolCallHook: false,
     ...options,
-    config: { ...config, agents: config.agents ?? { entries: { main: { default: true } } } },
+    config: { ...config, agents: config.agents ?? { entries: { main: {} } } },
   });
 }
 function collectorTools(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {
@@ -20,7 +20,7 @@ function collectorTools(options: NonNullable<Parameters<typeof createOpenClawCod
     sessionKey: "agent:worker:main",
     runId: "collector-run",
     swarmCollector: true,
-    config: { agents: { entries: { main: { default: true } } }, tools: { swarm: true } },
+    config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
     ...options,
   }).map((tool) => tool.name);
 }
@@ -32,7 +32,7 @@ describe("Swarm registration", () => {
   ] as const)("keeps default Swarm within the $profile tool profile", ({ profile, wait }) => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:main",
-      config: { agents: { entries: { main: { default: true } } }, tools: { profile } },
+      config: { agents: { entries: { main: {} } }, tools: { profile } },
     });
     expect(tools.some((tool) => tool.name === "agents_wait")).toBe(wait);
     const spawn = tools.find((tool) => tool.name === "sessions_spawn");
@@ -88,7 +88,7 @@ describe("Swarm registration", () => {
     const names = collectorTools({
       sessionKey: "agent:worker:subagent:child",
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { allow: ["read"], swarm: true },
       },
       swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },
@@ -116,7 +116,7 @@ describe("Swarm registration", () => {
       sessionKey: "agent:worker:subagent:child",
       runId: "collector-run",
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { swarm: true },
       },
       swarmCollector: true,

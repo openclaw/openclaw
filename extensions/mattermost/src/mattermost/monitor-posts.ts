@@ -2,7 +2,8 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   implicitMentionKindWhen,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
@@ -16,7 +17,6 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MattermostPostSchema } from "./client.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
@@ -35,7 +35,6 @@ import {
 import type { MattermostIngressLifecycle, MattermostIngressPost } from "./monitor-ingress.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
-  buildMattermostInboundMediaPayload,
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
@@ -123,7 +122,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     // detection and CommandBody, or the leading-slash check fails and the model gets prose.
     const commandBody = normalizeMention(rawText, botUsername).trim();
     const { effectiveReplyToId, sessionKey } = thread;
-    const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    const { envelopeOptions, previousTimestamp } = await resolveInboundSessionEnvelopeContextAsync({
       cfg,
       agentId: route.agentId,
       sessionKey,
@@ -381,7 +380,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     }
     // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
     // bodies before model invocation. The guard above ensures this fallback is a bot mention.
-    const bodyForAgent = bodyText || rawText.trim();
+    const bodyForAgent = bodyText || rawText;
     core.channel.activity.record({
       channel: "mattermost",
       accountId: account.accountId,
@@ -419,10 +418,6 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             kind,
           })
         : undefined;
-    if (backfill && !backfill.current) {
-      monitor.logVerboseMessage("mattermost: drop stale thread turn after session rotation");
-      return;
-    }
     // Preserve concurrent live posts in the shared window, but do not render the
     // trigger or a later post into this older turn's supplemental context.
     const turnHistories = new Map<string, HistoryEntry[]>(
@@ -495,7 +490,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
       // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
       CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
-      ...(await buildMattermostInboundMediaPayload(mediaList)),
+      media: await toInboundMediaFactsWithMetadata(mediaList),
     });
     const pinnedMainDmOwner =
       kind === "direct"
@@ -505,9 +500,8 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             normalizeEntry: normalizeMattermostAllowEntry,
           })
         : null;
-    const previewLine = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
     monitor.logVerboseMessage(
-      `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
+      `mattermost inbound: from=${ctxPayload.From} id=${post.id} len=${bodyText.length}`,
     );
 
     await dispatchMattermostInboundTurn(monitor, {

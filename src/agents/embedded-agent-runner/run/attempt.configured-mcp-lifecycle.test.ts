@@ -8,7 +8,7 @@ import {
 import type { SessionMcpRuntime } from "../../agent-bundle-mcp-types.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinitions } from "../../sessions/tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   cleanupTempPaths,
@@ -113,8 +113,10 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
             throw new Error("The embedded runner did not prepare its session tools");
           }
           const model = options.model;
-          const tools = wrapToolDefinitions(options.customTools);
-          expect(tools.map((tool) => tool.name)).toContain(cataloged ? "tool_call" : toolName);
+          const tools = options.customTools.map((definition) => wrapToolDefinition(definition));
+          expect(tools.map((tool) => tool.name)).toContain(
+            cataloged ? "dispatch_action" : toolName,
+          );
           if (cataloged) {
             expect(tools.map((tool) => tool.name)).not.toContain(toolName);
           }
@@ -130,7 +132,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
                       {
                         type: "toolCall",
                         id: "delayed-call",
-                        name: cataloged ? "tool_call" : toolName,
+                        name: cataloged ? "dispatch_action" : toolName,
                         arguments: cataloged ? { id: toolName, args: {} } : {},
                       },
                     ]
@@ -171,7 +173,7 @@ describe("runEmbeddedAttempt configured MCP lifecycle (agents-embedded-agent-run
           runId,
           disableTools: false,
           sessionManager: SessionManager.inMemory(),
-          toolsAllow: ["silent__*", "tool_search", "tool_call", "tool_describe"],
+          toolsAllow: ["silent__*", "tool_search", "dispatch_action", "tool_describe"],
           config: {
             tools: {
               codeMode: false,

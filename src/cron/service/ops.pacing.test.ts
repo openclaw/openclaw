@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJobCreate, CronPacing } from "../types.js";
 import { add, update } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
@@ -11,6 +13,7 @@ const NOW = Date.parse("2026-07-18T12:00:00.000Z");
 function makeInput(pacing: CronPacing): CronJobCreate {
   return {
     name: "paced job",
+    agentId: "main",
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     pacing,
@@ -37,18 +40,44 @@ async function withState(run: (state: ReturnType<typeof createCronServiceState>)
 }
 
 describe("cron pacing validation", () => {
-  it("preserves a pending paced slot on an unrelated edit", async () => {
-    await withState(async (state) => {
-      const job = await add(state, makeInput({ max: "4h" }));
-      job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
+  it.each([
+    { label: "an authored anchor", anchorMs: NOW },
+    { label: "a missing anchor", anchorMs: undefined },
+  ])(
+    "preserves a pending paced slot and schedule on an unrelated edit with $label",
+    async ({ anchorMs }) => {
+      await withState(async (state) => {
+        const pendingSlot = NOW + 30 * 60_000;
+        const schedule = {
+          kind: "every" as const,
+          everyMs: 60_000,
+          ...(anchorMs === undefined ? {} : { anchorMs }),
+        };
+        const job = makeCronJob({
+          id: "pending-paced-edit",
+          agentId: "main",
+          createdAtMs: NOW,
+          updatedAtMs: NOW,
+          pacing: { max: "4h" },
+          schedule,
+          state: { nextRunAtMs: pendingSlot, pacedNextRunAtMs: pendingSlot },
+        });
+        await saveCronStore(state.deps.storePath, { version: 1, jobs: [job] });
 
-      const updated = await update(state, job.id, { description: "edited" });
+        const updated = await update(state, job.id, { description: "edited" });
+        const reloaded = await loadCronStore(state.deps.storePath);
 
-      expect(updated.pacing).toEqual({ max: "4h" });
-      expect(updated.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
-      expect(updated.state.pacedNextRunAtMs).toBe(job.state.pacedNextRunAtMs);
-    });
-  });
+        for (const observed of [updated, state.store?.jobs[0], reloaded.jobs[0]]) {
+          expect(observed?.id).toBe(job.id);
+          expect(observed?.description).toBe("edited");
+          expect(observed?.schedule).toEqual(schedule);
+          expect(observed?.pacing).toEqual({ max: "4h" });
+          expect(observed?.state.nextRunAtMs).toBe(pendingSlot);
+          expect(observed?.state.pacedNextRunAtMs).toBe(pendingSlot);
+        }
+      });
+    },
+  );
 
   it("requires clearing pacing when converting a recurring job to a one-shot", async () => {
     await withState(async (state) => {

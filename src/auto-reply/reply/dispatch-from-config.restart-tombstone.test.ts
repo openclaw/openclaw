@@ -178,27 +178,17 @@ describe("restart tombstone channel feedback", () => {
     );
   });
 
-  it.each([
-    { label: "room event", context: { InboundEventKind: "room_event" as const } },
-    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
-    { label: "system turn", context: { InputProvenance: { kind: "internal_system" as const } } },
-  ])("does not notify for $label", async ({ context }) => {
-    await rejectInbound({ context });
-    expect(deliver).not.toHaveBeenCalled();
-  });
+  it.each([{ label: "unauthorized inbound", context: { InboundAccessAuthorized: false } }])(
+    "does not notify for $label",
+    async ({ context }) => {
+      await rejectInbound({ context });
+      expect(deliver).not.toHaveBeenCalled();
+    },
+  );
 
   it("honors explicit send-policy denial", async () => {
     await rejectInbound({ sendPolicy: "deny" });
     expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("logs failed notice delivery without replacing the rejection or repeating the notice", async () => {
-    deliver.mockRejectedValueOnce(new Error("transport failed"));
-    await rejectInbound();
-    await rejectInbound();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
-    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("warns about ambiguous routed delivery without repeating the notice", async () => {

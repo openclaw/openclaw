@@ -10,8 +10,7 @@ function formatWarningToolLabel(
   metas: string[] | undefined,
   markdown: boolean,
 ): string {
-  // Progress prefixes are reserved internal traces. User warnings use the label
-  // and the same escaped details so every text-only display can retain them.
+  // Keep the tool label even for compact shell details so warnings name the failed tool.
   const { label } = resolveToolDisplay({ name: toolName });
   const { detail } = formatToolAggregateParts(toolName, metas, { markdown });
   return detail ? `${label}: ${detail}` : label;
@@ -106,11 +105,8 @@ function splitExecLikeFailureMeta(meta: string): { flags: string[]; body: string
     .split(" · ")
     .map((candidate) => candidate.trim())
     .filter(Boolean)) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
+    const target = part === "elevated" || part === "pty" ? flags : bodyParts;
+    target.push(part);
   }
   return { flags, body: bodyParts.join(" · ") };
 }
@@ -152,17 +148,8 @@ function extractLiteralExecCommand(body: string): string | undefined {
   }
 
   const runSubject = body.match(/^run (.+)$/u)?.[1];
-  if (runSubject && isKnownLiteralRunSummary(runSubject)) {
-    return runSubject;
-  }
-
-  return undefined;
+  return runSubject && isKnownLiteralRunSummary(runSubject) ? runSubject : undefined;
 }
-
-type RawExecContext = {
-  leading: string[];
-  trailing: string[];
-};
 
 function extractRawExecCommand(body: string): string | undefined {
   const codeSpan = extractTrailingMarkdownCodeSpan(body);
@@ -178,14 +165,11 @@ function extractTrailingMarkdownCodeSpan(
   body: string,
 ): { prefix: string | undefined; value: string } | undefined {
   const trimmed = body.trimEnd();
-  if (!trimmed.endsWith("`")) {
+  const delimiter = trimmed.match(/`+$/u)?.[0];
+  if (!delimiter) {
     return undefined;
   }
-  let delimiterLength = 0;
-  for (let index = trimmed.length - 1; index >= 0 && trimmed[index] === "`"; index -= 1) {
-    delimiterLength += 1;
-  }
-  const delimiter = "`".repeat(delimiterLength);
+  const delimiterLength = delimiter.length;
   const valueEnd = trimmed.length - delimiterLength;
   let searchIndex = 0;
   while (searchIndex < valueEnd) {
@@ -214,7 +198,7 @@ function unwrapMarkdownInlineCodePadding(value: string): string {
   const unwrapped = value.slice(1, -1);
   return /\S/u.test(unwrapped) ? unwrapped : value;
 }
-function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {
+function extractRawExecContext(prefix: string | undefined, inlineCode: string) {
   const value = prefix ?? "";
   const leading = [...value.matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
     .map((match) => match[1]?.trim())
@@ -277,10 +261,7 @@ function isKnownLiteralRunSummary(subject: string): boolean {
 }
 function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
   const match = /^(.*?)( \((?:agent|repo|workspace|sandbox)\))$/u.exec(value);
-  if (!match) {
-    return { text: value, suffix: "" };
-  }
-  return { text: match[1] ?? value, suffix: match[2] ?? "" };
+  return { text: match?.[1] ?? value, suffix: match?.[2] ?? "" };
 }
 function formatConciseExecExitSuffix(error: string | undefined): string {
   const normalized = normalizeOptionalString(error);

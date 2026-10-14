@@ -60,19 +60,31 @@ type ChromeBrowserRouteParams = {
   nodeId?: string;
 };
 
-function chromeNodeBrowserRequest(
-  runtime: PluginRuntime,
-  nodeId: string,
-): MeetingBrowserRequestCaller {
-  return async (request) =>
-    await callBrowserProxyOnNode({
-      runtime,
-      nodeId,
-      method: request.method,
-      path: request.path,
-      body: request.body,
-      timeoutMs: request.timeoutMs,
-    });
+type ChromeBrowserRoute = {
+  callBrowser: MeetingBrowserRequestCaller;
+} & ({ transport: "chrome"; nodeId?: undefined } | { transport: "chrome-node"; nodeId: string });
+
+async function resolveChromeBrowserRoute(
+  params: ChromeBrowserRouteParams,
+): Promise<ChromeBrowserRoute> {
+  if (params.transport !== "chrome-node") {
+    return {
+      transport: "chrome",
+      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+    };
+  }
+  const nodeId =
+    params.nodeId ??
+    (await resolveChromeNode({
+      runtime: params.runtime,
+      requestedNode: params.config.chromeNode.node,
+    }));
+  return {
+    transport: "chrome-node",
+    nodeId,
+    callBrowser: (request) =>
+      callBrowserProxyOnNode({ ...request, runtime: params.runtime, nodeId }),
+  };
 }
 
 export async function leaveChromeMeet(
@@ -82,24 +94,10 @@ export async function leaveChromeMeet(
     tab: GoogleMeetBrowserTab;
   },
 ): Promise<{ left: boolean; note: string }> {
-  // A pinned session node bypasses inventory, including the empty-string value.
-  // Keep this await conditional; launch:false leave still resolves the route.
-  const node =
-    params.transport === "chrome-node"
-      ? {
-          nodeId:
-            params.nodeId ??
-            (await resolveChromeNode({
-              runtime: params.runtime,
-              requestedNode: params.config.chromeNode.node,
-            })),
-        }
-      : undefined;
-  return await leaveMeetingWithBrowser({
+  const { callBrowser } = await resolveChromeBrowserRoute(params);
+  return leaveMeetingWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: node
-      ? chromeNodeBrowserRequest(params.runtime, node.nodeId)
-      : await resolveLocalMeetingBrowserRequest(params.runtime),
+    callBrowser,
     launch: params.config.chrome.launch,
     meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
@@ -116,22 +114,10 @@ export async function readChromeMeetTranscript(
     tab: GoogleMeetBrowserTab;
   },
 ): Promise<GoogleMeetTranscriptSnapshot> {
-  const node =
-    params.transport === "chrome-node"
-      ? {
-          nodeId:
-            params.nodeId ??
-            (await resolveChromeNode({
-              runtime: params.runtime,
-              requestedNode: params.config.chromeNode.node,
-            })),
-        }
-      : undefined;
-  return await readMeetingTranscriptWithBrowser({
+  const { callBrowser } = await resolveChromeBrowserRoute(params);
+  return readMeetingTranscriptWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: node
-      ? chromeNodeBrowserRequest(params.runtime, node.nodeId)
-      : await resolveLocalMeetingBrowserRequest(params.runtime),
+    callBrowser,
     finalize: params.finalize === true,
     meetingUrl: params.meetingUrl,
     meetingSessionId: params.meetingSessionId,
@@ -163,27 +149,19 @@ export async function recoverCurrentMeetTab(
     ({ transport: "chrome"; nodeId?: undefined } | { transport: "chrome-node"; nodeId: string })
 > {
   // Recovery deliberately re-resolves the configured node, not the session pin.
-  const node =
-    params.transport === "chrome-node"
-      ? {
-          nodeId: await resolveChromeNode({
-            runtime: params.runtime,
-            requestedNode: params.config.chromeNode.node,
-          }),
-        }
-      : undefined;
+  const { callBrowser, ...route } = await resolveChromeBrowserRoute({
+    ...params,
+    nodeId: undefined,
+  });
   return {
-    ...(node
-      ? { transport: "chrome-node" as const, nodeId: node.nodeId }
-      : { transport: "chrome" as const }),
+    ...route,
     ...(await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-      callBrowser: node
-        ? chromeNodeBrowserRequest(params.runtime, node.nodeId)
-        : await resolveLocalMeetingBrowserRequest(params.runtime),
+      callBrowser,
       captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
-      locationLabel: node ? "on the selected Chrome node" : "in local Chrome",
+      locationLabel:
+        route.transport === "chrome-node" ? "on the selected Chrome node" : "in local Chrome",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
       requestedMeetingUrl: params.url,

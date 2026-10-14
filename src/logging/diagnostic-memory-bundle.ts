@@ -55,7 +55,7 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
         sample,
         worker,
         entryLabel,
-        ["threadId", "external", "arrayBuffers", "sampleAgeMs"],
+        ["threadId", "external", "arrayBuffers", "sampleAgeMs", "heapSizeLimitBytes"],
         readOptionalPositiveInteger,
       );
       return sample;

@@ -7,8 +7,8 @@ import {
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import type { AcceptedTurnState, AcceptedTurns } from "./manager.accepted-turns.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -154,7 +154,7 @@ export async function runManagerCancelSession(params: {
               }
               try {
                 control?.assertCurrent(params.cfg);
-                control?.assertNativeAcpCurrent?.(
+                control?.assertAcpCurrent?.(
                   params.cfg,
                   phase === "publication"
                     ? (expectedLocator ?? acceptedTurn.runtimeHandle ?? publicationLocator)
@@ -199,7 +199,7 @@ export async function runManagerCancelSession(params: {
     let runtimeLocator: AcpSessionRuntimeLocator | undefined;
     const assertTargetCurrent = () => {
       control.assertCurrent(params.cfg);
-      control.assertNativeAcpCurrent?.(params.cfg, runtimeLocator);
+      control.assertAcpCurrent?.(params.cfg, runtimeLocator);
       if (!isCurrentActor()) {
         throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP session actor was replaced.");
       }
@@ -228,7 +228,7 @@ export async function runManagerCancelSession(params: {
         isCurrentActor,
         readAcpControl: () => constraint,
         assertMetadataCommitAllowed: (locator) => {
-          control.assertNativeAcpCurrent?.(params.cfg, locator);
+          control.assertAcpCurrent?.(params.cfg, locator);
         },
         expectedControlBinding:
           entry && ownerKey

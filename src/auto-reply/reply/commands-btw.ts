@@ -11,12 +11,16 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
+
+const log = createSubsystemLogger("auto-reply/commands-btw");
 
 /** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -35,15 +39,13 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     const sessionAgentId = params.agentId;
     const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, sessionAgentId);
 
+    const rejectQuestion = (text: string) =>
+      commandReply({ text, btw: { question }, isError: true });
+
     if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
-          btw: { question },
-          isError: true,
-        },
-      };
+      return rejectQuestion(
+        "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
+      );
     }
 
     try {
@@ -158,20 +160,12 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);
       }
-      return {
-        shouldContinue: false,
-        reply: reply ? { ...reply, btw: { question } } : reply,
-      };
+      return commandReply(reply ? { ...reply, btw: { question } } : reply);
     } catch (error) {
-      const message = error instanceof Error ? error.message.trim() : "";
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ /btw failed${message ? `: ${message}` : "."}`,
-          btw: { question },
-          isError: true,
-        },
-      };
+      log.warn(`Side question failed: ${formatErrorMessage(error)}`);
+      return rejectQuestion(
+        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      );
     }
   },
 );

@@ -35,8 +35,10 @@ chooses the provider for explicit evaluation and supported consumers. The core
 Selection does not start background work or replace the chat model.
 Automatic experimental consumers additionally require explicit
 [Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+The built-in OpenClaw runtime uses that opt-in for conversational tool filtering
+with bounded recent conversation. The selected Decision provider receives that
+secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
+Explicit `decision_evaluate` remains independent of Labs.
 
 ## Choose a provider and model
 
@@ -45,6 +47,10 @@ Configure the provider plugin before selecting its model:
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
+- [OpenAI](/providers/openai#decision-models) uses the bundled `openai` plugin
+  and the OpenAI Platform Decisions API. Configure an OpenAI API key;
+  ChatGPT/Codex subscription credentials do not authorize this endpoint.
+  Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
 - [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a local System One
   server such as Kev. Install and enable the external plugin, then configure a
   protected hosted credential or an explicit loopback `baseUrl`. Hosted
@@ -61,11 +67,12 @@ The current plugins declare these model references:
 | `onnx/gliclass-instruct-edge-v1.0`   | GLiClass Instruct Edge | Local export                                           |
 | `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
 | `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
+| `openai/gpt-6-luna`                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
 
-Both plugins are currently unpublished candidates. Their setup pages explain
+The ONNX and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 
@@ -335,7 +342,10 @@ A provider plugin implements `DecisionProviderV1` from
 `api.registerDecisionProvider(provider)`. Its `id` and `contractVersion: 1`
 identify the contract; `evaluate(batch, context)` returns validated typed answers
 or a supported unavailable reason. The context includes the selected model,
-optional agent ID, composed cancellation signal, and monotonic deadline.
+optional agent ID, composed cancellation signal, monotonic deadline, and an optional
+host-owned `isAdmissible()` predicate for automatic consumers. External transports
+check that predicate at final synchronous I/O, after awaited preparation; see the
+[provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:
 

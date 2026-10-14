@@ -30,7 +30,6 @@ function calculateAdaptiveColumnWidths(
     return [];
   }
 
-  // Use original total width from Convert API, or fall back to default
   const totalWidth =
     originalWidths && originalWidths.length > 0
       ? originalWidths.reduce((a: number, b: number) => a + b, 0)
@@ -40,21 +39,10 @@ function calculateAdaptiveColumnWidths(
   const blockMap = getBlockMap();
 
   function getCellText(cellId: string): string {
-    const cell = blockMap.get(cellId);
-    let text = "";
-    const childIds = normalizeChildBlockIds(cell?.children);
-
-    for (const childId of childIds) {
-      const child = blockMap.get(childId);
-      if (child?.text?.elements) {
-        for (const elem of child.text.elements) {
-          if (elem.text_run?.content) {
-            text += elem.text_run.content;
-          }
-        }
-      }
-    }
-    return text;
+    return normalizeChildBlockIds(blockMap.get(cellId)?.children)
+      .flatMap((childId) => blockMap.get(childId)?.text?.elements ?? [])
+      .map((element) => element.text_run?.content ?? "")
+      .join("");
   }
 
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
@@ -68,15 +56,10 @@ function calculateAdaptiveColumnWidths(
 
   const maxLengths = Array.from({ length: column_size }, () => 0);
 
-  for (let row = 0; row < row_size; row++) {
-    for (let col = 0; col < column_size; col++) {
-      const cellIndex = row * column_size + col;
-      const cellId = cellIds[cellIndex];
-      if (cellId) {
-        const content = getCellText(cellId);
-        const length = getWeightedLength(content);
-        maxLengths[col] = Math.max(maxLengths[col] ?? 0, length);
-      }
+  for (const [index, cellId] of cellIds.slice(0, row_size * column_size).entries()) {
+    if (cellId) {
+      const col = index % column_size;
+      maxLengths[col] = Math.max(maxLengths[col] ?? 0, getWeightedLength(getCellText(cellId)));
     }
   }
 
@@ -99,7 +82,6 @@ function calculateAdaptiveColumnWidths(
     ),
   );
 
-  // Redistribute remaining space to fill total width
   let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
   while (remaining > 0) {
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);

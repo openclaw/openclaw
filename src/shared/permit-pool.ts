@@ -1,3 +1,5 @@
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+
 type PermitRelease = () => void;
 type PermitWaiter = {
   expired: () => boolean;
@@ -22,17 +24,12 @@ export function createPermitPool(limit: number) {
       }
       released = true;
       active -= 1;
-      while (waiters.length > 0) {
-        const waiter = waiters.shift();
-        if (!waiter) {
+      for (let waiter = waiters.shift(); waiter; waiter = waiters.shift()) {
+        const expired = waiter.expired();
+        waiter.settle(expired ? null : createRelease());
+        if (!expired) {
           break;
         }
-        if (waiter.expired()) {
-          waiter.settle(null);
-          continue;
-        }
-        waiter.settle(createRelease());
-        break;
       }
     };
   };
@@ -58,17 +55,12 @@ export function createPermitPool(limit: number) {
         return releasePermit;
       }
       return await new Promise<PermitRelease | null>((resolve) => {
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelDeadline: (() => void) | undefined;
         const cancel = () => waiter.settle(null);
         const waiter: PermitWaiter = {
           expired,
           settle: (release) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            clearTimeout(timer);
+            cancelDeadline?.();
             signal?.removeEventListener("abort", cancel);
             const index = waiters.indexOf(waiter);
             if (index >= 0) {
@@ -77,12 +69,13 @@ export function createPermitPool(limit: number) {
             resolve(release);
           },
         };
-        if (deadlineAtMs !== undefined) {
-          timer = setTimeout(cancel, Math.max(1, deadlineAtMs - Date.now()));
-          timer.unref();
-        }
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
+        if (deadlineAtMs !== undefined) {
+          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, undefined, {
+            unref: true,
+          });
+        }
       });
     },
   };

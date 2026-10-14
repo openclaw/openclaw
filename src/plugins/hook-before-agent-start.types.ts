@@ -1,4 +1,3 @@
-// before_model_resolve hook
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 
 export type PluginHookBeforeModelResolveAttachment = {
@@ -20,9 +19,10 @@ export type PluginHookBeforeModelResolveResult = {
   providerOverride?: string;
   /** Override thinking for this agent run without changing session state. */
   thinkingOverride?: ThinkLevel;
+  /** Replace this run's fallback chain. An empty list disables model fallback. */
+  fallbacksOverride?: string[];
 };
 
-// before_prompt_build hook
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Current request before projection. Empty means no textual request; omission is legacy. */

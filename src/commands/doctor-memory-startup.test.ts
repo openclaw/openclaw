@@ -73,7 +73,7 @@ describe("Memory Core cold startup migrations", () => {
           profiles: { [profileId]: { type: "api_key", provider: "openai", keyRef: ref } },
         });
         if (entryState === "stored") {
-          writeSecretStoreEntry({
+          await writeSecretStoreEntry({
             scope: { kind: "team" },
             name: ref.id,
             value,

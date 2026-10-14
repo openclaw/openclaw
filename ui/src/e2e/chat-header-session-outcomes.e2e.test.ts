@@ -150,7 +150,7 @@ suite.define(() => {
 
         if (restartable) {
           await page.getByRole("button", { name: "Unarchive", exact: true }).waitFor();
-          await page.getByRole("button", { name: "Filter & sort" }).click();
+          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
           await chooseSidebarMenuOption(page, "Status", "All");
           await closeSidebarMenu(page);
         }

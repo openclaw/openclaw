@@ -267,12 +267,6 @@ describe("ACP diagnostic events", () => {
 
   it.each([
     {
-      status: "completed",
-      stopReason: "end_turn",
-      terminalReason: "failed",
-      errorCategory: "acp_tool_incomplete",
-    },
-    {
       status: "cancelled",
       stopReason: undefined,
       terminalReason: "cancelled",

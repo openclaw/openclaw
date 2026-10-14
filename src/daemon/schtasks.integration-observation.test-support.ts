@@ -2,9 +2,14 @@
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
-import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
+import { decodeXml } from "../shared/xml.js";
 import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
@@ -16,7 +21,8 @@ const TASK_STATE_READY = 3;
 
 export const DIAGNOSTIC_TEXT_LIMIT = 16_384;
 const DIAGNOSTIC_PROCESS_LIMIT = 32;
-export const TASK_LOGON_INTERACTIVE_TOKEN = 3;
+export const TASK_LOGON_S4U = 2;
+const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 export const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
 
 export type ScheduledTaskPrincipal = {
@@ -331,6 +337,36 @@ export function assertInteractiveLeastPrivilegeTask(params: {
 }): void {
   expect(params.taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
   expect(params.principal.logonType).toBe(TASK_LOGON_INTERACTIVE_TOKEN);
+  assertLeastPrivilegeTask(params);
+}
+
+export function assertUnattendedLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+  scriptPath: string;
+}): void {
+  expect(params.taskXml).toContain("<LogonType>S4U</LogonType>");
+  expect(params.principal.logonType).toBe(TASK_LOGON_S4U);
+  expect(params.taskXml).toMatch(/<BootTrigger(?:\s[^>]*)?\/?>/u);
+  expect(params.taskXml).toMatch(/<LogonTrigger(?:\s[^>]*)?\/?>/u);
+  const normalizePath = (value: string) => path.win32.normalize(value).toLowerCase();
+  const command = decodeXml(params.taskXml.match(/<Command>([^<]*)<\/Command>/u)?.[1] ?? "");
+  const args = decodeXml(params.taskXml.match(/<Arguments>([^<]*)<\/Arguments>/u)?.[1] ?? "");
+  const workingDirectory = decodeXml(
+    params.taskXml.match(/<WorkingDirectory>([^<]*)<\/WorkingDirectory>/u)?.[1] ?? "",
+  );
+  expect(normalizePath(command)).toBe(normalizePath(getWindowsCmdExePath()));
+  expect(args).toBe(`/d /s /c ""${params.scriptPath}""`);
+  expect(normalizePath(workingDirectory)).toBe(
+    normalizePath(path.win32.dirname(params.scriptPath)),
+  );
+  assertLeastPrivilegeTask(params);
+}
+
+function assertLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+}): void {
   expect(params.principal.runLevel).toBe(TASK_RUNLEVEL_LEAST_PRIVILEGE);
   const exportedRunLevel = params.taskXml.match(/<RunLevel>([^<]+)<\/RunLevel>/u)?.[1];
   // Task Scheduler may omit the default LeastPrivilege node when exporting XML.

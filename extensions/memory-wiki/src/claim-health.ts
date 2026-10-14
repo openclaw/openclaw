@@ -18,25 +18,11 @@ export type WikiFreshness = {
   lastTouchedAt?: string;
 };
 
-export type WikiClaimHealth = {
-  key: string;
-  pagePath: string;
-  pageTitle: string;
-  pageId?: string;
-  claimId?: string;
-  text: string;
-  status: string;
-  confidence?: number;
-  evidenceCount: number;
-  missingEvidence: boolean;
-  freshness: WikiFreshness;
-};
+export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
 
-export type WikiClaimContradictionCluster = {
-  key: string;
-  label: string;
-  entries: WikiClaimHealth[];
-};
+export type WikiClaimContradictionCluster = ReturnType<
+  typeof buildClaimContradictionClusters
+>[number];
 
 export type WikiPageContradictionCluster = {
   key: string;
@@ -133,7 +119,7 @@ function buildWikiClaimHealth(params: {
   claim: WikiClaim;
   index: number;
   now?: Date;
-}): WikiClaimHealth {
+}) {
   const claimId = params.claim.id?.trim();
   return {
     key: `${params.page.relativePath}#${claimId ?? `claim-${params.index + 1}`}`,
@@ -156,10 +142,7 @@ export function collectWikiClaimHealth(pages: WikiPageSummary[], now?: Date): Wi
   );
 }
 
-export function buildClaimContradictionClusters(params: {
-  pages: WikiPageSummary[];
-  now?: Date;
-}): WikiClaimContradictionCluster[] {
+export function buildClaimContradictionClusters(params: { pages: WikiPageSummary[]; now?: Date }) {
   const claimHealth = collectWikiClaimHealth(params.pages, params.now);
   const byId = new Map<string, WikiClaimHealth[]>();
   for (const claim of claimHealth) {

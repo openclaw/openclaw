@@ -9,9 +9,9 @@ The current wire protocol is version 4. General clients must advertise exactly v
 `minProtocol: 4` and `maxProtocol: 4`. See the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol) for
 the complete handshake, authentication, role, scope, and method contracts.
-Exact node identities (`role: "node"` plus `mode: "node"`) and probe clients
+Exact node identities (`role: "node"` plus `mode: "node"`) and diagnostic clients
 can use v3. The built-in node host starts with an exact v4 envelope, then retries
-an exact v3 envelope after a v3 Gateway rejects v4. If that legacy probe reaches
+an exact v3 envelope after a v3 Gateway rejects v4. If that legacy connection attempt reaches
 an upgraded v4 Gateway, the client reconnects with the full v4 envelope before
 reporting readiness. Other exact node identities default to `[3, 4]`. Explicit
 bounds override these defaults; `[3, 4]` on the built-in node host selects the
@@ -31,7 +31,7 @@ Use the verified stable release with exact pins:
 npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+See the [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
 Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
 package versions and dist-tags.
@@ -162,7 +162,7 @@ transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 
-The Node client starts with a 30 second request timeout, a 15 second
+The Node client starts with a 30 second request timeout, a 30 second
 connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
 seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
 1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
@@ -181,15 +181,31 @@ first so its authoritative outcome can settle the run. Other gapped frames and
 subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
 also refresh durable state and restore their session subscriptions.
 
-The canonical defaults table and the server policy fields that can replace
+Session subscription requests time out without compensating RPCs. If the Gateway
+applied a subscribe or unsubscribe but its acknowledgment was lost, observation
+may remain stale until a fresh subscription or reconnect. In particular, a
+retained handle may miss updates after an unacknowledged unsubscribe. The caller
+still receives the timeout; ordinary acknowledged leases and release retries
+retain their ownership and ordering.
+
+The defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol#client-constants).
 
 Use the `./timeouts` entry point when a host must align readiness or watchdog
 budgets with these defaults. Use the `./readiness` entry point when startup must
-wait for an event-loop probe before opening the socket.
+wait for an event-loop check before opening the socket.
 
 ## Streaming chat
+
+The `runId` returned by `chat.send` identifies the submitted input even when a
+steer falls back to a followup. Queue admission is nonterminal: keep observing
+that ID until the consuming execution completes, or the input is rejected,
+canceled, or dropped before consumption. Collected inputs each receive the
+batch execution's terminal outcome under their original IDs. SDK run handles
+use the same IDs for events, `wait()`, and cancellation; canceling an input before
+consumption withdraws only that input. A steer accepted into the active turn
+continues to complete after its transcript receipt while that turn remains active.
 
 Event callbacks receive the wire payload unchanged. A `chat` delta's optional
 `message` is an authoritative snapshot that already includes `deltaText`.
@@ -229,7 +245,7 @@ reports `rebaselined`, `recovered`, or `unavailable`; unavailable full text omit
 have finite retention, and sessionless or unavailable transcript occurrences
 cannot be reconstructed; unknown outcomes remain unsettled with a recovery
 notice. Automatic recovery stops after four consecutive unavailable observations
-(initial probe plus three waits), releases retention protection, and stays stopped
+(initial check plus three waits), releases retention protection, and stays stopped
 across reconnects. Confirmed activity resets that budget; late terminal frames can
 still settle the run. Queued replies use exponential backoff with the Gateway
 client's positive 20% jitter and a 25–30 second cap. ACP reports unavailable full

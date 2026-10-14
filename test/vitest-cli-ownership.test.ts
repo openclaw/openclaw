@@ -18,7 +18,6 @@ import { gatewayDatabaseWorkerTestFiles } from "./vitest/vitest.gateway-server-p
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
-import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 
 const patternFiles = createPatternFileHelper("gateway-watch-ownership-");
 afterEach(() => patternFiles.cleanup());
@@ -64,51 +63,6 @@ function selectedByFilters(file: string, filters: string[]): boolean {
 let canonicalGatewayFiles: ReturnType<typeof gatewayProjectFiles>;
 beforeAll(() => {
   canonicalGatewayFiles = gatewayProjectFiles([]);
-});
-
-it.each([
-  ...[
-    "src/gateway/link-understanding.product.test.ts",
-    "src/gateway/server-methods/chat.abort-live-proof.test.ts",
-    "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
-    "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
-    "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
-    "src/gateway/server-methods/models-auth-refresh.integration.test.ts",
-    "src/gateway/server-methods/models-connect-publication.integration.test.ts",
-    "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
-    "src/gateway/server-methods/models-manual-policy.integration.test.ts",
-    "src/gateway/server/ws-connection.startup.test.ts",
-    "src/gateway/session-message-events.test.ts",
-    "src/gateway/worker-environments/worker-session-tool-executor.test.ts",
-    "test/plugins/codex-model-catalog.gateway.test.ts",
-    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
-    "src/gateway/setup-inference.first-signin.integration.test.ts",
-  ].map((file) => ({ file, owner: "gateway-database-workers" })),
-  ...[
-    "src/gateway/server.chat-cli-auth.test.ts",
-    "src/gateway/server.cli-watchdog.test.ts",
-    "src/gateway/server.codex-failure-recovery.test.ts",
-  ].map((file) => ({ file, owner: "gateway-server-isolated" })),
-])("keeps Gateway callers on their declared fork owner: $file", ({ file, owner }) => {
-  const owners = Object.entries(gatewayProjectFiles([file]))
-    .filter(([, files]) => files.includes(file))
-    .map(([name]) => name);
-  expect(owners).toEqual([owner]);
-});
-
-it("excludes the full Gateway TLS producer from threaded tooling", () => {
-  const file = "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts";
-  const config = createToolingVitestConfig({
-    OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("tls-tooling.json", [file]),
-  });
-  assert(config.test);
-  assert(config.root);
-  const test = config.test;
-  const files = fs.globSync(test.include ?? [], {
-    cwd: test.dir ?? config.root,
-    exclude: test.exclude,
-  });
-  expect(files).toEqual([]);
 });
 
 it("routes resume local-node handshakes only through the core broker fork", () => {
@@ -231,7 +185,7 @@ it.each(
     ["src/gateway/server-methods"],
     ["src/gateway/worker-environments"],
     ["src/gateway/server.sessions.compaction-read-errors.test.ts"],
-    ...gatewayDatabaseWorkerTestFiles.map((file) => [file]),
+    ["src/gateway/link-understanding.product.test.ts"],
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {

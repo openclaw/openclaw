@@ -21,7 +21,7 @@ scenario:
   docsRefs:
     - docs/channels/qa-channel.md
   codeRefs:
-    - src/auto-reply/reply/agent-runner.ts
+    - src/auto-reply/reply/agent-runner-run.ts
     - src/auto-reply/reply/private-message-tool-final.ts
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:

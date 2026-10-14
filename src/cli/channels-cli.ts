@@ -5,13 +5,11 @@ import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import {
   getChannelSetupOptionSwitches,
-  loadChannelSetupCliOptions,
   resolveChannelsAddChannelFromArgv,
   resolveChannelsAddOptions,
   type ChannelSetupCliOption,
@@ -34,12 +32,7 @@ type AddChannelSetupOptionsParams = {
   includeAll?: boolean;
 };
 
-type ChannelSetupOptionMode = "none" | "modern" | "legacy";
-
-type ChannelSetupOptionRegistration = {
-  mode: ChannelSetupOptionMode;
-  legacyIntDefaultAttributeNames: ReadonlySet<string>;
-};
+type ChannelSetupOptionRegistration = Awaited<ReturnType<typeof addChannelSetupOptions>>;
 
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   { flags: "--token <token>", description: "Channel token or credential payload" },
@@ -62,8 +55,6 @@ const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
     defaultValue: false,
   },
 ];
-
-const loadChannelsCommands = createLazyPromise(() => import("../commands/channels.js"));
 
 function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -111,26 +102,19 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(
-  command: Command,
-  params: AddChannelSetupOptionsParams = {},
-): Promise<ChannelSetupOptionRegistration> {
-  const { resolveChannelSetupCliOptionMetadata } = await loadChannelSetupCliOptions();
+async function addChannelSetupOptions(command: Command, params: AddChannelSetupOptionsParams = {}) {
+  const { resolveChannelSetupCliOptionMetadata } =
+    await import("../channels/plugins/cli-add-options.js");
   const selected = params.channelId?.trim().toLowerCase();
   const { options, selectedChannel, valueMetadataByAttributeName } =
     resolveChannelSetupCliOptionMetadata(selected, {
       includeAll: params.includeAll,
     });
-  const mode: ChannelSetupOptionMode = selected
-    ? selectedChannel?.setup
-      ? "modern"
-      : "legacy"
-    : "none";
   const seenFlags = new Set(command.options.flatMap(getChannelSetupOptionSwitches));
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
-  if (params.includeAll || (mode === "legacy" && selectedChannel?.setup === undefined)) {
+  if (params.includeAll || (selected && selectedChannel?.setup === undefined)) {
     for (const option of LEGACY_CHANNEL_SETUP_OPTIONS) {
       addChannelSetupOption(command, option, seenFlags);
     }
@@ -141,7 +125,10 @@ async function addChannelSetupOptions(
       legacyIntDefaultAttributeNames.add(attributeName);
     }
   }
-  return { mode, legacyIntDefaultAttributeNames };
+  return {
+    preserveLegacyDefaults: !selected || !selectedChannel?.setup,
+    dropEmptyLegacyDefaultsForAttributeNames: legacyIntDefaultAttributeNames,
+  };
 }
 
 export async function registerChannelsCli(
@@ -161,7 +148,7 @@ export async function registerChannelsCli(
           ["openclaw channels list", "List configured channels."],
           ["openclaw channels list --all", "Show configured, bundled, and installable channels."],
           ["openclaw channels add", "Open guided channel setup."],
-          ["openclaw channels status --probe", "Run channel status checks and probes."],
+          ["openclaw channels status --probe", "Check channel status and connectivity."],
           [
             "openclaw channels add --channel telegram --token <token>",
             "Add or update a channel account non-interactively.",
@@ -186,7 +173,7 @@ export async function registerChannelsCli(
     .command("status")
     .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
-    .option("--probe", "Probe channel credentials", false)
+    .option("--probe", "Check channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -207,7 +194,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsCapabilitiesCommand } = await loadChannelsCommands();
+        const { channelsCapabilitiesCommand } = await import("../commands/channels.js");
         await channelsCapabilitiesCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },
           defaultRuntime,
@@ -230,7 +217,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (entries, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsResolveCommand } = await loadChannelsCommands();
+        const { channelsResolveCommand } = await import("../commands/channels.js");
         await channelsResolveCommand(
           {
             agent: resolveStringOption(command, "agent"),
@@ -253,7 +240,7 @@ export async function registerChannelsCli(
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsLogsCommand } = await loadChannelsCommands();
+        const { channelsLogsCommand } = await import("../commands/channels.js");
         await channelsLogsCommand(opts, defaultRuntime);
       });
     });
@@ -324,8 +311,8 @@ export async function registerChannelsCli(
     .option("--name <name>", "Display name for this account");
 
   let channelSetupRegistration: ChannelSetupOptionRegistration = {
-    mode: "none",
-    legacyIntDefaultAttributeNames: new Set(),
+    preserveLegacyDefaults: true,
+    dropEmptyLegacyDefaultsForAttributeNames: new Set(),
   };
   const selectedChannelId = await resolveChannelsAddChannelFromArgv(argv);
   if (
@@ -340,7 +327,7 @@ export async function registerChannelsCli(
 
   addCommand.action(async (channelArg: string | undefined, opts, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const { channelsAddCommand } = await loadChannelsCommands();
+      const { channelsAddCommand } = await import("../commands/channels.js");
       const hasFlags = hasExplicitOptions(
         command,
         command.options
@@ -349,18 +336,7 @@ export async function registerChannelsCli(
       );
       await channelsAddCommand(
         {
-          ...resolveChannelsAddOptions(
-            channelArg,
-            opts,
-            command,
-            channelSetupRegistration.mode === "modern"
-              ? undefined
-              : {
-                  preserveLegacyDefaults: true,
-                  dropEmptyLegacyDefaultsForAttributeNames:
-                    channelSetupRegistration.legacyIntDefaultAttributeNames,
-                },
-          ),
+          ...resolveChannelsAddOptions(channelArg, opts, command, channelSetupRegistration),
           agent: resolveStringOption(command, "agent"),
         },
         defaultRuntime,
@@ -380,7 +356,7 @@ export async function registerChannelsCli(
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { channelsRemoveCommand } = await loadChannelsCommands();
+        const { channelsRemoveCommand } = await import("../commands/channels.js");
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },

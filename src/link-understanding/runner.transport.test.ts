@@ -1,12 +1,20 @@
+import { existsSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { applyLinkUnderstanding } from "./apply.js";
 import { runLinkUnderstanding } from "./runner.js";
@@ -106,6 +114,14 @@ function config(args: string[], timeoutSeconds = 10): OpenClawConfig {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
 });
 
 it("cancels a non-OK response body before releasing its guarded transport", async () => {
@@ -225,15 +241,16 @@ it("fetches bare URLs in order while ignoring titled markdown links", async () =
   );
 });
 
-it("stops processor descendants after caller cancellation", async () => {
+it("stops processor descendants after caller cancellation", async ({ signal }) => {
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");
     const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
     const wrapperSource = [
-      "const { spawn } = require('node:child_process')",
-      "const { writeFileSync } = require('node:fs')",
+      fixtureReceiptClientSource(receipts.endpoint),
+      "import { spawn } from 'node:child_process'",
+      "import { writeFileSync } from 'node:fs'",
       `const worker = spawn(process.execPath, ['-e', ${JSON.stringify(workerSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })`,
-      `worker.once('message', () => writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)))`,
+      `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
     await withServer(
@@ -244,18 +261,38 @@ it("stops processor descendants after caller cancellation", async () => {
         const original = { ...ctx };
         let workerPid: number | undefined;
         const result = applyLinkUnderstanding({
-          cfg: config(["-e", wrapperSource]),
+          cfg: config(["--input-type=module", "-e", wrapperSource]),
           ctx,
           signal: controller.signal,
         });
         const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
         try {
-          workerPid = await waitForPidFile(pidPath);
+          // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
+          const settled = result.then(
+            () => {
+              if (!existsSync(pidPath)) {
+                throw new Error(`Timed out waiting for pid file: ${pidPath}`);
+              }
+            },
+            (error: unknown) => {
+              if (!existsSync(pidPath)) {
+                throw error;
+              }
+            },
+          );
+          await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+          workerPid = await readPidFile(pidPath);
           expect(isPidAlive(workerPid)).toBe(true);
           controller.abort();
-          await rejected;
+          await withinTest(rejected, signal);
           expect(ctx).toEqual(original);
-          expect(await waitForPidToExit(workerPid, 500)).toBe(true);
+          // Caller rejection does not expose the adopted worker's native reap event.
+          while (isPidAlive(workerPid)) {
+            await delay(25, undefined, { signal }).catch((error: unknown) => {
+              throw new Error(`Processor descendant ${workerPid} stayed alive`, { cause: error });
+            });
+          }
+          expect(isPidAlive(workerPid)).toBe(false);
         } finally {
           controller.abort();
           killPidIfAlive(workerPid);

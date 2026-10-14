@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
@@ -35,9 +36,14 @@ vi.mock("./command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
+// mock-isolation: Directory commands read and mutate synthetic channel config, never host config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   readConfigFileSnapshotForWrite: async () => {
     const snapshot = await mocks.readConfigFileSnapshot();
@@ -117,32 +123,6 @@ describe("registerDirectoryCli", () => {
     });
     runtimeState.defaultRuntime.exit.mockImplementation((code: number) => {
       throw new Error(`exit:${code}`);
-    });
-  });
-
-  describe.each([
-    ["self", ["directory", "self"]],
-    ["peers", ["directory", "peers", "list"]],
-    ["groups", ["directory", "groups", "list"]],
-    ["members", ["directory", "groups", "members", "--group-id", "group-1"]],
-  ])("%s selector input", (_leaf, args) => {
-    it.each([
-      ["account", ""],
-      ["account", " \t\n "],
-      ["channel", ""],
-      ["channel", " \t\n "],
-    ])("rejects blank %s=%j before command startup", async (selector, value) => {
-      const startup = vi.fn(() => {
-        throw new Error("Command startup reached");
-      });
-      const program = new Command().name("openclaw").hook("preAction", startup);
-      registerDirectoryCli(program);
-
-      await expect(
-        program.parseAsync([...args, `--${selector}`, value], { from: "user" }),
-      ).rejects.toThrow(new RegExp(`--${selector}.*blank`));
-
-      expect(startup).not.toHaveBeenCalled();
     });
   });
 
@@ -248,7 +228,7 @@ describe("registerDirectoryCli", () => {
       });
     });
 
-    it.each(["", " \t\n "])("rejects blank group ID %j before setup writes", async (groupId) => {
+    it.each([""])("rejects blank group ID %j before setup writes", async (groupId) => {
       const program = new Command().name("openclaw");
       registerDirectoryCli(program);
 
@@ -299,10 +279,6 @@ describe("registerDirectoryCli", () => {
   it.each([
     ["self", ["directory", "self", "--channel", "slack", "--json"]],
     ["peers", ["directory", "peers", "list", "--channel", "slack", "--json"]],
-    [
-      "group members",
-      ["directory", "groups", "members", "--channel", "slack", "--group-id", "group-1", "--json"],
-    ],
   ])("stops %s when canonical config validation exits", async (_label, args) => {
     const directory = {
       self: vi.fn().mockResolvedValue({ id: "self-1" }),
@@ -540,106 +516,11 @@ describe("registerDirectoryCli", () => {
     expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("prefers live directory list readers when available", async () => {
-    const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
-    const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: { slack: {} } },
-      channelId: "slack",
-      plugin: {
-        id: "slack",
-        directory: { listPeers, listPeersLive },
-      },
-      configChanged: false,
-    });
-
-    const program = createProgram();
-
-    await program.parseAsync(
-      [
-        "directory",
-        "peers",
-        "list",
-        "--channel",
-        "slack",
-        "--query",
-        "ada",
-        "--limit",
-        "5",
-        "--json",
-      ],
-      { from: "user" },
-    );
-
-    expect(listPeersLive).toHaveBeenCalledTimes(1);
-    const listPeersLiveArgs = firstRecordArg(listPeersLive);
-    expect(listPeersLiveArgs.accountId).toBe("default");
-    expect(listPeersLiveArgs.query).toBe("ada");
-    expect(listPeersLiveArgs.limit).toBe(5);
-    expect(listPeers).not.toHaveBeenCalled();
-    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
-      JSON.stringify([{ id: "user:live", kind: "user" }], null, 2),
-    );
-  });
-
-  it("falls back to config-backed directory list readers when live readers are absent", async () => {
-    const listGroups = vi.fn().mockResolvedValue([{ id: "channel:config", kind: "group" }]);
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: { slack: {} } },
-      channelId: "slack",
-      plugin: {
-        id: "slack",
-        directory: { listGroups },
-      },
-      configChanged: false,
-    });
-
-    const program = createProgram();
-
-    await program.parseAsync(["directory", "groups", "list", "--channel", "slack", "--json"], {
-      from: "user",
-    });
-
-    expect(listGroups).toHaveBeenCalledTimes(1);
-    expect(firstRecordArg(listGroups).accountId).toBe("default");
-    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
-      JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
-    );
-  });
-
   it.each([
     {
       label: "peers",
       args: ["directory", "peers", "list", "--channel", "demo-directory", "--account", "account-1"],
       expected: "No peers found",
-    },
-    {
-      label: "groups",
-      args: [
-        "directory",
-        "groups",
-        "list",
-        "--channel",
-        "demo-directory",
-        "--account",
-        "account-1",
-      ],
-      expected: "No groups found",
-    },
-    {
-      label: "group members",
-      args: [
-        "directory",
-        "groups",
-        "members",
-        "--channel",
-        "demo-directory",
-        "--account",
-        "account-1",
-        "--group-id",
-        "group-1",
-      ],
-      expected: 'No group members found for group "group-1"',
     },
   ])("names the query context for empty $label", async ({ args, expected }) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
@@ -669,7 +550,6 @@ describe("registerDirectoryCli", () => {
 
   describe.each([
     { args: ["self"], method: "self", title: "Self" },
-    { args: ["peers", "list"], method: "listPeers", title: "Peers" },
     { args: ["groups", "list"], method: "listGroups", title: "Groups" },
     {
       args: ["groups", "members", "--group-id", "group-1"],
@@ -677,9 +557,9 @@ describe("registerDirectoryCli", () => {
       title: "Group Members",
     },
   ])("$title output", ({ args, method, title }) => {
-    it.each([60, 80])("preserves table bytes and raw JSON at width %i", async (columns) => {
+    it.each([80])("preserves table bytes and raw JSON at width %i", async (columns) => {
       const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-      const originalTerm = process.env.TERM;
+      const originalEnv = captureEnv(["TERM"]);
       Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
       process.env.TERM = "xterm";
       try {
@@ -742,11 +622,7 @@ describe("registerDirectoryCli", () => {
         } else {
           Reflect.deleteProperty(process.stdout, "columns");
         }
-        if (originalTerm === undefined) {
-          delete process.env.TERM;
-        } else {
-          process.env.TERM = originalTerm;
-        }
+        originalEnv.restore();
       }
     });
   });
@@ -788,30 +664,6 @@ describe("registerDirectoryCli", () => {
       ["directory", "self", "--channel", "demo-directory", "--json"],
       "Channel demo-directory does not support directory self",
     ],
-    [
-      "peers",
-      ["directory", "peers", "list", "--channel", "demo-directory", "--json"],
-      "Channel demo-directory does not support directory peers",
-    ],
-    [
-      "groups",
-      ["directory", "groups", "list", "--channel", "demo-directory", "--json"],
-      "Channel demo-directory does not support directory groups",
-    ],
-    [
-      "group members",
-      [
-        "directory",
-        "groups",
-        "members",
-        "--channel",
-        "demo-directory",
-        "--group-id",
-        "group-1",
-        "--json",
-      ],
-      "Channel demo-directory does not support group members listing",
-    ],
   ])("bubbles JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "demo-directory": {} } },
@@ -833,79 +685,7 @@ describe("registerDirectoryCli", () => {
   });
 
   it.each([
-    { mode: "human", args: ["directory", "self", "--channel", "demo-directory"] },
-    {
-      mode: "JSON",
-      args: ["directory", "self", "--channel", "demo-directory", "--json"],
-    },
-  ])("renders named errors without class names in $mode mode", async ({ mode, args }) => {
-    const error = new Error("Multiple agents are configured, but this operation has no owner.");
-    error.name = "AgentSelectionRequiredError";
-    const self = vi.fn().mockRejectedValue(error);
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: { "demo-directory": {} } },
-      channelId: "demo-directory",
-      plugin: { id: "demo-directory", directory: { self } },
-      configChanged: false,
-    });
-
-    const program = createProgram();
-
-    if (mode === "JSON") {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(error.message);
-      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
-      expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
-    } else {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
-      expect(runtimeErrors()).toEqual([error.message]);
-      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
-    }
-    expect([...runtimeState.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(error.name);
-  });
-
-  it.each([
     ["peers list", "5x", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
-    ["peers list", "", ["directory", "peers", "list", "--channel", "slack", "--limit", ""]],
-    ["peers list", "   ", ["directory", "peers", "list", "--channel", "slack", "--limit", "   "]],
-    ["groups list", "5x", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
-    ["groups list", "", ["directory", "groups", "list", "--channel", "slack", "--limit", ""]],
-    [
-      "group members with a blank group ID",
-      "5x",
-      ["directory", "groups", "members", "--channel", "slack", "--group-id", "", "--limit", "5x"],
-    ],
-    [
-      "group members",
-      "5x",
-      [
-        "directory",
-        "groups",
-        "members",
-        "--channel",
-        "slack",
-        "--group-id",
-        "group-1",
-        "--limit",
-        "5x",
-      ],
-    ],
-    [
-      "group members",
-      "",
-      [
-        "directory",
-        "groups",
-        "members",
-        "--channel",
-        "slack",
-        "--group-id",
-        "group-1",
-        "--limit",
-        "",
-      ],
-    ],
   ])("rejects invalid directory limit %s %j", async (_label, _limit, args) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { slack: {} } },

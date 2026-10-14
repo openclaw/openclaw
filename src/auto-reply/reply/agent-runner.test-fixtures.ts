@@ -27,13 +27,14 @@ type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueued
   };
 
 export function isModelRuntimeContextCarrier(message: { role: string; content: unknown }): boolean {
+  // OpenAI runtime notices use developer or user messages according to provider support.
   const text =
     extractTextFromChatContent(message.content, {
       joinWith: "\n",
       normalizeText: (value) => value,
     }) ?? "";
   return (
-    message.role === "user" &&
+    (message.role === "developer" || message.role === "user") &&
     hasInternalRuntimeContext(text) &&
     !stripInternalRuntimeContext(text).trim()
   );

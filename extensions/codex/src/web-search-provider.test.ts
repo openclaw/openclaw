@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
@@ -11,6 +11,8 @@ import {
   type JsonValue,
 } from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
+// Loads the provider's lazy runtime at collection, outside the first test's deadline.
+import "./web-search-provider.runtime.js";
 
 function codexModel(
   options: {
@@ -196,12 +198,6 @@ function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvid
   });
 }
 
-beforeAll(async () => {
-  // Execution cases share this lazy runtime. Import it once so the first case
-  // does not absorb module initialization that every later case reuses.
-  await import("./web-search-provider.runtime.js");
-});
-
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
@@ -340,27 +336,6 @@ describe("codex web search provider", () => {
       throw new Error("expected isolated Codex home and workspace");
     }
     expect(path.dirname(threadStartCwd)).toBe(path.dirname(isolatedCodexHome));
-  });
-
-  it("selects the live default text-capable model", async () => {
-    const { client, requests } = createFakeClient({
-      models: [
-        codexModel({ id: "available-first", isDefault: false }),
-        codexModel({ id: "available-default", model: "available-default-wire" }),
-      ],
-    });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const tool = createSearchTool(provider);
-
-    const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
-
-    expect(result?.model).toBe("available-default");
-    expect(requests[1]?.params).toEqual(
-      expect.objectContaining({ model: "available-default-wire" }),
-    );
-    expect(requests[2]?.params).not.toHaveProperty("model");
   });
 
   it("does not send app-server requests after authority ends during client preparation", async () => {

@@ -1,10 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
+  listSessionPendingInputs,
   stageSessionPendingInput,
   upsertSessionEntryCore,
   loadTranscriptEvents,
@@ -13,7 +18,9 @@ import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, setAvatar } from "../../state/user-profiles.js";
+import { setAvatar } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortQueuedChatTurnById,
@@ -24,11 +31,11 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
-import type { GatewayRequestContext } from "./types.js";
 
 describe("pending input read boundary", () => {
   it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:pending-automation",
@@ -80,7 +87,7 @@ describe("pending input read boundary", () => {
             jobs: name ? [{ ...job, name }] : [],
           });
           const counter = trackSqliteStatementExecutions(
-            openOpenClawStateDatabase().db,
+            requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
             ["names", "selection"],
             (sql) =>
               /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)
@@ -144,6 +151,7 @@ describe("pending input read boundary", () => {
       } finally {
         for (const receipt of receipts) {
           receipt.finish("interrupted");
+          await receipt.settled?.();
         }
       }
     });
@@ -151,7 +159,7 @@ describe("pending input read boundary", () => {
 
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+      await captureRuntimeConfigAsyncReader()();
       const profile = ensureProfileForEmail("pending-sender@example.test");
       const scope = {
         agentId: "main",
@@ -160,10 +168,9 @@ describe("pending input read boundary", () => {
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const receipts = [];
-      const readDisplay = vi.spyOn(userProfileList, "getUserProfileDisplay");
+      const readDisplay = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
-          now.mockReturnValue(2_000 + index);
           receipts.push(
             expectDefined(
               await stageSessionPendingInput(scope, {
@@ -184,6 +191,11 @@ describe("pending input read boundary", () => {
             ),
           );
         }
+        // Acceptance belongs to the writer worker, independently of the display projection.
+        const storedInputs = await listSessionPendingInputs(scope);
+        const acceptanceTimes = new Map(
+          storedInputs.items.map((input) => [input.id, input.acceptedAt]),
+        );
         const context = await createHistoryReadContext();
         for (const [index, overrides] of [
           {},
@@ -240,21 +252,26 @@ describe("pending input read boundary", () => {
           "pending-display-run-0",
         ]);
         expect(initial).toEqual(
-          receipts.map((receipt, index) =>
-            expect.objectContaining({
+          receipts.map((receipt, index) => {
+            const acceptedAt = expectDefined(
+              acceptanceTimes.get(receipt.inputId),
+              "stored acceptance time",
+            );
+            expect(acceptedAt).not.toBe(1_000 + index);
+            return expect.objectContaining({
               id: receipt.inputId,
-              acceptedAt: 2_000 + index,
+              acceptedAt,
               message: expect.objectContaining({
                 content: `Pending input ${index}`,
-                timestamp: 2_000 + index,
+                timestamp: acceptedAt,
                 __openclaw: expect.objectContaining({
                   senderIdentity: { type: "profile", id: profile.id },
                   senderName: "Historical sender",
                   senderProfileAvatarUrl: expect.stringContaining(profile.id),
                 }),
               }),
-            }),
-          ),
+            });
+          }),
         );
         const initialBytes = JSON.stringify(initial);
         expect(initialBytes).not.toContain("idempotencyKey");
@@ -289,14 +306,15 @@ describe("pending input read boundary", () => {
         readDisplay.mockRestore();
         for (const receipt of receipts) {
           receipt.finish("interrupted");
+          await receipt.settled?.();
         }
-        now.mockRestore();
       }
     });
   });
 
   it("keeps cancelled input readable and sanitized without changing the transcript or crossing a reset", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:accepted",
@@ -327,6 +345,7 @@ describe("pending input read boundary", () => {
       );
       try {
         receipt.finish("cancelled");
+        await receipt.settled?.();
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
         const displayId = `pending:${receipt.inputId}`;
         expect(page).toMatchObject({
@@ -340,6 +359,7 @@ describe("pending input read boundary", () => {
         expect(JSON.stringify(page)).not.toContain("credential=");
         expect(await loadTranscriptEvents(scope)).toEqual([]);
         const respond = vi.fn();
+        const context = await createHistoryReadContext();
         const lookup = () =>
           expectDefined(
             chatMessageGetHandlers["chat.message.get"],
@@ -347,12 +367,18 @@ describe("pending input read boundary", () => {
           )({
             params: { sessionKey: scope.sessionKey, messageId: displayId },
             respond,
-            context: { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
+            context,
             req: {} as never,
             client: null,
             isWebchatConnect: () => false,
           });
-        await lookup();
+        const sql = observeHostDataSql();
+        try {
+          await lookup();
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         expect(respond).toHaveBeenLastCalledWith(
           true,
           expect.objectContaining({
@@ -368,12 +394,14 @@ describe("pending input read boundary", () => {
         });
       } finally {
         receipt.finish("interrupted");
+        await receipt.settled?.();
       }
     });
   });
 
   it("does not reveal an input hidden by the canonical history visibility policy", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:hidden-input",
@@ -405,7 +433,7 @@ describe("pending input read boundary", () => {
         )({
           params: { sessionKey: scope.sessionKey, messageId: `pending:${receipt.inputId}` },
           respond,
-          context: { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
+          context: await createHistoryReadContext(),
           req: {} as never,
           client: null,
           isWebchatConnect: () => false,
@@ -413,6 +441,7 @@ describe("pending input read boundary", () => {
         expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_visible" });
       } finally {
         receipt.finish("interrupted");
+        await receipt.settled?.();
       }
     });
   });
@@ -423,6 +452,7 @@ describe("pending input consumption receipts", () => {
     "%s returns only requested current-session receipts in pages and empty deltas",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:collected",
@@ -536,6 +566,7 @@ describe("pending input consumption receipts", () => {
             }).aborted,
           ).toBe(true);
           retained[0]?.finish("cancelled");
+          await retained[0]?.settled?.();
           const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
           expect(cancelledPage.inputReceipts).toEqual([
@@ -550,12 +581,9 @@ describe("pending input consumption receipts", () => {
           await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
           expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
         } finally {
-          aggregate.finish("interrupted");
-          for (const source of sources) {
-            source.finish("interrupted");
-          }
-          for (const receipt of retained) {
+          for (const receipt of [aggregate, ...sources, ...retained]) {
             receipt.finish("interrupted");
+            await receipt.settled?.();
           }
         }
       });

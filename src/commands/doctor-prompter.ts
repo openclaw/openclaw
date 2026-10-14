@@ -2,11 +2,7 @@ import { confirm, select } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  resolveDoctorRepairMode,
-  shouldAutoApproveDoctorFix,
-  type DoctorRepairMode,
-} from "./doctor-repair-mode.js";
+import { resolveDoctorRepairMode, shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
 import type { DoctorOptions } from "./doctor.types.js";
 import { guardCancel } from "./onboard-helpers.js";
 
@@ -17,28 +13,16 @@ type DoctorRuntimeRepairConfirmParams = DoctorConfirmParams & {
   requiresInteractiveConfirmation?: boolean;
 };
 
-export type DoctorPrompter = {
-  confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmRuntimeRepair: (params: DoctorRuntimeRepairConfirmParams) => Promise<boolean>;
-  select: <T>(params: Parameters<typeof select>[0], fallback: T) => Promise<T>;
-  shouldRepair: boolean;
-  shouldForce: boolean;
-  repairMode: DoctorRepairMode;
-};
+export type DoctorPrompter = ReturnType<typeof createDoctorPrompter>;
 
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   signal?: AbortSignal;
-}): DoctorPrompter {
+}) {
   const repairMode = resolveDoctorRepairMode(params.options);
   const confirmPrompt = async (p: DoctorConfirmParams) => {
-    if (params.signal?.aborted) {
-      return false;
-    }
-    if (repairMode.nonInteractive) {
+    if (params.signal?.aborted || repairMode.nonInteractive) {
       return false;
     }
     if (!repairMode.canPrompt) {
@@ -68,7 +52,7 @@ export function createDoctorPrompter(params: {
   return {
     confirm: confirmDefault,
     confirmAutoFix: confirmDefault,
-    confirmAggressiveAutoFix: async (p) => {
+    confirmAggressiveAutoFix: async (p: DoctorConfirmParams) => {
       if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
         return true;
       }
@@ -77,7 +61,7 @@ export function createDoctorPrompter(params: {
       }
       return confirmPrompt(p);
     },
-    confirmRuntimeRepair: async (p) => {
+    confirmRuntimeRepair: async (p: DoctorRuntimeRepairConfirmParams) => {
       const { requiresInteractiveConfirmation, ...confirmParams } = p;
       if (
         requiresInteractiveConfirmation !== true &&

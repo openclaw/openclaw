@@ -1,3 +1,4 @@
+import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -11,19 +12,20 @@ import {
   ChatSessionCompanionThreads,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
-  requestSessionCompanionState,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
-import type { SidebarLayout } from "./sidebar-layout-types.ts";
+import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
   isSidebarSlotVisible,
   openSlot,
+  presentNarrowSidebarLayout,
   promoteSidebarPanel,
   setSidebarOpen,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
@@ -32,6 +34,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
   protected sessionCompanionFocusRequest?: () => boolean;
+  /** The subagent the Subagents panel was asked to show, or null for its list; taken once. */
+  protected subagentsShowRequest?: () => string | null | undefined;
+  /** The control a background panel was opened from in a narrow pane; the region takes it once. */
+  protected sideFocusOrigin?: () => HTMLElement | null;
   protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
     this.requestUpdate();
   });
@@ -77,13 +83,96 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
-      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
-      this.setSessionObserverVisibility(false);
+    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion");
+    const changeSlot = closing ? closeSlot : openSlot;
+    this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
+    this.setSessionObserverVisibility(!closing);
+  }
+
+  requestSubagentsPanel(intent: "open" | "toggle"): void {
+    this.requestBackgroundPanel("subagents", intent);
+  }
+
+  /** Opens the Subagents panel on one subagent, or on its list. */
+  protected showSubagents(subagentKey: string | null, focus = false): void {
+    const sessionKey = this.state?.sessionKey;
+    // The pane owns the intent across the panel's lazy mount; the panel takes
+    // it once, and only for the session that asked.
+    const take = () => {
+      if (this.subagentsShowRequest === take) {
+        this.subagentsShowRequest = undefined;
+        this.requestUpdate();
+      }
+      return this.state?.sessionKey === sessionKey ? subagentKey : undefined;
+    };
+    this.subagentsShowRequest = take;
+    this.requestUpdate();
+    this.requestBackgroundPanel("subagents", "open");
+    if (focus) {
+      void this.focusSubagentsPanel();
+    }
+  }
+
+  private async focusSubagentsPanel(): Promise<void> {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
+    await customElements.whenDefined("openclaw-chat-sidebar-region");
+    this.requestUpdate();
+    await this.updateComplete;
+    const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
+    await region?.updateComplete;
+    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
+      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
+    );
+    if (
+      this.isConnected &&
+      state &&
+      this.state === state &&
+      state.sessionKey === sessionKey &&
+      this.isSlotShown(state.sidebarLayout, "subagents")
+    ) {
+      tab?.focus({ preventScroll: true });
+    }
+  }
+
+  /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
+  protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.mergedChrome || this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout, { allPanels: this.mergedChrome })
+      : layout;
+  }
+
+  protected isSlotShown(layout: SidebarLayout, slot: SidebarSlotId): boolean {
+    return isSidebarSlotVisible(this.presentSidebarLayout(layout), slot);
+  }
+
+  protected requestBackgroundPanel(
+    slot: "subagents" | "processes",
+    intent: "open" | "close" | "toggle",
+  ): void {
+    const state = this.state;
+    if (!state) {
       return;
     }
-    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
-    this.setSessionObserverVisibility(true);
+    const closing =
+      intent === "close" ||
+      (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot));
+    if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
+      // The panel is about to replace the view this control is in; the region,
+      // which may not have loaded yet, carries focus across from it.
+      const active = this.ownerDocument.activeElement;
+      const origin = active instanceof HTMLElement && this.contains(active) ? active : null;
+      const take = () => {
+        if (this.sideFocusOrigin === take) {
+          this.sideFocusOrigin = undefined;
+        }
+        return origin;
+      };
+      this.sideFocusOrigin = take;
+    }
+    this.commitSidebarLayout(
+      closing ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
+    );
   }
 
   protected syncSessionCompanionPresentation(presented: boolean): void {
@@ -240,7 +329,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.sessionCompanionHydrationKey = hydrationKey;
     void this.sessionCompanionThreads.hydrate(
       sessionKey,
-      (key) => requestSessionCompanionState(state.client!, key, agentId),
+      (key) =>
+        state.client!.request<SessionsCompanionStateResult>("sessions.companion.state", {
+          sessionKey: key,
+          ...(agentId ? { agentId } : {}),
+        }),
       agentId,
     );
   }

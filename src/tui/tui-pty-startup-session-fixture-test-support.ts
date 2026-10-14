@@ -152,9 +152,10 @@ export async function exerciseStartupHistoryRendering(
     releaseStartup: () => Promise<void>;
   },
   timeoutMs: number,
+  signal: AbortSignal,
 ) {
   try {
-    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", timeoutMs);
+    await fixture.waitForLogEntry((entry) => entry.method === "startupHistoryPending", signal);
     let startupOutput = "";
     const startupRows = await waitForSynchronizedFrameRows(
       {

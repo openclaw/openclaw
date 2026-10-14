@@ -2,15 +2,9 @@
 import { Option, type Command } from "commander";
 import { isGatewayServiceEnv } from "../../daemon/constants.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveGatewayRpcOptionsWithLocalPort } from "../gateway-rpc.js";
 import type { DaemonInstallOptions, DaemonLifecycleOptions } from "./types.js";
-
-const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
-const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
-const updateExecutorModuleLoader = createLazyImportLoader(() => import("./update-executor.js"));
-const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
 function updateExecutorOption(): Option {
   return new Option("--update-executor <mode>", "Private update executor")
@@ -27,7 +21,7 @@ async function runUpdateCommand(
     await operation();
     return;
   }
-  const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
+  const { runGatewayServiceUpdateCommand } = await import("./update-executor.js");
   await runGatewayServiceUpdateCommand(mode, action, operation);
 }
 
@@ -55,25 +49,22 @@ function resolveInstallOptions(
 }
 
 function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
-  const parentForce = inheritOptionFromParent<boolean>(command, "force");
-  const force = Boolean(cmdOpts.force || parentForce);
+  const options = resolveLifecycleOptions(cmdOpts, command);
   const safeFromGateway =
     process.platform === "win32" &&
     isGatewayServiceEnv(process.env) &&
     !isGatewayExternallySupervised() &&
-    !force &&
+    !options.force &&
     cmdOpts.wait === undefined &&
     !cmdOpts.preserveDefinition &&
     !cmdOpts.skipDeferral;
   return {
-    ...cmdOpts,
-    force,
+    ...options,
     safe: cmdOpts.safe || safeFromGateway,
-    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
-function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   return {
     ...cmdOpts,
@@ -87,19 +78,19 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("status")
     .description(
-      opts?.statusDescription ?? "Show gateway service status + probe connectivity/capability",
+      opts?.statusDescription ?? "Show gateway service status + check connectivity/capability",
     )
     .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--port <port>", "Local Gateway port")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--no-probe", "Skip RPC probe")
-    .option("--require-rpc", "Exit non-zero when the RPC probe fails", false)
+    .option("--no-probe", "Skip RPC check")
+    .option("--require-rpc", "Exit non-zero when the RPC check fails", false)
     .option("--deep", "Scan system-level services", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
-      const { runDaemonStatus } = await daemonStatusModuleLoader.load();
+      const { runDaemonStatus } = await import("./status.runtime.js");
       await runDaemonStatus({
         rpc: resolveGatewayRpcOptionsWithLocalPort(
           {
@@ -122,6 +113,15 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
+    .addOption(
+      new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--restore-service-cli <json>",
+        "Restore the service onto a retained OpenClaw CLI",
+      ).hideHelp(),
+    )
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--allow-unconfigured", "Allow the service to start without gateway.mode=local")
@@ -130,7 +130,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(updateExecutorOption())
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
-        const { runDaemonInstall } = await daemonInstallModuleLoader.load();
+        const { runDaemonInstall } = await import("./install.runtime.js");
         await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
       });
     });
@@ -144,7 +144,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       .description(`${description} the Gateway service (launchd/systemd/schtasks)`)
       .option("--json", "Output JSON", false)
       .action(async (cmdOpts, command) => {
-        const lifecycle = await daemonLifecycleModuleLoader.load();
+        const lifecycle = await import("./lifecycle.runtime.js");
         await lifecycle[action]({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
       });
   }
@@ -162,8 +162,8 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
-        const { runDaemonStop } = await daemonLifecycleModuleLoader.load();
-        await runDaemonStop(resolveStopOptions(cmdOpts, command));
+        const { runDaemonStop } = await import("./lifecycle.runtime.js");
+        await runDaemonStop(resolveLifecycleOptions(cmdOpts, command));
       });
     });
 
@@ -192,7 +192,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
-        const { runDaemonRestart } = await daemonLifecycleModuleLoader.load();
+        const { runDaemonRestart } = await import("./lifecycle.runtime.js");
         await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
       });
     });

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -39,19 +40,9 @@ export type SubsystemLogger = {
 type ChalkInstance = InstanceType<typeof Chalk>;
 
 const inspectValue: ((value: unknown) => string) | null = (() => {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
   try {
-    const utilNamespace = getBuiltinModule("util") as {
-      inspect?: (value: unknown) => string;
-    };
-    return typeof utilNamespace.inspect === "function" ? utilNamespace.inspect : null;
+    const inspect = process.getBuiltinModule?.("util").inspect;
+    return typeof inspect === "function" ? inspect : null;
   } catch {
     return null;
   }
@@ -156,13 +147,10 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (CHANNEL_SUBSYSTEM_PREFIXES.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
-  if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
-    return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
-  }
-  return parts.join("/");
+  return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
 }
 
-export function stripRedundantSubsystemPrefixForConsole(
+function stripRedundantSubsystemPrefixForConsole(
   message: string,
   displaySubsystem: string,
 ): string {
@@ -170,7 +158,6 @@ export function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  // Common duplication when a message manually includes the subsystem tag.
   if (message.startsWith("[")) {
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
@@ -179,11 +166,7 @@ export function stripRedundantSubsystemPrefixForConsole(
         normalizeLowercaseStringOrEmpty(bracketTag) ===
         normalizeLowercaseStringOrEmpty(displaySubsystem)
       ) {
-        let i = closeIdx + 1;
-        while (message[i] === " ") {
-          i += 1;
-        }
-        return message.slice(i);
+        return message.slice(closeIdx + 1).replace(/^ */, "");
       }
     }
   }
@@ -200,17 +183,7 @@ export function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  let i = displaySubsystem.length;
-  while (message[i] === " ") {
-    i += 1;
-  }
-  if (message[i] === ":") {
-    i += 1;
-  }
-  while (message[i] === " ") {
-    i += 1;
-  }
-  return message.slice(i);
+  return message.slice(displaySubsystem.length).replace(/^ *:? */, "");
 }
 
 function createConsoleLineFormatter(subsystem: string) {
@@ -308,13 +281,21 @@ function formatConsoleMetaValue(value: unknown): string | undefined {
   return JSON.stringify(value);
 }
 
-/** Keeps an Error's message, which a JSON round-trip would otherwise reduce to `{}`. */
-function prepareConsoleMetaRecord(meta: Record<string, unknown>): Record<string, unknown> {
+/** Preserve native error diagnostics before any sink reduces non-enumerable fields to `{}`. */
+function prepareLogMetaRecord(
+  meta: Record<string, unknown>,
+  stackHeadOnly = false,
+): Record<string, unknown> {
   let prepared: Record<string, unknown> | undefined;
   for (const [key, value] of Object.entries(meta)) {
     if (value instanceof Error) {
       prepared ??= { ...meta };
-      prepared[key] = value.message;
+      prepared[key] = {
+        name: value.name,
+        message: value.message,
+        errorCode: extractErrorCode(value),
+        stack: stackHeadOnly ? value.stack?.split("\n").slice(0, 6).join("\n") : value.stack,
+      };
     }
   }
   return prepared ?? meta;
@@ -335,7 +316,7 @@ function prepareConsoleMetaRecord(meta: Record<string, unknown>): Record<string,
 function formatConsoleMeta(meta: Record<string, unknown>): string {
   let redacted: Record<string, unknown>;
   try {
-    redacted = redactLogRecordForTransport(prepareConsoleMetaRecord(meta), { format: "console" });
+    redacted = redactLogRecordForTransport(meta);
   } catch {
     // A record this sink cannot serialize must not cost the console its message.
     // The file log and `openclaw logs --json` remain the full-fidelity record.
@@ -410,6 +391,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
+    let consoleFields = meta;
     if (meta && Object.keys(meta).length > 0) {
       const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
         consoleMessage?: unknown;
@@ -417,7 +399,8 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }
-      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+      fileMeta = Object.keys(rest).length > 0 ? prepareLogMetaRecord(rest) : undefined;
+      consoleFields = fileMeta && consoleEnabled ? prepareLogMetaRecord(rest, true) : undefined;
     }
     if (fileEnabled) {
       logToFile(getFileLogger(level), level, message, fileMeta);
@@ -431,9 +414,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const consoleMeta =
       consoleSettings.style !== "json" &&
       consoleMessageOverride === undefined &&
-      fileMeta &&
+      consoleFields &&
       CONSOLE_META_LEVELS.has(level)
-        ? formatConsoleMeta(fileMeta)
+        ? formatConsoleMeta(consoleFields)
         : "";
     const consoleMessage =
       consoleMessageOverride ?? (consoleMeta ? `${message} ${consoleMeta}` : message);
@@ -442,7 +425,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         level,
         suppressProbeMessages,
         message: consoleMessage,
-        meta: fileMeta,
+        meta: consoleFields,
       })
     ) {
       return;
@@ -450,7 +433,12 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     writeConsoleLine(
       level,
       consoleSettings.style === "json"
-        ? formatJsonConsoleLine({ level, subsystem: resolvedSubsystem, message, meta: fileMeta })
+        ? formatJsonConsoleLine({
+            level,
+            subsystem: resolvedSubsystem,
+            message,
+            meta: consoleFields,
+          })
         : (formatConsoleLine ??= createConsoleLineFormatter(resolvedSubsystem))(
             level,
             consoleMessage,

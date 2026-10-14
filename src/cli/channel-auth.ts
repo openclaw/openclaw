@@ -12,7 +12,7 @@ import { resolveInstallableChannelPlugin } from "../commands/channel-setup/chann
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import type { ChannelAccountStartOutcome } from "../gateway/server-channel-runtime.types.js";
@@ -78,7 +78,10 @@ async function isConfiguredAuthPlugin(
 
 async function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): Promise<string> {
   // Account callbacks need runtime values; this auto-enabled view is never persisted.
-  const cfg = applyPluginAutoEnable({ config: getRuntimeConfig(), env: process.env }).config;
+  const cfg = applyPluginAutoEnable({
+    config: await captureRuntimeConfigAsyncReader()(),
+    env: process.env,
+  }).config;
   const configured: string[] = [];
   for (const plugin of listChannelPlugins()) {
     if (supportsChannelAuthMode(plugin, mode) && (await isConfiguredAuthPlugin(plugin, cfg))) {
@@ -104,12 +107,7 @@ async function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
   mode: ChannelAuthMode,
   runtime: RuntimeEnv,
-): Promise<{
-  cfg: OpenClawConfig;
-  channelInput: string;
-  channelId: string;
-  plugin: ChannelPlugin;
-} | null> {
+) {
   parseAccountSelector(opts.account);
   parseChannelSelector(opts.channel);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
@@ -160,7 +158,7 @@ async function resolveChannelPluginForMode(
   }
   return {
     // Execution needs resolved runtime values; successful writes refresh this snapshot.
-    cfg: getRuntimeConfig(),
+    cfg: await captureRuntimeConfigAsyncReader()(),
     channelInput,
     channelId,
     plugin,

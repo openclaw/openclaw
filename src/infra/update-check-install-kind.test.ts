@@ -109,7 +109,7 @@ describe("resolveUpdateInstallKind", () => {
       await expect(resolveUpdateInstallKind(alias)).resolves.toBe("git");
       await expect(resolveUpdateInstallKind(nested)).resolves.toBe("package");
 
-      expect(runCommand).toHaveBeenCalledTimes(3);
+      expect(runCommand).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -124,7 +124,9 @@ describe("resolveUpdateInstallKind", () => {
           await fs.mkdir(path.join(root, ".git"));
         }
 
+        const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
         await expect(resolveUpdateInstallKind(root)).resolves.toBe("package");
+        expect(runCommand).toHaveBeenCalledTimes(marker === "absent" ? 0 : 1);
       });
     },
   );

@@ -22,12 +22,8 @@ function isGatewayLocalPath(value: string): boolean {
 }
 
 function isCanonicalPublicResourcePath(value: string): boolean {
-  try {
-    // Public readers match URL pathnames, and the proxy owns its route before reader dispatch.
-    return value !== SANDBOX_HOST_PATH && new URL(value, "http://localhost").pathname === value;
-  } catch {
-    return false;
-  }
+  // Public readers match URL pathnames, and the proxy owns its route before reader dispatch.
+  return value !== SANDBOX_HOST_PATH && URL.parse(value, "http://localhost")?.pathname === value;
 }
 
 export function createPluginBoardWidgetContentKindRegistrar(registry: PluginRegistry) {
@@ -76,7 +72,7 @@ export function createPluginBoardWidgetContentKindRegistrar(registry: PluginRegi
     ) {
       fail(
         record.id,
-        `public resource paths must be canonical URL pathnames and cannot use ${SANDBOX_HOST_PATH}`,
+        `public resource paths must be normalized URL paths and cannot use ${SANDBOX_HOST_PATH}`,
       );
     }
     for (const registered of registry.boardWidgetContentKinds.values()) {

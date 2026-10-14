@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Ensures ingress agent command callsites pass explicit owner context.
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
@@ -20,9 +19,6 @@ const enforcedFiles = new Set([
   "src/gateway/server-node-events.ts",
 ]);
 
-/**
- * Finds legacy `agentCommand(...)` call lines in ingress-owned source.
- */
 function findLegacyAgentCommandCallLines(
   _content: string,
   _fileName: string,
@@ -34,9 +30,6 @@ function findLegacyAgentCommandCallLines(
   });
 }
 
-/**
- * Runs the ingress owner-context guard.
- */
 async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

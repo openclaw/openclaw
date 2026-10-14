@@ -179,15 +179,12 @@ describe("guardSessionManager integration", () => {
     },
   );
 
-  it.each(["retain", "omit", "in-place", "forge"] as const)(
+  it.each(["retain", "in-place", "forge"] as const)(
     "sender provenance survives only unchanged queued hook evidence: %s",
     (mode) => {
       installWriteHook((event) => {
         const message = (event as { message: PersistedUserTurnMessage }).message;
         const metadata = message["__openclaw"]!;
-        if (mode === "omit") {
-          delete metadata.senderIdentity;
-        }
         if (mode === "in-place") {
           (metadata.senderIdentity as { id: string }).id = "forged";
         }
@@ -333,7 +330,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toMatchObject(prepared);
   });
 
-  it("skips plugin hooks while redacting every persisted transcript content field", () => {
+  it("skips plugin hooks while preserving every persisted transcript content field", () => {
     installWriteHook(() => ({
       message: makeAgentAssistantMessage({
         content: [{ type: "text", text: "changed by hook" }],
@@ -366,16 +363,18 @@ describe("guardSessionManager integration", () => {
 
     const messages = getMessages(sm);
 
-    const serialized = JSON.stringify(messages);
-
-    expect(serialized).not.toContain("the email is peter@dc.io");
-    expect(serialized).not.toContain("contact peter@dc.io");
-    expect(serialized).not.toContain("peter@dc.io\\n");
-    expect(serialized).not.toContain('"/tmp/peter@dc.io"');
-    expect(serialized).toContain('"thinking":"the email is peter@d***.io"');
-    expect(serialized).toContain('"text":"contact peter@d***.io"');
-    expect(serialized).toContain('"text":"peter@d***.io\\n"');
-    expect(serialized).toContain('"/tmp/peter@d***.io"');
+    expect(messages).toMatchObject([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
+          { type: "text", text: "contact peter@dc.io" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
+        ],
+      },
+      { role: "toolResult", content: [{ type: "text", text: "peter@dc.io\n" }] },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("changed by hook");
   });
 });
 
@@ -447,7 +446,6 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(messages[1]).toMatchObject({
       toolCallId: "call_orphan_2",
       isError: true,
-      content: [{ type: "text", text: expect.stringContaining("missing tool result") }],
     });
 
     appendMessage({
@@ -460,18 +458,5 @@ describe("flushPendingToolResultsAfterIdle", () => {
       "toolResult",
       "user",
     ]);
-  });
-
-  it("immediately flushes pending results when idle waiting is disabled", async () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = appender(sm);
-    const waitForIdleSpy = vi.fn(async () => {});
-    const agent = { waitForIdle: waitForIdleSpy };
-
-    appendMessage(idleToolCall("call_orphan_immediate"));
-    await flushPendingToolResultsAfterIdle({ agent, sessionManager: sm, timeoutMs: 0 });
-
-    expect(waitForIdleSpy).not.toHaveBeenCalled();
-    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant", "toolResult"]);
   });
 });

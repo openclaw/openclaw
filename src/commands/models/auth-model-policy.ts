@@ -64,10 +64,7 @@ export function withoutProviderModelPolicy(
       delete connection.agents.defaults.models;
     }
   }
-  for (const agent of [
-    ...Object.values(connection.agents?.entries ?? {}),
-    ...(connection.agents?.list ?? []),
-  ]) {
+  for (const agent of Object.values(connection.agents?.entries ?? {})) {
     delete agent.modelPolicy;
   }
   return connection;

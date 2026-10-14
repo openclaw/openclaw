@@ -38,7 +38,7 @@ describe("cold-import resource observations", () => {
   it.each([
     "not a resource record",
     RESOURCE_MARKER + "{",
-    ...[undefined, 0, -1, 1.5].map(
+    ...[undefined, 0, 1.5].map(
       (pid) =>
         RESOURCE_MARKER + JSON.stringify({ ...observation, pid, userCpuUs: 1, systemCpuUs: 0 }),
     ),

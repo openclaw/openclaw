@@ -4,21 +4,10 @@ import type {
   FileEntry,
   SessionEntry,
   SessionHeader,
+  SessionMessageEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
-const sessionEntryTypeSchema = z.enum([
-  "message",
-  "thinking_level_change",
-  "model_change",
-  "compaction",
-  "reset",
-  "branch_summary",
-  "custom",
-  "custom_message",
-  "label",
-  "session_info",
-]);
 const readableContentSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))]);
 const readableMessageSchema = z.discriminatedUnion("role", [
   z.looseObject({ role: z.literal("user"), content: readableContentSchema }),
@@ -106,6 +95,9 @@ const indexedSessionEntrySchema = z.discriminatedUnion("type", [
     name: z.string().optional(),
   }),
 ]);
+const sessionEntryTypeSchema = z.enum(
+  indexedSessionEntrySchema.options.flatMap((entry) => [...entry.shape.type.values]),
+);
 const parentLinkedOpaqueEntrySchema = z.looseObject({
   type: z
     .unknown()
@@ -140,6 +132,15 @@ export function assertCurrentSessionTranscriptHeader(header: SessionHeader | und
       "Persisted legacy session transcripts require doctor/import migration before runtime use",
     );
   }
+}
+
+export function isReadableSessionMessage(
+  message: unknown,
+): message is Extract<
+  SessionMessageEntry["message"],
+  { role: z.infer<typeof readableMessageSchema>["role"] }
+> {
+  return readableMessageSchema.safeParse(message).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {

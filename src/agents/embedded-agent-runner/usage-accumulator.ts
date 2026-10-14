@@ -12,6 +12,7 @@ export type UsageAccumulator = {
   cacheWrite1h: number;
   reasoningTokens: number;
   total: number;
+  usageReport?: NormalizedUsage["usageReport"];
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
   cost: NormalizedUsage["cost"] | "unavailable";
   /** Counts every attempt, including retries. */
@@ -36,22 +37,26 @@ export const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: NormalizedUsage | undefined,
 ) => {
+  if (usage?.usageReport?.state === "unavailable") {
+    target.usageReport = usage.usageReport;
+    target.cost = "unavailable";
+    return;
+  }
   if (!hasBillableUsage(usage)) {
     return;
   }
+  target.usageReport ??= usage.usageReport;
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  if (usage.cacheRead !== undefined) {
-    target.cacheReadReported = true;
+  for (const key of ["cacheRead", "cacheWrite"] as const) {
+    if (usage[key] !== undefined) {
+      target[`${key}Reported`] = true;
+    }
   }
-  if (usage.cacheWrite !== undefined) {
-    target.cacheWriteReported = true;
+  for (const key of USAGE_COST_COMPONENTS) {
+    target[key] += usage[key] ?? 0;
   }
-  target.input += usage.input ?? 0;
-  target.output += usage.output ?? 0;
-  target.cacheRead += usage.cacheRead ?? 0;
-  target.cacheWrite += usage.cacheWrite ?? 0;
   target.cacheWrite1h += usage.cacheWrite1h ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
@@ -100,26 +105,27 @@ export const mergeAttemptRunStatsIntoAccumulator = (
 };
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
+  if (usage.usageReport?.state === "unavailable") {
+    return { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } };
+  }
   const hasUsage =
-    usage.input > 0 ||
-    usage.output > 0 ||
-    usage.cacheRead > 0 ||
-    usage.cacheWrite > 0 ||
+    USAGE_COST_COMPONENTS.some((key) => usage[key] > 0) ||
     usage.reasoningTokens > 0 ||
     usage.total > 0;
   const cost = usage.cost === "unavailable" ? undefined : usage.cost;
-  if (!hasUsage && !cost) {
+  if (!usage.usageReport && !hasUsage && !cost) {
     return undefined;
   }
   const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   return {
-    input: usage.input || undefined,
-    output: usage.output || undefined,
+    ...(usage.usageReport ? { usageReport: usage.usageReport } : {}),
+    input: usage.usageReport ? usage.input : usage.input || undefined,
+    output: usage.usageReport ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
     ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
-    total: usage.total || derivedTotal || undefined,
+    total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),
   };
 };

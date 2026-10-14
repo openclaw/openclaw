@@ -29,7 +29,6 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
     id: `bridge:${method}:1`,
     method,
     args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
-    promise: new Promise(() => {}),
     reply: owner.inbox.createReply(`bridge:${method}:1`),
     cancel,
   };

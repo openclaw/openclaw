@@ -798,7 +798,7 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
    /** Sets focus on the control. */
    focus(options) {
 diff --git a/dist/chunks/chunk.XSKA3LE6.js b/dist/chunks/chunk.XSKA3LE6.js
-index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc9110ac584e 100644
+index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45f941bfed 100644
 --- a/dist/chunks/chunk.XSKA3LE6.js
 +++ b/dist/chunks/chunk.XSKA3LE6.js
 @@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -821,7 +821,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
        const isRtl = this.localize.dir() === "rtl";
        if (event.key === "Escape" && this.open && isTopDismissible(this)) {
          const trigger = this.getTrigger();
-@@ -78,22 +77,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -78,22 +77,12 @@ var WaDropdown = class extends WebAwesomeElement {
          trigger?.focus({ preventScroll: true });
          return;
        }
@@ -843,12 +843,13 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
 -        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
 -      }
 +      const items = currentSubmenuItem ? this.getSubmenuItems(currentSubmenuItem) : this.getItems();
-+      const activeItem = items.find((item) => item === focusedItem) ?? items.find((item) => item.active);
++      // A focused item outside this level (e.g. the owner of a hover-opened submenu) keeps its keys.
++      const activeItem = items.find((item) => item === focusedItem) ?? (focusedItem ? void 0 : items.find((item) => item.active));
 +      const activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
        let itemToSelect;
        if (event.key === "ArrowUp") {
          event.preventDefault();
-@@ -113,39 +101,23 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -113,39 +102,23 @@ var WaDropdown = class extends WebAwesomeElement {
            itemToSelect = items[0];
          }
        }
@@ -896,7 +897,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
          return;
        }
        if (event.key === "Home" || event.key === "End") {
-@@ -154,7 +126,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -154,7 +127,7 @@ var WaDropdown = class extends WebAwesomeElement {
          itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
        }
        if (event.key === "Tab") {
@@ -905,7 +906,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
        }
        if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
          clearTimeout(this.userTypedTimeout);
-@@ -180,19 +152,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -180,19 +153,11 @@ var WaDropdown = class extends WebAwesomeElement {
          itemToSelect.scrollIntoView({ block: "nearest" });
          return;
        }
@@ -926,7 +927,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
          } else {
            this.makeSelection(activeItem, event);
          }
-@@ -213,7 +177,8 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -213,7 +178,8 @@ var WaDropdown = class extends WebAwesomeElement {
      };
      /** Handle global mouse movement for safe triangle logic */
      this.handleGlobalMouseMove = (event) => {
@@ -936,7 +937,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -231,7 +196,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -231,7 +197,7 @@ var WaDropdown = class extends WebAwesomeElement {
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
@@ -945,7 +946,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -241,15 +206,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,15 +207,20 @@ var WaDropdown = class extends WebAwesomeElement {
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -971,7 +972,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -266,12 +236,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -266,12 +237,7 @@ var WaDropdown = class extends WebAwesomeElement {
          return;
        }
        this.customStates.set("open", this.open);
@@ -985,7 +986,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -300,104 +265,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -300,104 +266,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -1166,7 +1167,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -405,8 +362,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -405,8 +363,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -1175,7 +1176,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -433,60 +388,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -433,60 +389,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -1275,7 +1276,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..697a0072eefecfc32959bd9e70dffc91
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -506,6 +458,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -506,6 +459,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x, y, placement: placement2 }) => {
@@ -1981,7 +1982,7 @@ index 7d00635638361679a37070b02f3c2df9f6921cea..52b573eeac08eb9ada098fb43b9648c6
    async stop() {
      return new Promise((resolve) => {
 diff --git a/dist-cdn/chunks/chunk.R3TB74QH.js b/dist-cdn/chunks/chunk.R3TB74QH.js
-index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6f517e71c 100644
+index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd088819820f 100644
 --- a/dist-cdn/chunks/chunk.R3TB74QH.js
 +++ b/dist-cdn/chunks/chunk.R3TB74QH.js
 @@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -2004,7 +2005,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
        const isRtl = this.localize.dir() === "rtl";
        if (event.key === "Escape" && this.open && isTopDismissible(this)) {
          const trigger = this.getTrigger();
-@@ -88,22 +87,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -88,22 +87,12 @@ var WaDropdown = class extends WebAwesomeElement {
          trigger?.focus({ preventScroll: true });
          return;
        }
@@ -2026,12 +2027,13 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
 -        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
 -      }
 +      const items = currentSubmenuItem ? this.getSubmenuItems(currentSubmenuItem) : this.getItems();
-+      const activeItem = items.find((item) => item === focusedItem) ?? items.find((item) => item.active);
++      // A focused item outside this level (e.g. the owner of a hover-opened submenu) keeps its keys.
++      const activeItem = items.find((item) => item === focusedItem) ?? (focusedItem ? void 0 : items.find((item) => item.active));
 +      const activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
        let itemToSelect;
        if (event.key === "ArrowUp") {
          event.preventDefault();
-@@ -123,39 +111,23 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -123,39 +112,23 @@ var WaDropdown = class extends WebAwesomeElement {
            itemToSelect = items[0];
          }
        }
@@ -2079,7 +2081,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
          return;
        }
        if (event.key === "Home" || event.key === "End") {
-@@ -164,7 +136,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -164,7 +137,7 @@ var WaDropdown = class extends WebAwesomeElement {
          itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
        }
        if (event.key === "Tab") {
@@ -2088,7 +2090,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
        }
        if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
          clearTimeout(this.userTypedTimeout);
-@@ -190,19 +162,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -190,19 +163,11 @@ var WaDropdown = class extends WebAwesomeElement {
          itemToSelect.scrollIntoView({ block: "nearest" });
          return;
        }
@@ -2109,7 +2111,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
          } else {
            this.makeSelection(activeItem, event);
          }
-@@ -223,7 +187,8 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -223,7 +188,8 @@ var WaDropdown = class extends WebAwesomeElement {
      };
      /** Handle global mouse movement for safe triangle logic */
      this.handleGlobalMouseMove = (event) => {
@@ -2119,7 +2121,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -241,7 +206,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,7 +207,7 @@ var WaDropdown = class extends WebAwesomeElement {
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
@@ -2128,7 +2130,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -251,15 +216,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -251,15 +217,20 @@ var WaDropdown = class extends WebAwesomeElement {
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -2154,7 +2156,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -276,12 +246,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -276,12 +247,7 @@ var WaDropdown = class extends WebAwesomeElement {
          return;
        }
        this.customStates.set("open", this.open);
@@ -2168,7 +2170,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -310,104 +275,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -310,104 +276,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -2349,7 +2351,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -415,8 +372,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -415,8 +373,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -2358,7 +2360,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -443,60 +398,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -443,60 +399,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -2458,7 +2460,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..2caea12e9dae817847deeecee3c018d6
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -516,6 +468,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -516,6 +469,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x: x2, y, placement: placement2 }) => {

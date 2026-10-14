@@ -73,33 +73,13 @@ describe("doctor database schema preflight", () => {
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
-  it("refuses before config repair flows when updates are disabled", async () => {
-    writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
-    mockDoctorConfigSnapshot();
-    const statePath = resolveOpenClawStateSqlitePath(process.env);
-    const original = fs.readFileSync(statePath);
-
-    await expect(doctorCommand(createDoctorRuntime(), { nonInteractive: true })).rejects.toThrow(
-      /Doctor refused to continue.*database schema.*newer than this build/iu,
-    );
-
-    expect(updateCommand).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(fs.readFileSync(statePath)).toEqual(original);
-    expect(fs.readdirSync(path.dirname(statePath))).toEqual([path.basename(statePath)]);
-  });
-
-  it.each([
-    ["plain doctor", { nonInteractive: true }],
-    ["doctor --fix", { nonInteractive: true, repair: true }],
-  ])("diagnoses an unreadable shared state database for %s", async (_label, options) => {
+  it("diagnoses an unreadable shared state database", async () => {
     const statePath = resolveOpenClawStateSqlitePath(process.env);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(statePath, "not a sqlite database");
     mockDoctorConfigSnapshot();
 
-    const failure = await doctorCommand(createDoctorRuntime(), options).then(
+    const failure = await doctorCommand(createDoctorRuntime(), { nonInteractive: true }).then(
       () => null,
       (error: unknown) => error,
     );

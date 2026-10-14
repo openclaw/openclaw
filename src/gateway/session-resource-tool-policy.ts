@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { hasGatewayAdminScope } from "./server-methods/chat-origin-routing.js";
+import { hasGatewayAdminScope } from "./operator-scopes.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -36,12 +36,15 @@ export function resolveSessionResourceToolPolicy(params: {
     storePath?: string;
   }) => SessionEntry | undefined;
   toolName: string;
+  /** A thread-owned native App borrow supplies its current binding assertion. */
+  assertNativeRuntimeCurrent?: () => void;
 }) {
   const { config, current } = params;
   const entry = current.entry;
   // Native ownership still uses plugin storage. A published, invalidatable ownership
   // view is required before this retained resource path can serve locked sessions.
-  if (entry.modelSelectionLocked === true) {
+  params.assertNativeRuntimeCurrent?.();
+  if (entry.modelSelectionLocked === true && !params.assertNativeRuntimeCurrent) {
     denied(
       "Session-scoped resources are unavailable for sessions with locked model selection. Administrator global access remains available.",
     );

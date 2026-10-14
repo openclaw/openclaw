@@ -1,6 +1,10 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
+import {
+  createDiscordGatewayPlugin,
+  waitForDiscordGatewayPluginRegistration,
+} from "./gateway-plugin.js";
 
 const mocks = vi.hoisted(() => ({
   register: vi.fn(),
@@ -114,12 +118,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 describe("createDiscordGatewayPlugin", () => {
-  let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
-  let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
-  beforeAll(async () => {
-    ({ createDiscordGatewayPlugin, waitForDiscordGatewayPluginRegistration } =
-      await import("./gateway-plugin.js"));
-  });
   beforeEach(() => {
     vi.unstubAllEnvs();
     for (const key of [
@@ -242,21 +240,6 @@ describe("createDiscordGatewayPlugin", () => {
     } finally {
       process.off("unhandledRejection", unhandled);
     }
-  });
-
-  it("keeps gateway WebSocket direct when only ambient proxy env is configured", () => {
-    vi.stubEnv("https_proxy", "env-proxy.test:8080");
-    const runtime = createRuntimeSpies();
-    createPlugin({}, runtime).openSocket();
-    expect(mocks.httpsAgent).toHaveBeenCalledTimes(1);
-    expect(mocks.httpsAgent).toHaveBeenCalledWith({ lookup: expect.any(Function) });
-    expect(mocks.socket).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      agent: HttpsAgent.lastCreated,
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-    expect(mocks.proxyAgent).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", () => {

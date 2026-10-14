@@ -1,12 +1,15 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { appendTranscriptMessageSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -36,6 +39,7 @@ beforeAll(async () => {
     layout: "state-only",
     prefix: "openclaw-heartbeat-context-",
   });
+  setRuntimeConfigSnapshot({});
   for (const label of ["enabled", "disabled", "incognito"]) {
     const incognito = label === "incognito";
     const scope = {
@@ -43,12 +47,12 @@ beforeAll(async () => {
       sessionKey: incognito ? incognitoKey : `agent:heartbeat:${label}`,
       sessionId: `heartbeat-${label}`,
     };
-    replaceSessionEntrySync(scope, {
+    await replaceSessionEntry(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       ...(incognito ? { incognito: true } : {}),
     });
-    appendTranscriptMessageSync(scope, {
+    await appendTranscriptMessage(scope, {
       message: { role: "assistant", content: incognito ? privateReply : reply },
     });
   }
@@ -71,6 +75,10 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  memorySessionActorOwners.closeDatabase({
+    agentId: "heartbeat",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "heartbeat", env: state.env }),
+  });
   await state.cleanup();
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
 });
@@ -79,6 +87,37 @@ async function tick() {
   vi.setSystemTime(clock.clock.now() + 30_000);
   await clock.advanceBy(30_000);
 }
+
+it("checks memory pressure every tick without recording idle samples", async () => {
+  const emitMemorySample = vi.fn(() => ({
+    rssBytes: 100,
+    heapTotalBytes: 80,
+    heapUsedBytes: 40,
+    externalBytes: 10,
+    arrayBuffersBytes: 5,
+  }));
+  const options = {
+    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+    recoverStuckSession: () => undefined,
+    emitMemorySample,
+    sampleLiveness: () => null,
+  };
+  startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: true } }, options);
+
+  await tick();
+  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
+  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+
+  logSessionStateChange({
+    sessionId: "heartbeat-samples",
+    sessionKey: "agent:heartbeat:samples",
+    state: "processing",
+  });
+  await tick();
+
+  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+});
 
 it.each([true, false])(
   "keeps heartbeat enrichment off the main thread with its sink enabled=%s",

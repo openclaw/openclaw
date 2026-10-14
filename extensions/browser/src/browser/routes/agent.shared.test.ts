@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
+import { BrowserProfileUnavailableError } from "../errors.js";
 import * as navigationGuard from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
@@ -61,7 +61,6 @@ function routeContextForTab(
         ssrfPolicy: {},
       },
     }),
-    mapTabError: () => null,
   } as unknown as BrowserRouteContext;
 }
 
@@ -112,7 +111,7 @@ describe("browser route shared helpers", () => {
       },
     });
 
-    handleRouteError({ mapTabError: toBrowserErrorResponse } as never, response.res, error);
+    handleRouteError(response.res, error);
 
     expect(response.statusCode).toBe(409);
     expect(response.body).toMatchObject({
@@ -128,7 +127,7 @@ describe("browser route shared helpers", () => {
       "connect failed for wss://browser-user:browser-password@browserless.example/cdp?token=browser-token",
     );
 
-    handleRouteError({ mapTabError: () => null } as never, response.res, error);
+    handleRouteError(response.res, error);
 
     expect(response.statusCode).toBe(500);
     expect(response.body).toMatchObject({ error: expect.stringContaining("browserless.example") });

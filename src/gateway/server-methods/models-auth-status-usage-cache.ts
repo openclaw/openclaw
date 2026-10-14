@@ -248,7 +248,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
     agentId: snapshot.agentId,
     agentDir: snapshot.agentDir,

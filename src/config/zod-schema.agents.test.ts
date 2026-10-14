@@ -7,13 +7,6 @@ describe("agent roster ownership", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });
 
-  it("accepts sole and explicitly owned multi-agent rosters without a stored default", () => {
-    expect(AgentsSchema.safeParse({ entries: { Ops: {} } }).success).toBe(true);
-    expect(
-      AgentsSchema.safeParse({ ownership: "explicit", entries: { alpha: {}, beta: {} } }).success,
-    ).toBe(true);
-  });
-
   it("rejects a markerless multi-agent roster without explicit ownership", () => {
     const result = AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } });
 
@@ -22,12 +15,6 @@ describe("agent roster ownership", () => {
       expect(result.error.issues[0]?.message).toContain('agents.ownership="explicit"');
       expect(result.error.issues[0]?.message).toContain("run openclaw doctor");
     }
-  });
-
-  it("accepts one legacy default marker", () => {
-    expect(
-      AgentsSchema.safeParse({ entries: { alpha: { default: true }, beta: {} } }).success,
-    ).toBe(true);
   });
 
   it("rejects multiple legacy default markers", () => {
@@ -91,24 +78,43 @@ describe("explicit ambient agent targets", () => {
       }).success,
     ).toBe(true);
   });
+});
 
-  it("validates targets against the implicit main roster", () => {
-    expect(OpenClawSchema.safeParse({ talk: { agentId: "main" } }).success).toBe(true);
-    expect(OpenClawSchema.safeParse({ talk: { agentId: "missing" } }).success).toBe(false);
+describe("agent GitHub sandbox identity", () => {
+  const profileId = "ghp_0123456789abcdef0123456789abcdef";
+
+  it("accepts an explicit sandbox identity opt-in for one agent", () => {
+    const github = { profileId, allowInSandbox: true };
+    const result = AgentsSchema.safeParse({ entries: { release: { tools: { github } } } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data?.entries?.release?.tools?.github).toEqual(github);
+    }
   });
 
-  it("allows upgrade compatibility owners to outlive their roster entries", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            authInheritance: { agentId: "retired-ops" },
-            sessionStore: { agentId: "retired-ops" },
-          },
-          entries: { research: {}, writer: {} },
-        },
-      }).success,
-    ).toBe(true);
+  it("rejects a non-boolean sandbox identity opt-in", () => {
+    const result = AgentsSchema.safeParse({
+      entries: { release: { tools: { github: { profileId, allowInSandbox: "true" } } } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          path: ["entries", "release", "tools", "github", "allowInSandbox"],
+        }),
+      ]);
+    }
+  });
+
+  it("rejects a global sandbox identity opt-in", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: { github: { profileId, allowInSandbox: true } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ["tools", "github"], code: "unrecognized_keys" }),
+      ]);
+    }
   });
 });

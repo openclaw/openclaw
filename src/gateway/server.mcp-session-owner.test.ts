@@ -27,7 +27,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { isSessionPersonalBootstrapTurn } from "../sessions/session-participant-input.js";
-import { setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
   activateMcpLoopbackClientGrantCapture,

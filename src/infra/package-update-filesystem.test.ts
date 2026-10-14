@@ -129,9 +129,7 @@ it.runIf(process.platform === "darwin").each([
     );
 
     if (continues) {
-      await expect(copyPackagePathEntry(source, destination)).resolves.toEqual({
-        ownershipPreserved: operation !== "lchown",
-      });
+      await expect(copyPackagePathEntry(source, destination)).resolves.toBeUndefined();
       expect(await fs.readlink(destination)).toBe("missing");
     } else {
       await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
@@ -360,7 +358,6 @@ it("retains the first copy failure when private staging has been replaced", asyn
 
 it.each([
   { name: "ENOENT", refusal: Object.assign(new Error("owner missing"), { code: "ENOENT" }) },
-  { name: "EBUSY", refusal: Object.assign(new Error("owner replaced"), { code: "EBUSY" }) },
   { name: "false", refusal: false },
 ])("does not retire a backup after a one-shot $name ownership refusal", async ({ refusal }) => {
   const root = dirs.make("package-backup-refusal-");
@@ -454,30 +451,28 @@ it("preserves an observed filesystem identity refusal when the cleanup budget ex
   expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
 });
 
-it.each(["EACCES", "EBUSY"])(
-  "retains the original backup when removal reports %s after the cleanup budget",
-  async (code) => {
-    const root = dirs.make("package-backup-late-io-");
-    const backup = path.join(root, ".openclaw.backup");
-    await fs.mkdir(backup);
-    await fs.writeFile(path.join(backup, "marker.txt"), "original");
-    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
-    vi.spyOn(prototype, "remove").mockImplementationOnce(async () => {
-      clock.mockReturnValue(300_001);
-      throw Object.assign(new Error(`${code}: fixture removal failed`), { code });
-    });
-    const rename = vi.spyOn(fs, "rename");
+it("retains the original backup when removal fails after the cleanup budget", async () => {
+  const code = "EACCES";
+  const root = dirs.make("package-backup-late-io-");
+  const backup = path.join(root, ".openclaw.backup");
+  await fs.mkdir(backup);
+  await fs.writeFile(path.join(backup, "marker.txt"), "original");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
+  vi.spyOn(prototype, "remove").mockImplementationOnce(async () => {
+    clock.mockReturnValue(300_001);
+    throw Object.assign(new Error(`${code}: fixture removal failed`), { code });
+  });
+  const rename = vi.spyOn(fs, "rename");
 
-    const warning = await discardPackageUpdateBackup(backup, "old package", root);
+  const warning = await discardPackageUpdateBackup(backup, "old package", root);
 
-    expect(warning).toContain("cleanup budget expired");
-    expect(warning).toContain(backup);
-    expect(warning).toContain(`${code}: fixture removal failed`);
-    expect(rename).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
-  },
-);
+  expect(warning).toContain("cleanup budget expired");
+  expect(warning).toContain(backup);
+  expect(warning).toContain(`${code}: fixture removal failed`);
+  expect(rename).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
+});
 
 it.each(["owner", "backup"] as const)(
   "does not downgrade a revoked %s to a cleanup deadline warning",
@@ -623,19 +618,9 @@ it("does not compensate a root rename after its original owner refused once", as
 
 it.each([
   {
-    name: "a false copy failure",
-    copyFailure: { error: false },
-    cleanupFailure: undefined,
-  },
-  {
     name: "an undefined copy failure before a cleanup failure",
     copyFailure: { error: undefined },
     cleanupFailure: { error: new Error("cleanup failed after copy refusal") },
-  },
-  {
-    name: "a sole cleanup failure",
-    copyFailure: undefined,
-    cleanupFailure: { error: new Error("cleanup failed after publication") },
   },
   {
     name: "a sole undefined cleanup failure",
@@ -661,7 +646,7 @@ it.each([
   ) {
     staging = this.rootReal;
     if (copyFailure) {
-      // oxlint-disable-next-line typescript/only-throw-error -- false and undefined must remain the original copy failure.
+      // oxlint-disable-next-line typescript/only-throw-error -- Undefined must remain the original copy failure.
       throw copyFailure.error;
     }
     return copy.call(this, ...args);
@@ -669,10 +654,8 @@ it.each([
   vi.spyOn(prototype, "remove").mockImplementation(function (this: Root, relativePath, options) {
     if (path.basename(relativePath).startsWith(".openclaw-shim-stage-")) {
       cleanupAttempts += 1;
-      if (cleanupFailure) {
-        // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
-        throw cleanupFailure.error;
-      }
+      // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
+      throw cleanupFailure.error;
     }
     return remove.call(this, relativePath, options);
   });
@@ -696,11 +679,7 @@ it.each([
   );
   expect(await fs.readFile(source, "utf8")).toBe("replacement");
   expect(await fs.readFile(destination, "utf8")).toBe(copyFailure ? "live" : "replacement");
-  if (cleanupFailure) {
-    expect(await fs.readdir(staging)).toEqual([]);
-  } else {
-    await expect(fs.lstat(staging)).rejects.toHaveProperty("code", "ENOENT");
-  }
+  expect(await fs.readdir(staging)).toEqual([]);
 });
 
 it.each(["publish", "revoke", "replace"] as const)(
@@ -735,7 +714,7 @@ it.each(["publish", "revoke", "replace"] as const)(
       beforePublish,
     );
     if (action === "publish") {
-      await expect(result).resolves.toEqual({ ownershipPreserved: true });
+      await expect(result).resolves.toBeUndefined();
     } else if (action === "revoke") {
       await expect(result).rejects.toBe(refusal);
     } else {

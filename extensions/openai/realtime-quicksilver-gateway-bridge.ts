@@ -1,4 +1,5 @@
 // Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioOutputPort,
@@ -98,7 +99,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private delegations: OpenAIQuicksilverDelegationController | undefined;
   private connected = false;
   private closed = false;
-  private closeNotified = false;
   private closingPromise: Promise<void> | undefined;
   private closeReason: "completed" | "error" = "completed";
   private providerSessionClosed = false;
@@ -256,12 +256,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connectSignal: AbortSignal,
   ): Promise<void> {
     this.transport = "direct";
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    const ready = createDeferred();
     this.delegations = this.createDelegationController({
-      onSessionStarted: resolveReady,
+      onSessionStarted: ready.resolve,
     });
     await this.connectSocket(
       auth,
@@ -280,7 +277,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         voice: this.config.voice,
       }),
     );
-    await waitForOpenAIQuicksilverConnectStep(readyPromise, connectSignal);
+    await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
   }
 
   private async connectWebRtc(
@@ -587,10 +584,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         clearTimeout(this.timer);
         this.timer = undefined;
       }
-      if (this.providerSessionClosed) {
-        this.finishClose(disposition, beforeClose);
-        return;
-      }
       this.closingPromise = closeOpenAILiveSocket(socket)
         .then((receiptReason) => {
           if (receiptReason === "content" || receiptReason === "connection_lost") {
@@ -620,10 +613,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       try {
         beforeClose?.();
       } finally {
-        if (!this.closeNotified) {
-          this.closeNotified = true;
-          this.config.onClose?.(this.closeReason);
-        }
+        this.config.onClose?.(this.closeReason);
       }
     }
   }

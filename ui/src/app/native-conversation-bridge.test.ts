@@ -16,7 +16,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function fixture() {
+function fixture(features: string[] = []) {
   const messages: Record<string, unknown>[] = [];
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
@@ -58,7 +58,7 @@ function fixture() {
     formFactor: "desktop",
     surface: "conversation",
   });
-  vi.stubGlobal("__OPENCLAW_NATIVE_CONVERSATION__", { contract: 1 });
+  vi.stubGlobal("__OPENCLAW_NATIVE_CONVERSATION__", { contract: 1, features });
   const reply = vi.fn((_message: Record<string, unknown>): Promise<unknown> =>
     Promise.resolve({ ok: true }),
   );
@@ -106,6 +106,143 @@ async function flush() {
 }
 
 describe("native conversation contract", () => {
+  it("publishes bounded change-only sidebar facts only to an opted-in current document", async () => {
+    const old = fixture();
+    old.bridge.publishSessionFacts([]);
+    await flush();
+    expect(old.messages.some((message) => message.type === "session-facts")).toBe(false);
+    old.bridge.dispose();
+    const f = fixture(["session-facts-v1", "unknown-feature"]);
+    const row = {
+      agentId: "work",
+      sessionKey: "agent:work:other",
+      hasComposerDraft: true,
+      outboxAttentionCount: 61,
+    };
+    f.bridge.publishSessionFacts([row]);
+    f.bridge.publishSessionFacts([{ ...row }]);
+    await flush();
+    expect(f.messages[0]).toMatchObject({
+      capabilities: ["navigate", "presentation", "focus-composer", "session-facts-v1"],
+    });
+    expect(f.messages.filter((message) => message.type === "session-facts")).toEqual([
+      {
+        contract: 1,
+        documentId: f.documentId,
+        type: "session-facts",
+        revision: 1,
+        sessions: [row],
+      },
+    ]);
+    f.bridge.publishSessionFacts([]);
+    await flush();
+    expect(f.messages.at(-1)).toMatchObject({ revision: 2, sessions: [] });
+    for (const invalid of [
+      [{ ...row, outboxAttentionCount: -1 }],
+      [{ ...row, outboxAttentionCount: Number.MAX_SAFE_INTEGER + 1 }],
+      [{ ...row, sessionKey: "🦞".repeat(1025) }],
+      Array.from({ length: 65 }, (_, index) => ({ ...row, sessionKey: String(index) })),
+      Array.from({ length: 64 }, (_, index) => ({
+        ...row,
+        sessionKey: `${index}${"x".repeat(1024)}`,
+      })),
+    ]) {
+      f.bridge.publishSessionFacts(invalid);
+      await flush();
+      expect(f.messages.at(-1)).toMatchObject({ type: "session-facts", sessions: null });
+    }
+    f.bridge.dispose();
+    const count = f.messages.length;
+    f.bridge.publishSessionFacts([row]);
+    await flush();
+    expect(f.messages).toHaveLength(count);
+  });
+
+  it("rejects unadvertised or hidden session action commands before navigation", async () => {
+    const old = fixture();
+    old.command("open-session-actions", old.data);
+    await flush();
+    expect(old.navigateAndWait).not.toHaveBeenCalled();
+    expect(old.messages.find((message) => message.type === "command-result")).toMatchObject({
+      error: "unsupported",
+    });
+    old.bridge.dispose();
+    const f = fixture(["session-actions-v1"]);
+    f.command("presentation", { visible: false, active: false });
+    await flush();
+    f.command(
+      "open-session-actions",
+      { agentId: "main", sessionKey: f.data.sessionKey },
+      { requestId: "hidden" },
+    );
+    await flush();
+    expect(f.navigateAndWait).not.toHaveBeenCalled();
+    expect(
+      f.messages.find(
+        (message) => message.type === "command-result" && message.requestId === "hidden",
+      ),
+    ).toMatchObject({
+      type: "command-result",
+      requestId: "hidden",
+      error: "unavailable",
+    });
+  });
+
+  it.each(["current", "superseded", "detached", "retired"] as const)(
+    "waits for rendered session actions without opening a stale menu (%s)",
+    async (owner) => {
+      const f = fixture(["session-actions-v1"]);
+      const page = document.createElement("openclaw-chat-page");
+      const pane = document.createElement("openclaw-chat-pane");
+      pane.sessionKey = f.data.sessionKey;
+      pane.classList.add("chat-pane-cache__pane--active");
+      page.append(pane);
+      document.body.append(page);
+      const results = () => f.messages.filter((message) => message.type === "command-result");
+      f.command("open-session-actions", {
+        agentId: f.data.agentId,
+        sessionKey: f.data.sessionKey,
+      });
+      await flush();
+      await vi.dynamicImportSettled();
+      await flush();
+      expect(results()).toEqual([]);
+
+      if (owner === "superseded") {
+        f.data.sessionKey = "agent:main:other";
+        f.changed();
+        // The pane cache retains the prior session's pane and moves only its class.
+        pane.classList.remove("chat-pane-cache__pane--active");
+      } else if (owner === "detached") {
+        pane.remove();
+      } else if (owner === "retired") {
+        f.bridge.dispose();
+      }
+      await flush();
+      // A retired pane settles the command now, not at the response deadline.
+      expect(results()).toMatchObject(
+        owner === "superseded" || owner === "detached"
+          ? [{ requestId: "request-1", ok: false, error: "unavailable" }]
+          : [],
+      );
+      const menu = document.createElement("openclaw-chat-header-session-menu");
+      const dropdown = document.createElement("wa-dropdown");
+      dropdown.open = false;
+      menu.append(dropdown);
+      pane.append(menu);
+      await flush();
+      expect(dropdown.open).toBe(owner === "current");
+      if (owner === "current") {
+        expect(results()).toEqual([]);
+        dropdown.dispatchEvent(new Event("wa-after-show"));
+        await flush();
+        expect(results()).toMatchObject([{ requestId: "request-1", ok: true }]);
+      } else {
+        expect(results()).toHaveLength(owner === "retired" ? 0 : 1);
+      }
+    },
+  );
+
   it("requires the conversation capability and a callable handler", () => {
     const f = fixture();
     f.bridge.dispose();
@@ -229,68 +366,125 @@ describe("native conversation contract", () => {
     expect(f.messages.some((message) => message.type === "route-changed")).toBe(false);
   });
 
-  it.each([true, false])(
-    "awaits state publication before the navigation result (accepted: %s)",
-    async (ok) => {
+  it.each(["accepted", "rejected", "timeout"] as const)(
+    "awaits state delivery and permits fresh confirmation after %s acknowledgement",
+    async (deliveryResult) => {
+      vi.useFakeTimers();
       const f = fixture();
       await flush();
       const delivery = createDeferred<unknown>();
       f.reply.mockImplementation((message) =>
         message.type === "state" ? delivery.promise : Promise.resolve({ ok: true }),
       );
+      const target = { agentId: "main", sessionKey: "agent:main:next" };
       f.navigateAndWait.mockImplementation(async () => {
-        f.data.sessionKey = "agent:main:next";
+        f.data.sessionKey = target.sessionKey;
         f.changed();
       });
-      f.command("navigate", { agentId: "main", sessionKey: "agent:main:next" });
+      f.command("navigate", target);
       await flush();
       expect(f.messages.at(-1)).toMatchObject({
         type: "state",
-        context: { sessionKey: "agent:main:next" },
+        context: { sessionKey: target.sessionKey },
       });
       expect(f.messages.some((message) => message.type === "command-result")).toBe(false);
-      delivery.resolve(ok ? { ok: true } : { ok: false, error: "unsupported" });
-      await flush();
+      if (deliveryResult === "timeout") {
+        await vi.advanceTimersByTimeAsync(15_000);
+      } else {
+        delivery.resolve(
+          deliveryResult === "accepted" ? { ok: true } : { ok: false, error: "unavailable" },
+        );
+        await flush();
+      }
       expect(f.messages.at(-1)).toMatchObject({
         type: "command-result",
-        ok,
-        ...(ok ? {} : { error: "navigate-rejected" }),
+        ok: deliveryResult === "accepted",
+        ...(deliveryResult === "accepted"
+          ? {}
+          : { error: deliveryResult === "timeout" ? "navigate-timeout" : "navigate-rejected" }),
+      });
+      if (deliveryResult === "accepted") {
+        return;
+      }
+      f.reply.mockResolvedValue({ ok: true });
+      f.changed();
+      await flush();
+      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(2);
+      f.command("navigate", target, { requestId: "retry" });
+      await flush();
+      expect(f.messages.slice(-2)).toMatchObject([
+        { type: "state", revision: 3, context: target },
+        { type: "command-result", requestId: "retry", ok: true },
+      ]);
+      delivery.resolve({ ok: false, error: "late-rejection" });
+      await flush();
+      f.command("navigate", target, { requestId: "confirmed" });
+      await flush();
+      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(3);
+      expect(f.messages.at(-1)).toMatchObject({
+        type: "command-result",
+        requestId: "confirmed",
+        ok: true,
       });
     },
   );
 
-  it("rejects a resolved navigation that did not select its target", async () => {
-    const f = fixture();
-    f.command("navigate", { agentId: "main", sessionKey: "agent:main:missing" });
-    await flush();
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "command-result",
-      ok: false,
-      error: "navigate-rejected",
-    });
-  });
-
-  it("reports web navigation that supersedes a pending native command", async () => {
-    const f = fixture();
-    const gate = createDeferred();
-    f.navigateAndWait.mockReturnValue(gate.promise);
-    f.command("navigate", { agentId: "main", sessionKey: "agent:main:native" });
-    await flush();
-    f.data.sessionKey = "agent:main:web";
-    f.changed();
-    gate.resolve();
-    await flush();
-    expect(f.messages).toContainEqual(
-      expect.objectContaining({ type: "command-result", ok: false, error: "navigate-rejected" }),
-    );
-    expect(f.messages).toContainEqual(
-      expect.objectContaining({
-        type: "route-changed",
-        agentId: "main",
-        sessionKey: "agent:main:web",
-      }),
-    );
-  });
+  it.each(["missing target", "superseded", "failed loader", "non-chat route"] as const)(
+    "rejects navigation that does not settle on its requested conversation: %s",
+    async (failure) => {
+      const f = fixture();
+      const gate = createDeferred();
+      const target =
+        failure === "missing target"
+          ? "agent:main:missing"
+          : failure === "superseded"
+            ? "agent:main:native"
+            : f.data.sessionKey;
+      if (failure === "failed loader") {
+        f.navigateAndWait.mockRejectedValueOnce(new Error("Session unavailable"));
+      } else if (failure === "non-chat route") {
+        f.navigateAndWait.mockImplementationOnce(async () => {
+          f.match.routeId = "dashboard";
+          f.changed();
+        });
+      } else if (failure === "superseded") {
+        f.navigateAndWait.mockReturnValue(gate.promise);
+      }
+      f.command(
+        "navigate",
+        { agentId: "main", sessionKey: target },
+        { requestId: failure === "non-chat route" ? "face" : "request-1" },
+      );
+      await flush();
+      if (failure === "superseded") {
+        f.data.sessionKey = "agent:main:web";
+        f.changed();
+        gate.resolve();
+        await flush();
+        expect(f.messages).toContainEqual(
+          expect.objectContaining({
+            type: "command-result",
+            ok: false,
+            error: "navigate-rejected",
+          }),
+        );
+        expect(f.messages).toContainEqual(
+          expect.objectContaining({
+            type: "route-changed",
+            agentId: "main",
+            sessionKey: "agent:main:web",
+          }),
+        );
+      } else {
+        expect(f.messages.at(-1)).toMatchObject({
+          type: "command-result",
+          ok: false,
+          error: "navigate-rejected",
+          ...(failure === "non-chat route" ? { requestId: "face" } : {}),
+        });
+      }
+    },
+  );
 
   it("projects shared global rows only from the selected agent", async () => {
     const f = fixture();
@@ -322,34 +516,6 @@ describe("native conversation contract", () => {
       context: { agentId: "research", sessionKey: "global" },
       title: "Research conversation",
       run: { active: false },
-    });
-  });
-
-  it("rejects a failed route loader and a settled non-chat route", async () => {
-    const f = fixture();
-    f.navigateAndWait.mockRejectedValueOnce(new Error("Session unavailable"));
-    f.command("navigate", { agentId: "main", sessionKey: f.data.sessionKey });
-    await flush();
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "command-result",
-      ok: false,
-      error: "navigate-rejected",
-    });
-    f.navigateAndWait.mockImplementationOnce(async () => {
-      f.match.routeId = "dashboard";
-      f.changed();
-    });
-    f.command(
-      "navigate",
-      { agentId: "main", sessionKey: f.data.sessionKey },
-      { requestId: "face" },
-    );
-    await flush();
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "command-result",
-      requestId: "face",
-      ok: false,
-      error: "navigate-rejected",
     });
   });
 
@@ -415,143 +581,108 @@ describe("native conversation contract", () => {
     },
   );
 
-  it.each(["rejected", "timeout"] as const)(
-    "allows a fresh navigation to confirm the same state after its delivery %s",
-    async (failure) => {
+  it.each(["timeout", "document retirement"] as const)(
+    "does not publish a late navigation result after %s",
+    async (retirement) => {
       vi.useFakeTimers();
       const f = fixture();
-      await flush();
-      const delivery = createDeferred<unknown>();
-      f.reply.mockImplementation((message) =>
-        message.type === "state" ? delivery.promise : Promise.resolve({ ok: true }),
-      );
+      const first = createDeferred();
+      const second = createDeferred();
+      f.navigateAndWait.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
       const target = { agentId: "main", sessionKey: "agent:main:next" };
-      f.navigateAndWait.mockImplementation(async () => {
-        f.data.sessionKey = target.sessionKey;
-        f.changed();
-      });
       f.command("navigate", target);
       await flush();
-      if (failure === "rejected") {
-        delivery.resolve({ ok: false, error: "unavailable" });
+      if (retirement === "document retirement") {
+        f.bridge.dispose();
+        first.resolve();
         await flush();
-      } else {
-        await vi.advanceTimersByTimeAsync(15_000);
+        expect(f.messages.some((message) => message.type === "command-result")).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+        return;
       }
-      expect(f.messages.at(-1)).toMatchObject({
-        type: "command-result",
-        ok: false,
-        error: failure === "timeout" ? "navigate-timeout" : "navigate-rejected",
-      });
-      f.reply.mockResolvedValue({ ok: true });
-      f.changed();
+      await vi.advanceTimersByTimeAsync(15_000);
+      f.command("navigate", target, { requestId: "second" });
       await flush();
-      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(2);
-      f.command("navigate", target, { requestId: "retry" });
+      f.data.sessionKey = target.sessionKey;
+      f.changed();
+      const beforeLateCompletion = [...f.messages];
+      first.resolve();
+      await flush();
+      expect(f.messages).toEqual(beforeLateCompletion);
+      second.resolve();
       await flush();
       expect(f.messages.slice(-2)).toMatchObject([
-        { type: "state", revision: 3, context: target },
-        { type: "command-result", requestId: "retry", ok: true },
+        { type: "state", context: target },
+        { type: "command-result", requestId: "second", ok: true },
       ]);
-      delivery.resolve({ ok: false, error: "late-rejection" });
-      await flush();
-      f.command("navigate", target, { requestId: "confirmed" });
-      await flush();
-      expect(f.messages.filter((message) => message.type === "state")).toHaveLength(3);
-      expect(f.messages.at(-1)).toMatchObject({
-        type: "command-result",
-        requestId: "confirmed",
-        ok: true,
-      });
+      expect(
+        f.messages.filter(
+          (message) => message.type === "command-result" && message.requestId === "request-1",
+        ),
+      ).toHaveLength(1);
     },
   );
 
-  it("retires timed-out navigation before a later command can publish its state", async () => {
-    vi.useFakeTimers();
-    const f = fixture();
-    const first = createDeferred();
-    const second = createDeferred();
-    f.navigateAndWait.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const target = { agentId: "main", sessionKey: "agent:main:next" };
-    f.command("navigate", target);
-    await flush();
-    await vi.advanceTimersByTimeAsync(15_000);
-    f.command("navigate", target, { requestId: "second" });
-    await flush();
-    f.data.sessionKey = target.sessionKey;
-    f.changed();
-    const beforeLateCompletion = [...f.messages];
-    first.resolve();
-    await flush();
-    expect(f.messages).toEqual(beforeLateCompletion);
-    second.resolve();
-    await flush();
-    expect(f.messages.slice(-2)).toMatchObject([
-      { type: "state", context: target },
-      { type: "command-result", requestId: "second", ok: true },
-    ]);
-    expect(
-      f.messages.filter(
-        (message) => message.type === "command-result" && message.requestId === "request-1",
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("leaves transcript file links and existing pane link handlers in control", async () => {
-    const f = fixture();
-    for (const markup of [
-      '<a href="/workspace/notes.md" data-file-path="/workspace/notes.md">Transcript file</a>',
-      '<a href="/settings">Existing panel action</a>',
-      '<a href="/chat/main/next">In-pane session</a>',
-    ]) {
-      document.body.innerHTML = markup;
-      const anchor = document.querySelector("a")!;
-      const handled = vi.fn((event: MouseEvent) => event.preventDefault());
-      anchor.addEventListener("click", handled);
-      anchor.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      expect(handled).toHaveBeenCalledOnce();
-    }
-    await flush();
-    expect(f.messages.some((message) => message.type === "open-dashboard")).toBe(false);
-    expect(f.navigateAndWait).not.toHaveBeenCalled();
-  });
-
-  it("only hands unclaimed same-origin application routes to Dashboard", async () => {
-    const f = fixture();
-    for (const markup of [
-      "<a>Action without href</a>",
-      '<a href="/files/report.txt">Non-route file</a>',
-      '<a href="/settings" data-file-path="settings">Workspace file</a>',
-      '<a href="/settings" download>Download</a>',
-      '<a href="/settings" target="_blank">New window</a>',
-      '<a href="https://example.com/settings">External</a>',
-      '<a href="/chat/main/next">Conversation</a>',
-    ]) {
-      document.body.innerHTML = markup;
-      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-      const finish = vi.fn((event: MouseEvent) => {
-        expect(event.defaultPrevented).toBe(false);
-        event.preventDefault();
-      });
-      window.addEventListener("click", finish, { once: true });
-      document.querySelector("a")!.dispatchEvent(click);
-      window.removeEventListener("click", finish);
-      expect(finish).toHaveBeenCalledOnce();
-    }
-    await flush();
-    expect(f.messages.some((message) => message.type === "open-dashboard")).toBe(false);
-    expect(f.navigateAndWait).not.toHaveBeenCalled();
-    document.body.innerHTML = '<a href="/settings?section=general">Settings</a>';
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    document.querySelector("a")!.dispatchEvent(click);
-    await flush();
-    expect(click.defaultPrevented).toBe(true);
-    expect(f.messages.at(-1)).toMatchObject({
-      type: "open-dashboard",
-      path: "/settings",
-      search: "?section=general",
-    });
-  });
+  it.each([
+    {
+      claimed: true,
+      markups: [
+        '<a href="/workspace/notes.md" data-file-path="/workspace/notes.md">Transcript file</a>',
+        '<a href="/settings">Existing panel action</a>',
+        '<a href="/chat/main/next">In-pane session</a>',
+      ],
+    },
+    {
+      claimed: false,
+      markups: [
+        "<a>Action without href</a>",
+        '<a href="/files/report.txt">Non-route file</a>',
+        '<a href="/settings" data-file-path="settings">Workspace file</a>',
+        '<a href="/settings" download>Download</a>',
+        '<a href="/settings" target="_blank">New window</a>',
+        '<a href="https://example.com/settings">External</a>',
+        '<a href="/chat/main/next">Conversation</a>',
+      ],
+    },
+  ])(
+    "only hands unclaimed application links to Dashboard (claimed: $claimed)",
+    async ({ claimed, markups }) => {
+      const f = fixture();
+      for (const markup of markups) {
+        document.body.innerHTML = markup;
+        const anchor = document.querySelector("a")!;
+        const handled = vi.fn((event: MouseEvent) => {
+          if (!claimed) {
+            expect(event.defaultPrevented).toBe(false);
+          }
+          event.preventDefault();
+        });
+        if (claimed) {
+          anchor.addEventListener("click", handled);
+        } else {
+          window.addEventListener("click", handled, { once: true });
+        }
+        anchor.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        window.removeEventListener("click", handled);
+        expect(handled).toHaveBeenCalledOnce();
+      }
+      await flush();
+      expect(f.messages.some((message) => message.type === "open-dashboard")).toBe(false);
+      expect(f.navigateAndWait).not.toHaveBeenCalled();
+      if (!claimed) {
+        document.body.innerHTML = '<a href="/settings?section=general">Settings</a>';
+        const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+        document.querySelector("a")!.dispatchEvent(click);
+        await flush();
+        expect(click.defaultPrevented).toBe(true);
+        expect(f.messages.at(-1)).toMatchObject({
+          type: "open-dashboard",
+          path: "/settings",
+          search: "?section=general",
+        });
+      }
+    },
+  );
 
   it.each(["rejected", "throwing"] as const)(
     "shows a toast when Dashboard handoff is %s",
@@ -622,19 +753,5 @@ describe("native conversation contract", () => {
       requestId: "focus",
       ok: true,
     });
-  });
-
-  it("does not publish a late navigation result after document retirement", async () => {
-    vi.useFakeTimers();
-    const f = fixture();
-    const gate = createDeferred();
-    f.navigateAndWait.mockReturnValue(gate.promise);
-    f.command("navigate", { agentId: "main", sessionKey: "agent:main:next" });
-    await flush();
-    f.bridge.dispose();
-    gate.resolve();
-    await flush();
-    expect(f.messages.some((message) => message.type === "command-result")).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

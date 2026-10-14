@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "System busyness placement" });
@@ -34,9 +35,12 @@ suite.define(() => {
       { viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" },
       async ({ page }) => {
         await installMockGateway(page, { methodResponses });
+        const layoutModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/debug/debug-overlay-layout.runtime.ts",
+        );
         const layoutRequests: string[] = [];
         page.on("request", (request) => {
-          if (request.url().includes("debug-overlay-layout.runtime-")) {
+          if (layoutModule.test(request.url())) {
             layoutRequests.push(request.url());
           }
         });

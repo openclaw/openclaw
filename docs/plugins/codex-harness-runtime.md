@@ -24,6 +24,27 @@ cache writes, and every completed model call in the side thread's native tool
 loop; replayed response IDs are counted once. The visible reply still contains
 only the last answer, and the main session's usage and context snapshot stay unchanged.
 
+Read-only session forks reuse the parent's prepared thread and turn settings.
+On managed inference routes, they replay the last model request's exact
+instructions, tool schemas, and input prefix, followed by the completed parent
+response and the side question. Further fork continuations retain their tool-denial
+outcomes. If the reconstructed history no longer matches the recorded prefix,
+native history takes precedence without guaranteed prompt-cache reuse.
+These request snapshots stay in process memory after parent settlement, within
+a shared 32 MiB least-recently-used budget. An evicted or oversized snapshot,
+or a WebSocket continuation that references prior server-side context, falls
+back to native thread reconstruction without guaranteed prompt-cache reuse.
+When the prepared request remains in the snapshot budget, native reconstruction retains
+the parent's exact instructions and tool schemas, including the code-mode catalog. Tool choice
+remains `none` and native hosted search stays disabled.
+The separately retained OpenClaw instruction text is limited to 256 KiB per
+thread and 256 threads per route. Thread retirement or client shutdown removes
+the retained context. None of these snapshots extends the parent's authority:
+each fork uses the current side request's authorization and cancellation lifetime.
+Native tools are denied through the required PreToolUse relay. Hosted web search
+is disabled in Codex, and replayed requests use `tool_choice: "none"` so retaining
+the parent's exact tool schemas cannot enable hosted execution.
+
 For native connected apps, Codex also owns the final per-thread app and tool
 policy. OpenClaw caches a runtime-and-workspace-scoped `plugin/installed`
 snapshot, reads exact configured plugin details, provisionally admits only
@@ -37,7 +58,7 @@ This check finishes before OpenClaw injects history, starts a turn, or commits a
 thread binding. If the snapshot request fails, persistent provisional threads
 are deleted and ephemeral threads are unsubscribed. OpenClaw retires the app-server connection when safe
 cleanup cannot be confirmed. Supervised branches also clean up their temporary
-probe and preserve recovery state if cleanup fails.
+check and preserve recovery state if cleanup fails.
 
 Account-wide app access cannot override an explicitly disabled configured
 workspace plugin. OpenClaw uses its installed snapshot and reads only that
@@ -66,9 +87,9 @@ catalogs, persona files, memory-provider instructions, and tool-routed `MEMORY.m
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
-native subagents. Connections without that relay carry the eligible skill catalog
+native subagents. Connections without that relay carry eligible skills, persona, and memory
 in thread developer instructions instead, preserving delivery when the model
-owns collaboration-mode instructions. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
 for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
@@ -83,11 +104,8 @@ legacy memory tool names or workspace-file routing.
 
 Custom commands, Desktop proxy attachments, external Unix/WebSocket app-server
 connections, non-OpenAI native providers, custom upstream endpoints, unsupported
-native accounts, locked upstreams, and native `features.respect_system_proxy` profiles retain their existing
-collaboration carrier. Managed relay requests use the Gateway's HTTP(S) proxy
-and TLS configuration instead of changing native networking settings. OpenClaw reports that
-the parent-local workaround is unavailable there rather than replacing another
-application's live configuration. Existing history, including any older embedded
+native accounts, locked upstreams, and native `features.respect_system_proxy` profiles use the thread developer carrier. Managed relay requests use the Gateway's HTTP(S) proxy
+and TLS configuration instead of changing native networking settings. OpenClaw leaves the native network and account configuration unchanged. Existing history, including any older embedded
 persona or explicitly shared task text, is preserved; this is not a retroactive
 history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
 

@@ -89,6 +89,18 @@ describe("session suggestions protocol", () => {
       ts: 1,
     };
 
+    for (const cursor of [0, 4, 800]) {
+      expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "draft", cursor })).toBe(
+        true,
+      );
+      expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "draft", cursor })).toBe(
+        true,
+      );
+    }
+    for (const cursor of [-1, 0.5, 801, "2"]) {
+      expect(Value.Check(SessionTypingParamsSchema, { ...params, cursor })).toBe(false);
+      expect(Value.Check(SessionTypingEventSchema, { ...event, cursor })).toBe(false);
+    }
     expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "draft" })).toBe(true);
     expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "draft" })).toBe(true);
     expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "x".repeat(401) })).toBe(

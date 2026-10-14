@@ -16,18 +16,9 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
 
-type XaiRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  voice?: string;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  reasoningEffort?: XaiRealtimeReasoningEffort;
-  sessionResumption?: boolean;
-};
+type XaiRealtimeVoiceProviderConfig = Partial<
+  ReturnType<typeof normalizeXaiRealtimeProviderConfig>
+>;
 
 export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio"> & {
@@ -168,9 +159,7 @@ function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | unde
   throw new Error('xAI realtime voice reasoningEffort must be "high" or "none"');
 }
 
-export function normalizeXaiRealtimeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-): XaiRealtimeVoiceProviderConfig {
+export function normalizeXaiRealtimeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = readNestedXaiConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

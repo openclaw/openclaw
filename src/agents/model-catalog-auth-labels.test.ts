@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createBedrockAwsSdkConfig } from "./auth-profiles/config-fixtures.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -8,16 +10,13 @@ import {
 } from "./model-catalog-auth-labels.js";
 
 const envKey = vi.hoisted(() => vi.fn());
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env.js")>()),
   resolveEnvApiKey: envKey,
-  resolveUsableCustomProviderApiKey: () => null,
 }));
-vi.mock("./auth-profiles.js", async () => ({
-  isConfiguredAwsSdkAuthProfileForProvider: (await import("./auth-profiles/order.js"))
-    .isConfiguredAwsSdkAuthProfileForProvider,
-  isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
-  resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
-    .resolveAuthProfileDisplayLabel,
+vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-provider-config.js")>()),
+  resolveUsableCustomProviderApiKey: () => null,
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
   const capturedStore = structuredClone(store);
@@ -35,22 +34,6 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
-
-  it("labels an unresolved API key reference", () => {
-    const captured = capture("openai", {
-      version: 1,
-      profiles: {
-        default: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      },
-    });
-    expect(captured.labels.get("openai")?.all).toMatchObject({
-      profiles: { default: "default=ref" },
-    });
-  });
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();
@@ -190,6 +173,45 @@ describe("captured catalog auth labels", () => {
       now.mockRestore();
     }
   });
+
+  it.each([
+    [true, "rate_limit", "billing", "10m"],
+    [true, "overloaded", "auth_permanent", "10m"],
+    [false, "rate_limit", "billing", "1h"],
+  ] as const)(
+    "shows the enforced mixed-window deadline (managed=%s, %s, %s)",
+    (managesOwnAvailability, cooldownReason, disabledReason, expected) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      try {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability }],
+        });
+        const captured = capture("my-gateway", {
+          version: 1,
+          profiles: { primary: { type: "api_key", provider: "my-gateway", key: "synthetic-key" } },
+          usageStats: {
+            primary: {
+              cooldownUntil: 1_700_003_600_000,
+              cooldownReason,
+              disabledUntil: 1_700_000_600_000,
+              disabledReason,
+            },
+          },
+        });
+        withPluginMetadataSnapshotScope(snapshot, () => {
+          expect(captured.read()).toContain(`(next, cooldown ${expected})`);
+          now.mockReturnValue(1_700_000_600_000);
+          if (managesOwnAvailability) {
+            expect(captured.read()).not.toContain("cooldown");
+          } else {
+            expect(captured.read()).toContain("(next, cooldown 50m)");
+          }
+        });
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it("captures workspace environment labels before later environment changes", () => {
     const config: OpenClawConfig = { plugins: { allow: ["workspace-auth-label"] } };

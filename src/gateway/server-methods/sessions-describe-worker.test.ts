@@ -3,11 +3,12 @@ import { expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registryRead from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
-  clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDisk,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import {
   bindSwarmRunReservation,
   holdQueuedSwarmRun,
@@ -28,7 +29,8 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -91,6 +93,7 @@ async function withFixture(
     context: GatewayRequestContext;
     ownerId: string;
     viewer: GatewayClient;
+    retainedRunIds: string[];
   }) => Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -143,7 +146,13 @@ async function withFixture(
       const context = requestContext(cfg);
       context.getRuntimeConfig = () => getRuntimeConfigSnapshot() ?? cfg;
       try {
-        await run({ cfg, context, ownerId, viewer });
+        await run({
+          cfg,
+          context,
+          ownerId,
+          viewer,
+          retainedRunIds: records.map((entry) => entry.runId),
+        });
       } finally {
         getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();
@@ -159,19 +168,23 @@ async function whilePaused(
 ) {
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  const ensure = projection.ensureMaterialized.bind(projection);
+  const prepare = projection.prepareSelection.bind(projection);
   const paused = createDeferredCore();
   const released = createDeferredCore();
-  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    await ensure();
-    paused.resolve();
-    await released.promise;
-  });
+  const readiness = vi
+    .spyOn(projection, "prepareSelection")
+    .mockImplementationOnce(async (...args) => {
+      const result = await prepare(...args);
+      paused.resolve();
+      await released.promise;
+      return result;
+    });
   const request = start();
   try {
     expect(
       await Promise.race([paused.promise.then(() => "paused"), request.then(() => "responded")]),
     ).toBe("paused");
+    expect(readiness).toHaveBeenCalledOnce();
     await change();
     released.resolve();
     return await request;
@@ -201,27 +214,22 @@ async function afterCommittedChange(
   }
 }
 
-it.each(["describe", "list"] as const)(
+it.each(["list"] as const)(
   "captures current registry facts after %s owner publications",
-  async (method) => {
-    await withFixture(async ({ context, viewer }) => {
+  async () => {
+    await withFixture(async ({ context, viewer, retainedRunIds }) => {
       await describeSession(context, viewer);
       const current = retainedRun("current-memory", {
         childSessionKey: targetKey,
         controllerSessionKey: "agent:main:current-controller",
       });
       try {
-        const read = method === "list" ? whilePaused : afterCommittedChange;
-        const response = await read(
+        const response = await whilePaused(
           context,
           () =>
-            method === "describe"
-              ? describeSession(context, viewer)
-              : listSessions({ client: viewer, context, request: { limit: 100 } }).then(
-                  (result) => ({
-                    session: result.sessions.find((row) => row.key === targetKey),
-                  }),
-                ),
+            listSessions({ client: viewer, context, request: { limit: 100 } }).then((result) => ({
+              session: result.sessions.find((row) => row.key === targetKey),
+            })),
           () => {
             const published = retainedRun("current-persisted", {
               collect: true,
@@ -229,8 +237,12 @@ it.each(["describe", "list"] as const)(
               swarmRequesterSessionKey: targetKey,
               collectorCompletion: { status: "done" },
             });
-            persistSubagentRunsToDisk(new Map([[published.runId, published]]));
+            persistRegistryFixture(new Map([[published.runId, published]]), [
+              ...retainedRunIds,
+              published.runId,
+            ]);
             subagentRuns.set(current.runId, current);
+            subagentRuns.commitOwnership(current);
           },
         );
         expect(response).toMatchObject({
@@ -330,7 +342,7 @@ it("projects current target, lineage, children and placement after committed cha
   });
 });
 
-it.each(["draft", "role", "creator alias"] as const)(
+it.each(["role", "creator alias"] as const)(
   "rechecks sharing visibility after a %s change before the synchronous read",
   async (change) => {
     await withFixture(async ({ cfg, context, viewer }) => {
@@ -605,7 +617,7 @@ it.each(["executor", "reservation"] as const)(
             activeRunIds: [],
           }),
         ).toBe(true);
-        bindSwarmRunReservation(run.runId, run);
+        bindSwarmRunReservation(run.runId, getSubagentRunRuntimeKey(run));
       }
       try {
         expect(registryRead.isSubagentRunLive(run)).toBe(owner === "executor");

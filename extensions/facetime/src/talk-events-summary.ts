@@ -1,4 +1,8 @@
-import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  asRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FaceTimeTalkEventSummary = {
   type: string;
@@ -11,12 +15,8 @@ export type FaceTimeTalkEventSummary = {
   message?: string;
 };
 
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-export function summarizeRecentTalkEvents(events: readonly unknown[], limit = 12) {
-  return events.slice(-limit).map((event): FaceTimeTalkEventSummary => {
+export function summarizeRecentTalkEvents(events: readonly unknown[]) {
+  return events.slice(-12).map((event): FaceTimeTalkEventSummary => {
     const record = asRecord(event);
     const payload = asRecord(record.payload);
     return {
@@ -24,7 +24,7 @@ export function summarizeRecentTalkEvents(events: readonly unknown[], limit = 12
       turnId: normalizeOptionalString(record.turnId),
       callId: normalizeOptionalString(record.callId),
       final: typeof record.final === "boolean" ? record.final : undefined,
-      byteLength: optionalNumber(payload.byteLength),
+      byteLength: asFiniteNumber(payload.byteLength),
       name: normalizeOptionalString(payload.name),
       text: normalizeOptionalString(payload.text),
       message: normalizeOptionalString(payload.message),

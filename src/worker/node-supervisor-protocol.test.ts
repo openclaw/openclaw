@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
@@ -12,9 +12,6 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "./node-supervisor-protocol.js";
 
-const RESULT_JSON_MAX_BYTES = 64 * 1024;
-const ERROR_TEXT_MAX_BYTES = 4 * 1024;
-
 const identity: NodeWorkerSupervisorIdentity = {
   launchId: "launch-1",
   planHash: "a".repeat(64),
@@ -25,184 +22,151 @@ const identity: NodeWorkerSupervisorIdentity = {
   runId: "run-1",
 };
 
-describe("node worker status wait request", () => {
-  it.each([undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS])(
-    "accepts bounded optional wait %s",
-    (waitMs) => {
-      const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
-      expect(parseNodeWorkerLookupInput(JSON.stringify(input))).toEqual(input);
-    },
-  );
+function launchInput() {
+  const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+  return {
+    environmentSession: 1,
+    launchId: "turn-1",
+    gatewayNamespace: "gateway-1",
+    expectedBundleHash: descriptor.admission.handshake.bundleHash,
+    placementGeneration: 4,
+    descriptor,
+  };
+}
 
-  it.each([0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1])(
-    "rejects invalid wait %s",
-    (waitMs) => {
-      expect(() =>
-        parseNodeWorkerLookupInput(JSON.stringify({ launchId: identity.launchId, waitMs })),
-      ).toThrow("INVALID_REQUEST");
-    },
-  );
+it("accepts only bounded optional status waits", () => {
+  for (const waitMs of [undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS]) {
+    const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
+    expect(parseNodeWorkerLookupInput(JSON.stringify(input))).toEqual(input);
+  }
+  for (const waitMs of [0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1]) {
+    expect(() =>
+      parseNodeWorkerLookupInput(JSON.stringify({ launchId: identity.launchId, waitMs })),
+    ).toThrow("INVALID_REQUEST");
+  }
 });
 
-describe("node worker supervisor launch request", () => {
-  it("keeps the old launch shape exact and binds negotiated idle retention into its plan hash", () => {
-    const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+it("preserves published authoring and negotiated idle retention in launch identity", () => {
+  for (const multipleProfiles of [undefined, false, true]) {
+    const base = launchInput();
     const input = {
-      environmentSession: 1,
-      launchId: "turn-1",
-      gatewayNamespace: "gateway-1",
-      expectedBundleHash: descriptor.admission.handshake.bundleHash,
-      placementGeneration: 4,
-      descriptor,
+      ...base,
+      descriptor: {
+        ...base.descriptor,
+        assignment: {
+          ...base.descriptor.assignment,
+          ...(multipleProfiles === undefined ? {} : { skillAuthoring: { multipleProfiles } }),
+        },
+      },
     };
     const legacy = parseNodeWorkerLaunchInput(JSON.stringify(input));
     expect(legacy).toEqual(input);
+    if (multipleProfiles !== undefined) {
+      expect(nodeWorkerPlanHash(legacy)).not.toBe(nodeWorkerPlanHash(base));
+    }
     const retained = parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: true }));
     expect(retained).toEqual({ ...input, idleRetention: true });
     expect(nodeWorkerPlanHash(retained)).not.toBe(nodeWorkerPlanHash(legacy));
     expect(() =>
       parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: false })),
     ).toThrow("INVALID_REQUEST");
-  });
+  }
+});
 
-  it.each([undefined, 2])(
-    "rejects a Gateway without the negotiated environment lifetime marker %s",
-    (environmentSession) => {
-      const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
-      expect(() =>
-        parseNodeWorkerLaunchInput(
-          JSON.stringify({
-            environmentSession,
-            launchId: "turn-1",
-            gatewayNamespace: "gateway-1",
-            expectedBundleHash: descriptor.admission.handshake.bundleHash,
-            placementGeneration: 4,
-            descriptor,
-          }),
-        ),
-      ).toThrow("INVALID_REQUEST");
-    },
-  );
-
-  it("rejects mismatched launch and turn ids", () => {
-    const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
-
+it("rejects malformed authoring, unnegotiated lifetimes, and mismatched turn identities", () => {
+  const input = launchInput();
+  for (const skillAuthoring of [
+    null,
+    {},
+    { multipleProfiles: "false" },
+    { multipleProfiles: false, extra: true },
+  ]) {
     expect(() =>
       parseNodeWorkerLaunchInput(
         JSON.stringify({
-          environmentSession: 1,
-          launchId: "other-launch",
-          gatewayNamespace: "gateway-1",
-          expectedBundleHash: descriptor.admission.handshake.bundleHash,
-          placementGeneration: 4,
-          descriptor,
+          ...input,
+          descriptor: {
+            ...input.descriptor,
+            assignment: { ...input.descriptor.assignment, skillAuthoring },
+          },
         }),
       ),
-    ).toThrow("launchId must match descriptor assignment turnId");
-  });
+    ).toThrow("INVALID_REQUEST");
+  }
+  for (const environmentSession of [undefined, 2]) {
+    expect(() =>
+      parseNodeWorkerLaunchInput(JSON.stringify({ ...input, environmentSession })),
+    ).toThrow("INVALID_REQUEST");
+  }
+  expect(() =>
+    parseNodeWorkerLaunchInput(JSON.stringify({ ...input, launchId: "other-launch" })),
+  ).toThrow("launchId must match descriptor assignment turnId");
 });
 
-describe("node worker environment stop request", () => {
+it("requires a complete bounded environment owner independently of its completed turn", () => {
   const scope = {
     gatewayNamespace: "gateway-1",
     environmentId: "environment-1",
     sessionId: "session-1",
     ownerEpoch: 3,
   };
-
-  it("preserves the exact environment owner independently of its completed turn", () => {
-    expect(parseNodeWorkerEnvironmentStopInput(JSON.stringify(scope))).toEqual(scope);
-  });
-
-  it.each([
-    { ...scope, ownerEpoch: undefined },
-    { ...scope, ownerEpoch: -1 },
-    { ...scope, sessionId: "" },
-    { ...scope, gatewayNamespace: "../gateway" },
-    { ...scope, launchId: "turn-1" },
-    { ...scope, environmentId: "x".repeat(4096) },
-  ])("rejects an incomplete or unbounded environment owner: %j", (input) => {
-    expect(() => parseNodeWorkerEnvironmentStopInput(JSON.stringify(input))).toThrow(
-      "INVALID_REQUEST",
-    );
-  });
+  expect(parseNodeWorkerEnvironmentStopInput(JSON.stringify(scope))).toEqual(scope);
+  for (const fields of [
+    { ownerEpoch: undefined },
+    { ownerEpoch: -1 },
+    { sessionId: "" },
+    { gatewayNamespace: "../gateway" },
+    { launchId: "turn-1" },
+    { environmentId: "x".repeat(4096) },
+  ]) {
+    expect(() =>
+      parseNodeWorkerEnvironmentStopInput(JSON.stringify({ ...scope, ...fields })),
+    ).toThrow("INVALID_REQUEST");
+  }
 });
 
-describe("node worker supervisor wire receipt", () => {
-  it("accepts only bounded worker connection diagnostics", () => {
-    expect(
-      parseNodeWorkerConnectionFailureMessage({
-        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
-        cause: "certificate rejected",
-      }),
-    ).toEqual({
+it("accepts only bounded worker connection diagnostics", () => {
+  for (const cause of ["certificate rejected", null]) {
+    const message = { type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE, cause };
+    expect(parseNodeWorkerConnectionFailureMessage(message)).toEqual(message);
+  }
+  expect(
+    parseNodeWorkerConnectionFailureMessage({
       type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
-      cause: "certificate rejected",
-    });
-    expect(
-      parseNodeWorkerConnectionFailureMessage({
-        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
-        cause: null,
-      }),
-    ).toEqual({ type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE, cause: null });
-    expect(
-      parseNodeWorkerConnectionFailureMessage({
-        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
-        cause: "x".repeat(64 * 1024 + 1),
-      }),
-    ).toBeNull();
-  });
+      cause: "x".repeat(64 * 1024 + 1),
+    }),
+  ).toBeNull();
+});
 
-  it.each([
-    { ...identity, state: "pending" },
-    { ...identity, state: "running" },
+it("round-trips only closed receipts with bounded output or single-line failure diagnostics", () => {
+  for (const fields of [
+    { state: "pending" },
+    { state: "running" },
     {
-      ...identity,
       state: "completed",
       resultJson: JSON.stringify({ status: "completed", transcriptNextSeq: 2 }),
     },
-    { ...identity, state: "failed", errorText: "worker exited before completion" },
-    { ...identity, state: "interrupted", errorText: "node host stopped" },
-    { ...identity, state: "cancelled", errorText: "node worker launch cancelled" },
-  ])("round-trips the closed $state receipt", (receipt) => {
+    { state: "failed", errorText: "worker exited before completion" },
+    { state: "interrupted", errorText: "node host stopped" },
+    { state: "cancelled", errorText: "node worker launch cancelled" },
+  ]) {
+    const receipt = { ...identity, ...fields };
     expect(parseNodeWorkerSupervisorReceipt(receipt)).toEqual(receipt);
-  });
-
-  it.each([
-    { name: "extra field", receipt: { ...identity, state: "running", workerPid: 123 } },
-    { name: "missing plan hash", receipt: { ...identity, planHash: undefined, state: "running" } },
-    { name: "completed without output", receipt: { ...identity, state: "completed" } },
-    {
-      name: "completed with malformed output",
-      receipt: { ...identity, state: "completed", resultJson: "{" },
-    },
-    {
-      name: "oversized completed output",
-      receipt: {
-        ...identity,
-        state: "completed",
-        resultJson: JSON.stringify({ text: "x".repeat(RESULT_JSON_MAX_BYTES) }),
-      },
-    },
-    { name: "failed without error", receipt: { ...identity, state: "failed" } },
-    {
-      name: "multiline error",
-      receipt: { ...identity, state: "failed", errorText: "first\nsecond" },
-    },
-    {
-      name: "oversized error",
-      receipt: {
-        ...identity,
-        state: "failed",
-        errorText: "x".repeat(ERROR_TEXT_MAX_BYTES + 1),
-      },
-    },
-  ])("rejects $name", ({ receipt }) => {
+  }
+  for (const receipt of [
+    "{",
+    null,
+    ...[
+      { state: "running", workerPid: 123 },
+      { state: "running", planHash: undefined },
+      { state: "completed" },
+      { state: "completed", resultJson: "{" },
+      { state: "completed", resultJson: JSON.stringify({ text: "x".repeat(64 * 1024) }) },
+      { state: "failed" },
+      { state: "failed", errorText: "first\nsecond" },
+      { state: "failed", errorText: "x".repeat(4 * 1024 + 1) },
+    ].map((fields) => Object.assign({}, identity, fields)),
+  ]) {
     expect(parseNodeWorkerSupervisorReceipt(receipt)).toBeNull();
-  });
-
-  it("rejects non-object values without throwing", () => {
-    expect(parseNodeWorkerSupervisorReceipt("{")).toBeNull();
-    expect(parseNodeWorkerSupervisorReceipt(null)).toBeNull();
-  });
+  }
 });

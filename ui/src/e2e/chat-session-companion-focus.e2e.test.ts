@@ -1,9 +1,12 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -37,8 +40,8 @@ suite.define(() => {
         await page.keyboard.type("Ready to ask");
         expect(await input.inputValue()).toBe("Ready to ask");
 
-        await page.locator(".side-panel__minimize").click();
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, "Minimize side panel");
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
           .toBe(true);
@@ -86,7 +89,10 @@ suite.define(() => {
     "preserves newer main focus while %s opens a delayed rail",
     async (command) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -121,7 +127,10 @@ suite.define(() => {
     "focuses a new Side chat opening after %s supersedes an unmounted command",
     async (action) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -133,7 +142,7 @@ suite.define(() => {
           if (action === "close") {
             await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
           } else if (action === "minimize") {
-            await page.locator(".side-panel__minimize").click();
+            await selectChatLayoutAction(page, "Minimize side panel");
           } else {
             await openChatSidePanelType(page, "Files");
           }
@@ -141,7 +150,7 @@ suite.define(() => {
           if (action === "close") {
             await openChatSidePanelType(page, "Side chat");
           } else if (action === "minimize") {
-            await page.locator(".chat-side-panel-toggle").click();
+            await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           } else {
             await page.getByRole("tab", { name: "Side chat", exact: true }).click();
           }
@@ -218,7 +227,7 @@ suite.define(() => {
           deferredMethods: ["sessions.companion.ask"],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         const firstInput = panes.first().locator(".agent-chat__composer-shell textarea");
@@ -285,11 +294,8 @@ suite.define(() => {
       expect(await sideInput.isDisabled()).toBe(false);
       await mainInput.focus();
       // The shared selection owner also publishes background roster reconciliation.
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: { agentSelection: { set: (agent: string) => void } } };
-        };
-        app.runtime.context.agentSelection.set("work");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.set("work");
       });
       await expect.poll(() => sideInput.isDisabled()).toBe(false);
       expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
@@ -324,7 +330,10 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const held =
         intent === "sidebar menu before mount"
-          ? await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u)
+          ? await holdModuleResponse(
+              page,
+              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+            )
           : null;
       try {
         const gateway = await installMockGateway(page, {
@@ -367,6 +376,7 @@ suite.define(() => {
             .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
           await page.keyboard.press("Shift+F10");
+          await openSessionMenuSubmenu(page, "Advanced");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

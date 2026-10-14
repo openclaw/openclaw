@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
@@ -39,8 +39,7 @@ type PlaybackSourceIdentity = {
   size: number;
   mtimeMs: number;
   ctimeMs: number;
-  dev: number;
-  ino: number;
+  exactIdentity: ExactFileIdentity;
 };
 
 type PlaybackSourceStat = Omit<PlaybackSourceIdentity, "path">;
@@ -116,8 +115,8 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
         source.size,
         source.mtimeMs,
         source.ctimeMs,
-        source.dev,
-        source.ino,
+        source.exactIdentity.dev.toString(),
+        source.exactIdentity.ino.toString(),
       ]),
     )
     .digest("hex");
@@ -132,15 +131,18 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 function playbackSourceIdentityMatches(
   source: PlaybackSourceIdentity,
-  opened: { realPath: string; stat: PlaybackSourceStat },
+  opened: {
+    realPath: string;
+    stat: Omit<PlaybackSourceStat, "exactIdentity">;
+    exactIdentity: ExactFileIdentity;
+  },
 ): boolean {
   return (
     opened.realPath === source.path &&
     opened.stat.size === source.size &&
     opened.stat.mtimeMs === source.mtimeMs &&
     opened.stat.ctimeMs === source.ctimeMs &&
-    opened.stat.dev === source.dev &&
-    opened.stat.ino === source.ino
+    sameFileIdentity(opened.exactIdentity, source.exactIdentity)
   );
 }
 
@@ -320,7 +322,6 @@ export async function resolvePlaybackMetadataForSource(
   return { playback: mode === "fallback" ? undefined : mode, durationMs, width, height };
 }
 
-/** Replaces the original container suffix for a transcoded response filename. */
 export function replacePlaybackFileExtension(fileName: string, extension: `.${string}`): string {
   const currentExtension = path.extname(fileName);
   const stem = currentExtension ? fileName.slice(0, -currentExtension.length) : fileName;
@@ -478,6 +479,7 @@ async function transcodePlaybackSource(params: {
           !playbackSourceIdentityMatches(params.source, {
             realPath: opened.realPath,
             stat: await opened.handle.stat(),
+            exactIdentity: opened.exactIdentity,
           })
         ) {
           throw new Error("Playback source changed during transcode read");

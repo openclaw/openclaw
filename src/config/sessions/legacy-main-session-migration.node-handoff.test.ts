@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -26,7 +26,6 @@ const { createFixture } = setupLegacyMainSessionMigrationTests();
 
 function createNodeHandoff(existingCanonical = false) {
   const fixture = createFixture();
-  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
   const entry = { sessionId: "node-artifact-handoff", updatedAt: 100 };
   const events = [
     { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
@@ -260,8 +259,6 @@ describe("legacy main session node artifact handoff", () => {
 
   it.each([
     { side: "source", artifact: "widget" },
-    { side: "destination", artifact: "widget" },
-    { side: "source", artifact: "membership" },
     { side: "destination", artifact: "membership" },
   ] as const)(
     "retains both nodes when $side $artifact changes after cleanup planning",

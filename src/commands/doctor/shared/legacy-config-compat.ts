@@ -1,9 +1,17 @@
 // Top-level legacy config migration runner used before full config validation.
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../../../config/legacy.default-agent-owner.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
-import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsThroughRewrite,
+} from "../../../config/resolution-facts.js";
+import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "../../../config/validation.js";
 import {
   isPluginSourceModulePath,
   tryNativeRequireModule,
@@ -14,6 +22,8 @@ import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-conf
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
+import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
+import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
 
 const require = createRequire(import.meta.url);
 
@@ -64,12 +74,22 @@ export function applyLegacyDoctorMigrations(
   changes: string[];
   warnings?: string[];
 } {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return { next: null, changes: [] };
   }
-  const original = raw as Record<string, unknown>;
-  const next = cloneConfigWithResolutionFacts(original);
-  const changes: string[] = [];
+  const original = raw;
+  const copilotConfig = removeLegacyCopilotDiscovery(original);
+  const contextBudget = migrateLegacyContextBudgetConfig(copilotConfig);
+  const next = inheritLegacyDefaultAgentId(
+    original,
+    cloneConfigWithResolutionFacts(contextBudget.config),
+  );
+  const changes = contextBudget.changes.map(({ message }) => message);
+  if (copilotConfig !== original) {
+    changes.push(
+      "The GitHub Copilot discovery switch was retired and has been removed. Configured Copilot access now refreshes its model list automatically. Use the model allow list (agents.defaults.modelPolicy.allow) to hide Copilot models; it does not stop discovery requests.",
+    );
+  }
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
     migration.apply(next, changes, options.context);
   }
@@ -77,6 +97,17 @@ export function applyLegacyDoctorMigrations(
     pluginContracts: options.pluginContracts !== false,
   });
   changes.push(...compat.changes);
+  const legacyOwner = tryGetLegacyDefaultAgentId(next);
+  if (legacyOwner && options.pluginContracts !== false) {
+    const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
+      compat.next,
+      legacyOwner,
+    );
+    if (materialized.insertedPaths.length > 0) {
+      Object.assign(compat.next, materialized.config);
+      changes.push("Preserved legacy ownership for enabled channels.");
+    }
+  }
   const ownership: ReturnType<
     typeof import("./legacy-config-binding-repair.runtime.js").repairUnownedChannelAccountBindings
   > =
@@ -88,14 +119,15 @@ export function applyLegacyDoctorMigrations(
       : { config: compat.next, changes: [] };
   changes.push(...ownership.changes);
   const warnings = [
+    ...contextBudget.warnings.map(({ message }) => message),
     ...(compat.warnings ?? []),
     ...(ownership.warnings ?? []),
     ...collectToolPolicyConflictWarnings(ownership.config),
   ];
-  // The config reader keeps the retired default-agent marker outside the object.
-  // Cloning must retain that owner so validation does not roll back a repairable roster.
+  copyConfigResolutionFactsThroughRewrite(original, ownership.config);
+  // Only Doctor retains the preimage owner for state migration before the config commit.
   return {
-    next: changes.length > 0 ? inheritLegacyDefaultAgentId(original, ownership.config) : null,
+    next: changes.length > 0 ? inheritLegacyDefaultAgentId(next, ownership.config) : null,
     changes,
     ...(warnings.length ? { warnings } : {}),
   };

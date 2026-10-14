@@ -5,6 +5,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-core.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -17,10 +18,7 @@ export type ExecApprovalRequestPayload = {
   resolvedPath?: string | null;
   sessionKey?: string | null;
   runId?: string | null;
-  commandSpans?: readonly {
-    startIndex: number;
-    endIndex: number;
-  }[];
+  commandSpans?: readonly ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -35,18 +33,12 @@ export type ExecApprovalRequest = {
   pluginDetail?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  pluginActions?: unknown;
   proposalHash?: string | null;
   /** Canonical raising session when this request is projected into an ancestor session. */
   sourceSessionKey?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
-};
-
-type ExecApprovalResolved = {
-  id: string;
-  decision?: string | null;
-  resolvedBy?: string | null;
-  ts?: number | null;
 };
 
 export type ExecApprovalPromptState = {
@@ -63,6 +55,16 @@ export type ExecApprovalPromptState = {
 
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
+
+const APPROVAL_EVENT_KINDS = [
+  ["exec", "exec"],
+  ["plugin", "plugin"],
+  ["openclaw", "system-agent"],
+] as const;
+
+function approvalKindForEvent(event: string, phase: "requested" | "resolved") {
+  return APPROVAL_EVENT_KINDS.find(([prefix]) => event === `${prefix}.approval.${phase}`)?.[1];
+}
 
 function parseCommandSpans(
   value: unknown,
@@ -206,6 +208,7 @@ function parseApprovalRequested(
       pluginDetail: readStringValue(request.detail) ?? null,
       pluginSeverity: readStringValue(request.severity) ?? null,
       pluginId: readStringValue(request.pluginId) ?? null,
+      pluginActions: request.actions,
     };
   }
   const description = normalizeOptionalString(request.description);
@@ -223,43 +226,20 @@ function parseApprovalRequested(
   };
 }
 
-export function parseApprovalResolvedEvent(
-  event: string,
-  payload: unknown,
-): ExecApprovalResolved | null {
-  if (
-    (event !== "exec.approval.resolved" &&
-      event !== "plugin.approval.resolved" &&
-      event !== "openclaw.approval.resolved") ||
-    !isRecord(payload)
-  ) {
+export function parseApprovalResolvedEvent(event: string, payload: unknown): { id: string } | null {
+  if (!approvalKindForEvent(event, "resolved") || !isRecord(payload)) {
     return null;
   }
-  const id = normalizeOptionalString(payload.id) ?? "";
-  if (!id) {
-    return null;
-  }
-  return {
-    id,
-    decision: typeof payload.decision === "string" ? payload.decision : null,
-    resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
-    ts: typeof payload.ts === "number" ? payload.ts : null,
-  };
+  const id = normalizeOptionalString(payload.id);
+  return id ? { id } : null;
 }
 
 export function parseApprovalRequestedEvent(
   event: string,
   payload: unknown,
 ): ExecApprovalRequest | null {
-  if (event === "exec.approval.requested") {
-    return parseApprovalRequested("exec", payload);
-  }
-  if (event === "plugin.approval.requested") {
-    return parseApprovalRequested("plugin", payload);
-  }
-  return event === "openclaw.approval.requested"
-    ? parseApprovalRequested("system-agent", payload)
-    : null;
+  const kind = approvalKindForEvent(event, "requested");
+  return kind ? parseApprovalRequested(kind, payload) : null;
 }
 
 export async function resolveApprovalRequest(
@@ -381,19 +361,8 @@ function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string)
   state.execApprovalErrors.delete(id);
 }
 
-function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
-  const pendingIds = new Set(state.execApprovalQueue.map((entry) => entry.id));
-  for (const id of state.execApprovalErrors.keys()) {
-    if (!pendingIds.has(id)) {
-      state.execApprovalErrors.delete(id);
-    }
-  }
-}
-
 export function clearExecApprovalTimers(state: ExecApprovalPromptState): void {
-  for (const timer of state.execApprovalExpiryTimers?.values() ?? []) {
-    globalThis.clearTimeout(timer);
-  }
+  state.execApprovalExpiryTimers?.forEach((timer) => globalThis.clearTimeout(timer));
   state.execApprovalExpiryTimers?.clear();
 }
 
@@ -446,8 +415,12 @@ export async function refreshPendingApprovalQueue(
       return false;
     }
     state.execApprovalQueue = refreshed;
-    pruneExecApprovalErrors(state);
     const refreshedIds = new Set(refreshed.map((entry) => entry.id));
+    for (const id of state.execApprovalErrors.keys()) {
+      if (!refreshedIds.has(id)) {
+        state.execApprovalErrors.delete(id);
+      }
+    }
     for (const id of state.execApprovalExpiryTimers?.keys() ?? []) {
       if (!refreshedIds.has(id)) {
         clearApprovalExpiryTimer(state, id);

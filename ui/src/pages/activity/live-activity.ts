@@ -13,19 +13,7 @@ type LiveActivitySnapshot = {
   readonly error: string | null;
 };
 
-export type LiveActivity = {
-  readonly snapshot: LiveActivitySnapshot;
-  subscribe: (listener: (snapshot: LiveActivitySnapshot) => void) => () => void;
-  syncSessions: (rows: readonly GatewaySessionRow[]) => void;
-  retry: () => void;
-  clear: () => void;
-  dispose: () => void;
-};
-
-export function createLiveActivity(
-  gateway: ApplicationGateway,
-  sessions: SessionCapability,
-): LiveActivity {
+export function createLiveActivity(gateway: ApplicationGateway, sessions: SessionCapability) {
   let entries: ActivityEntry[] = [];
   let snapshot: LiveActivitySnapshot = { entries, revision: 0, error: null };
   const errors = new Map<string, string>();
@@ -155,11 +143,11 @@ export function createLiveActivity(
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
+    subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    syncSessions(nextRows) {
+    syncSessions(nextRows: readonly GatewaySessionRow[]) {
       if (rows === nextRows) {
         return;
       }

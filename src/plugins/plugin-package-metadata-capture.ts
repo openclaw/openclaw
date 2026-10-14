@@ -15,11 +15,13 @@ import {
 } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
-import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
-export function createPluginDependencyResolver() {
+export function createPluginDependencyResolver(lookupBoundary?: {
+  root: string;
+  onUnresolvable: (name: string, importer: string) => void;
+}) {
   const roots = new Map<string, PluginDependencyResolution | undefined>();
   return (name: string, importer: string): PluginDependencyResolution | undefined => {
     const key = `${path.dirname(importer)}\0${name}`;
@@ -30,6 +32,24 @@ export function createPluginDependencyResolver() {
     for (const nodeModules of createRequire(importer).resolve.paths(`${name}/`) ?? []) {
       const candidate = path.join(nodeModules, name);
       if (fs.existsSync(path.join(candidate, "package.json"))) {
+        if (
+          lookupBoundary &&
+          isPathInside(lookupBoundary.root, importer) &&
+          !isPathInside(lookupBoundary.root, nodeModules)
+        ) {
+          const manifestFile = path.join(resolvePluginModulePackageRoot(importer), "package.json");
+          const manifest = fs.existsSync(manifestFile)
+            ? asOptionalRecord(JSON.parse(fs.readFileSync(manifestFile, "utf8")))
+            : undefined;
+          // Node walks ancestor node_modules up to the filesystem root. An undeclared
+          // optional lookup must not acquire unrelated ancestor code for a rehearsal.
+          // Declared packages and links inside the copy retain containment validation.
+          if (!pluginDependencyNames(manifest).has(name)) {
+            lookupBoundary.onUnresolvable(name, importer);
+            roots.set(key, undefined);
+            return undefined;
+          }
+        }
         const resolved = {
           root: fs.realpathSync(candidate),
           lookupDirectory: path.dirname(nodeModules),
@@ -90,6 +110,9 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isNativeImportPattern: (specifier: string) => boolean;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (
@@ -191,19 +214,6 @@ export function resolvePluginModulePackageRoot(filename: string): string {
   return path.dirname(filename);
 }
 
-export function capturePluginModuleSource(
-  filename: string,
-  capture: (root: string, source: string) => void,
-): string | undefined {
-  const real = fs.realpathSync(filename);
-  if (!fs.statSync(real).isFile()) {
-    return undefined;
-  }
-  // The admitted artifact owns byte capture; package metadata only selects its layout.
-  capture(resolvePluginModulePackageRoot(real), real);
-  return real;
-}
-
 export function capturePluginPackageMetadata(
   root: string,
   destination: string,
@@ -239,7 +249,8 @@ export function capturePluginPackageMetadata(
       const filename = fileURLToPath(url);
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
-      if (isPathInside(root, filename) && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+      const insideRoot = isPathInside(root, filename);
+      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
         const real = fs.realpathSync(input);
         if (
           !isPathInside(prepared?.boundary ?? root, real) &&
@@ -364,7 +375,6 @@ function visitPluginPackageTargetFiles(params: {
 
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
-  destination: string;
   /** Absolute normalized root captured by the artifact producer. */
   readonly capturedRoot: string;
   sourceRoot: string;
@@ -610,7 +620,7 @@ export function withPluginSourceCaptureDirectory<T>(
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
+export function createPluginSourceCapture() {
   const override = sourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
@@ -645,8 +655,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
     throw error;
   }
-  const inputs = new Map<string, PluginSourceInput>();
-  const pendingInputs = new Set<string>();
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
@@ -656,7 +664,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
     try {
       const value = capture();
-      verifyPluginSourceInputs(inputs, pendingInputs);
       return { value, additions: [...additions] };
     } catch (error) {
       // Another specifier must not admit files from an incomplete capture transaction.
@@ -665,7 +672,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       }
       throw error;
     } finally {
-      pendingInputs.clear();
       additions.clear();
     }
   };
@@ -674,28 +680,22 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       throw captureFailures.get(filename);
     }
   };
-  const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
-  };
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    const filenames = directory + path.sep;
-    const urls = pathToFileURL(filenames).href;
+    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+    const urls = pathToFileURL(directory + path.sep).href;
     const cache = createRequire(import.meta.url).cache;
     for (const id of Object.keys(cache)) {
-      if (id.startsWith(filenames) || id.startsWith(urls)) {
+      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
         delete cache[id];
       }
     }
     captureFailures.clear();
   };
   return {
-    inputs,
-    pendingInputs,
     additions,
-    capture: captureAdmitted,
+    capture: acquire,
     assertModuleAvailable,
     directory,
     outputRoot: override?.managedRoot ?? instance?.managedRoot,

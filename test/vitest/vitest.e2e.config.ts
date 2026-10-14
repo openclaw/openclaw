@@ -57,7 +57,6 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
         "src/**/*.e2e.test.ts",
         "packages/**/*.e2e.test.ts",
         "src/gateway/gateway.test.ts",
-        "src/gateway/server.startup-matrix-migration.integration.test.ts",
         BUNDLED_PLUGIN_E2E_TEST_GLOB,
       ],
       exclude,

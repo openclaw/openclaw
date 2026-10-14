@@ -162,9 +162,7 @@ describe("SQLite WAL checkpoint observations", () => {
 
   it.each([
     { checkpointMode: "TRUNCATE", readBigInts: false, returnArrays: false },
-    { checkpointMode: "PASSIVE", readBigInts: false, returnArrays: false },
-    { checkpointMode: "PASSIVE", readBigInts: true, returnArrays: false },
-    { checkpointMode: "PASSIVE", readBigInts: false, returnArrays: true },
+    { checkpointMode: "PASSIVE", readBigInts: true, returnArrays: true },
   ] as const)(
     "records a $checkpointMode checkpoint blocked by another connection's reader (BigInt=$readBigInts, arrays=$returnArrays)",
     ({ checkpointMode, readBigInts, returnArrays }) => {
@@ -242,7 +240,7 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(() => reader.next()).toThrow(RangeError);
       expect(db.isTransaction).toBe(false);
       expect(maintenance.inspectIdle?.()).toBe("retire");
-      expect(maintenance.health?.activeReaders).toEqual([]);
+      expect(readSqliteReaderDiagnosticsForPath(databasePath).activeReaders).toEqual([]);
       expect(() => assertNoActiveSqliteReaders(db, "native idle probe")).not.toThrow();
       reader.return?.();
       expect(maintenance.inspectIdle?.()).toBe("healthy");
@@ -267,62 +265,74 @@ describe("SQLite WAL checkpoint observations", () => {
     }
   });
 
-  it("reports a named Kysely reader without claiming it is the blocking owner", () => {
+  it("bounds named Kysely reader diagnostics without claiming a blocking owner", () => {
     const databasePath = path.join(tempDirs.make("openclaw-sqlite-reader-owner-"), "state.sqlite");
     const writer = openNodeSqliteDatabase(databasePath);
-    const reader = openNodeSqliteDatabase(databasePath);
+    const readers: Array<ReturnType<typeof openNodeSqliteDatabase>> = [];
+    const held: Array<ReturnType<typeof iterateSqliteQuerySync>> = [];
     const maintenance = configureSqliteWalMaintenance(writer, {
       checkpointIntervalMs: 0,
       checkpointMode: "PASSIVE",
       databasePath,
     });
-    writer.exec(
-      "CREATE TABLE events(value TEXT); INSERT INTO events VALUES ('before-reader'); PRAGMA wal_checkpoint(TRUNCATE)",
-    );
-    const held = withSqliteReaderOwner(
-      { operation: "fixture.blocked-read", ownerKind: "main" },
-      () =>
-        iterateSqliteQuerySync(
-          reader,
-          getNodeSqliteKysely<{ events: { value: string } }>(reader)
-            .selectFrom("events")
-            .select("value"),
-        ),
-    );
     try {
-      held.next();
+      writer.exec(
+        "CREATE TABLE events(value TEXT); INSERT INTO events VALUES ('before-reader'); PRAGMA wal_checkpoint(TRUNCATE)",
+      );
+      for (let index = 0; index < 10; index++) {
+        withSqliteReaderOwner({ operation: `fixture.reader-${index}`, ownerKind: "main" }, () => {
+          const reader = openNodeSqliteDatabase(databasePath);
+          readers.push(reader);
+          const iterator = iterateSqliteQuerySync(
+            reader,
+            getNodeSqliteKysely<{ events: { value: string } }>(reader)
+              .selectFrom("events")
+              .select("value"),
+          );
+          held.push(iterator);
+          iterator.next();
+        });
+      }
       writer.prepare("INSERT INTO events (value) VALUES (?)").run("after-reader");
       expect(maintenance.checkpoint()).toBe(false);
       expect(maintenance.health).toMatchObject({
         state: "blocked",
-        activeReaders: [
+        activeReaders: expect.arrayContaining([
           expect.objectContaining({
-            operation: "fixture.blocked-read",
+            operation: "fixture.reader-0",
             ownerKind: "main",
             kind: "iterator",
             connectionId: expect.any(Number),
             threadId,
           }),
-        ],
+        ]),
         readerDiagnostics: [
           expect.objectContaining({
             scope: "current-thread",
             blockingOwner: "unknown",
             nativeStatements: "unobserved",
             threadId,
-            connectionCount: 2,
-            readerCount: 1,
+            connectionCount: 11,
+            readerCount: 10,
           }),
         ],
       });
+      expect(maintenance.health?.activeReaders).toHaveLength(8);
+      expect(maintenance.health?.readerDiagnostics?.[0]?.connections).toHaveLength(8);
       expect(JSON.stringify(maintenance.health)).not.toContain("SELECT");
-      held.return?.();
+      for (const iterator of held) {
+        iterator.return?.();
+      }
       expect(maintenance.checkpoint()).toBe(true);
       expect(maintenance.health?.activeReaders).toBeUndefined();
       expect(readSqliteReaderDiagnosticsForPath(databasePath).activeReaders).toEqual([]);
     } finally {
-      held.return?.();
-      reader.close();
+      for (const iterator of held) {
+        iterator.return?.();
+      }
+      for (const reader of readers) {
+        reader.close();
+      }
       maintenance.close();
       writer.close();
     }
@@ -380,53 +390,6 @@ describe("SQLite WAL checkpoint observations", () => {
     } finally {
       unsubscribe();
       reader.close();
-      maintenance.close();
-      writer.close();
-    }
-  });
-
-  it("bounds connection and reader detail while reporting omitted local activity", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-wal-reader-bound-"), "state.sqlite");
-    const writer = openNodeSqliteDatabase(databasePath);
-    const readers: Array<ReturnType<typeof openNodeSqliteDatabase>> = [];
-    const releaseReaders: Array<() => void> = [];
-    const maintenance = configureSqliteWalMaintenance(writer, {
-      databasePath,
-      checkpointIntervalMs: 0,
-      checkpointMode: "PASSIVE",
-    });
-    try {
-      writer.exec("CREATE TABLE events(value TEXT); INSERT INTO events VALUES ('before');");
-      for (let index = 0; index < 10; index++) {
-        withSqliteReaderOwner({ operation: `fixture.reader-${index}`, ownerKind: "main" }, () => {
-          const reader = openNodeSqliteDatabase(databasePath);
-          readers.push(reader);
-          const iterator = iterateSqliteQuerySync(
-            reader,
-            getNodeSqliteKysely<{ events: { value: string } }>(reader)
-              .selectFrom("events")
-              .select("value"),
-          );
-          releaseReaders.push(() => {
-            iterator.return?.();
-          });
-          iterator.next();
-        });
-      }
-      writer.exec("INSERT INTO events VALUES ('after');");
-      expect(maintenance.checkpoint()).toBe(false);
-      expect(maintenance.health?.activeReaders).toHaveLength(8);
-      expect(maintenance.health?.readerDiagnostics).toEqual([
-        expect.objectContaining({ connectionCount: 11, readerCount: 10 }),
-      ]);
-      expect(maintenance.health?.readerDiagnostics?.[0]?.connections).toHaveLength(8);
-    } finally {
-      for (const release of releaseReaders) {
-        release();
-      }
-      for (const reader of readers) {
-        reader.close();
-      }
       maintenance.close();
       writer.close();
     }

@@ -1,5 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type {
   SqliteWorkerRequest,
@@ -11,25 +12,34 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import type {
+  SqliteWorkerRequestCustody,
+  SqliteWorkerSlotCustody,
+} from "./sqlite-worker-request-custody.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
 } from "./sqlite-worker-transfer.js";
+import type { WorkerRequestObservation } from "./worker-request-diagnostics.js";
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
     ? Omit<Request, "id">
     : never
   : never;
-type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
+type DispatchState = {
+  custody: SqliteWorkerRequestCustody;
+  openNotEntered?: boolean;
+  openRefused?: boolean;
+};
 export type Job = {
+  custody: SqliteWorkerRequestCustody;
+  observation: WorkerRequestObservation;
   signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
-  nativeDispatched?: boolean;
-  requestPosted?: boolean;
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;
@@ -48,6 +58,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
+  custody: SqliteWorkerSlotCustody;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
@@ -62,11 +73,13 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  nativeLostObservers?: Set<(reason: Error) => void>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
   markNativeStopped(): void;
   closeReceipt?: SqliteWorkerCloseReceipt;
   stateDatabasePath?: string;
+  stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
   id: number;
   key: string;
   databasePath: string;
@@ -96,6 +109,7 @@ export type OperationScope = {
   stateContext?: SqliteWorkerStateContext;
 };
 export type EnqueueOptions = {
+  requestClass?: string;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
   signal?: AbortSignal;
@@ -126,8 +140,9 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
-  preparation?: Buffer;
+  preparation?: Buffer<ArrayBuffer>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
   expectedIdentity?: string;
@@ -137,13 +152,14 @@ export type PreparedSqliteWorkerOpen = {
   onNativeStopped?: (
     stopped: Promise<void>,
     readCloseReceipt: () => SqliteWorkerCloseReceipt | undefined,
+    readOpenRefused: () => boolean,
   ) => void;
   stateDatabasePath?: string;
   createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: () => void;
   moduleUrl: URL;
   databasePath: string;
-  input: Buffer;
+  input: Buffer<ArrayBuffer>;
   existingOnly: boolean;
   stateContext?: SqliteWorkerStateContext;
 };
@@ -161,6 +177,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "createAdmission"
   | "stateDatabasePath"
   | "onNativeStopped"
+  | "onNativeLost"
   | "signal"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";

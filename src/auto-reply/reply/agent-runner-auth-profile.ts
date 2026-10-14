@@ -1,4 +1,3 @@
-// Resolves auth profile settings that agent runner forwards to providers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveProviderIdForAuth,
@@ -7,42 +6,28 @@ import {
 import type { FollowupRun } from "./queue.js";
 
 /** Keeps an auth profile only when the current provider shares the primary auth scope. */
-export function resolveProviderScopedAuthProfile(params: {
-  provider: string;
-  primaryProvider: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  config?: ProviderAuthAliasLookupParams["config"];
-  workspaceDir?: ProviderAuthAliasLookupParams["workspaceDir"];
-}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
-  const aliasParams = { config: params.config, workspaceDir: params.workspaceDir };
-  const providerId = normalizeProviderId(params.provider);
-  const primaryProviderId = normalizeProviderId(params.primaryProvider);
-  const sharesAuthScope =
-    (providerId !== "" && providerId === primaryProviderId) ||
-    resolveProviderIdForAuth(params.provider, aliasParams) ===
-      resolveProviderIdForAuth(params.primaryProvider, aliasParams);
-  const authProfileId = sharesAuthScope ? params.authProfileId : undefined;
-  return {
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
-  };
-}
-
-/** Resolves the auth profile override for a queued follow-up run. */
 export function resolveRunAuthProfile(
   run: FollowupRun["run"],
   provider: string,
   params?: { config?: ProviderAuthAliasLookupParams["config"] },
-) {
-  return resolveProviderScopedAuthProfile({
-    provider,
-    primaryProvider: run.provider,
-    authProfileId: run.authProfileId,
-    authProfileIdSource: run.authProfileIdSource,
-    config: params?.config ?? run.config,
-    workspaceDir: run.workspaceDir,
-  });
+): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+  const {
+    provider: primaryProvider,
+    authProfileId: requestedAuthProfileId,
+    authProfileIdSource,
+  } = run;
+  const aliasParams = { config: params?.config ?? run.config, workspaceDir: run.workspaceDir };
+  const providerId = normalizeProviderId(provider);
+  const primaryProviderId = normalizeProviderId(primaryProvider);
+  const sharesAuthScope =
+    (providerId !== "" && providerId === primaryProviderId) ||
+    resolveProviderIdForAuth(provider, aliasParams) ===
+      resolveProviderIdForAuth(primaryProvider, aliasParams);
+  const authProfileId = sharesAuthScope ? requestedAuthProfileId : undefined;
+  return {
+    authProfileId,
+    authProfileIdSource: authProfileId ? authProfileIdSource : undefined,
+  };
 }
 
 /** Applies an auto-fallback probe's pinned auth to its fallback candidate. */

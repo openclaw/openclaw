@@ -1,14 +1,17 @@
-import type { DatabaseSync } from "node:sqlite";
 import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.kernel.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -16,7 +19,6 @@ import {
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type {
   LegacyMcpOAuthImportResult,
-  LegacyMcpOAuthWorkerOperations,
   PreparedLegacyMcpOAuthImport,
 } from "./state-migrations.mcp-oauth.worker-contract.js";
 import {
@@ -29,7 +31,7 @@ type McpOAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_st
 const MIGRATION_KIND = "legacy-mcp-oauth-json";
 
 function importAndRecordReceiptInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: PreparedLegacyMcpOAuthImport,
 ): LegacyMcpOAuthImportResult {
   const { sourceKey, storeKey, now } = params;
@@ -118,26 +120,35 @@ function importAndRecordReceiptInDatabase(
 }
 
 /** Doctor's original maintenance owner authorizes this separate migration family. */
-export function executeLegacyMcpOAuthWorkerCommand(
-  database: OpenClawStateDatabase,
-  command: SqliteWorkerCommand<LegacyMcpOAuthWorkerOperations>,
-): LegacyMcpOAuthWorkerOperations[keyof LegacyMcpOAuthWorkerOperations]["output"] {
-  if (command.type === "legacyMcpOAuth.readReceipt") {
-    return readLegacyMigrationReceiptFromDatabase(database.db, command.input.sourceKey);
-  }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      if (command.type === "legacyMcpOAuth.import") {
-        const result = importAndRecordReceiptInDatabase(db, command.input);
+function migrationWrite<Input, Result>(
+  operation: (db: EngineConnection, input: Input) => Result,
+  recordReceipt?: (db: EngineConnection, result: Result) => void,
+) {
+  return (input: Input, { open }: WorkerOperationContext): Result => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = operation(db, input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        deferSqliteWorkerCommitReceipt(db, result);
+        recordReceipt?.(db, result);
         return result;
-      }
-      markLegacyMigrationSourceRemovedInDatabase(db, command.input.sourceKey);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return undefined;
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-  );
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    );
+  };
 }
+
+export const legacyMcpOAuthOperations = {
+  "legacyMcpOAuth.readReceipt": (input: { sourceKey: string }, { open }) =>
+    readLegacyMigrationReceiptFromDatabase(open().db, input.sourceKey),
+  "legacyMcpOAuth.import": migrationWrite(
+    importAndRecordReceiptInDatabase,
+    deferSqliteWorkerCommitReceipt,
+  ),
+  "legacyMcpOAuth.markRemoved": migrationWrite((db, input: { sourceKey: string }): void => {
+    markLegacyMigrationSourceRemovedInDatabase(db, input.sourceKey);
+  }),
+} satisfies WorkerOperationHandlers;
+
+export type LegacyMcpOAuthWorkerOperations = WorkerOperations<typeof legacyMcpOAuthOperations>;

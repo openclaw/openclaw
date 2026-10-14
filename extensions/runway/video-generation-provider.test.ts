@@ -8,7 +8,6 @@ import {
   installProviderHttpMockCleanup,
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -16,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
@@ -98,10 +98,6 @@ describe("runway video generation provider", () => {
       flagName: "--runway-api-key",
       envVar: "RUNWAYML_API_SECRET",
     });
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
   });
 
   it("submits a text-to-video task, polls it, and downloads the output", async () => {
@@ -272,4 +268,11 @@ describe("runway video generation provider", () => {
       "Runway video generation completed with malformed output URLs",
     );
   });
+});
+
+testVideoGenerationDeadlines({
+  providerId: "runway",
+  model: "gen4.5",
+  pendingStatus: "RUNNING",
+  loadPlugin: async () => (await import("./index.js")).default,
 });

@@ -79,6 +79,9 @@ describe("Google Meet startup ownership", () => {
         gateway: {
           isAvailable: async () => true,
           request: async (_method: string, params: { path: string }) => browser(params),
+          async readSessionFacts() {
+            throw new Error("Unexpected session facts request");
+          },
         },
         nodes: {
           list: async () => ({

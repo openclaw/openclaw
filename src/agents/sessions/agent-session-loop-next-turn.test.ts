@@ -14,6 +14,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
+import {
+  attachSteeringRuntimeContext,
+  setSteeringRuntimeContextRetention,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type { AgentTool } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
@@ -25,7 +29,10 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import { agentSessionSetPromptPreparation } from "./agent-session-prompting.js";
+import {
+  agentSessionQueuePromptContext,
+  agentSessionSetPromptPreparation,
+} from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -78,9 +85,60 @@ function mockAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
-  it.each(["apply", "dispose", "replace"] as const)(
-    "guards first-model preparation after a delayed SDK prompt override: %s",
-    async (closure) => {
+  it.each(["queued", "steering"] as const)(
+    "preserves %s custom context envelopes across transcript replay",
+    async (delivery) => {
+      const { session, sessionManager } = await createTestSession();
+      const timestamp = 1717570800000;
+      const text = "Persistent synthetic context";
+      const convert = session.agent.convertToLlm;
+      session.agent.convertToLlm = (messages) =>
+        convert(normalizeMessagesForLlmBoundary(messages, { appendOnlyRuntimeContext: true }));
+      let requested: Context["messages"] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requested = structuredClone(context.messages);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
+      if (delivery === "queued") {
+        session[agentSessionQueuePromptContext]({
+          role: "custom",
+          customType: "cache-context",
+          content: text,
+          display: false,
+          timestamp,
+        });
+      } else {
+        setSteeringRuntimeContextRetention(session, true);
+        const user = { role: "user" as const, content: "Queued user", timestamp };
+        const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+        try {
+          attachSteeringRuntimeContext(user, { text });
+        } finally {
+          clock.mockRestore();
+        }
+        session.agent.steer(user);
+      }
+      await session.prompt("Continue");
+
+      const replayed = await session.agent.convertToLlm(
+        sessionManager.buildSessionContext().messages,
+      );
+      const contextMessage = (messages: Context["messages"]) =>
+        messages.find((message) => JSON.stringify(message.content).includes(text));
+      expect(contextMessage(requested)).toMatchObject({ role: "user", timestamp });
+      expect(contextMessage(replayed)).toEqual(contextMessage(requested));
+    },
+  );
+
+  it.each(
+    (["apply", "dispose", "replace"] as const).flatMap((closure) =>
+      (["preparation", "admission"] as const).map((phase) => ({ closure, phase })),
+    ),
+  )(
+    "guards first-model $phase after a delayed SDK prompt override: $closure",
+    async ({ closure, phase }) => {
       const hookEntered = createDeferredCore();
       const hookRelease = createDeferredCore();
       const preparationEntered = createDeferredCore();
@@ -122,10 +180,24 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const settled = Promise.allSettled([prompt]);
       await hookEntered.promise;
       session[agentSessionSetPromptPreparation](async () => {
-        preparationEntered.resolve();
-        await preparationRelease.promise;
-        session.setActiveToolsByName(["read_policy"]);
-        session.agent.state.systemPrompt += "\nPermission change: read-only";
+        const waitForUpdate = async () => {
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        };
+        const update = () => {
+          session.setActiveToolsByName(["read_policy"]);
+          session.agent.state.systemPrompt += "\nPermission change: read-only";
+        };
+        if (phase === "preparation") {
+          await waitForUpdate();
+          update();
+          return undefined;
+        }
+        return async (onAdmitted) => {
+          await waitForUpdate();
+          onAdmitted(update);
+          expect(session.agent.state.isStreaming).toBe(true);
+        };
       });
       hookRelease.resolve();
       // A missing preparation boundary completes the request instead of entering the barrier.
@@ -153,6 +225,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           reason: { message: "Session prompt preparation is stale after replacement or disposal." },
         });
         expect(requests).toEqual([]);
+        if (phase === "admission") {
+          expect(session.agent.state.systemPrompt).not.toContain("Permission change: read-only");
+        }
       }
     },
   );
@@ -473,7 +548,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         },
         target: createTestUserTurnTranscriptTarget(),
       });
-      const queued = vi.spyOn(session.agent, "steer");
+      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
       try {
         await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
@@ -676,6 +751,52 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     expect(requests).toHaveLength(1);
     expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("does not answer a steer in place of a failed request", async () => {
+    const requests: Context[] = [];
+    const requestStarted = createDeferredCore();
+    const steerAccepted = createDeferredCore();
+    let failInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        failInitialResponse = () => {
+          const message = {
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "Unknown error (no error details in response)",
+          };
+          stream.push({ type: "error", reason: "error", error: message });
+          stream.end();
+        };
+        requestStarted.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "answered only the steer" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    const prompt = session.prompt("first question");
+    await requestStarted.promise;
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "second question", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      onQueueAccepted: () => steerAccepted.resolve(),
+    });
+    await steerAccepted.promise;
+    expect(session.getSteeringMessages()).toEqual(["second question"]);
+
+    failInitialResponse?.();
+    // The run owner retries the failed request; the caller re-queues the steer.
+    await expect(delivery).rejects.toThrow(
+      "active session ended before queued steering message was committed",
+    );
+    await prompt;
+
+    expect(requests).toHaveLength(1);
     expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 

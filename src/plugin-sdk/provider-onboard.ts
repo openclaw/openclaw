@@ -7,7 +7,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
-import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -644,10 +643,4 @@ export function createProviderConnectionPresetAppliers<TArgs extends unknown[]>(
 }
 
 /** Ensure static per-model config includes a provider model ref after onboarding. */
-export function ensureModelAllowlistEntry(params: {
-  cfg: OpenClawConfig;
-  modelRef: string;
-  defaultProvider?: string;
-}): OpenClawConfig {
-  return ensureStaticModelAllowlistEntry(params);
-}
+export { ensureStaticModelAllowlistEntry as ensureModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
