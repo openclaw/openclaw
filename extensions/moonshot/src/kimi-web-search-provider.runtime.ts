@@ -108,12 +108,18 @@ async function runKimiSearch(params: {
           title: title ? wrapWebContent(title, "web_search") : "",
           url,
           description: description ? wrapWebContent(description, "web_search") : "",
-          published: normalizeOptionalString(result.date),
-          siteName: normalizeOptionalString(result.site_name) ?? resolveSiteName(url),
+          // Provider metadata is page-controlled text; keep only values that cannot carry prose.
+          published: normalizeKimiResultDate(result.date),
+          siteName: resolveSiteName(url) || undefined,
         };
       });
     },
   );
+}
+
+function normalizeKimiResultDate(value: unknown): string | undefined {
+  const date = normalizeOptionalString(value);
+  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined;
 }
 
 export async function executeKimiWebSearchProviderTool(
