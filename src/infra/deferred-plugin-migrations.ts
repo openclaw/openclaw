@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,6 +30,7 @@ import {
 import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
@@ -165,7 +165,7 @@ export function mergeDeferredPluginMigration(
   };
 }
 
-function readPendingMigrationRows(database: DatabaseSync) {
+function readPendingMigrationRows(database: EngineConnection) {
   return executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
@@ -181,7 +181,7 @@ function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRow
   return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
 }
 
-function readPendingMigrationRecords(database: DatabaseSync) {
+function readPendingMigrationRecords(database: EngineConnection) {
   return tableExists(database, "migration_runs")
     ? pendingMigrationRecords(readPendingMigrationRows(database))
     : [];
@@ -192,7 +192,7 @@ export const deferredPluginMigrationReadOperations = {
     type: "plugins.deferredMigrations.read" as const,
     pending: readPendingMigrationRecords(db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function assertPendingGeneration(
   current: readonly DeferredPluginMigration[],
@@ -269,23 +269,6 @@ export function readDeferredPluginMigrationCompletions(
       );
     }, options) ?? []
   );
-}
-
-export async function readDeferredPluginMigrationCompletionsAsync(
-  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
-) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { runOpenClawStateWorkerOperation } =
-    await import("../state/openclaw-state-worker-store.js");
-  context.admission.assertCurrent();
-  const completed = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute({ type: "plugins.deferredMigrations.completions.read", input: undefined }),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  return completed ?? [];
 }
 
 /** Bind asynchronous settlement to the same pending records, including newly added owners. */
@@ -402,10 +385,11 @@ export function formatDeferredPluginMigration(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const retry = pending.command === "openclaw doctor --fix" ? "" : ', then "openclaw doctor --fix"';
-  const updating =
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
-  const next = updating
+  // This formatter also ships in the minimal PR bootstrap, without Doctor command modules.
+  const packageSwap =
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
+  const next = packageSwap
     ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry} to retry the upgrade.`
     : `Run "${pending.command}"${retry} to retry the upgrade.`;
   return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;
@@ -425,7 +409,7 @@ export type DeferredPluginMigrationRecordInput = {
 
 /** Native row transform; the worker owns its transaction and lease grants. */
 export function recordDeferredPluginMigrationsInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: Omit<DeferredPluginMigrationRecordInput, "env">,
 ) {
   const pendingById = new Map(

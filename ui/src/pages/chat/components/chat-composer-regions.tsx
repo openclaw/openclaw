@@ -14,6 +14,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
     <ChatQueue
       queue={view.composer.queue}
       displayQueue={view.composer.displayQueue}
+      connected={view.composer.connected}
       offline={view.composer.offline}
       canAbort={view.showAbortableUi}
       canRemoveServerQueued={canAct()}

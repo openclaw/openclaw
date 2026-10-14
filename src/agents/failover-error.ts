@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
@@ -27,6 +28,7 @@ import {
 } from "./failover/error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
@@ -297,6 +299,9 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
+  if (isChannelRunAuthorizationError(err)) {
+    return true;
+  }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
@@ -557,6 +562,7 @@ export function buildProviderReauthCommand(
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
+  rateLimitRetriesExhausted?: number;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -574,6 +580,7 @@ export function describeFailoverError(err: unknown): {
     return {
       message: err.message,
       rawError: err.rawError,
+      rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
@@ -597,6 +604,7 @@ export function describeFailoverError(err: unknown): {
 }
 
 type FailoverErrorContext = {
+  rateLimitRetriesExhausted?: number;
   provider?: string;
   model?: string;
   profileId?: string;
@@ -629,28 +637,36 @@ export function coerceToFailoverError(
     if (
       !Object.is(status, err.status) ||
       (context?.authMode && !err.authMode) ||
-      (context?.timeout && !err.timeout)
+      (context?.timeout && !err.timeout) ||
+      context?.rateLimitRetriesExhausted !== undefined
     ) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      const enriched = new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
-        authMode: err.authMode ?? context?.authMode,
-        status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
-        cliTimeout: err.cliTimeout,
-        timeout: err.timeout ?? context?.timeout,
-        attempts: err.attempts,
-        soonestCooldownExpiry: err.soonestCooldownExpiry,
-      });
+      const enriched = new FailoverError(
+        renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+        {
+          reason: err.reason,
+          provider: err.provider,
+          model: err.model,
+          profileId: err.profileId,
+          authMode: err.authMode ?? context?.authMode,
+          status,
+          code: err.code,
+          rawError:
+            err.rawError ??
+            (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),
+          rateLimitRetriesExhausted:
+            context?.rateLimitRetriesExhausted ?? err.rateLimitRetriesExhausted,
+          authProfileFailure: err.authProfileFailure,
+          sessionId: err.sessionId,
+          lane: err.lane,
+          cause: err.cause,
+          suspend: err.suspend,
+          cliTimeout: err.cliTimeout,
+          timeout: err.timeout ?? context?.timeout,
+          attempts: err.attempts,
+          soonestCooldownExpiry: err.soonestCooldownExpiry,
+        },
+      );
       copyErrorDiagnostic(err, enriched);
       return enriched;
     }
@@ -673,21 +689,25 @@ export function coerceToFailoverError(
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(message, {
-    reason,
-    provider: context?.provider ?? signal.provider,
-    model: context?.model,
-    profileId: context?.profileId,
-    authMode: context?.authMode,
-    sessionId: context?.sessionId,
-    lane: context?.lane,
-    status,
-    code,
-    rawError: message,
-    cause: err instanceof Error ? err : undefined,
-    timeout: context?.timeout,
-    suspend: shouldSuspend,
-  });
+  return new FailoverError(
+    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+    {
+      reason,
+      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+      provider: context?.provider ?? signal.provider,
+      model: context?.model,
+      profileId: context?.profileId,
+      authMode: context?.authMode,
+      sessionId: context?.sessionId,
+      lane: context?.lane,
+      status,
+      code,
+      rawError: message,
+      cause: err instanceof Error ? err : undefined,
+      timeout: context?.timeout,
+      suspend: shouldSuspend,
+    },
+  );
 }
 
 /** Classify one candidate failure once so fallback routing and diagnostics share it. */

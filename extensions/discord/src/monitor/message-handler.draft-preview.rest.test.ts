@@ -310,6 +310,35 @@ describe("Discord draft preview REST lifecycle", () => {
     }
   });
 
+  it("does not flush a progress final when delivery admission refuses custody", async () => {
+    vi.useFakeTimers();
+    const { controller, requests } = createContinuationHarness();
+    const adopt = vi.fn(() => true);
+    try {
+      await stageDelegation(controller);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await controller.flush();
+      const priorRequests = [...requests];
+      await expect(
+        controller.adoptProgressDraft(
+          { text: "Waiting for delegated work." },
+          {
+            kind: "final",
+            adoptProgressDraft: adopt,
+            onPlatformSendDispatch: async () => {
+              throw new Error("Delivery custody belongs to an earlier attempt");
+            },
+          },
+        ),
+      ).rejects.toThrow("Delivery custody belongs to an earlier attempt");
+      expect(requests).toEqual(priorRequests);
+      expect(adopt).not.toHaveBeenCalled();
+    } finally {
+      await controller.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["missing-id", "stopped", "declined", "label-only", "off"] as const)(
     "delivers the required waiting reply instead of adopting a %s card",
     async (scenario) => {

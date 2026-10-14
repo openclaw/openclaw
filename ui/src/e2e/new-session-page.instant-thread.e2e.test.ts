@@ -269,7 +269,7 @@ suite.define(() => {
         }
         await page.locator("#new-session-checkout-trigger").click();
         await page
-          .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
+          .locator('.oc-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
         await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
@@ -400,8 +400,8 @@ suite.define(() => {
         await navigateInApp(page, "new-session", "?agent=main");
         const composer = page.locator(".new-session-page__message");
         if (readiness) {
-          // Wait for the retained draft before fill selects and replaces it.
-          await expect.poll(() => composer.inputValue()).toBe(submitted);
+          // Accepted input retires even while preview readiness is pending.
+          await expect.poll(() => composer.inputValue()).toBe("");
         }
         await composer.fill(message);
         const newerUrl = page.url();

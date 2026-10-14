@@ -24,11 +24,14 @@ import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-sta
 import * as databaseMaintenance from "../../state/openclaw-state-db-async-lifecycle.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
+import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   resolveMaintenanceConfigFromInput,
   type ResolvedSessionMaintenanceConfig,
@@ -342,6 +345,113 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
     "age-retention",
   );
 });
+
+it("commits automatic maintenance after 20 sessions write during preparation", async ({
+  signal,
+}) => {
+  const { request, scope, storePath, updatedAt, archived } = createStore(86_400_000, sessionKey, {
+    workerMaintenance: true,
+  });
+  const victimKey = "agent:main:prepared-victim";
+  const writers = Array.from({ length: 20 }, (_, index) => `agent:main:writer-${index}`);
+  runOpenClawAgentWriteTransaction((owner) => {
+    writeSessionEntry(owner, victimKey, {
+      sessionId: "victim",
+      updatedAt: updatedAt - 172_800_000,
+    });
+    for (const key of writers) {
+      writeSessionEntry(owner, key, { sessionId: key, updatedAt });
+    }
+  }, scope);
+  let preparations = 0;
+  observeSessionMaintenancePlanningWorker({
+    async afterPrepare() {
+      preparations += 1;
+      if (preparations !== 1) {
+        return;
+      }
+      await Promise.all(
+        writers.map(async (key) => {
+          await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ label: "busy" }), {
+            skipMaintenance: true,
+          });
+          kickSessionEntryMaintenanceAfterWrite({ ...request, activeSessionKey: key });
+        }),
+      );
+    },
+  });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await withinTest(archived, signal);
+  expect(preparations).toBe(1);
+  expect(countPlanningPasses()).toBe(1);
+  expect(loadSessionEntry({ storePath, sessionKey: victimKey })?.archiveReason).toBe(
+    "age-retention",
+  );
+  for (const key of writers) {
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.label).toBe("busy");
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+  }
+});
+
+it.for(["removed", "unrelated", "victim"] as const)(
+  "rechecks %s protection at the automatic maintenance commit",
+  async (change, { signal }) => {
+    const { request, scope, storePath, updatedAt, archived } = createStore(86_400_000, sessionKey, {
+      workerMaintenance: true,
+    });
+    const victimKey = "agent:main:commit-victim";
+    runOpenClawAgentWriteTransaction((owner) => {
+      writeSessionEntry(owner, victimKey, {
+        sessionId: "victim",
+        updatedAt: updatedAt - 172_800_000,
+      });
+    }, scope);
+    let keys = change === "removed" ? [sessionKey] : [];
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => keys,
+      dispose() {},
+    }));
+    let commits = 0;
+    observeSessionMaintenancePlanningWorker({
+      beforeAdmission(admission) {
+        if (admission.stage === "commit") {
+          commits += 1;
+          keys = change === "removed" ? [] : [change === "victim" ? victimKey : sessionKey];
+        }
+      },
+    });
+    const rejected = createDeferred();
+    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+    const run = dispatch.getMockImplementation()!;
+    dispatch.mockImplementation(async (params) => {
+      try {
+        return await run(params);
+      } catch (error) {
+        rejected.resolve();
+        throw error;
+      }
+    });
+    try {
+      kickSessionEntryMaintenanceAfterWrite(request);
+      if (change === "victim") {
+        await withinTest(rejected.promise, signal);
+        await yieldToEventLoop();
+        expect(loadSessionEntry({ storePath, sessionKey: victimKey })?.archivedAt).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(999);
+      } else {
+        await withinTest(archived, signal);
+        expect(loadSessionEntry({ storePath, sessionKey: victimKey })?.archiveReason).toBe(
+          "age-retention",
+        );
+      }
+      expect(commits).toBe(1);
+      expect(countPlanningPasses()).toBe(1);
+    } finally {
+      await agentDatabase.closeOpenClawAgentDatabasesAsync();
+      unregister();
+    }
+  },
+);
 
 it("finishes a running pass with its captured policy when configuration changes", async ({
   signal,

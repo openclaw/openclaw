@@ -71,6 +71,17 @@ describe("diagnostics-prometheus runtime metrics", () => {
           trusted,
         );
       }
+      metrics.record(
+        {
+          ...baseEvent(),
+          type: "diagnostic.child_process.spawn",
+          family: "node",
+          operation: "sqlite.scoped-read.broker",
+          count: 1,
+          intervalMs: 60_000,
+        },
+        trusted,
+      );
       for (const [operation, count] of [
         ["repository.identities", 4],
         ["checkout.diff", 2],
@@ -126,6 +137,9 @@ describe("diagnostics-prometheus runtime metrics", () => {
       );
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker"} 1\n',
       );
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4\n',
@@ -205,7 +219,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
     }
   });
 
-  it("retains runtime durations across repeated HTTP scrapes without labels", async () => {
+  it("retains runtime durations across scrapes with bounded GC kind and thread labels", async () => {
     const metrics = createMetricsHarness();
     await withMetricsServer(metrics, async (url) => {
       const scrape = async () => {
@@ -214,18 +228,25 @@ describe("diagnostics-prometheus runtime metrics", () => {
         return await response.text();
       };
       metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
-      metrics.record({ type: "diagnostic.gc", durationMs: 1_250 });
+      metrics.record({
+        type: "diagnostic.gc",
+        kind: "scavenge",
+        thread: "main",
+        durationMs: 1_250,
+      });
       const first = await scrape();
       expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
       expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
-      expect(first).toContain("openclaw_gc_duration_seconds_count 1");
+      expect(first).toContain(
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
+      );
       expect(await scrape()).toBe(first);
       metrics.record(
         { type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record(
-        { type: "diagnostic.gc", durationMs: 20 },
+        { type: "diagnostic.gc", kind: "scavenge", thread: "main", durationMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record({ type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
@@ -244,15 +265,30 @@ describe("diagnostics-prometheus runtime metrics", () => {
         "openclaw_gateway_event_loop_delay_max_seconds_count 2",
         "openclaw_gateway_event_loop_delay_max_seconds_sum 1.27",
         "openclaw_gateway_event_loop_observed_seconds_total 10",
-        'openclaw_gc_duration_seconds_bucket{le="1"} 1',
-        'openclaw_gc_duration_seconds_bucket{le="2.5"} 2',
-        "openclaw_gc_duration_seconds_count 2",
-        "openclaw_gc_duration_seconds_sum 1.27",
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="1",thread="main"} 1',
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="2.5",thread="main"} 2',
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
+        'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
       ]) {
         expect(second).toContain(expected);
       }
       expect(await scrape()).toBe(second);
-      expect(second).not.toMatch(/\{(?!le=)/);
+      metrics.record({
+        type: "diagnostic.gc",
+        kind: "mark_sweep_compact",
+        thread: "sqlite-store.worker.js",
+        durationMs: 8,
+      });
+      const workerSample = await scrape();
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 1',
+      );
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_sum{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 0.008',
+      );
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
+      );
     });
   });
 });
@@ -343,6 +379,78 @@ it("exports worker queue and service populations without adding series per reque
       39,
     );
     expect(rendered).not.toContain("series_dropped");
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("exports completed SQLite request phases without inventing missing or invalid intervals", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "worker.request" as const,
+    kind: "sqlite_writer" as const,
+    requestClass: "transcripts",
+    phase: "completed" as const,
+    queueDepth: 0,
+    durationMs: 28_000,
+    timing: {
+      dispatched: 1_000,
+      posted: 2_000,
+      postFinished: 9_000,
+      received: 4_000,
+      inputReady: 7_000,
+      executeStarted: 11_000,
+      executeFinished: 16_000,
+      serialized: 17_000,
+      replied: 22_000,
+      replyReceived: 29_000,
+    },
+  };
+  try {
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    metrics.record({ ...event, phase: "queued", durationMs: undefined });
+    metrics.record({ ...event, phase: "started", durationMs: undefined });
+    expect(metrics.render()).not.toContain("openclaw_worker_request_phase_seconds");
+    metrics.record(event);
+    metrics.record({
+      ...event,
+      durationMs: undefined,
+      timing: {
+        dispatched: 1,
+        posted: 1,
+        received: 0,
+        inputReady: Number.NaN,
+        executeStarted: Number.POSITIVE_INFINITY,
+        replied: 2,
+      },
+    });
+    metrics.record({ ...event, durationMs: undefined, timing: undefined });
+    const rendered = metrics.render();
+    for (const [phase, seconds, count] of [
+      ["dispatch", 1, 2],
+      ["delivery", 2, 1],
+      ["input", 3, 1],
+      ["prepare", 4, 1],
+      ["execute", 5, 1],
+      ["result", 6, 1],
+      ["reply", 7, 1],
+    ] as const) {
+      const labels = `{kind="sqlite_writer",phase="${phase}",request_class="transcripts"}`;
+      expect(rendered).toContain(`openclaw_worker_request_phase_seconds_sum${labels} ${seconds}\n`);
+      expect(rendered).toContain(`openclaw_worker_request_phase_seconds_count${labels} ${count}\n`);
+    }
+    expect(rendered).toContain(
+      'openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1\n',
+    );
+    expect(
+      rendered
+        .split("\n")
+        .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
+    ).toHaveLength(7);
   } finally {
     metrics.stop();
   }

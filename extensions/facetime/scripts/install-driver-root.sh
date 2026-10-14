@@ -125,7 +125,6 @@ build_and_install() {
     LIBTOOL="$libtool" \
     'GCC_PREPROCESSOR_DEFINITIONS=$GCC_PREPROCESSOR_DEFINITIONS kNumber_Of_Channels=2 kPlugIn_BundleID=\"ai.openclaw.BlackHoleBridge\" kDriver_Name=\"OpenClawBridge\" kHas_Driver_Name_Format=false kDevice_Name=\"OpenClaw-Mic\" kDevice2_Name=\"OpenClaw-Feed\" kDevice_IsHidden=false kDevice2_IsHidden=false kDevice_HasInput=true kDevice_HasOutput=false kDevice2_HasInput=false kDevice2_HasOutput=true'
 
-  /usr/bin/codesign --force --deep --sign - "$driver"
   /usr/libexec/PlistBuddy -c "Add :OpenClawDriverRecipe string $recipe" \
     "$driver/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Add :OpenClawBlackHoleVersion string $version" \
@@ -147,13 +146,7 @@ build_and_install() {
 }
 
 case "${1:-}" in
-  --install)
-    if test "$#" -ne 1; then
-      echo "Usage: $0 --install | --uninstall" >&2
-      exit 2
-    fi
-    ;;
-  --uninstall)
+  --install|--uninstall)
     if test "$#" -ne 1; then
       echo "Usage: $0 --install | --uninstall" >&2
       exit 2

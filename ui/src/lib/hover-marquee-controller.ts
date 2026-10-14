@@ -7,7 +7,7 @@ const MARQUEE_LOOP_TRAVEL_FRACTION = 0.4;
 export type MarqueeOptions = { delay?: number; speed?: number; loop?: boolean };
 
 export class HoverMarqueeController {
-  private connected = true;
+  private connected = false;
   private label?: HTMLElement;
   private text?: HTMLElement;
   private host?: HTMLElement;
@@ -38,8 +38,10 @@ export class HoverMarqueeController {
   }
 
   connect() {
-    this.connected = true;
-    this.schedule();
+    if (!this.connected) {
+      this.connected = true;
+      this.schedule();
+    }
   }
 
   disconnect() {

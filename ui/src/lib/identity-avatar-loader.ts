@@ -1,5 +1,5 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -142,7 +142,7 @@ export function retainAvatarImageUrl(value: string | Promise<string | null> | nu
 }
 
 /** View ownership for agent cards/selectors; bytes remain in the shared Gateway image cache. */
-export class IdentityAvatarController implements ReactiveController {
+export class IdentityAvatarController implements SolidController {
   private readonly requestUpdate: () => void;
   private connected = false;
   private unsubscribeGatewayReset?: () => void;
@@ -153,7 +153,7 @@ export class IdentityAvatarController implements ReactiveController {
   private activeRoutes: Set<string> | null = null;
   private generation = identityAvatarGeneration;
 
-  constructor(host: ReactiveControllerHost | (() => void)) {
+  constructor(host: SolidControllerHost | (() => void)) {
     this.requestUpdate = typeof host === "function" ? host : () => host.requestUpdate();
     if (typeof host !== "function") {
       host.addController(this);

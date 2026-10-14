@@ -19,9 +19,12 @@ import {
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -151,6 +154,21 @@ export async function handleAgentExecutionError(params: {
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
   }
+  if (err instanceof WorkerNodeLostError) {
+    return settleFailure({ text: err.message });
+  }
+  if (isChannelRunAuthorizationError(err)) {
+    if (isChannelRunAuthorizationError(err, "unavailable")) {
+      return settleFailure({
+        text: "⚠️ OpenClaw could not verify current channel access. Please try your request again.",
+      });
+    }
+    takePendingLifecycleTerminal().emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    defaultRuntime.log("Channel request dropped: source authorization is no longer current.");
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+  }
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
       params.state.pendingLifecycleTerminal = undefined;
@@ -253,9 +271,14 @@ export async function handleAgentExecutionError(params: {
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
     return await settleFailure({
-      // Curated facet copy beats the generic classified summary; see
-      // buildExternalRunFailureReply for the same priority.
-      text: providerRequestError.userMessage,
+      // Recorded retry exhaustion is more specific than generic quota guidance.
+      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
+      text:
+        failureSummary?.kind === "rate_limit" &&
+        isFailoverError(err) &&
+        err.rateLimitRetriesExhausted !== undefined
+          ? failureSummary.text
+          : providerRequestError.userMessage,
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);

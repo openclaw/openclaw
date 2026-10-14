@@ -204,7 +204,7 @@ suite.define(() => {
           await page.locator(".sidebar-rail .sidebar-new-session").click();
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "test-cloud", exact: true })
             .click();
           await page.getByRole("switch", { name: "Incognito" }).click();

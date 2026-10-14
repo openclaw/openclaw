@@ -190,6 +190,14 @@ const sessionMenuOwnerRoots = [
   "ui/src/pages/chat/components/chat-header-session-menu.ts",
 ] as const;
 
+// Transcript virtualization sits several hops below the chat route. Direct imports
+// of these owners reach message reveal, Solid render lifecycle, and row geometry.
+const chatTranscriptOwnerRoots = [
+  "ui/src/pages/chat/components/chat-transcript-controller.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+  "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+] as const;
+
 function pageWatch(
   testFile: string,
   pages: readonly (keyof typeof pageStyles)[],
@@ -419,7 +427,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-cli-history-redaction.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-collaborator-scroll.e2e.test.ts", ["chat", "profile"]),
-  pageWatch("ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    ["chat"],
+    chatTranscriptOwnerRoots,
+  ),
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
@@ -561,7 +573,10 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
     ["chat", "profile"],
-    ["ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx"],
+    [
+      "ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx",
+      "ui/src/pages/chat/components/chat-message-reactions-view.tsx",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
@@ -691,7 +706,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-position-rail.e2e.test.ts",
     ["chat", "config"],
-    ["ui/src/pages/chat/sidebar-layout.ts", "ui/src/pages/question/question-page-registration.ts"],
+    [
+      ...chatTranscriptOwnerRoots,
+      "ui/src/pages/chat/sidebar-layout.ts",
+      "ui/src/pages/question/question-page-registration.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/chat-prepared-identity.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-provider-policy-notice.e2e.test.ts", ["chat"]),
@@ -719,7 +738,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-recovered-search.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-reply-attribution.e2e.test.ts", ["chat", "profile"]),
-  pageWatch("ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+    ["chat"],
+    chatTranscriptOwnerRoots,
+  ),
   pageWatch(
     "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts",
     ["chat"],

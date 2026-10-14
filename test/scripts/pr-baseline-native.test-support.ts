@@ -8,7 +8,7 @@ import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.te
 
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(root: string) {
+export function createBaselineFixture(root: string, productCount = 16) {
   const repo = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
@@ -59,7 +59,7 @@ export function createBaselineFixture(root: string) {
   }
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n.local/\nnode_modules/\n");
   mkdirSync(join(repo, "docs"), { recursive: true });
-  const product = Array.from({ length: 16 }, (_, i) => `docs/fix-${i}.md`);
+  const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
   for (const path of product) {
     writeFileSync(join(repo, path), "base\n");
   }
@@ -92,7 +92,7 @@ if (args[0] === 'api' && args[1] === 'user') {
  const overrides = path.join(root,'.local','live.json');
  console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
   user:{login:'fixture'},base:{ref:'main',sha:git('rev-parse','main'),repo},
-  head:{ref:'topic',sha:git('rev-parse','topic'),repo}, changed_files:16,
+  head:{ref:'topic',sha:git('rev-parse','topic'),repo}, changed_files:${productCount},
   ...(fs.existsSync(overrides) ? JSON.parse(fs.readFileSync(overrides,'utf8')) : {})}));
 } else if (args.some(a => a.startsWith('repos/fixture/repo/collaborators/'))) {
  console.log('{"permission":"write"}');
@@ -126,7 +126,10 @@ if (args[0] === 'api' && args[1] === 'user') {
   };
   const local = (name: string) => join(worktree, ".local", name);
   writeFileSync(local("pr-meta.json"), JSON.stringify(meta));
-  writeFileSync(local("pr-meta.env"), `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`);
+  writeFileSync(
+    local("pr-meta.env"),
+    `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\nPR_HEAD_REPO_URL=https://github.com/fixture/repo\n`,
+  );
   writeFileSync(local("review-mode.env"), "REVIEW_MODE=pr\n");
   const review = validReview(incoming);
   review.recommendation = "NEEDS WORK";
@@ -173,6 +176,33 @@ if (args[0] === 'api' && args[1] === 'user') {
     }
     git(repo, "commit", "-qam", `test: ${label}`);
     return git(repo, "rev-parse", "HEAD");
+  };
+  const preparePublication = () => {
+    git(repo, "config", `url.${repo}.insteadOf`, "https://github.com/fixture/repo.git");
+    const head = git(worktree, "rev-parse", "HEAD");
+    const stamp = spawnSync(
+      process.platform === "darwin" ? "/bin/bash" : "bash",
+      [
+        "-c",
+        'source "$1"; write_gates_env_stamp 42 true false github_pending "" "" "$2" "" "" "" ""',
+        "fixture-gates",
+        join(repo, "scripts/pr-lib/gates.sh"),
+        head,
+      ],
+      { cwd: worktree, env, encoding: "utf8" },
+    );
+    expect(stamp.status, stamp.stderr).toBe(0);
+    return head;
+  };
+  const publish = () => {
+    const hosted = git(repo, "rev-parse", "topic");
+    const head = preparePublication();
+    pass("prepare-push");
+    expect(git(repo, "rev-parse", "topic")).toBe(head);
+    expect(readFileSync(local("prepare-push-result.env"), "utf8")).toContain(
+      `PUSHED_FROM_SHA=${hosted}`,
+    );
+    return head;
   };
   const manifest = (baseline: string, changed = product) => {
     const source = git(worktree, "rev-parse", "HEAD");
@@ -239,8 +269,12 @@ if (args[0] === 'api' && args[1] === 'user') {
     run,
     approve,
     advanceMain,
+    preparePublication,
+    publish,
     manifest,
     successor,
     product,
+    incoming,
+    meta,
   };
 }

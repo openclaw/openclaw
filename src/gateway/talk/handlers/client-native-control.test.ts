@@ -379,7 +379,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
 
       await withNativePlugin(async ({ create, offer, broadcast, chatAbortControllers }) => {
         try {
-          const { socket } = await connectNativeSession({ create, offer });
+          const { socket, result } = await connectNativeSession({ create, offer });
           const sentFrames = () => socket.sent.map((frame): unknown => JSON.parse(frame));
           socket.serverEvent(
             nativeDelegation("canceled-delegation", "Keep working until I cancel."),
@@ -397,8 +397,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           });
           expect(abortSignal?.aborted).toBe(false);
 
-          socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "cancel" } });
-          socket.serverEvent(nativeDelegation("cancel-request", "cancel"));
+          await flushNativeTranscript(result, () => {
+            socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "cancel" } });
+            socket.serverEvent(nativeDelegation("cancel-request", "cancel"));
+          });
           await withinTest(cancellationObserved.promise, signal);
           expect(abortOwned).toHaveBeenCalledOnce();
           await vi.waitFor(() =>

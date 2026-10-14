@@ -1,5 +1,6 @@
 import { getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { observeGcSamples } from "./gc-observer.js";
 
 /** Publish isolate-local counters without sharing the task transport or keeping it alive. */
 export function serveWorkerMemorySamples(parent: MessagePort): () => void {
@@ -9,10 +10,26 @@ export function serveWorkerMemorySamples(parent: MessagePort): () => void {
     const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
     port1.postMessage({ heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes });
   };
-  port1.on("message", sample);
+  let stopGc: (() => void) | undefined;
+  port1.on("message", (request: { gc: boolean } | undefined) => {
+    if (request) {
+      if (request.gc) {
+        stopGc ??= observeGcSamples((gc) => port1.postMessage({ gc }));
+      } else {
+        stopGc?.();
+        stopGc = undefined;
+      }
+    } else {
+      sample();
+    }
+  });
+  port1.once("close", () => stopGc?.());
   port1.on("messageerror", () => port1.close());
   port1.unref();
   sample();
   parent.postMessage({ status: "memory", port: port2 }, [port2]);
-  return () => port1.close();
+  return () => {
+    stopGc?.();
+    port1.close();
+  };
 }

@@ -892,8 +892,15 @@ suite.define(() => {
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
-      expect(mobileContextBox.y + mobileContextBox.height).toBeLessThanOrEqual(
-        mobileModelSettingsBox.y + 1,
+      expect(
+        Math.abs(
+          mobileContextBox.y +
+            mobileContextBox.height / 2 -
+            (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(mobileContextBox.x + mobileContextBox.width).toBeLessThanOrEqual(
+        mobileModelSettingsBox.x,
       );
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);

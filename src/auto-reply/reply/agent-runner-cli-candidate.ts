@@ -198,7 +198,7 @@ export async function runCliFallbackCandidate(
           });
         // The CLI owner must see explicit pins before provider scoping can discard them.
         const authProfileId = allowCliAuthProfileForwarding
-          ? resolveCliExecutionAuthProfileId({
+          ? await resolveCliExecutionAuthProfileId({
               cliExecutionProvider: params.cliExecutionProvider,
               authProfileProvider: params.provider,
               config: params.runtimeConfig,

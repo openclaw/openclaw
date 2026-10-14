@@ -1,10 +1,7 @@
-import {
-  asOptionalRecord,
-  isRecord,
-  readStringField,
-} from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type {
   SessionCleanupReadInput,
   SessionCleanupReadResult,
@@ -13,7 +10,6 @@ import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { readTranscriptSnapshot } from "./session-accessor.sqlite-read.js";
 import { readWithCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 
 function isTranscriptMessageRole(role: unknown): boolean {
   return (
@@ -63,19 +59,7 @@ export function readSessionCleanupSnapshotInDatabase(
     const missing: SessionCleanupReadResult["missing"] = [];
     if (request.fixMissing) {
       for (const { sessionKey, entry } of entries) {
-        // Cleanup cannot release harness ownership or delete a user-shelved archive.
-        if (
-          (entry.modelSelectionLocked === true || entry.archivedAt !== undefined) &&
-          shouldPreserveMaintenanceEntry({ key: sessionKey, entry })
-        ) {
-          continue;
-        }
-        const legacySessionFile = readStringField(asOptionalRecord(entry), "sessionFile");
-        if (
-          parseAgentSessionKey(sessionKey) &&
-          (entry.initializationPending === true ||
-            (entry.sessionId === sessionKey && !legacySessionFile?.trim()))
-        ) {
+        if (shouldPreserveSessionCleanupEntry(sessionKey, entry)) {
           continue;
         }
         if (!entry.sessionId) {

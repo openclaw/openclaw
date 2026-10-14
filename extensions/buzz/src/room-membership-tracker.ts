@@ -207,9 +207,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       promise: Promise.resolve(),
     } satisfies RefreshState;
     state.promise = refreshMembership(channelId, state).finally(() => {
-      if (refreshes.get(channelId) === state) {
-        refreshes.delete(channelId);
-      }
+      refreshes.delete(channelId);
       if (
         state.generation !== state.lastAttemptedGeneration &&
         pendingMemberships.has(channelId) &&

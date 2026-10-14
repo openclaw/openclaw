@@ -11,12 +11,12 @@ import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { prepareSessionRowSelection } from "./session-utils-list.js";
+import { prepareSessionRowSelection, selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  getUserProfileDisplay: vi.fn((id: string) => ({
+  getResidentUserProfileDisplay: vi.fn((id: string) => ({
     id: id === "profile-merged-ada" ? "profile-ada" : id,
     displayName: id,
     hasAvatar: false,
@@ -32,6 +32,63 @@ const storePath = "/tmp/openclaw-session-inventory-filters";
 function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
+
+it.each([true, false])(
+  "keeps full-roster facets and owner rows while paging ordered=%s",
+  (ordered) => {
+    const store = Object.fromEntries(
+      [1, 4, 3, 5, 2].map((updatedAt) => [
+        `agent:main:page-${updatedAt}`,
+        entry({
+          sessionId: `page-${updatedAt}`,
+          updatedAt,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: updatedAt === 4 || updatedAt === 2 ? "profile-ada" : "profile-bob",
+          },
+        }),
+      ]),
+    );
+    const projection = createSessionRowProjectionFixture({ cfg, storePath, store });
+    onTestFinished(() => projection.dispose());
+    for (const [offset, keys, ownerCount, nextOffset] of [
+      [0, [4, 2, 5], 2, 2],
+      [2, [3, 2], 0, 4],
+      [4, [1], 0, null],
+      [7, [], 0, null],
+    ] as const) {
+      const selected = runSynchronousWork(
+        selectSessionEntries({
+          ...prepareSessionRowSelection(
+            projection,
+            { limit: 2, offset, includePeople: true },
+            { ordered },
+          ),
+          entriesSorted: ordered,
+          ownerFirstActorId: "profile-ada",
+        }),
+      );
+      expect(selected.entries.map(([key]) => key)).toEqual(
+        keys.map((id) => `agent:main:page-${id}`),
+      );
+      expect(selected).toMatchObject({
+        totalCount: 5,
+        peopleSessionCount: 5,
+        ownerCount,
+        nextOffset,
+        hasMore: nextOffset !== null,
+      });
+      expect(selected.ownerFacet.map(({ id }) => id)).toEqual(["profile-ada", "profile-bob"]);
+      expect(
+        selected.people?.map(({ identity, sessionCount }) => [identity.id, sessionCount]),
+      ).toEqual([
+        ["profile-bob", 3],
+        ["profile-ada", 2],
+      ]);
+    }
+  },
+);
 
 it("reports the age boundary of people outside the selected profile and returned page", async () => {
   const now = Date.UTC(2026, 8, 27);
@@ -99,7 +156,7 @@ it("reuses involvement facts until session replacement or profile publication", 
   const select = (id = "profile-ada") =>
     runSynchronousWork(
       filterSessionEntries({
-        ...prepareSessionRowSelection(projection, {}),
+        ...prepareSessionRowSelection(projection, {}, { ordered: true }),
         involvingActorId: id,
       }),
     ).entries.map(([sessionKey]) => sessionKey);

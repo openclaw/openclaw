@@ -2,10 +2,13 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
-  resolveEffectiveAgentRuntime,
   type ChatCommandDefinition,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
+import {
+  getModelsRuntimeChoices,
+  MODEL_PICKER_CHANGED_MESSAGE,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,11 +22,6 @@ import {
 } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
-import {
-  getDiscordModelPickerRuntimeChoices,
-  MODEL_PICKER_CHANGED_MESSAGE,
-  supportsDiscordModelPickerRuntimeChoices,
-} from "./model-picker.runtime.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   createDiscordModelPickerModelToken,
@@ -64,7 +62,7 @@ function resolveModelPickerSelectionValue(
 }
 
 function resolveRuntimeToken(
-  choices: ReturnType<typeof getDiscordModelPickerRuntimeChoices>,
+  choices: ReturnType<typeof getModelsRuntimeChoices>,
   token: string | undefined,
 ): string | undefined {
   if (!token) {
@@ -238,10 +236,7 @@ async function handleDiscordModelPickerInteraction(
     parsedProvider ?? currentModel?.provider ?? pickerData.resolvedDefault.provider;
   const resolvePendingRuntime = (provider: string) =>
     parsed.runtime ??
-    resolveRuntimeToken(
-      getDiscordModelPickerRuntimeChoices(pickerData, provider),
-      parsed.runtimeToken,
-    );
+    resolveRuntimeToken(getModelsRuntimeChoices(pickerData, provider), parsed.runtimeToken);
   const currentRuntime = resolveDiscordModelPickerCurrentRuntime(modelContext);
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
   const preferenceScope = resolveDiscordModelPickerPreferenceScope({
@@ -426,7 +421,7 @@ async function handleDiscordModelPickerInteraction(
       const selectedRuntime = resolveModelPickerSelectionValue(interaction) ?? parsed.runtime;
       const runtimeModel =
         selectedModel ?? (currentModel?.provider === provider ? currentModel.model : undefined);
-      const choices = getDiscordModelPickerRuntimeChoices(pickerData, provider, runtimeModel);
+      const choices = getModelsRuntimeChoices(pickerData, provider, runtimeModel);
       if (!selectedRuntime || !choices?.some((choice) => choice.id === selectedRuntime)) {
         await showNotice("That runtime is not available for this model. Choose a runtime again.");
         return;
@@ -473,43 +468,12 @@ async function handleDiscordModelPickerInteraction(
     }
 
     const resolvedModelRef = `${parsedModelRef.provider}/${parsedModelRef.model}`;
-    const choices = getDiscordModelPickerRuntimeChoices(
+    const choices = getModelsRuntimeChoices(
       pickerData,
       parsedModelRef.provider,
       parsedModelRef.model,
     );
-    const modelOnlyHost = !supportsDiscordModelPickerRuntimeChoices();
-    const supportsModelOnlySelection = () => {
-      const currentEntry = sessionEntry;
-      const override = currentEntry?.agentRuntimeOverride?.trim();
-      // The old command owner cannot validate native pins against a different model.
-      // Preserve those pins; model-only compatibility never invents a runtime choice.
-      if (override && !["auto", "default", "openclaw"].includes(override)) {
-        return false;
-      }
-      const model = pickerData.modelCatalog?.find(
-        (entry) => entry.provider === parsedModelRef.provider && entry.id === parsedModelRef.model,
-      );
-      return (
-        resolveEffectiveAgentRuntime({
-          cfg,
-          provider: parsedModelRef.provider,
-          modelId: parsedModelRef.model,
-          modelApi: model?.api,
-          modelBaseUrl: model?.baseUrl,
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          sessionEntry: currentEntry,
-        }) === "openclaw"
-      );
-    };
-    const legacyRuntimeNotice =
-      "This OpenClaw version supports model-only selection here. Update OpenClaw to change runtimes in the picker.";
-    if (modelOnlyHost && (parsed.runtime || parsed.runtimeToken || !supportsModelOnlySelection())) {
-      await showNotice(legacyRuntimeNotice);
-      return;
-    }
-    if (!modelOnlyHost && choices === undefined) {
+    if (choices === undefined) {
       await showNotice("Runtime availability is not confirmed. Reopen /model to try again.");
       return;
     }

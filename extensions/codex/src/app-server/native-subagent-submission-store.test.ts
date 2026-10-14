@@ -396,6 +396,7 @@ describe("native subagent submission receipts in the binding store", () => {
       update: () => entry,
     });
     const parent = await captureSessionEntryCurrentCheckAsync(scope);
+    using _ = { [Symbol.dispose]: () => parent.release() };
     const authority = createNativeSubagentSessionAuthority(parent);
     await patchSessionEntry({
       ...scope,

@@ -249,13 +249,12 @@ describe("createReadinessChecker", () => {
   });
 
   it.each([
-    { skipChannels: false, channelFailed: false, allowPending: true },
-    { skipChannels: true, channelFailed: false, allowPending: true },
-    { skipChannels: false, channelFailed: true, allowPending: true },
-    { skipChannels: true, channelFailed: false, allowPending: false },
+    { skipChannels: false, channelFailed: false },
+    { skipChannels: true, channelFailed: false },
+    { skipChannels: false, channelFailed: true },
   ])(
-    "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed, allow pending: $allowPending)",
-    ({ skipChannels, channelFailed, allowPending }) => {
+    "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed)",
+    ({ skipChannels, channelFailed }) => {
       withReadinessClock(() => {
         const pending = createAgentDatabaseInspectionRefusal({
           agentId: "main",
@@ -276,7 +275,6 @@ describe("createReadinessChecker", () => {
           startedAt: Date.now() - FIVE_MIN_MS,
           cacheTtlMs: 1_000,
           shouldSkipChannelReadiness: () => skipChannels,
-          allowPendingAgentDatabases: allowPending,
           getAgentDatabaseAdmissionRefusals: () => refusals,
         });
         const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
@@ -284,7 +282,7 @@ describe("createReadinessChecker", () => {
 
         refusals = [pending];
         expect(readiness()).toEqual({
-          ...(allowPending ? channelReadiness : failingSnapshot(["agent-database:main"])),
+          ...failingSnapshot(["agent-database:main"]),
           agentDatabases: [pending],
         });
 

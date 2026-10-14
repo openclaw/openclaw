@@ -550,6 +550,13 @@ export function createNodeRegistryRuntime<TRegistry extends object>(
   };
 }
 
+/** Private session-host transport, retaining registry-owned pairing and connection checks. */
+export function getNodeWorkerSupervisorTransport(
+  nodeRegistry: object,
+): NodeWorkerSupervisorTransport {
+  return requireNodeRegistryPrivateState(nodeRegistry).workerSupervisorTransport;
+}
+
 export function setNodeRunnerStateChangedListener(
   nodeRegistry: object,
   listener: (nodeId: string, change: NodeRunnerStateChange) => void,

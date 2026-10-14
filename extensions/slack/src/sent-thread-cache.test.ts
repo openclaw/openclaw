@@ -3,6 +3,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -216,7 +217,7 @@ describe("slack sent-thread-cache", () => {
       persistedRecords.set(key, value);
     });
     const lookup = vi.fn(async (key: string) => persistedRecords.get(key));
-    const openKeyedStore = vi.fn(() => ({
+    const openKeyedStoreV2 = vi.fn(() => ({
       register,
       lookup,
       consume: vi.fn(),
@@ -225,7 +226,7 @@ describe("slack sent-thread-cache", () => {
       clear: vi.fn(),
     }));
     setSlackRuntime({
-      state: { openKeyedStore },
+      state: { openKeyedStoreV2 },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
@@ -235,7 +236,7 @@ describe("slack sent-thread-cache", () => {
     expect(register).toHaveBeenCalledWith("A1:C123:1700000000.000002", {
       repliedAt,
     });
-    expect(openKeyedStore).toHaveBeenCalledWith({
+    expect(openKeyedStoreV2).toHaveBeenCalledWith({
       namespace: "slack.thread-participation",
       maxEntries: 1000,
     });
@@ -249,7 +250,7 @@ describe("slack sent-thread-cache", () => {
         threadTs: "1700000000.000002",
       }),
     ).resolves.toBe(true);
-    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openKeyedStoreV2).toHaveBeenCalledTimes(2);
     expect(lookup).toHaveBeenCalledWith("A1:C123:1700000000.000002");
 
     lookup.mockClear();
@@ -296,14 +297,15 @@ describe("slack sent-thread-cache", () => {
         expect(legacyEntry.expiresAt).toBe(legacyEntry.createdAt + 24 * 60 * 60 * 1000);
         resetPluginStateStoreForTests();
 
-        const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
-          createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
-            ...options,
-            env: state.env,
-          }),
+        const openKeyedStoreV2 = vi.fn((options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreV2ForTests<{ repliedAt: number }>(
+            "slack",
+            { ...options, env: state.env },
+            { assertCurrent() {} },
+          ),
         );
         setSlackRuntime({
-          state: { openKeyedStore },
+          state: { openKeyedStoreV2 },
           logging: { getChildLogger: () => ({ warn: vi.fn() }) },
         } as never);
 
@@ -319,7 +321,7 @@ describe("slack sent-thread-cache", () => {
           }),
         ).resolves.toBe(true);
         expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
-        expect(openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+        expect(openKeyedStoreV2).toHaveBeenCalledExactlyOnceWith({
           namespace: "slack.thread-participation",
           maxEntries: 1000,
         });
@@ -376,7 +378,7 @@ describe("slack sent-thread-cache", () => {
           }),
         ).resolves.toBe(true);
         expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000003", "T1")).toBe(true);
-        expect(openKeyedStore).toHaveBeenCalledTimes(2);
+        expect(openKeyedStoreV2).toHaveBeenCalledTimes(2);
 
         for (const probe of [
           { accountId: "A2", teamId: "T1", channelId: "C123", threadTs: "1700000000.000003" },
@@ -395,7 +397,7 @@ describe("slack sent-thread-cache", () => {
     const warn = vi.fn();
     setSlackRuntime({
       state: {
-        openKeyedStore: vi.fn(() => {
+        openKeyedStoreV2: vi.fn(() => {
           throw new Error("sqlite unavailable");
         }),
       },

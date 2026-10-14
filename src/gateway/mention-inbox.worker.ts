@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -17,7 +17,7 @@ export const mentionReadOperations = {
     type: "mentions.snapshot" as const,
     snapshot: readMentionStoreSnapshot(revision, db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export const mentionWorkerOperations = {
   "mentions.mutate": (input: MentionMutation, { open, stateOptions }): MentionMutationResult =>

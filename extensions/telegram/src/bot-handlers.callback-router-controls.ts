@@ -31,6 +31,7 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -344,7 +345,7 @@ const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
 export async function handleTelegramInteractiveCallback(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
   callback: CallbackQuery;
-  ctx: Pick<TelegramContext, "me" | "getFile">;
+  ctx: Pick<TelegramContext, "me" | "getFile" | "update">;
   callbackMessage: Message;
   data: string;
   pluginCallbackData: string;
@@ -390,6 +391,7 @@ export async function handleTelegramInteractiveCallback(params: {
       base: withResolvedTelegramForumFlag(callbackMessage, isForum),
       from: callback.from,
       text,
+      date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };

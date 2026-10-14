@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as downloads from "../../lib/download.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -52,9 +53,7 @@ describe("UsagePage detail requests", () => {
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
-    page
-      .querySelector(".usage-export-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+    await selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
     await waitForFast(() => expect(download).toHaveBeenCalledOnce());
     expect(download.mock.calls[0]![1]).toContain("exported-context");
     const collectionControl = new WeakRef({ unowned: true });

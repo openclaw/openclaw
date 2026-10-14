@@ -117,12 +117,11 @@ export function createGitHubPublicationCoordinator(params: {
     ) {
       throw new Error("GitHub publication session identity changed.");
     }
-    const admitted = await readGitHubPublicationWorktreeOwner({
+    using admitted = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
     });
-    using _ = { [Symbol.dispose]: () => admitted.release() };
 
     assertRequester();
     const identity = await prepareCurrentGitHubPublicationIdentity(request.agentId);

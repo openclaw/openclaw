@@ -1,5 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import "../lib/toast-host.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import "../styles/base.css";
@@ -47,7 +48,7 @@ describe("file path tooltip", () => {
     await userEvent.keyboard("{Escape}");
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
-    expect(card()?.textContent).not.toContain("Copied!");
+    await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
     expect(card()).toBeNull();

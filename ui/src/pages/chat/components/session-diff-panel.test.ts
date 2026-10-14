@@ -229,11 +229,13 @@ describe("SessionDiffPanel", () => {
     flush();
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
+      expect(
+        [...panel.querySelectorAll(".tok-string")].map((node) => node.textContent).join(""),
+      ).toContain("before"),
     );
-    expect([...panel.querySelectorAll(".tok-comment")].map((node) => node.textContent)).toContain(
-      "new comment",
-    );
+    expect(
+      [...panel.querySelectorAll(".tok-comment")].map((node) => node.textContent).join(""),
+    ).toContain("new comment");
     expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
     expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
     expect(panel.querySelector("img")).toBeNull();
@@ -272,8 +274,12 @@ describe("SessionDiffPanel", () => {
     flush();
     await vi.dynamicImportSettled();
 
-    const oldSide = split ? ".session-diff-split__side--left" : ".chat-diff__row--del";
-    const newSide = split ? ".session-diff-split__side--right" : ".chat-diff__row--add";
+    const oldSide = split
+      ? ".session-diff-split__side--left.session-diff-split__side--filled"
+      : ".chat-diff__row--del";
+    const newSide = split
+      ? ".session-diff-split__side--right.session-diff-split__side--filled"
+      : ".chat-diff__row--add";
     const text = split ? ".session-diff-split__text" : ".chat-diff__text";
     await waitForSolid(() => {
       expect(panel.querySelector(`${oldSide} .tok-propertyName`)?.textContent).toBe("data-mode");

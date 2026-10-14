@@ -384,7 +384,7 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
-// Gateway admission reads synthetic snapshots through its isolated config factory.
+// mock-isolation: Gateway admission must read synthetic snapshots without real config I/O.
 vi.mock("../config/io.factory.js", () => ({
   createConfigIO: (
     options: Parameters<typeof import("../config/io.factory.js").createConfigIO>[0] = {},

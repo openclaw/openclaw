@@ -10,12 +10,12 @@ export type SessionObserverCompanionSnapshot = {
 };
 
 export type SessionObserverService = {
-  /** @deprecated Use handleEventAsync; retained until the next Plugin SDK major. */
+  /** @deprecated Await handleEventAsync. Retained during stable deprecation. */
   handleEvent: (event: SessionObserverEvent) => void;
   handleEventAsync: (event: SessionObserverEvent) => Promise<void>;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
-  /** @deprecated Use getCompanionSnapshotAsync; retained until the next Plugin SDK major. */
+  /** @deprecated Await getCompanionSnapshotAsync. Retained during stable deprecation. */
   getCompanionSnapshot: (sessionKey: string, agentId?: string) => SessionObserverCompanionSnapshot;
   getCompanionSnapshotAsync: (
     sessionKey: string,

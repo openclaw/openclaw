@@ -13,7 +13,9 @@ import {
   isCodexAppServerLiveThreadClaimed,
   isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
+  readCodexLiveThreadEphemeralPolicy,
 } from "./client-runtime.js";
+import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   getCodexInferenceThread,
@@ -221,16 +223,38 @@ export async function tryReuseCodexLiveThread(
     throwIfAborted,
   } = options;
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
+  const creationPolicy = incognito
+    ? readCodexLiveThreadEphemeralPolicy(params.client, binding.threadId)
+    : undefined;
+  if (creationPolicy && options.admittedNativeThread?.status?.type !== "notLoaded") {
+    const effectivePolicy = createCodexEphemeralThreadPolicy(
+      params,
+      options.effectiveConfig.config,
+    );
+    if (
+      creationPolicy.autoCompactTokenLimit !== effectivePolicy.autoCompactTokenLimit ||
+      creationPolicy.autoCompactTokenLimitScope !== effectivePolicy.autoCompactTokenLimitScope
+    ) {
+      throw new CodexIncognitoPolicyChangeError("compaction settings");
+    }
+  }
 
   // These native-owned ephemeral lifetimes do not enter ordinary
   // configuration ownership. Keep their existing live-only continuation path.
   if (incognito && (binding.preserveNativeModel || binding.connectionScope === "supervision")) {
+    if (options.admittedNativeThread?.status?.type === "notLoaded") {
+      return { kind: "rotate" };
+    }
     if (
       binding.clientId === clientId &&
       binding.clientId &&
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
+      // Native adoption cannot establish immutable creation settings from current defaults.
+      if (!creationPolicy && params.appServer.serviceTier === "ultrafast") {
+        throw new CodexIncognitoPolicyChangeError("compaction settings");
+      }
       await params.buildFinalConfigPatch?.(
         {
           action: "resume",
@@ -287,19 +311,18 @@ export async function tryReuseCodexLiveThread(
     try {
       let pendingRetention: Promise<boolean> | undefined;
       if (retainSubscription) {
-        // A passive refusal still needs current durable lineage to republish.
-        // Start retention synchronously under that read, then await its eviction work.
-        const retain = () => {
-          assertWarmOwner();
-          if (isSameCodexAppServerThreadOwner(params.bindingStore.read(bindingIdentity), binding)) {
-            pendingRetention = retainCodexAppServerBindingSubscription(
-              params.client,
-              binding.threadId,
-              ownership,
-            );
-          }
-        };
         try {
+          const currentBinding = await params.bindingStore.readAsync(bindingIdentity);
+          const retain = () => {
+            assertWarmOwner();
+            if (isSameCodexAppServerThreadOwner(currentBinding, binding)) {
+              pendingRetention = retainCodexAppServerBindingSubscription(
+                params.client,
+                binding.threadId,
+                ownership,
+              );
+            }
+          };
           if (params.authority) {
             await params.authority.withCurrent(retain);
           } else {
@@ -338,12 +361,14 @@ export async function tryReuseCodexLiveThread(
     assertWarmOwner();
     if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
       try {
-        nativeThread = await assertAdoptedCodexThreadResumeAllowed(
-          params,
-          binding.threadId,
-          options,
-          assertWarmOwner,
-        );
+        nativeThread =
+          options.admittedNativeThread ??
+          (await assertAdoptedCodexThreadResumeAllowed(
+            params,
+            binding.threadId,
+            options,
+            assertWarmOwner,
+          ));
       } catch (error) {
         // This read-only preflight cannot change native configuration. Direct-input
         // refusals and failed reads preserve it too, but revocation or cancellation cannot.

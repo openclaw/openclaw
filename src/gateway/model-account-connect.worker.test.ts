@@ -7,6 +7,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveProfileOverride } from "../auto-reply/reply/directive-handling.auth-profile.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -31,7 +32,12 @@ import {
   setUserProfileAuthLink as setLinkSync,
   updateUserModelAuthProfile,
 } from "../state/user-model-accounts.js";
-import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { isUserProfileCatalogReady } from "../state/user-profile-list.js";
+import {
+  linkEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardSession } from "../wizard/session.js";
@@ -68,6 +74,52 @@ const credential: AuthProfileCredential = {
   token: "synthetic-private-account-token",
 };
 const authority = { assertCurrent() {} };
+
+it("prepares cold personal account policy with GitHub assignments and current role authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = syncGitHubIdentity({
+      identity: { accountId: 12345, login: "account-owner" },
+      authenticationAlias: { kind: "email", email: "cold-account-owner@example.test" },
+    }).id;
+    const client = createOperatorClient({ profileId: owner, scopes: ["operator.write"] });
+    const writer: GatewayOperatorRoleDefinition = {
+      agents: "*",
+      scopes: ["operator.write"],
+      sessions: { others: "none" },
+    };
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "denied",
+          definitions: {
+            denied: { agents: [], scopes: [], sessions: { others: "none" } },
+            writer,
+          },
+          assignments: { byGithubLogin: { "account-owner": "writer" } },
+        },
+      },
+    };
+    const context = createContext();
+    context.getRuntimeConfig = () => cfg;
+    context.getClientConnIds = (filter) =>
+      new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
+
+    expect(isUserProfileCatalogReady()).toBe(false);
+    const action = await prepareUserModelAccountAction({ client, context });
+    expect(action.owner).toBe(owner);
+    expect(() => action.assertCurrent()).not.toThrow();
+    expect(() => action.assertCurrent([{ profileId: owner, role: "denied" }])).toThrow(
+      ModelAccountConnectAuthorityError,
+    );
+    expect(() => action.assertCurrent([{ profileId: owner, role: null }])).not.toThrow();
+
+    writer.scopes = [];
+    expect(() => action.assertCurrent()).toThrow(ModelAccountConnectAuthorityError);
+    writer.scopes = ["operator.write"];
+    setUserProfileRole(owner, "denied");
+    expect(() => action.assertCurrent()).toThrow(ModelAccountConnectAuthorityError);
+  });
+});
 
 it("prepares personal account ownership from the next foreign commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

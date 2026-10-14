@@ -82,6 +82,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { ModelCompatSchema } from "../config/zod-schema.model-compat.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -150,8 +151,8 @@ import {
 } from "./live-tool-probe.test-helpers.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -3630,7 +3631,7 @@ describe("retryLiveTranscriptProjectionRead", () => {
 });
 
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { storePath, entry } = await loadSessionEntryAsync(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
@@ -5249,8 +5250,18 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
     },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    ...(model.compat ? { compat: model.compat } : {}),
+    ...(model.compat ? { compat: pickConfigModelCompat(model.compat) } : {}),
   };
+}
+
+// Runtime normalization can add plugin-internal compat flags (Xiaomi's omitEmptyArrayItems)
+// that the config schema rejects; the plugin re-applies them when it resolves the configured model.
+const CONFIG_MODEL_COMPAT_KEYS = new Set(Object.keys(ModelCompatSchema.unwrap().shape));
+
+function pickConfigModelCompat(compat: NonNullable<Model["compat"]>) {
+  return Object.fromEntries(
+    Object.entries(compat).filter(([key]) => CONFIG_MODEL_COMPAT_KEYS.has(key)),
+  );
 }
 
 function mergeLiveProviderConfig(params: {

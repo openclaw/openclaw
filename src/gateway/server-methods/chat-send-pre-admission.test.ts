@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   prepareUserProfileCatalog,
-  readUserProfileIdentity,
+  readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -588,7 +588,8 @@ describe("chat send retry identity", () => {
   it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(
     "rechecks the canonical profile after real recovery without changing %s outcomes",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
+      await withOpenClawTestState(stateOptions, async () => {
         setRuntimeConfigSnapshot({});
         const { fixture, params } = preAdmissionFixture(`profile-recovery-${outcome}`);
         const sourceEmail = "recovery-source@example.test";
@@ -625,10 +626,7 @@ describe("chat send retry identity", () => {
         });
         // Keep the selected ID exact: resolving both sides would silently follow a merge.
         params.assertCurrent = () => {
-          if (
-            readUserProfileIdentity(client.authenticatedUserProfile!.profileId)?.profileId !==
-            source.id
-          ) {
+          if (readResidentUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
             throw mismatch;
           }
         };
@@ -652,7 +650,7 @@ describe("chat send retry identity", () => {
           expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
           if (outcome !== "unchanged") {
             linkEmail(sourceEmail, target.id);
-            expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+            expect(readResidentUserProfileId(source.id)).toBe(target.id);
             expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
           }
           if (outcome === "cached-success" || outcome === "cached-error") {

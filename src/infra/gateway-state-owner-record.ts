@@ -31,10 +31,14 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   );
 }
 
+export class StateDatabaseAccessError extends Error {
+  override name = "StateDatabaseAccessError";
+}
+
 export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
   () =>
-    class extends Error {
+    class extends StateDatabaseAccessError {
       constructor(
         readonly databasePath: string,
         message: string,
@@ -48,7 +52,7 @@ export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
 export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
   () =>
-    class extends Error {
+    class extends StateDatabaseAccessError {
       constructor(
         readonly databasePath: string,
         message: string,
@@ -57,6 +61,12 @@ export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
       }
     },
 );
+
+export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
+  error instanceof AggregateError
+    ? error.errors.length > 0 && error.errors.every(isStateDatabaseMaintenanceContention)
+    : error instanceof StateDatabaseAdmissionPendingError ||
+      error instanceof StateDatabaseOfflineMaintenanceError;
 
 /** Persisted ownership can identify a holder but cannot lend this process maintenance authority. */
 export function assertPersistedStateDatabaseAccessAllowed(params: {
@@ -73,7 +83,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     if (extractErrorCode(error) === "ENOENT") {
       return;
     }
-    throw new Error(unavailable, { cause: error });
+    throw new StateDatabaseAccessError(unavailable, { cause: error });
   }
   const owner = parseGatewayLockPayload(raw);
   if (!owner) {
@@ -81,7 +91,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     throw new StateDatabaseAdmissionPendingError(databasePath, unavailable);
   }
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
-    throw new Error(unavailable);
+    throw new StateDatabaseAccessError(unavailable);
   }
   if (isGatewayStateOwnerDefinitelyStale(owner, ownerPath)) {
     return;
@@ -92,7 +102,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   if (!isPidAlive(owner.pid)) {
-    throw new Error(unavailable);
+    throw new StateDatabaseAccessError(unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {

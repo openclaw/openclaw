@@ -136,32 +136,37 @@ describe("worker placement read cache", () => {
       warn,
       now: () => nowMs,
     });
-    await monitor.sweep();
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    await monitor.sweep();
-    expect(reads).not.toHaveBeenCalled();
-    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+    const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
+    try {
+      await monitor.sweep();
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      await monitor.sweep();
+      expect(reads).not.toHaveBeenCalled();
+      expect(runWorkspaceCommand).not.toHaveBeenCalled();
 
-    const active = await advancePlacementFixtureToActive(writer, database, {
-      sessionId: "disk-cache",
-      sessionKey: "agent:main:disk-cache",
-      agentId: "main",
-    });
-    await monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
-    expect(monitor.read(active)?.status).toBe("ok");
+      const active = await advancePlacementFixtureToActive(writer, database, {
+        sessionId: "disk-cache",
+        sessionKey: "agent:main:disk-cache",
+        agentId: "main",
+      });
+      await monitor.sweep();
+      expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+      expect(monitor.read(active)?.status).toBe("ok");
 
-    const draining = await writer.transition({
-      sessionId: active.sessionId,
-      from: "active",
-      to: "draining",
-      expectedGeneration: active.generation,
-    });
-    nowMs += 15 * 60_000;
-    await monitor.sweep();
-    expect(monitor.read(draining)).toBeUndefined();
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
+      const draining = await writer.transition({
+        sessionId: active.sessionId,
+        from: "active",
+        to: "draining",
+        expectedGeneration: active.generation,
+      });
+      nowMs += 15 * 60_000;
+      await monitor.sweep();
+      expect(monitor.read(draining)).toBeUndefined();
+      expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("claims and releases an existing worker placement with a NULL execution mode", async () => {
@@ -206,6 +211,13 @@ describe("worker placement read cache", () => {
       });
       const claimed = await reader.readProjection([identity.sessionId]);
       expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      // A warm read must still return independent placement and nested claim snapshots.
+      const warm = await reader.readProjection([identity.sessionId]);
+      warm.placements.get(identity.sessionId)!.state = "requested";
+      warm.placements.get(identity.sessionId)!.turnClaim!.claimId = "caller-change";
+      expect(
+        (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
+      ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
       await writer.releaseTurnIfOwned(claim);
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),

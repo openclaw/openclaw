@@ -117,6 +117,22 @@ describe("inferKind — yaml extensions", () => {
 });
 
 describe("universal verbs — yaml dispatch", () => {
+  it.each([
+    { text: "1", key: 1 },
+    { text: "true", key: true },
+    { text: "null", key: null },
+  ])("edits a YAML map's native $text key", ({ text, key }) => {
+    const ast = parseYaml(`${text}: old\nuntouched: keep\n`).ast;
+    const result = setOcPath(ast, parseOcPath(`oc://workflow.yaml/${text}`), "updated");
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.ast.kind === "yaml") {
+      const written = parseYaml(result.ast.raw).ast.doc;
+      expect(written.get(key)).toBe("updated");
+      expect(written.get("untouched")).toBe("keep");
+    }
+  });
+
   it("resolveOcPath returns kind-agnostic match for yaml leaf", () => {
     const { ast } = parseYaml(LOBSTER);
     const m = resolveOcPath(ast, parseOcPath("oc://workflow.lobster/name"));

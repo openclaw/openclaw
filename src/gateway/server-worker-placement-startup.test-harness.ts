@@ -15,7 +15,7 @@ const moveDestinationMocks = vi.hoisted(() => ({
   })),
   resolveCanonicalSession: vi.fn(() => ({
     sessionId: "session-recovery",
-    worktree: { id: "worktree-recovery" },
+    worktree: { id: "worktree-recovery", branch: "fixture", repoRoot: "/gateway/workspace" },
   })),
   resolveExecutionMode: vi.fn(() => "remote-exec"),
   resolveGatewaySessionTarget: vi.fn(() => ({
@@ -77,6 +77,8 @@ vi.mock("./worker-environments/placement-session-runtime.js", async (importOrigi
     ...actual,
     resolveWorkerPlacementExecutionMode: moveDestinationMocks.resolveExecutionMode,
     resolveWorkerPlacementSessionRuntime: moveDestinationMocks.resolveSessionRuntime,
+    resolveWorkerPlacementSessionRuntimeAsync: async () =>
+      moveDestinationMocks.resolveSessionRuntime(),
   };
 });
 

@@ -25,6 +25,7 @@ import {
   createConfiguredAcpTopicBinding,
   createConfiguredBindingRoute,
 } from "./bot-native-command-dispatch.test-support.js";
+import { recordTelegramUpdateReceivedAt } from "./bot-processing-outcome.js";
 import {
   makeCallbackRetryContext,
   makePrivateTextContext,
@@ -1314,6 +1315,96 @@ describe("createTelegramBot", () => {
     expect(payload.BodyForAgent).toContain("Total voters: 3");
   });
 
+  it("preserves a bot mention split across ordinary long-paste fragments", async () => {
+    loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
+      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
+    });
+    const timerSpy = vi.spyOn(globalThis, "setTimeout");
+    const work: Promise<unknown>[] = [];
+    let flush: (() => void) | undefined;
+    try {
+      await createTelegramBot({ token: "tok" });
+      const handler = getMessageHandler();
+      const fragments = ["A".repeat(4090) + " @open", "claw_bot help"];
+      for (const [index, text] of fragments.entries()) {
+        const replay = await dispatchSpooledPrivateText(handler, {
+          updateId: 8300 + index,
+          messageId: 8300 + index,
+          text,
+          replayUpdate: "full",
+          message: { chat: { id: -1008300, type: "supergroup", title: "Long paste" } },
+        });
+        work.push(requireValue(replay.deferredWork, "long-paste participant").task);
+        flush = takeLatestTimerCallback(1_500);
+      }
+      requireValue(flush, "long-paste flush")();
+      await Promise.all(work);
+      expect(replySpy).toHaveBeenCalledOnce();
+      expect(replySpy.mock.calls[0]?.[0].RawBody).toBe(fragments.join(""));
+    } finally {
+      flush?.();
+      await Promise.allSettled(work);
+      timerSpy.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps forwarded contact mentions separate from text (contactFirst=%s)",
+    async (contactFirst) => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
+      });
+      const timerSpy = vi.spyOn(globalThis, "setTimeout");
+      const work: Promise<unknown>[] = [];
+      let flush: (() => void) | undefined;
+      try {
+        await createTelegramBot({ token: "tok" });
+        const handler = getMessageHandler();
+        let id = contactFirst ? 8100 : 8200;
+        for (const text of ["hello", "@openclaw_bot help"]) {
+          replySpy.mockClear();
+          const segments = [
+            { text },
+            {
+              contact: { first_name: "@openclaw_bot", phone_number: "+15550100001" },
+            },
+          ];
+          if (contactFirst) {
+            segments.reverse();
+          }
+          for (const segment of segments) {
+            const replay = await dispatchSpooledPrivateText(handler, {
+              updateId: ++id,
+              messageId: id,
+              text: "",
+              replayUpdate: "full",
+              message: {
+                ...segment,
+                chat: { id: -1008100, type: "supergroup", title: "Contact batch" },
+                forward_origin: { type: "hidden_user", date: 500, sender_user_name: "Original" },
+              },
+            });
+            work.push(requireValue(replay.deferredWork, "forwarded contact participant").task);
+            flush = takeLatestTimerCallback(1_000);
+          }
+          requireValue(flush, "contact batch flush")();
+          await Promise.all(work);
+          expect(replySpy).toHaveBeenCalledTimes(text === "hello" ? 0 : 1);
+          if (text !== "hello") {
+            expect(replySpy.mock.calls[0]?.[0].BodyForAgent).toContain(
+              "[Shared contact] @openclaw_bot, +15550100001",
+            );
+          }
+        }
+      } finally {
+        flush?.();
+        await Promise.allSettled(work);
+        timerSpy.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves forwarded origin and formatting across debounce (multiple=%s)",
     async (multiple) => {
@@ -1579,6 +1670,35 @@ describe("createTelegramBot", () => {
     },
   );
 
+  it.each([
+    { name: "live tap", durableReceivedAtMs: undefined },
+    { name: "durable replay", durableReceivedAtMs: 1_736_381_700_000 },
+  ])("stamps generic callbacks with receipt time for $name", async ({ durableReceivedAtMs }) => {
+    // Fixture card was sent at 1_736_380_800; the tap arrives 20 minutes later.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_736_382_000_000);
+    try {
+      await createTelegramBot({ token: "tok" });
+      const callbackContext = makeGenericCallbackContext({ id: "cbq-generic-time-1" });
+      const ctx = {
+        ...callbackContext,
+        update: { update_id: 780, callback_query: callbackContext.callbackQuery },
+      };
+      const rawUpdate = JSON.stringify(ctx.update);
+      if (durableReceivedAtMs !== undefined) {
+        recordTelegramUpdateReceivedAt(ctx.update, durableReceivedAtMs);
+      }
+      expect(JSON.stringify(ctx.update)).toBe(rawUpdate);
+      await getOnHandler("callback_query")(ctx);
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      const expectedMs = durableReceivedAtMs ?? 1_736_382_000_000;
+      expect(payload.Timestamp).toBe(expectedMs);
+      expect(payload.ProviderMessageTimestamp).toBe(expectedMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves trailing whitespace in OC_MULTI values without routing generic messages", async () => {
     const value = "env|prod ";
     const data = `OC_MULTI|toggle|${value}`;
@@ -1631,23 +1751,52 @@ describe("createTelegramBot", () => {
     async ({ id, data, buttons, text, clearsButtons }) => {
       await createTelegramBot({ token: "tok" });
       const callbackHandler = getCallbackHandler();
-      await callbackHandler(
-        makeCallbackRetryContext({
-          id,
-          data,
-          messageId: 10,
-          message: { reply_markup: { inline_keyboard: buttons } },
-        }),
-      );
+      const callbackContext = makeCallbackRetryContext({
+        id,
+        data,
+        messageId: 10,
+        message: { date: 1_736_380_800, reply_markup: { inline_keyboard: buttons } },
+      });
+      const ctx = {
+        ...callbackContext,
+        update: { update_id: 781, callback_query: callbackContext.callbackQuery },
+      };
+      recordTelegramUpdateReceivedAt(ctx.update, 1_736_382_000_000);
+      await callbackHandler(ctx);
       if (clearsButtons) {
         expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
           reply_markup: { inline_keyboard: [] },
         });
       }
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(requireValue(replySpy.mock.calls.at(0), "replySpy call")[0].Body).toContain(text);
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      expect(payload.Body).toContain(text);
+      expect(payload.ProviderMessageTimestamp).toBe(1_736_382_000_000);
     },
   );
+
+  it("uses callback receipt time for plugin text submissions", async () => {
+    registerPluginInteractiveHandler("timestamp-test", {
+      channel: "telegram",
+      namespace: "timestamp",
+      handler: async () => ({ handled: true, submitText: "Plugin submission" }),
+    });
+    await createTelegramBot({ token: "tok" });
+    const callbackContext = makeCallbackRetryContext({
+      id: "plugin-submit-time",
+      data: buildTelegramOpaqueCallbackData("timestamp:submit"),
+      messageId: 10,
+    });
+    const ctx = {
+      ...callbackContext,
+      update: { update_id: 782, callback_query: callbackContext.callbackQuery },
+    };
+    recordTelegramUpdateReceivedAt(ctx.update, 1_736_382_000_000);
+    await getCallbackHandler()(ctx);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("Plugin submission");
+    expect(payload.ProviderMessageTimestamp).toBe(1_736_382_000_000);
+  });
 
   it.each([
     { data: "tgcmd:/login codex", namespace: "tgcmd" },

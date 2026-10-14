@@ -69,7 +69,7 @@ it("keeps async cold adoption, workspace scopes, and forced fresh inventories di
 });
 
 it.each(["database admission", "plugin cache"] as const)(
-  "rejects the log request when pricing loses its %s instead of omitting a record",
+  "retains every log record or rejects when pricing loses its %s",
   async (owner) => {
     const stateDir = tempDirs.make("openclaw-pricing-log-cancellation-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -136,6 +136,16 @@ it.each(["database admission", "plugin cache"] as const)(
     try {
       await using cache = createPluginCache();
       const params = { agentId: "main", sessionFile, config };
+      const expectedLogs = [
+        { timestamp: 1, role: "assistant", content: "Billed", tokens: 10, cost: 0 },
+        {
+          timestamp: 2,
+          role: "assistant",
+          content: "Estimated",
+          tokens: 120,
+          cost: expect.closeTo(0.00026, 12),
+        },
+      ];
       const request = withPluginCache(cache, () => loadSessionLogs(params));
       const outcome = request.then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -150,32 +160,24 @@ it.each(["database admission", "plugin cache"] as const)(
           await closeOpenClawStateDatabaseAsync();
         }
         reading.resolve();
-        expect(await outcome).toMatchObject({
-          status: "rejected",
-          error:
-            owner === "database admission"
-              ? {
-                  code: "PLUGIN_CACHE_FACT_INVALIDATED",
-                  cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
-                }
-              : expect.any(Error),
-        });
+        if (owner === "database admission") {
+          expect(await outcome).toMatchObject({
+            status: "rejected",
+            error: {
+              code: "PLUGIN_CACHE_FACT_INVALIDATED",
+              cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
+            },
+          });
+        } else {
+          expect(await outcome).toEqual({ status: "fulfilled", value: expectedLogs });
+        }
       } finally {
         reading.resolve();
         await outcome;
         await retirement;
       }
       await using resumed = createPluginCache();
-      expect(await withPluginCache(resumed, () => loadSessionLogs(params))).toEqual([
-        { timestamp: 1, role: "assistant", content: "Billed", tokens: 10, cost: 0 },
-        {
-          timestamp: 2,
-          role: "assistant",
-          content: "Estimated",
-          tokens: 120,
-          cost: expect.closeTo(0.00026, 12),
-        },
-      ]);
+      expect(await withPluginCache(resumed, () => loadSessionLogs(params))).toEqual(expectedLogs);
     } finally {
       reading.resolve();
       vi.restoreAllMocks();
