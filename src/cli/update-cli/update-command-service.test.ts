@@ -159,7 +159,8 @@ describe("maybeRestartService", () => {
         },
       };
       const rollback = change === "initial-readyz-rollback";
-      const pluginOnly = change === "initial-plugin-unavailable";
+      const pluginOnly =
+        change === "initial-plugin-error" || change === "initial-plugin-unavailable";
       const initialFailure = change.startsWith("initial-") && !pluginOnly;
       const healthy = await mocks.inspectGatewayRestart();
       if (change.startsWith("initial-")) {
@@ -247,18 +248,11 @@ describe("maybeRestartService", () => {
             ? { check: "versionMatch", code: "version-mismatch" }
             : change === "initial-build-error"
               ? { check: "versionMatch", code: "build-id-mismatch" }
-              : change === "initial-plugin-error"
-                ? {
-                    check: "pluginErrors",
-                    code: "plugin-errors",
-                    pluginId: "fixture",
-                    message: "failed",
-                  }
-                : change === "initial-readyz-error" || rollback
-                  ? { check: "readyz", code: "readyz-unhealthy" }
-                  : change === "initial-settle-error"
-                    ? { check: "settled", code: "timeout" }
-                    : { check: "service", code: "service-not-running" };
+              : change === "initial-readyz-error" || rollback
+                ? { check: "readyz", code: "readyz-unhealthy" }
+                : change === "initial-settle-error"
+                  ? { check: "settled", code: "timeout" }
+                  : { check: "service", code: "service-not-running" };
         expect(updateResult.steps).toContainEqual(
           expect.objectContaining({
             name: "gateway verification",
@@ -335,7 +329,10 @@ describe("maybeRestartService", () => {
         const result = await verification;
         expect(result.ok).toBe(true);
         if (pluginOnly) {
-          const retry = "openclaw --container service-box doctor --fix";
+          const retry =
+            change === "initial-plugin-unavailable"
+              ? "openclaw --container service-box doctor --fix"
+              : "openclaw --profile service-profile doctor --fix";
           expect(result.pluginWarnings).toEqual([
             expect.objectContaining({
               pluginId: "fixture",
@@ -344,6 +341,9 @@ describe("maybeRestartService", () => {
             }),
           ]);
           expect(result.summary).toContain("plugin failures need a retry");
+          expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+            expect.objectContaining({ requirePluginHealth: false }),
+          );
         }
         expect(onVerified).toHaveBeenCalledOnce();
       }

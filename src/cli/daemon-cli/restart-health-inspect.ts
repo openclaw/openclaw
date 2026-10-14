@@ -78,12 +78,10 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe = Boolean(
-    expectedVersion ||
-    expectedBuildId ||
+  const requiresGatewayProbe =
+    Boolean(expectedVersion || expectedBuildId) ||
     params.requirePluginHealth === false ||
-    params.requireChannelHealth === false,
-  );
+    params.requireChannelHealth === false;
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>

@@ -191,7 +191,6 @@ function updateGatewayHealthFacts(
       ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
       ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
     ],
-    // Channel connectivity is advisory to activation; warning steps retain its diagnostics.
     channelsReady: health.healthy,
     settled: health.healthy,
     readyz,
@@ -218,7 +217,6 @@ export async function verifyUpdatedGateway(
     ...params,
     assertCurrent,
     deadline: params.opts.run?.deadline ?? params.deadline,
-    requirePluginHealth: true,
   });
   const channelWarnings = [
     ...(health.channelProbeErrors ?? []),
@@ -305,8 +303,11 @@ export async function verifyUpdatedGateway(
       }
     }
   };
-  if (health.healthy && serviceRunning && readyz && !health.activatedPluginErrors?.length) {
+  if (health.healthy && serviceRunning && readyz) {
     const pluginFailures = new Map<string, string>();
+    for (const failure of health.activatedPluginErrors ?? []) {
+      pluginFailures.set(failure.id, failure.error);
+    }
     for (const failure of health.unavailablePlugins ?? []) {
       pluginFailures.set(failure.id, `${failure.reason}: ${failure.detail}`);
     }
@@ -333,7 +334,7 @@ export async function verifyUpdatedGateway(
     }
     return {
       ok: true,
-      score: 6,
+      score: 7,
       summary:
         channelWarnings.length > 0
           ? "Gateway service, version, and readiness verified; channel warnings need attention."
@@ -448,6 +449,7 @@ export async function verifyUpdatedGateway(
     !health.versionMismatch,
     !health.buildIdMismatch,
     !health.activatedPluginErrors?.length,
+    !health.channelProbeErrors?.length,
     health.healthy,
     readyz,
   ].filter(Boolean).length;

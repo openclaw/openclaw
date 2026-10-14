@@ -48,7 +48,7 @@ afterEach(async () => {
 
 describe("update repair channel warnings", () => {
   it.each(["channel probe", "plugin load"] as const)(
-    "completes activation with a channel warning but rejects a plugin load error (%s)",
+    "completes verified activation with a named warning (%s)",
     async (fault) => {
       const service = makeGatewayService({ status: "running", pid: 8000 });
       service.isLoaded = vi.fn(async () => true);
@@ -63,7 +63,10 @@ describe("update repair channel warnings", () => {
         gatewayHealthResponse({
           server: { version: "2026.10.3", buildId: "candidate", bootId: "candidate-boot" },
           health: {
-            channels: { whatsapp: { probe: { ok: false, error: "re-pair required" } } },
+            channels:
+              fault === "channel probe"
+                ? { whatsapp: { probe: { ok: false, error: "re-pair required" } } }
+                : {},
             ...(fault === "plugin load"
               ? {
                   plugins: {
@@ -93,15 +96,24 @@ describe("update repair channel warnings", () => {
         settle: { probes: 2 },
         onVerified,
       });
+      expect(validation).toMatchObject({ ok: true, score: 7 });
       if (fault === "plugin load") {
-        expect(validation).toMatchObject({ ok: false, summary: "plugin-errors" });
-        expect(onVerified).not.toHaveBeenCalled();
-        expect(result.steps[0]?.failureFacts).toContainEqual(
-          expect.objectContaining({ check: "pluginErrors", code: "plugin-errors" }),
+        expect(validation.summary).toBe(
+          "Gateway service, version, channels, and readiness verified; plugin failures need a retry.",
         );
-        return;
+        expect(validation.pluginWarnings).toEqual([
+          expect.objectContaining({
+            pluginId: "whatsapp",
+            reason: "dependency missing",
+            message:
+              'Plugin "whatsapp" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
+            guidance: ["openclaw doctor --fix"],
+          }),
+        ]);
+      } else {
+        expect(validation.summary).toContain("channel warnings need attention");
+        expect(validation.pluginWarnings).toBeUndefined();
       }
-      expect(validation.ok).toBe(true);
       expect(onVerified).toHaveBeenCalledOnce();
       expect(result.steps[0]).toMatchObject({ exitCode: 0 });
       expect(result.steps[0]?.failureFacts).toBeUndefined();
@@ -126,9 +138,11 @@ describe("update repair channel warnings", () => {
         expect.any(Function),
       );
       const report = renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown;
-      expect(report).toContain("whatsapp: re-pair required");
-      expect(report).toContain("openclaw channels status --probe");
-      expect(report).toContain("openclaw health --json");
+      if (fault === "channel probe") {
+        expect(report).toContain("whatsapp: re-pair required");
+        expect(report).toContain("openclaw channels status --probe");
+        expect(report).toContain("openclaw health --json");
+      }
       expect(report).not.toContain("restart remains unsafe");
     },
   );

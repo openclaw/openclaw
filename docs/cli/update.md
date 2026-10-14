@@ -700,7 +700,7 @@ a retention refusal alone does not establish service health or restoration.
 **Fix now:** a stopped service or failed readiness check means the update did not
 verify a serving Gateway. Check `openclaw gateway status --deep` using the same
 profile and account. The report identifies observed service status, version
-mismatches, readiness failures, and activated plugin load errors when available.
+mismatches, readiness failures, and plugin diagnostics when available.
 A readiness deadline without those facts does not identify the startup cause.
 
 Channel connectivity or probe errors are warnings once the target version and
