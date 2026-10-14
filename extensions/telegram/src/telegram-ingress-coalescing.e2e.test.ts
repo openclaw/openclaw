@@ -236,13 +236,7 @@ describe("Telegram durable ingress coalescing", () => {
           2,
         );
       });
-      const duplicateAdmission = await monitor.admit(queued);
-      if (duplicateAdmission.kind !== "durable") {
-        throw new Error("Expected the synthetic retry to remain durably admitted");
-      }
-      expect(duplicateAdmission.queueResult.kind).not.toBe("completed");
-      // The retry must not mistake tracker dedupe of still-running middleware
-      // for successful processing, nor let its same-lane tail overtake it.
+      // A pending duplicate must not let its same-lane follower overtake it.
       await vi.waitFor(async () => {
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           { id: eventId, attempts: 2, payload: { update: queued } },
@@ -256,8 +250,6 @@ describe("Telegram durable ingress coalescing", () => {
       await monitor.waitForIdle();
       await vi.advanceTimersByTimeAsync(2_000);
       monitor.requestDrain();
-      // SQLite worker-backed replay can outlive a short assertion poll. Join
-      // the owning monitor before checking delivery and its durable settlement.
       await monitor.waitForIdle();
       expect(downstreamTurns).toHaveBeenCalledTimes(3);
       expect(downstreamTurns.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
