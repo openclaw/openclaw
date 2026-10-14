@@ -100,13 +100,15 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         : []),
     ];
     const selectedSpeed =
-      props.fastMode.currentOverride === "auto"
-        ? "auto"
-        : ultrafast
-          ? "ultrafast"
-          : props.fastMode.active
-            ? "on"
-            : "off";
+      props.fastMode.nextValue === ""
+        ? ""
+        : props.fastMode.currentOverride === "auto"
+          ? "auto"
+          : ultrafast
+            ? "ultrafast"
+            : props.fastMode.active
+              ? "on"
+              : "off";
     const selectedSpeedIndex = speedOptions.findIndex(
       (option) => option.value === selectedSpeed && !option.disabled,
     );

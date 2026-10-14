@@ -157,10 +157,13 @@ describe("effort bar colour and flow", () => {
       false,
       state("ultrafast", ["priority", "ultrafast"], false),
     );
-    expect(
-      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
-    ).toBe(true);
+    expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
     expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
+    expect(host!.querySelector("summary")!.getAttribute("data-chat-fast-mode")).toBe("false");
+    expect(host!.querySelector("summary")!.getAttribute("aria-label")).not.toContain("Ultrafast");
+    expect(host!.querySelector('[data-chat-speed-option=""]')?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
     const standardOnly = await fixture(
       ["low", "medium", "high"],
       "high",

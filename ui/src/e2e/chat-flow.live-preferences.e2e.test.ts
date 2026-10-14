@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -6,6 +9,106 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Live chat preferences" });
 
 suite.define(() => {
+  it("stops showing saved Ultrafast as active on an unsupported request and restores it on return", async () => {
+    await suite.withPage({ viewport: { width: 1200, height: 853 } }, async ({ page }) => {
+      const key = "agent:main:speed-preferences";
+      const levels = [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ];
+      const row = {
+        key,
+        sessionId: "speed-preferences",
+        kind: "direct",
+        updatedAt: 1,
+        model: "example-fast",
+        modelProvider: "openai",
+        modelOverrideSource: "user",
+        fastMode: "ultrafast",
+        thinkingLevel: "high",
+        thinkingDefault: "low",
+        thinkingLevels: levels,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        agentModel: "openai/example-fast",
+        sessions: [row],
+        models: [
+          {
+            id: "example-fast",
+            name: "Fast example",
+            provider: "openai",
+            available: true,
+            supportsFastMode: true,
+            serviceTiers: ["priority", "ultrafast"],
+            thinkingLevels: levels,
+          },
+          {
+            id: "example-standard",
+            name: "Standard example",
+            provider: "anthropic",
+            available: true,
+            supportsFastMode: false,
+            thinkingLevels: levels,
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      const main = page.getByRole("main");
+      const model = main.locator("[data-chat-model-select]");
+      const effort = main.locator("[data-chat-thinking-select]");
+      await expect.poll(() => effort.getAttribute("data-chat-fast-mode")).toBe("true");
+      expect(await effort.getAttribute("aria-label")).toContain("Ultrafast");
+      await model.click();
+      await selectChatModelOption(
+        main.locator('[data-chat-model-option="anthropic/example-standard"]'),
+      );
+      expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+        key,
+        model: "anthropic/example-standard",
+      });
+      await expect.poll(() => model.textContent()).toContain("Standard example");
+      await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
+      await effort.click();
+      const standard = main.locator('[data-chat-speed-option=""]');
+      await standard.waitFor();
+      const frame = await takeControlUiScreenshotFrame(page, main, [model, effort, standard], {
+        elements: [main.locator(".agent-chat__input")],
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "unsupported-speed.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "unsupported-speed-composer.png"),
+        frame.elements[0]!.png,
+      );
+      expect(await effort.getAttribute("data-chat-fast-mode")).toBe("false");
+      expect(await effort.getAttribute("aria-label")).not.toContain("Ultrafast");
+      expect(await effort.getAttribute("class")).not.toContain("effort-trigger--ultrafast");
+      expect(await standard.getAttribute("aria-checked")).toBe("true");
+      expect(await main.locator(".chat-controls__effort-zap").count()).toBe(0);
+      expect(await main.locator('[data-chat-speed-option="on"]').count()).toBe(0);
+      expect((await gateway.getSessionRow(key))?.fastMode).toBe("ultrafast");
+      await effort.click();
+      await model.click();
+      await selectChatModelOption(main.locator('[data-chat-model-option="openai/example-fast"]'));
+      await expect.poll(() => effort.getAttribute("data-chat-fast-mode")).toBe("true");
+      expect(await effort.getAttribute("aria-label")).toContain("Ultrafast");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+      // Clearing the saved preference is still an explicit user action on the no-op route.
+      await model.click();
+      await selectChatModelOption(
+        main.locator('[data-chat-model-option="anthropic/example-standard"]'),
+      );
+      await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
+      await effort.click();
+      await standard.click();
+      expect((await gateway.waitForRequest("sessions.patch", { after: 3 })).params).toMatchObject({
+        key,
+        fastMode: null,
+      });
+    });
+  });
+
   it("saves model and reasoning while the admitted reply continues", async () => {
     await suite.withPage({ viewport: { width: 1200, height: 853 } }, async ({ page }) => {
       const key = "agent:main:live-preferences";

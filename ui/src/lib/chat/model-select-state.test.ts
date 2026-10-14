@@ -545,7 +545,6 @@ describe("chat-model-select-state service tiers", () => {
     });
     for (const catalog of [
       [],
-      [{ ...model, supportsFastMode: false }],
       [{ ...model, serviceTiers: undefined }],
       [{ ...model, available: undefined }],
       [{ ...model, available: false }],
@@ -556,6 +555,21 @@ describe("chat-model-select-state service tiers", () => {
         ultrafastSupported: undefined,
         currentOverride: "ultrafast",
         label: "Ultrafast",
+      });
+    }
+    for (const fastMode of [true, "auto", "ultrafast"] as const) {
+      expect(
+        resolveFastModeSelection({
+          ...input,
+          fastModeTarget: { ...input.fastModeTarget, fastMode },
+          catalog: [{ ...model, supportsFastMode: false }],
+        }),
+      ).toMatchObject({
+        active: false,
+        currentOverride: "off",
+        label: "Standard",
+        nextValue: "",
+        disabled: false,
       });
     }
     // Runtime alternatives are complete projections, not overlays on the base route.

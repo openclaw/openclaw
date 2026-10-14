@@ -440,17 +440,18 @@ export function resolveChatFastModeSelectState(
     ({ runtime }) =>
       runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
   );
-  const effectiveMode = standardOnly
-    ? false
-    : savedMode === "ultrafast" &&
-        canRecoverRejectedTier &&
-        ultrafastUnavailable &&
-        requestSupported
-      ? true
-      : savedMode;
+  const effectiveMode =
+    standardOnly || !requestSupported
+      ? false
+      : savedMode === "ultrafast" &&
+          canRecoverRejectedTier &&
+          ultrafastUnavailable &&
+          requestSupported
+        ? true
+        : savedMode;
   // Capability changes the effective choice without rewriting the saved session preference.
   const currentOverride =
-    isOpenAI || standardOnly
+    isOpenAI || standardOnly || !requestSupported
       ? effectiveMode === true
         ? "on"
         : effectiveMode === "auto" || effectiveMode === "ultrafast"
@@ -458,7 +459,7 @@ export function resolveChatFastModeSelectState(
           : "off"
       : configuredOverride;
   const supported = standardOnly || requestSupported || Boolean(configuredOverride);
-  // A saved Ultrafast setting remains Ultrafast even when access is unavailable.
+  // A saved preference is not active when it has no mapping on the selected request.
   const active =
     effectiveMode === true || effectiveMode === "auto" || effectiveMode === "ultrafast";
   const label =
