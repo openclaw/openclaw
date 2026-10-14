@@ -98,11 +98,12 @@ describe("k8s manifests", () => {
     expect(gateway.command).toEqual(["node", "/app/dist/index.js", "gateway", "run"]);
     expect(findNamed(env, "HOME")).toMatchObject({ value: "/home/node" });
     expect(findNamed(env, "OPENCLAW_CONFIG_DIR")).toMatchObject({ value: "/home/node/.openclaw" });
-    // Private SQLite snapshot staging needs a writable XDG_CACHE_HOME; the rootfs is read-only.
     const mounts = asRecords(gateway.volumeMounts, "gateway volume mounts");
     const homeMount = findNamed(mounts, "openclaw-home");
+    expect(homeMount).toMatchObject({ mountPath: "/home/node/.openclaw" });
+    expect(homeMount.readOnly).not.toBe(true);
     expect(findNamed(env, "XDG_CACHE_HOME")).toMatchObject({
-      value: `${String(homeMount.mountPath)}/.cache`,
+      value: "/home/node/.openclaw/.cache",
     });
     expect(findNamed(env, "OPENCLAW_GATEWAY_TOKEN")).toMatchObject({
       valueFrom: { secretKeyRef: { key: "OPENCLAW_GATEWAY_TOKEN", name: "openclaw-secrets" } },

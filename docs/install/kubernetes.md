@@ -155,7 +155,7 @@ Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
-Newer images need the writable cache location described under Architecture notes; the shipped manifest already provides it through `XDG_CACHE_HOME`.
+Images from `2026.8.1` onward need a [writable cache location](/install/kubernetes#architecture-notes); the shipped manifest provides it through `XDG_CACHE_HOME`. When upgrading an older deployment, apply that environment entry along with the image change.
 
 ### Expose beyond port-forward
 
@@ -204,7 +204,7 @@ This also deletes unrelated workloads and the PVC.
 - The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`.
 - No cluster-scoped resources; everything lives in a single namespace.
 - Security hardening: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000).
-- Writable cache: the Gateway stages private SQLite snapshots under `XDG_CACHE_HOME` (default `~/.cache`), which a read-only rootfs cannot provide, so the manifest points it at `/home/node/.openclaw/.cache` on the PVC. Keep an equivalent writable cache location if you customize the mounts; images newer than `2026.7.1-2` do not start without one.
+- Writable cache: the Gateway stages private SQLite snapshots under `XDG_CACHE_HOME` (default `~/.cache`). The manifest points it at `/home/node/.openclaw/.cache` on the PVC because the root filesystem is read-only. Keep an equivalent writable cache location if you customize the mounts.
 - The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`.
 - If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings.
 - Secrets are generated in a temp directory and applied directly to the cluster; no secret material is written to the repo checkout.
