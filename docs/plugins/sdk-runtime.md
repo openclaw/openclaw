@@ -129,6 +129,9 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
 Read-only forks do not acquire workspace placement authority, so a parent's
 pending placement publication does not block them. Normal parent settlement and
 usage updates preserve the fork's read authority. Session reset or deletion
