@@ -220,15 +220,15 @@ export function resolvePrivateSettlePolicy(
   const yieldedFinalDeliverable =
     hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
   const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
-  // Private findings stay bound to the requester incarnation that produced them.
+  // A settle wake resumes the exact requester incarnation, so admission needs
+  // the host-owned own-session binding even when no child requested a private
+  // completion target: a visible child's terminal notice resumes the parent too,
+  // and without the binding a guest holding only operator.sessions.write is
+  // denied that continuation (missing scope: operator.write).
   const privateBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(hasPrivateRows
-      ? {
-          completionRequesterSessionId: requester.sessionId,
-          completionRequesterLifecycleRevision: requester.lifecycleRevision,
-        }
-      : {}),
+    completionRequesterSessionId: requester.sessionId,
+    completionRequesterLifecycleRevision: requester.lifecycleRevision,
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
   // A yield owes the conversation a visible final unless private findings let the
