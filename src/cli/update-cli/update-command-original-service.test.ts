@@ -485,7 +485,6 @@ it.for([
           name: "UpdateCommandPendingRecoveryFailure",
           exitCode: 1,
           cause: { kind: "newer-schema" },
-          automaticTriage: undefined,
           result: {
             root: rootB,
             status: "error",
