@@ -7,7 +7,7 @@ import {
 } from "../test-helpers/modal-dialog.ts";
 import { installPopoverPolyfill } from "../test-helpers/popover.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { showSessionGroupDefaultsDialog } from "./session-group-defaults-dialog.ts";
+import { showSessionGroupDefaultsDialog } from "./session-group-defaults-dialog.tsx";
 
 let fixture: ReturnType<typeof createModalDialogTestFixture>;
 let restorePopover: () => void;

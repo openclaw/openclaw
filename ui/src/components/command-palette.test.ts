@@ -16,7 +16,7 @@ import {
   mountPalette,
   registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,

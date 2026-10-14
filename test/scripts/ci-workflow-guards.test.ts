@@ -2448,7 +2448,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
       ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "ubuntu-24.04"],
+      ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
       ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
       ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
@@ -2651,7 +2651,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   });
 
   it.each(["hybrid", "runson"] as const)(
-    "gives %s UI offloads their hosted timeout budgets",
+    "keeps %s UI shards on Blacksmith with their existing timeout",
     (runnerBackend) => {
       const workflow = readCiWorkflow();
       for (const offload of [false, true]) {
@@ -2665,13 +2665,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           preflightOutputs: { hybrid_hosted_offload: String(offload) },
         } as const;
         expect(evaluateWorkflowExpression(workflow.jobs["checks-ui"]["runs-on"], context)).toBe(
-          offload ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+          "blacksmith-8vcpu-ubuntu-2404",
         );
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
           ["checks-ui-e2e-real-gateway", 20],
-          ["checks-ui", offload ? 35 : 20],
+          ["checks-ui", 20],
         ] as const) {
           expect(
             evaluateWorkflowExpression(workflow.jobs[jobName]["timeout-minutes"], context),

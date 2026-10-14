@@ -127,13 +127,15 @@ it.each([
     await host.updateComplete;
     await provider.querySelector<LitElement>("openclaw-plugin-view")?.updateComplete;
     await questionPanelIn(provider);
-    expect(provider.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
-    expect(provider.querySelectorAll('textarea[aria-label="Custom draft"]')).toHaveLength(
-      mode === "nondelegating" ? 1 : 0,
-    );
-    expect(provider.querySelectorAll(".agent-chat__composer-combobox textarea")).toHaveLength(
-      mode === "nondelegating" ? 0 : 1,
-    );
+    await vi.waitFor(() => {
+      expect(provider.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
+      expect(provider.querySelectorAll('textarea[aria-label="Custom draft"]')).toHaveLength(
+        mode === "nondelegating" ? 1 : 0,
+      );
+      expect(provider.querySelectorAll(".agent-chat__composer-combobox textarea")).toHaveLength(
+        mode === "nondelegating" ? 0 : 1,
+      );
+    });
     expect(reportError).toHaveBeenCalledTimes(mode === "failing" ? 1 : 0);
     const answer = provider.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
     answer.value = "New contributors";

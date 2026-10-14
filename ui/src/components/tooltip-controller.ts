@@ -1,3 +1,4 @@
+import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
 
@@ -15,22 +16,9 @@ const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
 const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
 
-export type TooltipPlacement =
-  | "top"
-  | "top-start"
-  | "top-end"
-  | "bottom"
-  | "bottom-start"
-  | "bottom-end"
-  | "left"
-  | "left-start"
-  | "left-end"
-  | "right"
-  | "right-start"
-  | "right-end";
 export interface TooltipPolicyProps {
   content?: string;
-  placement?: TooltipPlacement;
+  placement?: OverlayPlacement;
   closeDelay?: number;
   hoverDismissDelay?: number;
   delay?: number;
@@ -163,7 +151,7 @@ export class TooltipController {
   get trigger() {
     return this.#triggerElement;
   }
-  get resolvedPlacement(): TooltipPlacement {
+  get resolvedPlacement(): OverlayPlacement {
     return (this.placement === "right-start" || this.placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"

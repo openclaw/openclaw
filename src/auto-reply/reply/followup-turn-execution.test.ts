@@ -677,7 +677,7 @@ describe("executeFollowupTurn lifecycle", () => {
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 
-  it("drains detached progress before propagating execution failure", async () => {
+  it("surfaces a failure after input acceptance without retrying before model start", async () => {
     const order: string[] = [];
     const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     const failure = new Error("execution failed");
@@ -685,8 +685,11 @@ describe("executeFollowupTurn lifecycle", () => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
       throw failure;
     });
+    const turn = createTurn();
+    const onAdopted = vi.fn();
+    turn.queued.turnAdoptionLifecycle = { onAdopted };
     const pending = executeFollowupTurn({
-      turn: createTurn(),
+      turn,
       defaults: {
         typing: createTypingController(),
         typingMode: "never",
@@ -704,7 +707,11 @@ describe("executeFollowupTurn lifecycle", () => {
     await Promise.resolve();
     expect(order).toEqual([]);
     releaseProgress();
-    await expect(pending).rejects.toBe(failure);
+    await expect(pending).resolves.toMatchObject({
+      execution: { outcome: { kind: "rejected", payload: { isError: true } } },
+    });
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(state.execute).toHaveBeenCalledOnce();
     expect(order).toEqual(["progress"]);
   });
 

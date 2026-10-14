@@ -22,12 +22,17 @@ import { getExistingFollowupQueue } from "./queue/state.js";
 import { FollowupRunDeferredError, type FollowupRun } from "./queue/types.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 
+const admissionState = vi.hoisted(() => ({ beforeAdmission: vi.fn<() => Promise<void>>() }));
+
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
 vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => ({
-    kind: "admitted",
-    turn: createFollowupTurnTestTurn({ runId: `execution-${queued.prompt}`, queued }),
-  }),
+  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => {
+    await admissionState.beforeAdmission();
+    return {
+      kind: "admitted",
+      turn: createFollowupTurnTestTurn({ runId: `execution-${queued.prompt}`, queued }),
+    };
+  },
 }));
 
 // mock-isolation: No result accounting or worker initialization is needed for an aborted stub turn.
@@ -71,6 +76,7 @@ function createObservers() {
 beforeEach(() => {
   vi.useFakeTimers();
   resetFollowupTurnTestState();
+  admissionState.beforeAdmission.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -99,13 +105,17 @@ describe("queued turn callback ownership", () => {
         updateMode: "none",
       });
       let attempts = 0;
-      state.execute.mockImplementation(async (params: AgentTurnParams) => {
-        if (++attempts === 1) {
+      if (scenario === "deferred restart") {
+        admissionState.beforeAdmission.mockImplementationOnce(async () => {
           firstStarted.resolve();
           await releaseFirst.promise;
-          if (scenario === "deferred restart") {
-            throw new FollowupRunDeferredError("reply lane busy");
-          }
+          throw new FollowupRunDeferredError("reply lane busy");
+        });
+      }
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        if (++attempts === 1 && scenario !== "deferred restart") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
         }
         const item = params.followupRun.prompt;
         const runId = params.opts?.runId;

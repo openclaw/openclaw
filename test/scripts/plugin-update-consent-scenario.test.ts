@@ -65,6 +65,7 @@ let timeoutExit: number | undefined;
 let mutateDenial: ((result: Denial, repair: boolean, child: FixtureChild) => void) | undefined;
 const packages = new Map<number, { code: string; integrity: string }>();
 const coreVersions = new Map<string, string>();
+const tagUpdates: string[][] = [];
 
 function saveConfig() {
   fs.writeFileSync(
@@ -161,6 +162,7 @@ function cliReply(args: string[], child: FixtureChild): string {
     throw new Error("unprepared core update");
   }
   if (!repair) {
+    tagUpdates.push(args);
     fs.writeFileSync(
       path.resolve(path.dirname(entry), "..", "package.json"),
       JSON.stringify({ version: coreVersion }),
@@ -190,6 +192,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   packages.clear();
   coreVersions.clear();
+  tagUpdates.length = 0;
   mutateDenial = undefined;
   timeoutExit = undefined;
   vi.stubEnv("OPENCLAW_E2E_COMMAND_TIMEOUT", "");
@@ -201,6 +204,10 @@ beforeEach(() => {
   roots.push(root);
   entry = path.join(root, "host", "dist", "entry.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "host", "package.json"),
+    JSON.stringify({ version: "2026.9.5" }),
+  );
   coreTarball = path.join(root, "core.tgz");
   fs.writeFileSync(coreTarball, "core artifact placeholder; no archive reader is exercised");
   const stateDir = path.join(root, "state");
@@ -320,6 +327,17 @@ describe("installed-CLI consent scenario report contract", () => {
       expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
     },
   );
+
+  it("selects stable before tag updates only from an extended-stable host", async () => {
+    fs.writeFileSync(
+      path.resolve(path.dirname(entry), "..", "package.json"),
+      JSON.stringify({ version: "2026.9.33" }),
+    );
+
+    await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
+    expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
+    expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
+  });
 
   it("retains plugin consent proof when a frozen target predates core update consent", async () => {
     await expect(
