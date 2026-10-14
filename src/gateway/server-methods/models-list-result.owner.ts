@@ -20,6 +20,7 @@ import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projectio
 import type { ModelsListCatalogSource } from "./models-list-context.js";
 
 export type BuildModelsListResultParams = {
+  cliCompatibilityRefresh?: { assertCurrent: () => void; signal?: AbortSignal };
   source: ModelsListCatalogSource;
   agentId?: string;
   requesterProfileId?: string;
@@ -91,6 +92,9 @@ export async function resolveModelsListOwner({
     await loadDeferredCatalog(source.context, initialAgentId, {
       readOnly: false,
       refreshFullCatalog: true,
+      ...(params.cliCompatibilityRefresh
+        ? { cliCompatibilityRefresh: params.cliCompatibilityRefresh }
+        : {}),
       ...(params.params.provider ? { providerDiscoveryProviderIds: [params.params.provider] } : {}),
     });
     await withCurrentReadAuthority(authority, () => {});

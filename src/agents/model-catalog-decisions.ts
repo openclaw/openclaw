@@ -19,6 +19,7 @@ import type {
 } from "../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePreparedPersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
@@ -74,6 +75,8 @@ export type ModelCatalogDecisionParams = {
   profileProvider?: string;
   runtimeOverride?: string;
   accountCatalog?: import("./prepared-model-runtime-auth.js").PreparedAccountCatalogAccess;
+  /** Explicit model selection may defer unknown CLI requirements to execution without bypassing auth. */
+  cliCompatibilityPurpose?: "selection";
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   isCurrent?: () => boolean;
   preparedPersonalCatalog?: PersonalCatalogProfiles & { isCurrent: () => boolean };
@@ -253,12 +256,60 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     workspaceDir,
     profileProvider,
   }).evaluateNative;
+  const hasCliCompatibilityBackend = params.pluginRegistry?.cliBackends.some(
+    ({ backend }) => backend.prepareModelCatalog !== undefined,
+  );
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
-  const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>
-    preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
+  const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) => {
+    const evaluation = preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
       ? host
       : nativeEvaluator(entry, host, runtimeId);
+    // Ordinary prepared reads have no CLI maintenance facts to project. Keep their
+    // native availability overlay free of another runtime-policy resolution.
+    if (!snapshot.cliRuntimeCompatibility && !hasCliCompatibilityBackend) {
+      return evaluation;
+    }
+    const requestedRuntimeId = runtimeId ?? evaluation.requestedRuntimeId;
+    const runtime = !isDefaultAgentRuntimeId(requestedRuntimeId)
+      ? requestedRuntimeId
+      : resolveCatalogDecisionRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry,
+          evaluation: { ...evaluation, requestedRuntimeId },
+          pluginRegistry: params.pluginRegistry,
+        })?.id;
+    if (!runtime || runtime === "openclaw" || runtime === "auto") {
+      return evaluation;
+    }
+    const compatibility = snapshot.cliRuntimeCompatibility?.[runtime];
+    const modelCompatibility = compatibility?.models[entry.id];
+    const needsPreparation =
+      compatibility !== undefined ||
+      params.pluginRegistry?.cliBackends.some(
+        ({ backend }) => backend.id === runtime && backend.prepareModelCatalog !== undefined,
+      );
+    if (
+      !needsPreparation ||
+      modelCompatibility?.available === true ||
+      (params.cliCompatibilityPurpose === "selection" &&
+        modelCompatibility?.compatibility === "unknown")
+    ) {
+      return evaluation;
+    }
+    return {
+      ...evaluation,
+      availability: false,
+      availabilityAuthoritative: true,
+      runtimeCompatibilityReason:
+        modelCompatibility?.reason ??
+        "CLI compatibility has not been verified. Refresh Models to retry.",
+      ...(compatibility?.nextCheckAt !== undefined
+        ? { runtimeCompatibilityNextCheckAt: compatibility.nextCheckAt }
+        : {}),
+    };
+  };
   // Retire the captured host evaluation so its caller prepares fresh facts.
   const authValidUntil = resolveAuthStoreReadOnlyValidUntil(authStore, Date.now());
   const agentDir = resolveAgentDir(params.cfg, params.agentId);

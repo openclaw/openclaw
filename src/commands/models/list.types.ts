@@ -6,6 +6,8 @@ export type ModelRow = {
   contextTokens?: number;
   local: boolean | null;
   available: boolean | null;
+  runtimeCompatibilityReason?: string;
+  runtimeCompatibilityNextCheckAt?: number;
   tags: string[];
 };
 

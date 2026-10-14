@@ -18,6 +18,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { projectCliRuntimeCompatibility } from "./models-list-public-projection.js";
 
 type CatalogDecisions = ReturnType<typeof createModelCatalogDecisions>;
 
@@ -116,6 +117,7 @@ export function prepareModelPickerRuntimeChoices(params: {
           return {
             agentRuntime: runtime,
             available: false,
+            ...projectCliRuntimeCompatibility(evaluation),
             ...(unavailableReason ? { unavailableReason } : {}),
             ...(evaluation.unavailableUntil === undefined
               ? {}

@@ -10,53 +10,70 @@ const log = createSubsystemLogger("anthropic-cli-version");
 /** Share one lazy discovery result between native CLI capabilities and OAuth identity. */
 export function createClaudeCodeVersionProbe(api: OpenClawPluginApi) {
   let installedVersion: string | undefined;
-  const resolveVersion = createLazyRuntimeModule(async () => {
-    try {
-      // Login-shell PATH discovery can block well beyond the request probe budget.
-      const executable = resolveClaudeTerminalExecutable(process.env, { pathStrategy: "direct" });
-      if (!executable) {
-        // Without evidence the transport keeps its version floor; say so loudly
-        // instead of letting a later 400 blame a CLI the user already updated.
-        // Log only the failure category: subprocess output and error text may
-        // carry private paths or values the redactor cannot guarantee to strip.
+  let generation = 0;
+  const resolveVersion = createLazyRuntimeModule<string | undefined>(
+    async (): Promise<string | undefined> => {
+      const probeGeneration = generation;
+      try {
+        // Login-shell PATH discovery can block well beyond the request probe budget.
+        const executable = resolveClaudeTerminalExecutable(process.env, { pathStrategy: "direct" });
+        if (!executable) {
+          // Without evidence the transport keeps its version floor; say so loudly
+          // instead of letting a later 400 blame a CLI the user already updated.
+          // Log only the failure category: subprocess output and error text may
+          // carry private paths or values the redactor cannot guarantee to strip.
+          log.warn(
+            "Claude Code version probe: executable-missing; OAuth requests keep the built-in version floor",
+          );
+          return undefined;
+        }
+        // The runner retains process cleanup; requests need not wait for a slow tree kill.
+        const result = await withTimeout(
+          api.runtime.system.runCommandWithTimeout([executable.executable, "--version"], {
+            timeoutMs: 1_500,
+            killProcessTree: true,
+            killGraceMs: 100,
+            maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
+            terminateOnOutputLimit: true,
+          }),
+          1_500,
+        );
+        if (probeGeneration !== generation) {
+          return resolveVersion();
+        }
+        let observedVersion: string | undefined;
+        if (result.code !== 0 || result.outputLimitExceeded) {
+          log.warn(
+            "Claude Code version probe: command-failed; OAuth requests keep the built-in version floor",
+          );
+        } else {
+          observedVersion = parseClaudeCodeVersion(result.stdout);
+          if (!observedVersion) {
+            log.warn(
+              "Claude Code version probe: unparseable-output; OAuth requests keep the built-in version floor",
+            );
+          }
+        }
+        installedVersion = observedVersion;
+        return observedVersion;
+      } catch {
+        if (probeGeneration !== generation) {
+          return resolveVersion();
+        }
         log.warn(
-          "Claude Code version probe: executable-missing; OAuth requests keep the built-in version floor",
+          "Claude Code version probe: probe-error; OAuth requests keep the built-in version floor",
         );
         return undefined;
       }
-      // The runner retains process cleanup; requests need not wait for a slow tree kill.
-      const result = await withTimeout(
-        api.runtime.system.runCommandWithTimeout([executable.executable, "--version"], {
-          timeoutMs: 1_500,
-          killProcessTree: true,
-          killGraceMs: 100,
-          maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
-          terminateOnOutputLimit: true,
-        }),
-        1_500,
-      );
-      if (result.code !== 0 || result.outputLimitExceeded) {
-        log.warn(
-          "Claude Code version probe: command-failed; OAuth requests keep the built-in version floor",
-        );
-        return undefined;
-      }
-      installedVersion = parseClaudeCodeVersion(result.stdout);
-      if (!installedVersion) {
-        log.warn(
-          "Claude Code version probe: unparseable-output; OAuth requests keep the built-in version floor",
-        );
-      }
-      return installedVersion;
-    } catch {
-      log.warn(
-        "Claude Code version probe: probe-error; OAuth requests keep the built-in version floor",
-      );
-      return undefined;
-    }
-  });
+    },
+  );
   return {
     resolveVersion,
+    invalidateVersion: () => {
+      generation += 1;
+      installedVersion = undefined;
+      resolveVersion.clear();
+    },
     ensureDynamicSystemPromptSectionsSupport: async () => {
       await resolveVersion();
     },

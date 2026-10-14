@@ -1,8 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
@@ -64,11 +66,18 @@ export function resolveCatalogDecisionRuntime(params: {
       })();
   // Route projection must retain the native owner that supplied availability. Recomputing
   // implicit policy from its API-key route alone would relabel that owner as OpenClaw.
+  // Direct CLI provider refs also name their execution owner, even without a harness policy.
+  const provider = normalizeProviderId(params.entry.provider);
+  const directCliRuntime = params.pluginRegistry
+    ? params.pluginRegistry.cliBackends.find(
+        ({ backend }) => normalizeProviderId(backend.id) === provider,
+      )?.backend.id
+    : listCliRuntimeModelBackendBindings().find((binding) => binding.runtime === provider)?.runtime;
   const runtime =
     selected.policy.runtimeSource === "implicit" &&
     !selected.policy.forcedByEnvironment &&
     isDefaultAgentRuntimeId(params.evaluation.requestedRuntimeId)
-      ? (params.evaluation.runtimeAuth?.id ?? selected.runtime)
+      ? (params.evaluation.runtimeAuth?.id ?? directCliRuntime ?? selected.runtime)
       : selected.runtime;
   if (
     selected.policy.runtime === "auto" &&

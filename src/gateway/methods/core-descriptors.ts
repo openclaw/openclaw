@@ -102,7 +102,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   [
     "models.list",
     "models",
-    "operator.read",
+    "dynamic",
     "<=2026.7",
     {
       startup: true,

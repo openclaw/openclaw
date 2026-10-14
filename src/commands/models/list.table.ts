@@ -90,5 +90,14 @@ export function printModelTable(
       row.tags.map(formatRowTag).join(","),
     ].join(" ");
     runtime.log(line);
+    if (row.runtimeCompatibilityReason) {
+      const nextCheck =
+        row.runtimeCompatibilityNextCheckAt === undefined
+          ? ""
+          : ` Automatic checks can retry after ${new Date(row.runtimeCompatibilityNextCheckAt).toISOString()}.`;
+      runtime.log(
+        `  CLI compatibility: ${sanitizeTerminalText(row.runtimeCompatibilityReason)}${nextCheck} Retry now: openclaw models list --refresh.`,
+      );
+    }
   }
 }

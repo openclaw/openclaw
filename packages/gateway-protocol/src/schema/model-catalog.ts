@@ -25,6 +25,8 @@ export const ModelsListParamsSchema = Type.Object(
     preparedOnly: Type.Optional(Type.Boolean()),
     /** Force replacement of a completed full-catalog generation. */
     refresh: Type.Optional(Type.Boolean()),
+    /** Retry local CLI compatibility maintenance with current operator write authority. */
+    refreshCliCompatibility: Type.Optional(Type.Boolean()),
     view: Type.Optional(
       Type.Union([
         Type.Literal("default"),
@@ -44,6 +46,19 @@ export const ModelsListParamsSchema = Type.Object(
         },
       },
       { not: { required: ["sessionKey", "authProfileId"] } },
+      {
+        if: {
+          properties: { refreshCliCompatibility: { const: true } },
+          required: ["refreshCliCompatibility"],
+        },
+        // JSON Schema conditional keyword, not a Promise method.
+        // oxlint-disable-next-line unicorn/no-thenable
+        then: {
+          properties: { refresh: { const: true } },
+          required: ["refresh"],
+          not: { anyOf: [{ required: ["sessionKey"] }, { required: ["authProfileId"] }] },
+        },
+      },
     ],
   },
 );
@@ -61,6 +76,10 @@ const ModelRuntimeProperties = {
   unavailableReason: Type.Optional(ModelUnavailableReasonSchema),
   /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
   unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Gateway-local CLI recovery guidance, independent of authentication and paired-node readiness. */
+  runtimeCompatibilityReason: Type.Optional(NonEmptyString),
+  /** Next request-driven automatic check in epoch milliseconds; a manual refresh can retry sooner. */
+  runtimeCompatibilityNextCheckAt: Type.Optional(Type.Integer({ minimum: 0 })),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   contextTokens: Type.Optional(Type.Integer({ minimum: 1 })),
   local: Type.Optional(Type.Boolean()),

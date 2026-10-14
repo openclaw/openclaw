@@ -143,6 +143,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "talk.config") {
     return record?.includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
+  if (method === "models.list") {
+    return record?.refreshCliCompatibility === true ? [WRITE_SCOPE] : [READ_SCOPE];
+  }
   if (method === "environments.list") {
     const runtimeId = record && "runtimeId" in record ? record.runtimeId : undefined;
     // Match the handler: every nonempty runtime ID needs command eligibility access.

@@ -261,6 +261,45 @@ export function projectSessionModelCatalog(
   config: OpenClawConfig,
   ownership: AgentHarnessSessionRuntimeOwnership | undefined,
 ): ModelChoice[] {
+  let projectedModels = models;
+  if (readParams.sessionEntry?.execHost === "node") {
+    // Gateway-local login and installation facts cannot establish node readiness.
+    const omitLocalReadiness = <
+      T extends {
+        available?: boolean;
+        unavailableReason?: string;
+        unavailableUntil?: number;
+        runtimeCompatibilityReason?: string;
+        runtimeCompatibilityNextCheckAt?: number;
+      },
+    >(
+      choice: T,
+    ) => {
+      const {
+        available: _available,
+        unavailableReason: _reason,
+        unavailableUntil: _until,
+        runtimeCompatibilityReason: _compatibilityReason,
+        runtimeCompatibilityNextCheckAt: _compatibilityNextCheck,
+        ...remote
+      } = choice;
+      return remote;
+    };
+    projectedModels = models.map((model) => {
+      const projected =
+        model.agentRuntime?.id === "claude-cli" || model.provider === "claude-cli"
+          ? omitLocalReadiness(model)
+          : model;
+      return model.runtimeChoices
+        ? {
+            ...projected,
+            runtimeChoices: model.runtimeChoices.map((choice) =>
+              choice.agentRuntime.id === "claude-cli" ? omitLocalReadiness(choice) : choice,
+            ),
+          }
+        : projected;
+    });
+  }
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
   const entry = readParams.sessionEntry;
@@ -271,7 +310,7 @@ export function projectSessionModelCatalog(
     !entry?.agentRuntimeOverride?.trim() &&
     !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
   if (!nativeAuth && !workerAuth) {
-    return models;
+    return projectedModels;
   }
   // Pending native branches have no tuple. Worker inference uses the configured ambient model;
   // explicit model, runtime, and personal-account choices retain Gateway availability checks.
@@ -280,7 +319,7 @@ export function projectSessionModelCatalog(
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
     });
-  return models.map((model) => {
+  return projectedModels.map((model) => {
     if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
       return model;
     }
@@ -295,6 +334,8 @@ export function projectSessionModelCatalog(
       available: _available,
       unavailableReason: _reason,
       unavailableUntil: _until,
+      runtimeCompatibilityReason: _compatibilityReason,
+      runtimeCompatibilityNextCheckAt: _compatibilityNextCheck,
       ...available
     } = model;
     return available;

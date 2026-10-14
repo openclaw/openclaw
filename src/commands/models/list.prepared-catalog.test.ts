@@ -144,6 +144,31 @@ async function list(options: Parameters<typeof modelsListCommand>[0]) {
 }
 
 describe("models list published transport", () => {
+  it("preserves CLI recovery diagnostics in JSON without relabeling API authentication", async () => {
+    const diagnostics = {
+      runtimeCompatibilityReason: "CLI 1.0 needs 2.0; its configured installer is unowned.",
+      runtimeCompatibilityNextCheckAt: 2_000_000_000_000,
+    };
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model, { ...model, id: "blocked", available: false, ...diagnostics }],
+    });
+    await list({ json: true });
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        count: 2,
+        models: [
+          expect.not.objectContaining({ runtimeCompatibilityReason: expect.anything() }),
+          expect.objectContaining({
+            key: "catalog-provider/blocked",
+            available: false,
+            ...diagnostics,
+          }),
+        ],
+      },
+      2,
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
   it.each(["ready", "unavailable"] as const)(
     "reports configured ids missing from a %s listing without changing availability",
     async (status) => {
@@ -210,15 +235,19 @@ describe("models list published transport", () => {
     expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        requiredCapabilities: ["published-model-catalog"],
+        requiredCapabilities: [
+          "published-model-catalog",
+          "model-catalog-cli-compatibility-refresh-v1",
+        ],
         localPortOverride: 19001,
-        timeoutMs: 210_000,
+        timeoutMs: 1_200_000,
         params: {
           agentId: "work",
           view: "all",
           provider: "catalog-provider",
           includeDetails: true,
           refresh: true,
+          refreshCliCompatibility: true,
         },
       }),
     );
@@ -259,6 +288,20 @@ describe("models list published transport", () => {
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("uses a selected remote Gateway without reading a local lock owner", async () => {
+    vi.mocked(gateway.isImplicitLocalGatewayTarget).mockResolvedValue(false);
+    await list({ json: true });
+    expect(gatewayLock.readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ localPortOverride: expect.anything() }),
+    );
+    expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].requiredCapabilities).toEqual([
+      "published-model-catalog",
+    ]);
+  });
+
   it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>
       modelsListCommand({ json: true }, runtime),
@@ -268,61 +311,34 @@ describe("models list published transport", () => {
     expect(gateway.callGateway).toHaveBeenCalledOnce();
   });
 
-  it.each([{ refresh: false, refreshFailed: true }])(
-    "uses published refresh status with rejected auth for %j",
-    async ({ refresh, refreshFailed }) => {
-      vi.mocked(gateway.callGateway).mockResolvedValue({
-        models: [model],
-        refreshFailed,
-        providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
-      });
-      await list({ refresh, json: true });
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Model discovery authentication was rejected for signed-out. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
-      );
-      if (refreshFailed) {
-        expect(runtime.error).toHaveBeenCalledWith(
-          "Model discovery could not refresh all providers. Showing the available published model list.",
-        );
-      } else {
-        expect(runtime.error).toHaveBeenCalledTimes(1);
-      }
-      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
-      expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
-        }),
-      );
-    },
-  );
+  it("reports published refresh failure and rejected discovery authentication", async () => {
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      refreshFailed: true,
+      providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
+    });
+    await list({ json: true });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Model discovery authentication was rejected for signed-out. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Model discovery could not refresh all providers. Showing the available published model list.",
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
+    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ params: { view: "default", includeDetails: true } }),
+    );
+  });
 
-  it.each([{ json: false, plain: false }])(
-    "reports rejected discovery with empty provider inventory for %j",
-    async (output) => {
-      const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
-      vi.mocked(gateway.callGateway).mockResolvedValue({
-        models: [],
-        providerOutcomes: [outcome],
-      });
-
-      await list({ provider: "xai", agent: "work", ...output });
-
-      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-        "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
-      );
-      if (output.json) {
-        expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-          { count: 0, models: [], providerOutcomes: [outcome] },
-          2,
-        );
-      } else if (output.plain) {
-        expect(runtime.log).not.toHaveBeenCalled();
-        expect(runtime.writeStdout).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
-      }
-    },
-  );
+  it("reports rejected discovery with empty provider inventory", async () => {
+    const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: [], providerOutcomes: [outcome] });
+    await list({ provider: "xai", agent: "work" });
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
+  });
 
   it("preserves model rows and public discovery facts without printing raw provider errors", async () => {
     const providerOutcomes = [
@@ -371,54 +387,44 @@ describe("models list published transport", () => {
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
   });
 
-  it.each([true])(
-    "uses the standalone owner only with no selected Gateway, refresh=%s",
-    async (refresh) => {
-      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
-      const stop = vi.fn(async () => {});
-      const handle = { proxyUrl: "http://proxy.example.test", stop, kill: vi.fn() };
-      vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
-      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) => {
-        expect(proxyLifecycle.startProxy).toHaveBeenCalledTimes(refresh ? 1 : 0);
-        expect(proxyLifecycle.stopProxy).not.toHaveBeenCalled();
-        return await read(createOwner());
-      });
-      await list({ agent: "work", all: true, json: true, refresh });
-      expect(runtime.error).toHaveBeenCalledWith(
-        refresh
-          ? "Gateway is not running. Refreshing the local model catalog."
-          : "Gateway is not running. Showing the local cached model catalog. Use --refresh to discover provider models.",
-      );
-      expect(gateway.callGateway).not.toHaveBeenCalled();
-      expect(catalog.withPreparedModelCatalogOwner).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          agentId: "work",
-          readOnly: !refresh,
-          ...(refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
-        }),
-        expect.any(Function),
-      );
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          count: 1,
-          models: [
-            expect.objectContaining({ key: "catalog-provider/Reader", contextWindow: 128000 }),
-          ],
-        }),
-        2,
-      );
-      if (refresh) {
-        expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
-          expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
-        );
-        expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
-        expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
-      } else {
-        expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
-        expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("uses the standalone owner for refresh only with no selected Gateway", async () => {
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const handle = { proxyUrl: "http://proxy.example.test", stop: vi.fn(), kill: vi.fn() };
+    vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+    vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) => {
+      expect(proxyLifecycle.startProxy).toHaveBeenCalledOnce();
+      expect(proxyLifecycle.stopProxy).not.toHaveBeenCalled();
+      return await read(createOwner());
+    });
+    await list({ agent: "work", all: true, json: true, refresh: true });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not running. Refreshing the local model catalog.",
+    );
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        agentId: "work",
+        readOnly: false,
+        refreshFullCatalog: true,
+        persistOfflineRefresh: true,
+      }),
+      expect.any(Function),
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        models: [
+          expect.objectContaining({ key: "catalog-provider/Reader", contextWindow: 128000 }),
+        ],
+      }),
+      2,
+    );
+    expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
+    );
+    expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
+    expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
+  });
 
   it("releases local refresh proxy routing when discovery fails", async () => {
     vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
@@ -545,6 +551,40 @@ describe("model list terminal table", () => {
     available: true,
     tags: [],
   });
+  it("prints sanitized CLI recovery guidance and request-driven retry timing", () => {
+    printModelTable(
+      [
+        {
+          ...makeRow("fixture/new-model"),
+          available: false,
+          runtimeCompatibilityReason:
+            "CLI \u001b[31m1.0\u001b[0m needs 2.0.\nUpdate its installer.",
+          runtimeCompatibilityNextCheckAt: 2_000_000_000_000,
+        },
+      ],
+      runtime,
+    );
+    expect(runtime.log.mock.calls.at(-1)?.[0]).toBe(
+      "  CLI compatibility: CLI 1.0 needs 2.0.\\nUpdate its installer. Automatic checks can retry after 2033-05-18T03:33:20.000Z. Retry now: openclaw models list --refresh.",
+    );
+  });
+
+  it("keeps plain output limited to keys when CLI compatibility has failed", () => {
+    printModelTable(
+      [
+        {
+          ...makeRow("fixture/new-model"),
+          available: false,
+          runtimeCompatibilityReason: "CLI needs an update.",
+        },
+      ],
+      runtime,
+      { plain: true },
+    );
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("fixture/new-model");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("prints context caps with sanitized tags in their original order", () => {
     const tags = [
       "\u001b[31mdefault\u001b[0m",

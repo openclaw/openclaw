@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
@@ -26,6 +26,7 @@ import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
+const sessionCleanup = new Set<() => Promise<void>>();
 let nextOwnerId = 0;
 
 async function createOwner(
@@ -39,6 +40,7 @@ async function createOwner(
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
     skillsSnapshot?: SkillSnapshot;
+    cliRuntimeVersion?: string;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
   } = {},
@@ -61,6 +63,7 @@ async function createOwner(
     "registry-test",
   );
   context.params.skillsSnapshot = options.skillsSnapshot;
+  context.cliRuntimeVersion = options.cliRuntimeVersion;
   context.params.agentAccountId = options.agentAccountId;
   context.effectiveAuthProfileId = options.authProfileId;
   admissions.push(admission);
@@ -114,6 +117,10 @@ async function createOwner(
   const register = () => {
     capability.register(session);
     sessions.add(session);
+    sessionCleanup.add(async () => {
+      exited.resolve();
+      await context.preparedBackend.closeLiveSession?.("restart");
+    });
     return session;
   };
   return {
@@ -134,11 +141,15 @@ async function createOwner(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  vi.useRealTimers();
   for (const session of sessions) {
     session.close("restart");
   }
   sessions.clear();
+  // Rejection cases assert their cleanup failure in the test; still settle their owned work.
+  await Promise.allSettled([...sessionCleanup].map((cleanup) => cleanup()));
+  sessionCleanup.clear();
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -146,9 +157,9 @@ afterEach(() => {
 });
 
 describe("generic plugin-owned live session registry", () => {
-  it.each([{ agentAccountId: "telegram-account" }, { authProfileId: "different-profile" }])(
+  it.for([{ agentAccountId: "telegram-account" }, { authProfileId: "different-profile" }])(
     "retires one conversation's conflicting process before replacement: %j",
-    async (scope) => {
+    async (scope, { signal }) => {
       const entered = createDeferred();
       const held = createDeferred();
       const original = await createOwner({
@@ -169,7 +180,7 @@ describe("generic plugin-owned live session registry", () => {
         expect(getCliLiveSessionApprovalGrants(next.context)).toBeUndefined();
         expect(() => next.capability.activate(original.session)).toThrow("admitted run");
         restarting = next.capability.restart();
-        await entered.promise;
+        await withinTest(entered.promise, signal);
         expect(() => next.register()).toThrow("cleanup has not settled");
       } finally {
         held.resolve();
@@ -315,9 +326,9 @@ describe("generic plugin-owned live session registry", () => {
     expect(owner.close).toHaveBeenCalledOnce();
   });
 
-  it.each(["current", "caller", "signal"] as const)(
+  it.for(["current", "caller", "signal"] as const)(
     "rechecks authority after cross-route process cleanup (%s)",
-    async (revoked) => {
+    async (revoked, { signal }) => {
       const entered = createDeferred();
       const held = createDeferred();
       const owner = await createOwner({
@@ -335,7 +346,7 @@ describe("generic plugin-owned live session registry", () => {
         (error: unknown) => error,
       );
       try {
-        await entered.promise;
+        await withinTest(entered.promise, signal);
         expect(() => restarting.register()).toThrow("cleanup has not settled");
         if (revoked === "caller") {
           restarting.revokeCaller();
@@ -410,9 +421,15 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
-  it("joins natural retirement that starts while restart is awaiting the previous owner", async () => {
+  it("joins natural retirement that starts while restart is awaiting the previous owner", async ({
+    signal,
+  }) => {
+    const entered = createDeferred();
     const held = createDeferred();
-    const cleanup = vi.fn(() => held.promise);
+    const cleanup = vi.fn(() => {
+      entered.resolve();
+      return held.promise;
+    });
     const original = await createOwner({ cleanup });
     original.register();
     const next = await createOwner({ sessionId: original.sessionId });
@@ -423,7 +440,8 @@ describe("generic plugin-owned live session registry", () => {
     original.capability.remove(original.session);
     original.exited.resolve();
     try {
-      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      await withinTest(entered.promise, signal);
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
     } finally {
       held.resolve();
@@ -453,6 +471,59 @@ describe("generic plugin-owned live session registry", () => {
       }
     },
   );
+
+  it("rejects required generation reuse after a verified CLI update without closing its process", async () => {
+    const original = await createOwner({ cliRuntimeVersion: "2.1.269" });
+    original.register();
+    const changed = await createOwner({
+      sessionId: original.sessionId,
+      requiredGeneration: original.session.generation,
+      cliRuntimeVersion: "2.1.286",
+    });
+    expect(() => changed.capability.current()).toThrow(
+      expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
+    );
+    expect(original.close).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBe(original.session);
+  });
+
+  it("replaces an idle process after a verified CLI update while reusing an unchanged version", async () => {
+    const cleanup = vi.fn(async () => {});
+    const original = await createOwner({ idle: true, cliRuntimeVersion: "2.1.269", cleanup });
+    original.register();
+    const unchanged = await createOwner({
+      sessionId: original.sessionId,
+      cliRuntimeVersion: "2.1.269",
+    });
+    expect(unchanged.capability.current()).toBe(original.session);
+    unchanged.capability.activate(original.session);
+    expect(original.close).not.toHaveBeenCalled();
+
+    const updated = await createOwner({
+      sessionId: original.sessionId,
+      cliRuntimeVersion: "2.1.286",
+    });
+    expect(() => updated.capability.activate(original.session)).toThrow(
+      "CLI live session no longer belongs to this admitted run.",
+    );
+    await updated.capability.restart();
+    expect(original.close).toHaveBeenCalledExactlyOnceWith("restart");
+    expect(original.waitForExit).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(updated.capability.current()).toBeUndefined();
+
+    updated.register();
+    updated.capability.activate(updated.session);
+    expect(updated.capability.current()).toBe(updated.session);
+    expect(
+      getCliLiveSessionGeneration({
+        backendId: "claude-cli",
+        agentId: "main",
+        sessionId: updated.sessionId,
+        sessionKey: updated.sessionKey,
+      }),
+    ).toBe(updated.session.generation);
+  });
 
   it("refuses plugin restart when the exact live generation is required", async () => {
     const original = await createOwner({ generation: "required-live-process" });
@@ -651,12 +722,14 @@ describe("generic plugin-owned live session registry", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "retains natural cleanup until replacement is safe (fails=%s)",
-    async (fails) => {
+    async (fails, { signal }) => {
+      const entered = createDeferred();
       const held = createDeferred();
       const failure = new Error("artifact cleanup failed");
       const cleanup = vi.fn(async () => {
+        entered.resolve();
         await held.promise;
         if (fails) {
           throw failure;
@@ -673,7 +746,8 @@ describe("generic plugin-owned live session registry", () => {
       const rejected = vi.fn();
       const closing = closeCliLiveSession(original.context, "restart").then(completed, rejected);
       try {
-        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+        await withinTest(entered.promise, signal);
+        expect(cleanup).toHaveBeenCalledOnce();
         expect(successor.close).not.toHaveBeenCalled();
         expect(completed).not.toHaveBeenCalled();
         expect(rejected).not.toHaveBeenCalled();

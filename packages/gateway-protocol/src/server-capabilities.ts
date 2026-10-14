@@ -5,6 +5,7 @@ export const GATEWAY_SERVER_CAPS = {
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
+  MODEL_CATALOG_CLI_COMPATIBILITY_REFRESH: "model-catalog-cli-compatibility-refresh-v1",
   LOCAL_STATE_OWNER_ROUTING: "local-state-owner-routing-v1",
   MODELS_AUTH_SET_API_KEY_OWNER: "models-auth-set-api-key-owner-v1",
   MODELS_AUTH_LOGIN_OWNER: "models-auth-login-owner-v1",

@@ -18,8 +18,8 @@ import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
-// The catalog worker permits three minutes; leave room for connection and result projection.
-const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;
+// A manual refresh permits a 15-minute installer, three-minute discovery, and transport slack.
+const MODEL_CATALOG_MAINTENANCE_TIMEOUT_MS = 20 * 60_000;
 
 function toCliModelRow(model: ModelChoice): ModelRow {
   return {
@@ -30,6 +30,14 @@ function toCliModelRow(model: ModelChoice): ModelRow {
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     local: model.local ?? null,
     available: model.available ?? null,
+    ...(model.runtimeCompatibilityReason
+      ? {
+          runtimeCompatibilityReason: model.runtimeCompatibilityReason,
+          ...(model.runtimeCompatibilityNextCheckAt !== undefined
+            ? { runtimeCompatibilityNextCheckAt: model.runtimeCompatibilityNextCheckAt }
+            : {}),
+        }
+      : {}),
     tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
   };
 }
@@ -60,12 +68,12 @@ export async function modelsListCommand(
     view: opts.all || provider ? "all" : "default",
     ...(provider ? { provider } : {}),
     includeDetails: true,
-    ...(opts.refresh ? { refresh: true } : {}),
+    ...(opts.refresh ? { refresh: true, refreshCliCompatibility: true } : {}),
   };
   let result = await readSelectedGatewayModelCatalog(
     cfg,
     params,
-    opts.refresh ? MODEL_CATALOG_REFRESH_TIMEOUT_MS : undefined,
+    opts.refresh ? MODEL_CATALOG_MAINTENANCE_TIMEOUT_MS : undefined,
   );
   if (!result) {
     runtime.error(

@@ -55,6 +55,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/index.call-scope.test.ts",
   "extensions/agentsapi/agentsapi-attempt.test.ts",
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
+  "extensions/anthropic/cli-readiness.test.ts",
   "extensions/codex/src/migration/provider.auth.test.ts",
   "extensions/codex/src/migration/provider.test.ts",
   "extensions/github-copilot/index.test.ts",

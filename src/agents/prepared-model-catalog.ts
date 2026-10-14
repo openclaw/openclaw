@@ -65,6 +65,8 @@ export type LoadPreparedModelCatalogParams = {
   providerDiscoveryProviderIds?: readonly string[];
   /** Explicitly requests full inventory acquisition; writable reads also replace completed data. */
   refreshFullCatalog?: boolean;
+  /** Request-bound authority for an explicit CLI compatibility retry. */
+  cliCompatibilityRefresh?: { assertCurrent: () => void; signal?: AbortSignal };
   /** Persist refreshed inventory only while the caller holds exclusive offline state custody. */
   persistOfflineRefresh?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
@@ -95,6 +97,7 @@ async function materializeRequestedModelCatalog(
   readOnly: boolean | undefined,
   refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
   providerIds?: readonly string[],
+  cliCompatibilityRefresh?: LoadPreparedModelCatalogParams["cliCompatibilityRefresh"],
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
@@ -104,6 +107,7 @@ async function materializeRequestedModelCatalog(
     refreshFullCatalog === true
       ? await refreshPreparedModelRuntimeCatalog(snapshot, {
           refresh: readOnly !== true,
+          ...(readOnly !== true && cliCompatibilityRefresh ? { cliCompatibilityRefresh } : {}),
           ...(providerIds ? { providerIds } : {}),
         })
       : undefined;
@@ -113,6 +117,7 @@ async function materializeRequestedModelCatalog(
       ? snapshot.readFullModelCatalog?.()
       : await snapshot.loadFullModelCatalog({
           refresh: refreshFullCatalog === true,
+          ...(refreshFullCatalog && cliCompatibilityRefresh ? { cliCompatibilityRefresh } : {}),
           ...(providerIds ? { providerIds } : {}),
         }));
   if (!modelCatalog) {
@@ -395,6 +400,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
             request.readOnly,
             request.refreshFullCatalog,
             request.providerDiscoveryProviderIds,
+            request.cliCompatibilityRefresh,
           );
     // Projection must finish before releasing the selected generation's resources.
     return await read(owner);

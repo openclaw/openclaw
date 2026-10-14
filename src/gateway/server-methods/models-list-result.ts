@@ -55,6 +55,7 @@ import { resolveModelProviderCapabilities } from "./model-provider-capabilities.
 import { createModelsListProviderFilter, listDecisionModels } from "./models-list-capabilities.js";
 import {
   buildPublicModelProjection,
+  projectCliRuntimeCompatibility,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
@@ -464,6 +465,7 @@ async function prepareOwnedModelsListResult({
         ...(serviceTiers === undefined ? {} : { serviceTiers }),
         ...(serviceTierObservation ? { serviceTierObservation } : {}),
         ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
+        ...projectCliRuntimeCompatibility(evaluation),
         ...(projectedAvailability === false && evaluation.unavailableReason
           ? {
               unavailableReason: evaluation.unavailableReason,

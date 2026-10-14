@@ -4,6 +4,7 @@ import type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
+import type { CliBackendModelCatalogResult } from "../plugins/cli-backend.types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
@@ -47,6 +48,8 @@ export type ModelCatalogEntry = {
 
 /** Logical catalog rows plus the physical variants used for route selection. */
 export type ModelCatalogSnapshot = {
+  /** Gateway-local CLI installation observations, never auth or remote-node evidence. */
+  cliRuntimeCompatibility?: Readonly<Record<string, CliBackendModelCatalogResult>>;
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
   /** Provider-owned outcome of each live catalog request in this generation. */

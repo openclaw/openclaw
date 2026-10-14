@@ -13,8 +13,79 @@ import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+import type { PreparedModelCatalogCandidate } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  isPreparedModelCatalogFull,
+  markPreparedModelCatalogFull,
+} from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelCatalogInventory } from "./prepared-model-runtime.types.js";
+
+/** Bind projected inventory, readiness and authentication in one publication. */
+export function createPreparedModelCatalogPublication(params: {
+  project: (
+    inventory: PreparedModelCatalogInventory,
+    configuredRuntimeModels: PreparedModelCatalogCandidate["configuredRuntimeModels"],
+  ) => ModelCatalogSnapshot;
+  setCatalogAuth: (catalog: ModelCatalogSnapshot, auth: PreparedModelCatalogAuth) => void;
+  currentAuth: PreparedModelCatalogAuth;
+  eligibleProviders: readonly string[];
+}) {
+  return (
+    nextInventory: PreparedModelCatalogInventory,
+    configuredRuntimeModels: PreparedModelCatalogCandidate["configuredRuntimeModels"],
+    acquiredNative: boolean,
+  ): PreparedModelCatalogCandidate & { catalog: ModelCatalogSnapshot } => {
+    const catalog = params.project(nextInventory, configuredRuntimeModels);
+    params.setCatalogAuth(
+      catalog,
+      getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? params.currentAuth,
+    );
+    catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
+    if (
+      acquiredNative &&
+      params.eligibleProviders.every((provider) => nextInventory.providers.has(provider))
+    ) {
+      markPreparedModelCatalogFull(catalog);
+    }
+    return {
+      catalog,
+      inventory: nextInventory,
+      configuredRuntimeModels,
+      nativeCatalogAcquired: acquiredNative,
+    };
+  };
+}
+
+/** Merge each discovery owner's result with the currently published counterpart. */
+export function mergePreparedCatalogPublicationInventory(
+  candidate: PreparedModelCatalogInventory,
+  previous: PreparedModelCatalogInventory | undefined,
+  source: "provider" | "native",
+  staticCatalog: ModelCatalogSnapshot,
+): PreparedModelCatalogInventory {
+  const providers = source === "provider" ? candidate : (previous ?? candidate);
+  const native = source === "native" ? candidate.catalog : previous?.catalog;
+  const apiCatalog = source === "native" && !previous ? staticCatalog : providers.catalog;
+  return {
+    ...providers,
+    catalog: native ? mergePreparedNativeCatalog(native, apiCatalog) : apiCatalog,
+  };
+}
+
+/** Native completion changes readiness without replacing visible provider facts. */
+export function retainPreparedNativeCatalogReadiness(
+  catalog: ModelCatalogSnapshot | undefined,
+  baseline: ModelCatalogSnapshot | undefined,
+): ModelCatalogSnapshot | undefined {
+  if (!catalog || !baseline) {
+    return catalog;
+  }
+  baseline.authoritative = catalog.authoritative;
+  if (isPreparedModelCatalogFull(catalog)) {
+    markPreparedModelCatalogFull(baseline);
+  }
+  return retainPreparedModelCatalogPublication(catalog, baseline);
+}
 
 function catalogPublicationContent(catalog: ModelCatalogSnapshot) {
   const { pendingProviders: _pending, refreshFailed: _failed, ...inventory } = catalog;

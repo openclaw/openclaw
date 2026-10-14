@@ -31,6 +31,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
+  cliCompatibilityRefresh?: LoadPreparedModelCatalogParams["cliCompatibilityRefresh"];
   providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
@@ -41,6 +42,7 @@ type LoadGatewayModelCatalogParams = {
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
+  cliCompatibilityRefresh?: LoadPreparedModelCatalogParams["cliCompatibilityRefresh"];
   providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 };
@@ -68,6 +70,9 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     readOnly: params?.readOnly !== false,
     ...(params?.refreshFullCatalog !== undefined
       ? { refreshFullCatalog: params.refreshFullCatalog }
+      : {}),
+    ...(params?.cliCompatibilityRefresh
+      ? { cliCompatibilityRefresh: params.cliCompatibilityRefresh }
       : {}),
     ...(params?.providerDiscoveryProviderIds
       ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }

@@ -25,6 +25,7 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import { captureModelsCliCompatibilityRefresh } from "./models-compatibility-refresh.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
@@ -42,7 +43,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
       let scope: ChatMetadataReadParams | undefined;
       let publicationScope: ChatMetadataReadParams | undefined;
+      let cliCompatibilityRefresh:
+        | ReturnType<typeof captureModelsCliCompatibilityRefresh>
+        | undefined;
+      let readerOwnsRelease = false;
       try {
+        cliCompatibilityRefresh = params.refreshCliCompatibility
+          ? captureModelsCliCompatibilityRefresh(options)
+          : undefined;
         const scoped = Boolean(params.sessionKey || params.authProfileId);
         const draftAccountSelection =
           !params.sessionKey && params.authProfileId
@@ -101,6 +109,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         }
         const preparedScope = publicationScope;
         const assertCurrent = () => {
+          cliCompatibilityRefresh?.assertCurrent();
           preparedScope.draftAccountSelection?.assertCurrent();
           preparedScope.assertCurrent?.();
         };
@@ -120,9 +129,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
             assertCurrent();
           }
         }
+        readerOwnsRelease = true;
         return {
           assertCurrent,
-          release: preparedScope.release,
+          release: () => {
+            try {
+              cliCompatibilityRefresh?.release();
+            } finally {
+              preparedScope.release?.();
+            }
+          },
           run: async (respond) => {
             const includeManualSelection = hasGatewayClientCap(
               client?.connect.caps,
@@ -145,6 +161,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 source: { kind: "gateway", context },
                 ...listParams(),
                 publicationScope: preparedScope,
+                cliCompatibilityRefresh,
               }));
             const runtimeOwnership =
               scope && params.view !== "provider-config"
@@ -204,9 +221,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
             }
           },
         };
-      } catch (error) {
-        (publicationScope ?? scope)?.release?.();
-        throw error;
+      } finally {
+        if (!readerOwnsRelease) {
+          try {
+            cliCompatibilityRefresh?.release();
+          } finally {
+            (publicationScope ?? scope)?.release?.();
+          }
+        }
       }
     },
     (error, { respond }) => {

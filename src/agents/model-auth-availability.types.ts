@@ -24,6 +24,10 @@ export type ModelAuthAvailabilityRef = {
   requiredProfileId?: string;
 };
 export type ModelAuthAvailabilityEvaluation = {
+  /** Local CLI preparation failure; separate from authentication and remote-node readiness. */
+  runtimeCompatibilityReason?: string;
+  /** Next request-driven automatic compatibility check, in epoch milliseconds. */
+  runtimeCompatibilityNextCheckAt?: number;
   requestedRuntimeId?: string;
   availability: ModelAuthAvailability;
   /** A route/account or runtime-owned result must not fall back to provider-only registry auth. */
