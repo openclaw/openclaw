@@ -49,6 +49,10 @@ describe("MCP HTTP stream timeouts", () => {
         offsets: [0],
         createListener: () =>
           createServer((request, response) => {
+            if (request.method !== "POST") {
+              response.writeHead(405).end();
+              return;
+            }
             void (async () => {
               let body = "";
               for await (const chunk of request) {
