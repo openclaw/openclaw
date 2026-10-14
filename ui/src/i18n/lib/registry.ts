@@ -25,6 +25,7 @@ const LAZY_LOCALE_REGISTRY = {
   nl: () => import("../locales/nl.ts"),
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
+  he: () => import("../locales/he.ts"),
 } satisfies Record<string, () => Promise<LocaleModule>>;
 type LazyLocale = keyof typeof LAZY_LOCALE_REGISTRY;
 export type Locale = typeof DEFAULT_LOCALE | LazyLocale;
