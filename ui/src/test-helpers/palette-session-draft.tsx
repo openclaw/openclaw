@@ -1,19 +1,19 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import type { SolidController } from "../../lit/solid-controller-host.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import type { SolidController } from "../lit/solid-controller-host.ts";
+import { ControllerHost } from "../lit/subscriptions-controller.ts";
+import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import {
   PaletteSessionAttachments,
   PaletteSessionAuxiliary,
   PaletteSessionControls,
   PaletteSessionRecovery,
-} from "./palette-session-draft-view.tsx";
-import { PaletteSessionDraft } from "./palette-session-draft.ts";
+} from "../pages/new-session/palette-session-draft-view.tsx";
+import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import { mountSolid } from "./mount-solid.ts";
+import { flush } from "./solid-settle.ts";
 
 export class PaletteDraftHost extends ControllerHost {
   readonly element = document.createElement("div");

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { mount } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { mount } from "./palette-session-draft.test-support.tsx";
 
 afterEach(() => {
   cleanupSolid();

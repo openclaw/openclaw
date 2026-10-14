@@ -8,10 +8,10 @@ import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { mount, PaletteDraftHost } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { mount, PaletteDraftHost } from "./palette-session-draft.test-support.tsx";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
 
 afterEach(() => {
