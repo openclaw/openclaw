@@ -257,6 +257,20 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return scopedWriteToken(record, keys);
   }
 
+  /** A cohort discovers all dependency scopes in one admission publication. */
+  function readSqliteDatabaseScopedWriteTokensForPath(
+    location: string,
+    scopes: readonly (string | readonly SqliteDatabaseWriteScope[])[],
+  ): string[] | undefined {
+    const record = owner.pathAdmission(location);
+    if (!record || isRetired(record)) {
+      return undefined;
+    }
+    const groups = scopes.map(normalizedWriteScopes);
+    ensureWriteScopes(record, groups.flat());
+    return groups.map((keys) => scopedWriteToken(record, keys));
+  }
+
   /** Capture the exact post-commit token before any fallible publication executes. */
   function readSqliteDatabasePendingScopedWriteToken(
     database: DatabaseSync,
@@ -346,6 +360,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     withoutSqliteDatabaseWriteScope,
     readSqliteDatabaseScopedWriteToken,
     readSqliteDatabaseScopedWriteTokenForPath,
+    readSqliteDatabaseScopedWriteTokensForPath,
     readSqliteDatabasePendingScopedWriteToken,
     readSqliteDatabaseWriteTokenForPath,
     readSqliteDatabasePendingWriteToken,
