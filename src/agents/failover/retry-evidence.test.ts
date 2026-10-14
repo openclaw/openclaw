@@ -53,6 +53,10 @@ describe("classifyRateLimitWindow", () => {
       "429 Request too large for mock-1 in organization org-example on tokens per min (TPM).",
       false,
     ],
+    [
+      "429 Rate limit reached for mock-1 in organization org-example on requests per minute (RPM): Limit 30, Used 30, Requested 100. Please try again in 2s. See the tokens per minute (TPM) guidance for details.",
+      false,
+    ],
     ["429 Rate limit reached on tokens per minute (TPM).", false],
   ])("distinguishes exhausted organization TPM from request throttles: %s", (message, expected) => {
     expect(hasOrganizationTpmRateLimitEvidence(message)).toBe(expected);

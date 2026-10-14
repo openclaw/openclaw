@@ -43,6 +43,7 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
+  isFinalFallbackAttempt?: boolean,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -50,6 +51,7 @@ function createController(
         runId: "run:failover-retry-controller-test",
         abortSignal,
         onRetryWait,
+        isFinalFallbackAttempt,
       } as ControllerInput["runInput"]["runParams"],
       globalLane: "test",
       agentDir: "/tmp/openclaw-failover-retry-controller-test",
@@ -224,14 +226,21 @@ describe("createEmbeddedRunFailoverRetryController", () => {
   });
 
   it.each([
-    [true, true, false],
-    [false, true, true],
-    [true, false, true],
+    [true, true, false, false],
+    [false, true, false, true],
+    [true, false, false, true],
+    [true, true, true, true],
   ])(
-    "handles organization TPM exhaustion (fallback=%s, replaySafe=%s)",
-    async (fallback, replaySafe, retries) => {
+    "handles organization TPM exhaustion (fallback=%s, replaySafe=%s, final=%s)",
+    async (fallback, replaySafe, isFinal, retries) => {
       const advanceAuthProfile = vi.fn(async () => true);
-      const controller = createController(advanceAuthProfile, fallback);
+      const controller = createController(
+        advanceAuthProfile,
+        fallback,
+        undefined,
+        undefined,
+        isFinal,
+      );
       const message =
         "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 1s.";
       await expect(

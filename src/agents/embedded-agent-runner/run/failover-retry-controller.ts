@@ -336,6 +336,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       if (
         rateLimit &&
         fallbackConfigured &&
+        params.isFinalFallbackAttempt !== true &&
         retry.failoverEligible !== false &&
         hasOrganizationTpmRateLimitEvidence(retry.message)
       ) {
