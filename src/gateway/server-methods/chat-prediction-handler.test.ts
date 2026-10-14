@@ -21,6 +21,7 @@ import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.j
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
+// mock-isolation: Exercise real RPC and persistence while keeping model dispatch and credentials outside this fixture.
 vi.mock("../composer-prediction-completion.js", () => ({ completeComposerPrediction: complete }));
 
 beforeEach(() => complete.mockReset().mockResolvedValue("What should I try next?"));
@@ -115,7 +116,10 @@ describe("registered chat.predict", () => {
       expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
       f.cfg.gateway!.controlUi!.experimental!.composerPredictions!.enabled = true;
       expect(await request(f.context, f.client, "old-run")).toMatchObject([true, { text: null }]);
-      await patchSessionEntryCore(f.scope, { status: undefined, lifecycleRunId: "successor" });
+      await patchSessionEntryCore(f.scope, () => ({
+        status: undefined,
+        lifecycleRunId: "successor",
+      }));
       expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
       expect(complete).not.toHaveBeenCalled();
     });
@@ -164,11 +168,11 @@ describe("registered chat.predict", () => {
       await withPredictionTest(async () => {
         const f = await fixture();
         const runId = "completed";
-        await patchSessionEntryCore(f.scope, {
+        await patchSessionEntryCore(f.scope, () => ({
           status: undefined,
           lastRunId: "previous",
           lifecycleRunId: runId,
-        });
+        }));
         const registration = registerChatAbortController({
           chatAbortControllers: f.context.chatAbortControllers,
           runId,
@@ -185,11 +189,11 @@ describe("registered chat.predict", () => {
           persistGatewaySessionLifecycleEventForEvent: async () => {
             writeEntered.resolve();
             await releaseWrite.promise;
-            await patchSessionEntryCore(f.scope, {
+            await patchSessionEntryCore(f.scope, () => ({
               status: "done",
               lastRunId: runId,
               lifecycleRunId: undefined,
-            });
+            }));
           },
           trackTrackedRunTerminalPersistence: ({ persistence }) => {
             // Attach the event handler's exact write to its real run registration.
@@ -275,7 +279,7 @@ describe("registered chat.predict", () => {
       expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);
       f.cfg.gateway!.controlUi!.experimental!.composerPredictions!.enabled = true;
       complete.mockImplementationOnce(async () => {
-        await patchSessionEntryCore(f.scope, { lastRunId: "new-completed" });
+        await patchSessionEntryCore(f.scope, () => ({ lastRunId: "new-completed" }));
         return "stale suggestion";
       });
       expect(await request(f.context, f.client)).toMatchObject([true, { text: null }]);

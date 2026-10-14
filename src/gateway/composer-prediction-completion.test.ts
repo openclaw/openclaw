@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeComposerPrediction } from "./composer-prediction-completion.js";
 
 const { completion, route } = vi.hoisted(() => ({ completion: vi.fn(), route: vi.fn() }));
+// mock-isolation: Model-selection tests must not initialize inference runtimes or credential owners.
 vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion: completion }));
+// mock-isolation: Fixture routes must not discover real CLI backends or process-wide model auth.
 vi.mock("../agents/isolated-completion-route.js", () => ({
   resolveIsolatedCompletionProvider: (selection: {
     provider: string;
