@@ -406,7 +406,8 @@ it.each([
 
 it("leaves the run ledger unchanged while the activation Doctor child is pending", async () => {
   const { root, env } = await createDoctorFixture();
-  vi.useFakeTimers();
+  // Ledger receipts still need real worker scheduling and monotonic clocks.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();

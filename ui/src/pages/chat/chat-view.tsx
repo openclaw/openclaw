@@ -500,8 +500,3 @@ function ChatContent(input: { props: ChatProps }) {
     </section>
   );
 }
-
-/** Remaining Lit hosts share the native view's retained root. */
-export function renderChat(props: ChatProps, application?: ApplicationContext) {
-  return solidContent(ChatView, { props, application });
-}

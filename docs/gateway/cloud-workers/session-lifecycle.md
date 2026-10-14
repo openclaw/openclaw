@@ -124,6 +124,8 @@ Each recovery attempt binds the current session store once and keeps that source
 
 ## Move a session
 
+Right-click an eligible session in the sidebar or Sessions page, or open its chat-header menu. Choose **Move to cloud…** for an idle local workspace or **Move session…** for an active worker. While a completed worker reply is still saving its workspace, ordinary Move is temporarily disabled with **Finalizing worker workspace**; it becomes available after settlement. The explicit, destructive offline-device recovery described below remains separate.
+
 To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. An operator with `operator.write` can select the Gateway or an eligible paired device; selecting a configured cloud profile requires `operator.admin`. Profiles may also offer operating systems and machine classes, with the machine list filtered to the selected system. Moving to the current profile with a different effective operating system or class replaces its worker; it is not an in-place resize, and native size overrides may take precedence over classes. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including operating-system and machine overrides, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
 
 An active paired-device placement stays `active` when its runner disconnects.
@@ -210,6 +212,8 @@ openclaw gateway call sessions.move \
   --timeout 1500000 \
   --params '{"key":"agent:main:big-refactor","expected":{"generation":5,"environmentId":"worker:source","ownerEpoch":2},"target":{"kind":"gateway"}}'
 ```
+
+A failed Move projects its original request facts in `placementMove.retry`: `expected`, `target`, and `abandonSource: true` when the original decision abandoned its source. For a failed move still in `draining`, retry by adding the session `key` and optional `agentId` to that descriptor. Do not substitute the draining placement's newer generation or choose a different target for the outstanding Move. The descriptor grants no authority: the Gateway still validates session access, the exact source, and current policy. Recovery may finish before the retry arrives; refresh the placement after a refusal.
 
 Worker targets use `{"kind":"profile","profileId":"aws","os":"linux","machineClass":"tiny"}` or `{"kind":"device","deviceId":"paired-device-id"}`. Omit `os` or `machineClass` to use the corresponding profile default. Moving to the same profile with a different operating system or class replaces the worker. A stale source is rejected rather than moving a newer placement. Successful results end in `local` for the Gateway target or `active` for a worker target.
 

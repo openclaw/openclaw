@@ -90,6 +90,7 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  deviceFolderNodeIds?: ReadonlySet<string>;
   workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
@@ -212,6 +213,9 @@ export function createKnownNodeCatalog(params: {
       sessionHost: live
         ? params.sessionHostNodeIds?.has(nodeId) === true
         : nodePairing?.sessionHost === true,
+      ...(live && params.deviceFolderNodeIds?.has(nodeId)
+        ? { workerHost: { deviceFolders: true as const } }
+        : {}),
       ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
       ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
       ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),

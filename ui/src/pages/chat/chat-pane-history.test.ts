@@ -6,8 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import "./chat-pane.tsx";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import "./chat-pane.tsx";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -25,7 +25,8 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -413,7 +414,7 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("does not bootstrap older history when the viewport starts short or grows", async () => {
+  it("fills a visible history tail once the viewport can fit it", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -453,10 +454,11 @@ describe("chat pane native history pagination", () => {
       pane.syncHistoryObserver();
       clientHeight = 600;
       pane.syncHistoryObserver();
-      await Promise.resolve();
-      expect(request).not.toHaveBeenCalled();
-      expect(observe).not.toHaveBeenCalled();
-      expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4]);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(observe).toHaveBeenCalledWith(sentinel);
+      await vi.waitFor(() =>
+        expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

@@ -342,6 +342,13 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
+Prompt-cache history warnings identify the first changed message and bounded
+field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
+They report no message content, argument values, or signature bytes. Unknown
+extension keys appear as `other`; blocks beyond the retained diagnostic prefix
+appear as `content[remaining]`. A history warning identifies changed model
+context; it does not alone prove why a provider's cache-read tokens dropped.
+
 When debugging provider calls, use targeted environment flags instead of raising
 all logs to `debug`:
 

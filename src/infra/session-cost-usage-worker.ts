@@ -6,11 +6,7 @@ import {
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  getSessionKysely,
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -108,9 +104,11 @@ export async function executeUsageCostWorker(
     return reply.value as UsageCostWorkerHostEffects[Kind]["output"];
   };
   const target = (agentId: string, storePath: string) => {
-    const options = toDatabaseOptions(resolveSqliteReadScope({ agentId, storePath, env }));
+    const binding = input.stores.find(
+      (entry) => entry.agentId === agentId && entry.storePath === storePath,
+    )?.database;
     const owned = input.databases.find(
-      (entry) => entry.agentId === options.agentId && entry.path === options.path,
+      (entry) => entry.agentId === binding?.agentId && entry.path === binding.path,
     );
     if (!owned) {
       throw new Error("Usage worker requested an unowned database");
@@ -508,8 +506,15 @@ export async function executeUsageCostWorker(
     operation.maxFiles > 0
       ? Math.floor(operation.maxFiles)
       : undefined;
+  // Yield between whole-file publications so other agents do not spend their
+  // worker timeout queued behind a large batch. One large transcript can exceed this quantum.
+  const batchDeadline = maxFiles ? performance.now() + 10_000 : Infinity;
+  let completedFiles = 0;
   let changed = pruned;
-  for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
+  for (const { file, row, envelope, rebuild } of stale) {
+    if (completedFiles > 0 && (completedFiles === maxFiles || performance.now() >= batchDeadline)) {
+      break;
+    }
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
@@ -607,14 +612,21 @@ export async function executeUsageCostWorker(
       });
     }
     changed = true;
+    completedFiles++;
   }
-  if (!maxFiles || stale.length <= maxFiles) {
+  if (stale.length === completedFiles) {
     return { kind: "refresh", changed };
   }
+  const remaining = stale.slice(completedFiles).map(({ file }) => file);
+  const remainingPaths = new Set(remaining.map((file) => file.filePath));
   return {
     kind: "refresh",
     changed,
-    remainingFiles: stale.slice(maxFiles).map(({ file }) => ({
+    // Keep every requested alias pending even when scanning deduplicated physical keys.
+    remainingFiles: (operation.sessionFiles
+      ? requestedFiles.filter((file) => remainingPaths.has(file.filePath))
+      : remaining
+    ).map((file) => ({
       sessionFile: file.sourcePath,
       rollupId: file.filePath,
     })),

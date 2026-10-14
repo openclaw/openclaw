@@ -58,7 +58,7 @@ export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, r
 }
 
 // Deferred readers must execute their first SELECT to establish the native snapshot.
-const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
+const singleSessionParticipantQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
       "session_key",

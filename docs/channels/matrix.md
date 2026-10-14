@@ -175,6 +175,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 - `groups`: per-room policy map. Session identity uses the stable room ID after resolution. (`rooms` is a legacy alias.)
+  Room tool and mention policies use room IDs resolved from configured keys; inbound display names never select another room's policy.
   - `groups.<room>.account`: restrict one inherited room entry to a specific account.
   - `groups.<room>.enabled`: per-room toggle. When `false`, the room is ignored as if it were not in the map.
   - `groups.<room>.requireMention`: per-room override of the channel-level mention requirement.

@@ -82,3 +82,25 @@ GitHub publication options read independent account status and publication recei
 - `sessions.create.titleSource` optionally supplies up to 1,000 characters of the submitted topic when the first turn will be sent separately, such as after cloud dispatch. On a new interactive session without an initial turn, it starts ordinary background title generation without delaying creation or starting a task. Existing names keep precedence; incognito sessions and adoption of an existing session ignore this input. Completion emits `sessions.changed` with reason `chat.title`.
 
 - `sessions.create.surface` optionally accepts `"plugin-dock"` for an operator-created conversation owned by a plugin dock. It persists the immutable `createdSurface` marker; `createdVia`, the authenticated human creator, sharing, and sandbox policies retain their ordinary operator behavior. Omitting it keeps the existing creation behavior. Trusted spawn and other internal creation contracts cannot be replaced by this option. Adopting an existing session preserves its original creation surface and provenance.
+
+### Existing folders on paired devices
+
+`sessions.create` accepts `deviceFolder: { deviceId, path }` with `operator.write`.
+The selected device must be connected as a session host and advertise
+`workerHost.deviceFolders: true`. The node validates that the existing directory
+satisfies the node-local `nodeHost.workerRuns.folders` policy: unset allows any
+existing directory, a non-empty list restricts it to those roots, and `[]` disables
+this capability. It resolves symlinks locally and rejects filesystem roots and
+private-worker-storage overlap before returning the canonical path or creating a
+session row.
+The returned entry and session list/describe rows retain that same `deviceFolder`.
+
+This mode works in the user's directory in place: it does not create a managed
+worktree, synchronize files to the Gateway, or delete the folder when the session
+is removed. It cannot be combined with `worktree` (including fork-with-worktree),
+`worktreeSource`, `worktreeBaseRef`, `worktreeName`, `cwd`, `projectId`,
+`projectGitUrl`, `repository`, `execNode`, or `catalogId`. An existing keyed session
+can only be reused with its original device and canonical folder. A required
+cloud-worker profile cannot be combined with a device folder. If the device is
+offline or its folder consent changes, reconnect or restore consent; no local
+fallback is permitted.

@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import type {
   OpenClawStateDatabaseOptions,
@@ -19,7 +21,12 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   if (behavior.artifactPreservingReadOnly) {
     return (
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        ({ db }) => {
+          if (isPostgresSqlConnection(db)) {
+            requireNativeDatabaseFile("postgres", "repair");
+          }
+          return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
+        },
         { ...options, path: pathname },
       ) ?? []
     );

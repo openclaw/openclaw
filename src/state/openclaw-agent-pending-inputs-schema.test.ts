@@ -157,10 +157,9 @@ describe("pending input additive schema", () => {
       const metadata = old.prepare("SELECT * FROM schema_meta").all();
       const original = old.prepare("SELECT message_json FROM session_pending_inputs").get();
       old.close();
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "interrupted", message: receipt!.message }],
-      });
+      await expect(listSessionPendingInputs(scope)).rejects.toThrow(
+        "requires writable startup admission before session reads",
+      );
       if (path === "open") {
         openOpenClawAgentDatabase(options);
         await closeOpenClawAgentDatabasesAsync();
@@ -174,6 +173,10 @@ describe("pending input additive schema", () => {
         }
         current.close();
       }
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted", message: receipt!.message }],
+      });
       const reopened = new DatabaseSync(filename, { readOnly: true });
       try {
         expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);

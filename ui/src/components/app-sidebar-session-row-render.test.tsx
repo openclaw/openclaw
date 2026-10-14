@@ -58,14 +58,14 @@ const emptySnapshot: SidebarSnapshotModel = {
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };
 
-function createHost() {
+function createHost(mode: "chip" | "roster" = "roster") {
   const context = createContext(
     createGateway(createTestGatewayClient(async () => ({}))),
     createSessions("main", []),
   );
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
-  props.sidebarAgentsMode = "roster";
+  props.sidebarAgentsMode = mode;
   const host = new AppSidebarOwner(props, context, props);
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
@@ -201,6 +201,17 @@ it("keeps cached session rows while the live roster settles", async () => {
   for (const rows of samples) {
     expect(rows).toEqual([key]);
   }
+});
+
+it("keeps the unread badge on an idle child with an icon", () => {
+  const { host, container } = createHost("chip");
+  const session = {
+    ...projectSidebarSession({ key: "agent:main:child", icon: "🦞", unread: true, status: "done" }),
+    isChild: true,
+  };
+  mountSolid(() => renderRecentSession({ host, session }), { container });
+  expect(container.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+  expect(container.querySelector('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
 
 it("materializes the archive hint on hover without changing the action name", () => {
