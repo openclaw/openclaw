@@ -39,7 +39,7 @@ describe("MCP HTTP stream timeouts", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["headers", "body"] as const)(
+  it.for(["headers", "body"] as const)(
     "completes a tool call silent beyond the default %s timeout",
     async (stage, { signal }) => {
       const toolReceived = createDeferred<void>();
