@@ -616,7 +616,9 @@ describe("runPreparedReply media-only handling", () => {
                   );
                   scope = "revoked";
                 } else {
-                  scope = (await tool.execute("list", { action: "list" })).details.scope;
+                  const { details } = await tool.execute("list", { action: "list" });
+                  expect(details).toMatchObject({ scope: expect.any(String) });
+                  scope = (details as { scope: string }).scope;
                 }
               },
             );
