@@ -46,6 +46,17 @@ describe("web readability extractor", () => {
     expect(extracted.title).toBe("Example Article");
   });
 
+  it("keeps block boundaries in text mode", async () => {
+    const paragraph = (n: number) =>
+      `<p>Para ${n}. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>`;
+    const extracted = await extractArticle(
+      `<!doctype html><html><head><title>Results</title></head><body><article><h1>Heading</h1>${paragraph(0)}${paragraph(1)}<ul><li>alpha</li><li>beta</li></ul>${paragraph(2)}</article></body></html>`,
+    );
+    expect(extracted.text).toMatch(/^Heading\n+Para 0\./);
+    expect(extracted.text).toMatch(/planning cycle\.\n+Para 1\./);
+    expect(extracted.text).toMatch(/planning cycle\.\n+alpha\n+beta\n+Para 2\./);
+  });
+
   it("excludes double-escaped script prose in text mode", async () => {
     const extracted =
       await extractArticle(`<!doctype html><html><head><title>Cloud Costs</title></head><body><article>
