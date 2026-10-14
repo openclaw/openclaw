@@ -1007,8 +1007,8 @@ extension PostUpdateController {
         }
         // App-owned children were seeded by this launch. Services can still pin an
         // older concrete build even when runtime/current already points at this app.
-        return manager.hasAppHostedGateway || GatewayLaunchAgentManager.installedServiceCLI()?.prefix ==
-            GatewayLaunchAgentManager.concreteServicePrefix(runtime.cliCommand)
+        return manager.hasAppHostedGateway ||
+            GatewayLaunchAgentManager.installedServiceCLI()?.matchesBundledRuntime(runtime) == true
     }
 
     static func captureRuntimeContext(

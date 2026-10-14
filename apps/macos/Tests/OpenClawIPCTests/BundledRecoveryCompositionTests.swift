@@ -246,8 +246,9 @@ struct BundledRecoveryCompositionTests {
         try await AppKitTestSupport.startApplication()
         #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == nil)
         let manager = GatewayProcessManager.shared
-        AppStateStore.shared.connectionMode = .local
-        manager.setActive(true, source: .request)
+        let state = AppStateStore.shared
+        state.connectionMode = .local
+        await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused)
         #expect(PostUpdateController.shared.startIfNeeded())
         await manager.waitForStartupAttempt()
         let serviceReady = switch manager.status {
