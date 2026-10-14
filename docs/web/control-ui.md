@@ -158,6 +158,13 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
+Failed replies show **Try again** at the right of the heading. A compact
+**Copy error** icon beside the title appears on hover or keyboard focus, and
+stays visible on touch devices. **Details** appears only when the diagnostic
+contains more than the visible summary. To change models, use the model picker
+in the composer; retrying continues from the existing conversation without
+replaying the original request.
+
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
 with their keyboard shortcuts. Open **Subagents** there or from the side-panel

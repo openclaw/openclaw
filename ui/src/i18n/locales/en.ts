@@ -2812,7 +2812,6 @@ export const en: TranslationMap & {
       failedTitle: "Unable to finish this reply",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
-      changeModel: "Change model",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
