@@ -263,7 +263,7 @@ suite.define(() => {
             return backdrop.evaluate((element) => {
               const canvas = document.querySelector("openclaw-app")!.getBoundingClientRect();
               const scrim = element.getBoundingClientRect();
-              const corners = [
+              const corners: [number, number][] = [
                 [canvas.left + 1, canvas.top + 1],
                 [canvas.right - 1, canvas.top + 1],
                 [canvas.left + 1, canvas.bottom - 1],
