@@ -118,7 +118,9 @@ catalogSuite.define(() => {
     const commands: unknown[] = [];
     let rejectCatalogReplies = false;
     const rejected = new Set<string>();
-    const publish = async (id: string) => {
+    type PublicationPhase = "published" | "held" | "recovered";
+    let publication: { phase: PublicationPhase; frameStart: number; logStart: number } | undefined;
+    const publish = async (id: PublicationPhase) => {
       const args = [
         "config",
         "set",
@@ -127,6 +129,7 @@ catalogSuite.define(() => {
         "--strict-json",
         "--replace",
       ];
+      publication = { phase: id, frameStart: frames.length, logStart: owner.logs().length };
       const result = await owner.cli(args);
       commands.push({ args, ...result });
       expect(result.code, result.stderr).toBe(0);
@@ -237,17 +240,54 @@ catalogSuite.define(() => {
         },
       );
     } catch (error) {
+      const observed = publication ? frames.slice(publication.frameStart) : [];
+      const requests = new Set(
+        observed.flatMap(({ direction, frame }) =>
+          direction === "sent" && frame.method === "models.list" && typeof frame.id === "string"
+            ? [frame.id]
+            : [],
+        ),
+      );
+      const replies = observed.filter(
+        ({ direction, frame }) =>
+          direction === "received" && typeof frame.id === "string" && requests.has(frame.id),
+      );
+      const successfulReply = replies.findLast(({ frame }) => frame.ok === true);
+      const payload = successfulReply?.frame.payload;
+      const models =
+        payload &&
+        typeof payload === "object" &&
+        "models" in payload &&
+        Array.isArray(payload.models)
+          ? payload.models
+          : [];
       console.error("Automation catalog publication diagnostics", {
-        configEvents: frames.filter(({ frame }) => frame.event === "config.changed").length,
-        catalogRequests: catalogRequests.size,
-        catalogReplies: frames.filter(
-          ({ direction, frame }) =>
-            direction === "received" &&
-            typeof frame.id === "string" &&
-            catalogRequests.has(frame.id),
-        ).length,
+        phase: publication?.phase ?? null,
+        configEvents: observed.filter(({ frame }) => frame.event === "config.changed").length,
+        metadataEvents: observed.filter(({ frame }) => frame.event === "chat.metadata.changed")
+          .length,
+        catalogRequests: requests.size,
+        catalogSuccesses: replies.filter(({ frame }) => frame.ok === true).length,
+        catalogFailures: replies.filter(({ frame }) => frame.ok === false).length,
+        latestSuccessfulReplyHasExpectedModel: successfulReply
+          ? models.some(
+              (model: unknown) =>
+                model !== null &&
+                typeof model === "object" &&
+                "provider" in model &&
+                "id" in model &&
+                model.provider === "fixture" &&
+                model.id === publication?.phase,
+            )
+          : null,
+        latestReplyWasTransportFailure: replies.at(-1)?.transportFailure ?? null,
         publicationCommands: commands.length,
-        leaseVerificationFailed: owner.logs().includes("failed to verify plugin lifecycle lease"),
+        leaseVerificationFailed: publication
+          ? owner
+              .logs()
+              .slice(publication.logStart)
+              .includes("failed to verify plugin lifecycle lease")
+          : false,
       });
       throw error;
     } finally {
