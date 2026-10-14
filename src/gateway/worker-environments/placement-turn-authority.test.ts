@@ -634,7 +634,6 @@ it("retains original requester, transcript, and prompt cache facts while claim a
   const requesterOrigin = {
     sessionKey: "agent:research:whatsapp:group:requesters",
     senderId: "requester-bob",
-    memberRoleIds: ["reader"],
   };
   const binding = bindWorkerTurnOwner(
     store,
@@ -667,7 +666,7 @@ it("retains original requester, transcript, and prompt cache facts while claim a
   promptCacheContext.fastModeStartedAtMs = 456;
   promptCacheContext.fastModeAutoOnSeconds = 60;
   requesterOrigin.senderId = "replacement-alice";
-  requesterOrigin.memberRoleIds.push("administrator");
+  requesterOrigin.sessionKey = "agent:main:replacement";
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
@@ -681,10 +680,8 @@ it("retains original requester, transcript, and prompt cache facts while claim a
       expect(identity.requesterOrigin).toMatchObject({
         sessionKey: "agent:research:whatsapp:group:requesters",
         senderId: "requester-bob",
-        memberRoleIds: ["reader"],
       });
       expect(Object.isFrozen(identity.requesterOrigin)).toBe(true);
-      expect(Object.isFrozen(identity.requesterOrigin?.memberRoleIds)).toBe(true);
     });
     expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
       boundaryCount: 2,

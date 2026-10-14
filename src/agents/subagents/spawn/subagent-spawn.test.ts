@@ -396,6 +396,9 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result).toMatchObject({ status: "accepted", modelApplied: true });
     const queuedLaunch = requireRecord(firstRegisteredSubagentRun().queuedLaunch);
+    const persistedLaunchJson = JSON.stringify(queuedLaunch);
+    const persistedLaunch: unknown = JSON.parse(persistedLaunchJson);
+    expect(requireRecord(persistedLaunch).requesterRecovery).toEqual({});
     const queuedRequest = requireRecord(queuedLaunch.request);
     expect(queuedRequest).not.toHaveProperty("provider");
     expect(queuedRequest).not.toHaveProperty("model");

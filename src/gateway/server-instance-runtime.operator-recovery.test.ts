@@ -267,6 +267,18 @@ describe("typed restart recovery operator admission", () => {
     { source: "legacy claim", operator: false, requester: "absent", expected: "scope refusal" },
     { source: "matching requester", operator: true, requester: "matching", expected: "accepted" },
     {
+      source: "native queued requester",
+      operator: true,
+      requester: "matching",
+      expected: "accepted",
+    },
+    {
+      source: "native queued mismatched requester",
+      operator: true,
+      requester: "different",
+      expected: "identity refusal",
+    },
+    {
       source: "mismatched requester",
       operator: true,
       requester: "different",
@@ -280,8 +292,9 @@ describe("typed restart recovery operator admission", () => {
     },
   ] as const)(
     "applies recovery admission and the actual admin-method fence to $source",
-    async ({ operator, requester, expected }) => {
-      await withRecovery(async ({ target, context, entry, profileId }) => {
+    async ({ source, operator, requester, expected }) => {
+      await withRecovery(async (fixture) => {
+        const { target, context, entry, profileId } = fixture;
         if (requester !== "absent") {
           await replaceSessionEntry(target, {
             ...entry,
@@ -321,20 +334,44 @@ describe("typed restart recovery operator admission", () => {
               : [true, { runId: target.recoveryRunId, status: "ok" }, undefined],
           );
         });
-        const options = {
-          restartRecoveryOperatorTarget: operator ? target : undefined,
-          restartRecoveryRequesterTarget: requester !== "absent" ? target : undefined,
-        };
-        const result = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
-        if (expected === "accepted") {
-          await expect(result).resolves.toMatchObject({ status: "ok" });
-          expect(startTurn).toHaveBeenCalledOnce();
-        } else if (expected === "identity refusal") {
-          await expect(result).rejects.toThrow("requester has no matching operator authority");
-          expect(startTurn).not.toHaveBeenCalled();
-        } else {
-          await expect(result).rejects.toThrow("missing scope: operator.admin");
-          expect(startTurn).toHaveBeenCalledOnce();
+        const queued = source.startsWith("native queued");
+        const retained = queued
+          ? expectDefined(await fixture.restore(), "queued source authority")
+          : undefined;
+        const options = queued
+          ? {
+              operatorRunAuthority: retained?.authority,
+              agentToolCaller: {
+                agentId: "main",
+                sessionKey: target.sessionKey,
+                requesterOrigin: {
+                  sessionKey: target.sessionKey,
+                  operatorProfileId: requester === "matching" ? profileId : "another-requester",
+                },
+              },
+            }
+          : {
+              restartRecoveryOperatorTarget: operator ? target : undefined,
+              restartRecoveryRequesterTarget: requester !== "absent" ? target : undefined,
+            };
+        try {
+          const result = runtime.recovery.dispatchAgent(
+            recoveryRequest(target),
+            undefined,
+            options,
+          );
+          if (expected === "accepted") {
+            await expect(result).resolves.toMatchObject({ status: "ok" });
+            expect(startTurn).toHaveBeenCalledOnce();
+          } else if (expected === "identity refusal") {
+            await expect(result).rejects.toThrow("requester has no matching operator authority");
+            expect(startTurn).not.toHaveBeenCalled();
+          } else {
+            await expect(result).rejects.toThrow("missing scope: operator.admin");
+            expect(startTurn).toHaveBeenCalledOnce();
+          }
+        } finally {
+          retained?.release();
         }
       });
     },

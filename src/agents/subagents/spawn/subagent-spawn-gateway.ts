@@ -17,6 +17,7 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureRequesterOrigin } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -56,7 +57,18 @@ export function captureSubagentSpawnGatewayContext() {
   const operatorAuthority =
     resolveGatewayToolOperatorSelection().operatorAuthority ??
     gatewayScope?.client?.internal?.operatorRunAuthority;
-  return { gatewayContextResolver, operatorAuthority };
+  const requesterOrigin = gatewayCaller?.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: gatewayCaller.requesterOrigin })
+    : undefined;
+  const requester =
+    gatewayCaller && requesterOrigin
+      ? Object.freeze({
+          agentId: gatewayCaller.agentId,
+          sessionKey: gatewayCaller.sessionKey,
+          requesterOrigin,
+        })
+      : undefined;
+  return { gatewayContextResolver, operatorAuthority, requester };
 }
 
 async function dispatchSubagentGateway(
@@ -66,6 +78,7 @@ async function dispatchSubagentGateway(
     agentRunTracking?: "native_subagent";
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
+    requester?: ReturnType<typeof captureSubagentSpawnGatewayContext>["requester"];
   },
 ): Promise<{ response: SubagentGatewayResponse; registrationRequired: boolean }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
@@ -147,6 +160,15 @@ async function dispatchSubagentGateway(
               sessionSpawnContext,
             }
           : undefined;
+      const requester = workerIdentity
+        ? workerIdentity.requesterOrigin
+          ? {
+              agentId: workerIdentity.agentId,
+              sessionKey: workerIdentity.sessionKey,
+              requesterOrigin: workerIdentity.requesterOrigin,
+            }
+          : undefined
+        : options?.requester;
       return await dispatchGatewayMethodInProcess(
         request.method,
         requestParams,
@@ -154,6 +176,9 @@ async function dispatchSubagentGateway(
           {
             expectFinal: request.expectFinal,
             sessionMutationCommitGuard: assertDispatchCurrent,
+            ...(isChildRunLaunch && requester
+              ? { agentToolCaller: { ...requester, assertCurrent: assertDispatchCurrent } }
+              : {}),
             ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
             ...(gatewayContextResolver ? { resolveGatewayContext: gatewayContextResolver } : {}),
@@ -182,6 +207,9 @@ async function dispatchSubagentGateway(
         })
       : await dispatch();
     return { response, registrationRequired: true };
+  }
+  if (request.method === "agent" && options?.requester) {
+    throw new Error("Requester provenance requires trusted in-process Gateway dispatch.");
   }
   const dispatchAgentRequest = (timeoutMs?: number | null) => {
     request.assertDispatchCurrent?.();
@@ -270,16 +298,19 @@ export async function callSubagentGateway(
 
 export async function callNativeSubagentGateway(
   params: SubagentGatewayRequest,
-  authorization?: SubagentLaunchAuthorization,
-  gatewayContextResolver?: GatewayContextResolver,
-  preparedLaunch?: PreparedSessionRun,
+  options?: {
+    authorization?: SubagentLaunchAuthorization;
+    gatewayContextResolver?: GatewayContextResolver;
+    preparedLaunch?: PreparedSessionRun;
+    requester?: ReturnType<typeof captureSubagentSpawnGatewayContext>["requester"];
+  },
 ) {
-  // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
-  // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-  return await dispatchSubagentGateway(params, authorization, {
+  // Only direct dispatch carries host facts. Standalone calls without those facts
+  // retain the Gateway CLI's best-effort run tracking.
+  return await dispatchSubagentGateway(params, options?.authorization, {
+    ...options,
     agentRunTracking: "native_subagent",
-    gatewayContextResolver,
-    preparedLaunch,
+    requester: options?.requester,
   });
 }
 

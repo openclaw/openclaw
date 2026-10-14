@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
@@ -67,6 +74,60 @@ describe("reply requester authority", () => {
       expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
       expect(cancel).not.toHaveBeenCalled();
       expect(snapshot.fingerprint()).toBe(operation.toolAuthorityFingerprint);
+    },
+  );
+
+  it.each(["scheduled", "legacy-conversation"] as const)(
+    "evaluates a fresh request without the incumbent's %s shortcut",
+    async (shortcut) => {
+      const plugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({ id: "telegram" }),
+        groups: {
+          resolveToolPolicy: ({ cfg, groupId }) =>
+            groupId ? cfg.channels?.telegram?.groups?.[groupId]?.tools : undefined,
+        },
+      };
+      await withPluginRuntimeRegistryScope(
+        createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
+        async () => {
+          const run = createQueueTestRun({ prompt: "admitted work" });
+          if (shortcut === "scheduled") {
+            run.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
+          } else {
+            run.run.conversationToolPolicy = { deny: ["write"] };
+          }
+          const requesterOrigin = {
+            sessionKey: "agent:agent:telegram:group:requester-group",
+            messageProvider: "telegram",
+            groupId: "requester-group",
+            senderId: "alice",
+          };
+          const deniedConfig: OpenClawConfig =
+            shortcut === "scheduled"
+              ? { tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } } }
+              : {
+                  channels: {
+                    telegram: { groups: { "requester-group": { tools: { deny: ["exec"] } } } },
+                  },
+                };
+          const snapshot = prepareReplyToolAuthority(run);
+          try {
+            const original = await snapshot.fingerprintAsync(run.run);
+            const allowed = await snapshot.projectRequesterAsync(
+              { requesterOrigin, config: {} },
+              run.run,
+            );
+            const denied = await snapshot.projectRequesterAsync(
+              { requesterOrigin, config: deniedConfig },
+              run.run,
+            );
+            expect(denied).not.toBe(allowed);
+            expect(snapshot.fingerprint(run.run)).toBe(original);
+          } finally {
+            snapshot.close();
+          }
+        },
+      );
     },
   );
 

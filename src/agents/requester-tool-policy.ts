@@ -257,8 +257,8 @@ function resolveDelegatedPolicy(
       store: subagentStore,
     });
     if (ownEnvelope) {
-      // Senderless child and trusted-operator resumes keep the spawn-time requester snapshot.
-      // Later toolsBySender edits are non-retroactive; current non-sender restrictions layer later.
+      // The child keeps its persisted execution ceiling. An origin-bearing
+      // admission also resolves current requester permissions below.
       const executionPolicy = resolveDelegatedExecutionToolPolicy({
         config: params.config,
         ...ownEnvelope,
@@ -342,7 +342,7 @@ export function hasVerifiedRequesterCompletionHandoff(
   return delegatedPolicy.delegated && delegatedPolicy.source === "completion-handoff";
 }
 
-/** Resolve sender/group policy or a verified inherited projection, never both. */
+/** Resolve current requester permissions alongside any persisted child execution envelope. */
 export function resolveRequesterToolPolicies(
   params: RequesterToolPolicyParams,
 ): RequesterToolPolicyResolution {
@@ -363,41 +363,51 @@ export function resolveRequesterToolPolicies(
           store: subagentStore,
         })
       : undefined;
-  if (delegatedPolicy.delegated) {
-    // The persisted projection already includes both global and group sender policy.
-    // Re-resolving either without external identity would incorrectly select its wildcard.
-    return {
-      delegated: true,
-      requesterPolicySource: delegatedPolicy.source,
-      subagentPolicy,
-      inheritedToolPolicy: delegatedPolicy.policy,
-      inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
-      delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
-      inheritedToolPolicySource: delegatedPolicy.inheritedToolPolicySource,
-      subagentStore,
-    };
-  }
-  // An internal continuation keeps its originating requester, while the target
-  // agent still owns its own profile and grants. Resolve this only after the
-  // existing child-envelope path; origin is not a new external ingress.
+  // Preserved origin supplies requester facts for a new admission without
+  // replacing the child's persisted ceiling or its explicit delegation grant.
+  const resolveCurrentRequesterPolicy =
+    !delegatedPolicy.delegated ||
+    (delegatedPolicy.source === "persisted-child" && params.requesterOrigin !== undefined);
   const requester = params.requesterOrigin ?? params;
   const senderPolicyMode = params.senderPolicyMode ?? "always";
   const shouldResolveSenderPolicy =
     senderPolicyMode === "always" ||
     (senderPolicyMode === "when-sender-id" && Boolean(requester.senderId));
-  const groupPolicy = resolveRequesterConversationToolPolicy(params);
-  const senderPolicy = shouldResolveSenderPolicy
-    ? resolveSenderToolPolicy({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: requester.sessionKey,
-        messageProvider: requester.messageProvider,
-        senderId: requester.senderId,
-        senderName: requester.senderName,
-        senderUsername: requester.senderUsername,
-        senderE164: requester.senderE164,
-      })
+  const groupPolicy = resolveCurrentRequesterPolicy
+    ? resolveRequesterConversationToolPolicy(params)
     : undefined;
+  const senderPolicy =
+    resolveCurrentRequesterPolicy && shouldResolveSenderPolicy
+      ? resolveSenderToolPolicy({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: requester.sessionKey,
+          messageProvider: requester.messageProvider,
+          senderId: requester.senderId,
+          senderName: requester.senderName,
+          senderUsername: requester.senderUsername,
+          senderE164: requester.senderE164,
+        })
+      : undefined;
+  if (delegatedPolicy.delegated) {
+    // Senderless resumes and verified completion handoffs retain their snapshot;
+    // resolving them without requester identity would select an unrelated wildcard.
+    return {
+      delegated: true,
+      requesterPolicySource: delegatedPolicy.source,
+      groupPolicy,
+      senderPolicy,
+      subagentPolicy,
+      inheritedToolPolicy: delegatedPolicy.policy,
+      inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
+      delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
+      inheritedToolPolicySource:
+        toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
+          ? "sender"
+          : delegatedPolicy.inheritedToolPolicySource,
+      subagentStore,
+    };
+  }
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
     cfg: params.config,
     store: subagentStore,

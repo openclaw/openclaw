@@ -93,6 +93,22 @@ export function captureReplyMessageInjectionTarget(
           return undefined;
         }
       },
+      projectRequesterToolAuthorityFingerprint: (requester) => {
+        try {
+          return toolAuthority?.projectRequester?.(requester);
+        } catch {
+          toolAuthority?.assertActive();
+          return undefined;
+        }
+      },
+      projectRequesterToolAuthorityFingerprintAsync: async (requester) => {
+        try {
+          return await toolAuthority?.projectRequesterAsync?.(requester);
+        } catch {
+          toolAuthority?.assertActive();
+          return undefined;
+        }
+      },
       resolve: (params) =>
         getSessionControllerEntryForOperation(operation).attachment === attachment &&
         getAttachedBackend(operation) === backend
@@ -166,7 +182,7 @@ function resolveReplyBackendMessageInjection(
 function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
   options?: ReplyBackendQueueMessageOptions;
-  requesterOrigin?: ReplyMessageInjectionOptions["requesterOrigin"];
+  requesterToolAuthority?: ReplyMessageInjectionOptions["requesterToolAuthority"];
   inboundAudio?: boolean;
   personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
@@ -198,16 +214,27 @@ function resolveReplyMessageInjectionRejection(params: {
   }
   const toolAuthority =
     attachment && "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
-  if (params.requesterOrigin) {
+  if (params.requesterToolAuthority) {
     if (backend?.messageInjectionV2?.version !== 2) {
       return { reason: "guarded_injection_unsupported" };
     }
     try {
-      if (!toolAuthority?.acceptsRequesterOrigin(params.requesterOrigin)) {
+      if (!toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)) {
         return { reason: "requester_origin_mismatch" };
       }
     } catch {
       return { reason: "requester_origin_mismatch" };
+    }
+    // Fresh delegation cannot borrow a pending-answer shortcut from the incumbent.
+    const projected = normalizeOptionalString(params.options?.toolAuthorityFingerprint);
+    if (
+      !projected ||
+      projected !==
+        normalizeOptionalString(
+          backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
+        )
+    ) {
+      return { reason: "tool_authority_mismatch" };
     }
   }
   const canInject = () => {
@@ -221,7 +248,10 @@ function resolveReplyMessageInjectionRejection(params: {
       return false;
     }
     toolAuthority?.assertActive();
-    if (params.requesterOrigin && !toolAuthority?.acceptsRequesterOrigin(params.requesterOrigin)) {
+    if (
+      params.requesterToolAuthority &&
+      !toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)
+    ) {
       return false;
     }
     return true;
@@ -391,7 +421,7 @@ export function canInjectReplyMessageTarget(
     const owner = target[replyMessageInjectionTargetOwner];
     const {
       toolAuthorityOverlay,
-      requesterOrigin,
+      requesterToolAuthority,
       toolAuthorityPreparation,
       personalToolParticipant,
       assertCurrent,
@@ -407,14 +437,16 @@ export function canInjectReplyMessageTarget(
       owner.resolve({
         options: {
           ...backendOptions,
-          ...(toolAuthorityOverlay
+          ...(requesterToolAuthority || toolAuthorityOverlay
             ? {
-                toolAuthorityFingerprint:
-                  owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
+                toolAuthorityFingerprint: requesterToolAuthority
+                  ? owner.projectRequesterToolAuthorityFingerprint(requesterToolAuthority)
+                  : toolAuthorityOverlay &&
+                    owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
               }
             : {}),
         },
-        requesterOrigin,
+        requesterToolAuthority,
         personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
         inboundAudio,
         allowPendingUserInputAnswer,
@@ -468,7 +500,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   const {
     canAdmit,
     toolAuthorityOverlay,
-    requesterOrigin,
+    requesterToolAuthority,
     toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
@@ -476,9 +508,11 @@ async function beginPreparedReplyMessageInjectionTarget(
     inboundAudio,
     ...backendOptions
   } = options ?? {};
-  const projectedToolAuthorityFingerprint = toolAuthorityOverlay
-    ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
-    : backendOptions.toolAuthorityFingerprint;
+  const projectedToolAuthorityFingerprint = requesterToolAuthority
+    ? await owner.projectRequesterToolAuthorityFingerprintAsync(requesterToolAuthority)
+    : toolAuthorityOverlay
+      ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
+      : backendOptions.toolAuthorityFingerprint;
   const sourceBound =
     assertCurrent !== undefined ||
     (toolAuthorityPreparation !== undefined && toolAuthorityPreparation.authorityKind !== "run");
@@ -492,7 +526,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
     ? {
         ...backendOptions,
-        ...(toolAuthorityOverlay
+        ...(requesterToolAuthority || toolAuthorityOverlay
           ? { toolAuthorityFingerprint: projectedToolAuthorityFingerprint }
           : {}),
       }
@@ -502,34 +536,44 @@ async function beginPreparedReplyMessageInjectionTarget(
       ? { reason: "injection_unavailable" }
       : owner.resolve({
           options: queueOptions,
-          requesterOrigin,
+          requesterToolAuthority,
           personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
           inboundAudio,
           allowPendingUserInputAnswer,
           // An overlay alone does not add a caller lifetime binding to legacy input.
           assertCurrent: sourceBound ? assertSourceCurrent : undefined,
-          preparation: toolAuthorityOverlay
-            ? bindPreparedToolAuthority(
-                bindWorkerToolPreparation(
-                  {
-                    assertCurrent: () => assertSourceCurrent?.(),
-                    compatAssertCurrent: () => {
-                      toolAuthorityPreparation?.compatAssertCurrent();
-                      const overlay = options?.toolAuthorityOverlay;
-                      assertPolicy(overlay && owner.projectToolAuthorityFingerprint(overlay));
+          preparation:
+            requesterToolAuthority || toolAuthorityOverlay
+              ? bindPreparedToolAuthority(
+                  bindWorkerToolPreparation(
+                    {
+                      assertCurrent: () => assertSourceCurrent?.(),
+                      compatAssertCurrent: () => {
+                        toolAuthorityPreparation?.compatAssertCurrent();
+                        const requester = options?.requesterToolAuthority;
+                        const overlay = options?.toolAuthorityOverlay;
+                        assertPolicy(
+                          requester
+                            ? owner.projectRequesterToolAuthorityFingerprint(requester)
+                            : overlay && owner.projectToolAuthorityFingerprint(overlay),
+                        );
+                      },
+                      prepareCurrent: async () => {
+                        await toolAuthorityPreparation?.prepareCurrent();
+                        const requester = options?.requesterToolAuthority;
+                        const overlay = options?.toolAuthorityOverlay;
+                        assertPolicy(
+                          requester
+                            ? await owner.projectRequesterToolAuthorityFingerprintAsync(requester)
+                            : overlay &&
+                                (await owner.projectToolAuthorityFingerprintAsync(overlay)),
+                        );
+                      },
                     },
-                    prepareCurrent: async () => {
-                      await toolAuthorityPreparation?.prepareCurrent();
-                      const overlay = options?.toolAuthorityOverlay;
-                      assertPolicy(
-                        overlay && (await owner.projectToolAuthorityFingerprintAsync(overlay)),
-                      );
-                    },
-                  },
-                  toolAuthorityPreparation ? [toolAuthorityPreparation] : [],
-                ),
-              )
-            : toolAuthorityPreparation,
+                    toolAuthorityPreparation ? [toolAuthorityPreparation] : [],
+                  ),
+                )
+              : toolAuthorityPreparation,
         });
   if (!("injection" in resolved)) {
     const immediateRejection = {

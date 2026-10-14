@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
@@ -8,10 +12,12 @@ import {
   humanReplies,
   outbound,
   providerErrors,
+  registerProofModelScript,
   runHuman,
   runProofIngress,
   type RunResult,
   type ProofCase,
+  type ProofModelRequest,
 } from "./gateway.sessions-send-provenance.test-support.js";
 
 const cases: ProofCase[] = [
@@ -64,303 +70,818 @@ const cases: ProofCase[] = [
   },
 ];
 
-async function updateSenderPolicies(policies: Record<string, { deny: string[] | null }>) {
+async function patchProofConfig(patch: Record<string, unknown>, replacePaths: string[] = []) {
   const before = await gateway.client.request<{ hash: string }>("config.get", {});
   await gateway.client.request("config.patch", {
     baseHash: before.hash,
-    raw: JSON.stringify({ tools: { toolsBySender: policies } }),
-    replacePaths: Object.entries(policies).flatMap(([senderKey, policy]) =>
-      policy.deny === null ? [`tools.toolsBySender.${senderKey}.deny`] : [],
-    ),
+    raw: JSON.stringify(patch),
+    replacePaths,
   });
 }
 
-describe("registered sessions_send requester provenance", () => {
-  it(
-    "preserves requester policy without restricting later work or authorized delegation",
-    { timeout: 90_000 },
-    async ({ signal }) => {
-      for (const spec of cases) {
-        const sourceKey = `agent:${spec.agent}:telegram:direct:provenance-${spec.id === "allowed" ? "denied" : spec.id}`;
-        const scenario = createScenario(spec, sourceKey);
-        let incumbent: Promise<unknown> | undefined;
-        let source: ReturnType<typeof runProofIngress> | undefined;
-        let changedQueuedPolicy = false;
-        try {
-          if (spec.busy) {
-            if (spec.bootstrap) {
-              const bootstrap = await runProofIngress({
-                abortSignal: signal,
-                agentId: spec.agent,
-                sessionKey: sourceKey,
-                message: scenario.bootstrapPrompt,
-                senderId: spec.sender,
-                to: scenario.sourceRecipient,
-              });
-              expect(bootstrap).toMatchObject({
-                payloads: [expect.objectContaining({ text: `BOOTSTRAP_COMPLETE_${spec.id}` })],
-              });
-              expect(
-                scenario.bootstrapAccepted,
-                JSON.stringify(scenario.bootstrapAccepted),
-              ).toMatchObject({
-                status: "accepted",
-                targetDisposition: "queued",
-                runId: expect.any(String),
-              });
-              incumbent = gateway.client.request<RunResult>("agent.wait", {
-                runId: scenario.bootstrapAccepted?.runId,
-                timeoutMs: 30_000,
-              });
-            } else {
-              incumbent = runProofIngress({
-                abortSignal: signal,
-                agentId: "main",
-                sessionKey: scenario.targetKey,
-                message: scenario.incumbentPrompt,
-                senderId: "trusted",
-                to: `${scenario.sourceRecipient}-incumbent`,
-              });
-            }
-            incumbent = incumbent.then((result) => {
-              scenario.incumbentCompleted = true;
-              return result;
-            });
-            await withinTest(
-              awaitGateBeforeSettlement(
-                scenario.incumbentStarted.promise,
-                incumbent,
-                "Authorized receiver settled before its first delivery",
-              ),
-              signal,
-            );
-          }
-          source = runProofIngress({
+async function updateSenderPolicies(policies: Record<string, { deny: string[] | null }>) {
+  await patchProofConfig(
+    { tools: { toolsBySender: policies } },
+    Object.entries(policies).flatMap(([senderKey, policy]) =>
+      policy.deny === null ? [`tools.toolsBySender.${senderKey}.deny`] : [],
+    ),
+  );
+}
+
+async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
+  for (const spec of cases) {
+    const sourceKey = `agent:${spec.agent}:telegram:direct:provenance-${spec.id === "allowed" ? "denied" : spec.id}`;
+    const scenario = createScenario(spec, sourceKey);
+    let incumbent: Promise<unknown> | undefined;
+    let source: ReturnType<typeof runProofIngress> | undefined;
+    let changedQueuedPolicy = false;
+    try {
+      if (spec.busy) {
+        if (spec.bootstrap) {
+          const bootstrap = await runProofIngress({
             abortSignal: signal,
             agentId: spec.agent,
             sessionKey: sourceKey,
-            message: scenario.sourcePrompt,
+            message: scenario.bootstrapPrompt,
             senderId: spec.sender,
             to: scenario.sourceRecipient,
           });
-          const sourceResult = await source;
-          scenario.sourceCompleted = true;
-          expect(sourceResult).toMatchObject({
-            payloads: [expect.objectContaining({ text: `SOURCE_COMPLETE_${spec.id}` })],
+          expect(bootstrap).toMatchObject({
+            payloads: [expect.objectContaining({ text: `BOOTSTRAP_COMPLETE_${spec.id}` })],
           });
-          const rejectedSteering = spec.mode === "steer" && spec.denied;
           expect(
-            scenario.accepted,
-            JSON.stringify({ accepted: scenario.accepted, providerErrors }),
+            scenario.bootstrapAccepted,
+            JSON.stringify(scenario.bootstrapAccepted),
           ).toMatchObject({
-            status: rejectedSteering ? "error" : "accepted",
+            status: "accepted",
+            targetDisposition: "queued",
             runId: expect.any(String),
           });
-          if (rejectedSteering) {
-            expect(scenario.accepted?.error).toMatch(/different requester.*followup/);
-          }
-          expect(scenario.sourceRequests[0]?.tools).toContain("sessions_send");
-          if (spec.denied || spec.id === "delegate") {
-            expect(scenario.sourceRequests[0]?.tools).not.toContain("message");
-          } else {
-            expect(scenario.sourceRequests[0]?.tools).toContain("message");
-          }
-          if (spec.busy) {
-            if (!rejectedSteering) {
-              expect(scenario.accepted).toMatchObject({
-                targetDisposition: spec.mode === "steer" ? "steered" : "queued",
-              });
-            }
-            if (!spec.bootstrap) {
-              expect(scenario.incumbentCompleted).toBe(false);
-              expect(scenario.targetRequests).toEqual([]);
-            } else {
-              scenario.releaseTarget.resolve();
-            }
-            if (spec.id === "busy_followup") {
-              // Native acceptance already prepared this execution, unlike a human
-              // input still waiting for admission in the shared-conversation case.
-              await updateSenderPolicies({ "id:guest": { deny: null } });
-              changedQueuedPolicy = true;
-              expect(getRuntimeConfig().tools?.toolsBySender?.["id:guest"]?.deny).toBeUndefined();
-            }
-            scenario.releaseIncumbent.resolve();
-            expect(await incumbent).toMatchObject(
-              spec.bootstrap
-                ? { status: "ok" }
-                : {
-                    payloads: [expect.objectContaining({ text: `INCUMBENT_COMPLETE_${spec.id}` })],
-                  },
-            );
-            expect(
-              scenario.incumbentRequests.every((request) => request.tools.includes("message")),
-            ).toBe(true);
-            expect(
-              outbound.filter((entry) => entry.to === `${scenario.recipient}-incumbent`),
-            ).toEqual(
-              [1, 2].map((index) => ({
-                to: `${scenario.recipient}-incumbent`,
-                text: `${scenario.marker}_INCUMBENT_${index}`,
-                accountId: "default",
-              })),
-            );
-          }
-          if (rejectedSteering) {
-            await waitForGatewayActiveWork(30_000);
-            expect(scenario.targetRequests).toEqual([]);
-            expect(outbound.filter((entry) => entry.to === scenario.recipient)).toEqual([]);
-            expect(providerErrors).toEqual([]);
-            continue;
-          }
-          if (spec.mode !== "steer") {
-            expect(outbound.filter((entry) => entry.text === scenario.marker)).toEqual([]);
-          }
-          await withinTest(scenario.targetStarted.promise, signal);
-          scenario.releaseTarget.resolve();
-          if (!spec.bootstrap) {
-            const terminal = await gateway.client.request<RunResult>("agent.wait", {
-              runId: scenario.accepted?.runId,
-              timeoutMs: 30_000,
-            });
-            expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
-          }
-          await waitForGatewayActiveWork(30_000);
-          expect(providerErrors).toEqual([]);
-          const deliveries = outbound.filter((entry) => entry.to === scenario.recipient);
-          expect
-            .soft(deliveries, spec.name)
-            .toEqual(
-              spec.denied
-                ? []
-                : [{ to: scenario.recipient, text: scenario.marker, accountId: "default" }],
-            );
-          if (spec.mode !== "steer") {
-            expect
-              .soft(scenario.effectAfterSourceCompletion, spec.name)
-              .toEqual(spec.denied ? [] : [true]);
-          }
-          expect
-            .soft(
-              scenario.targetRequests.map((request) => request.tools.includes("message")),
-              spec.name,
-            )
-            .toEqual(scenario.targetRequests.map(() => !spec.denied));
-          console.log(
-            "[busy receiver proof]",
-            JSON.stringify({
-              case: spec.id,
-              accepted: scenario.accepted,
-              incumbentTools: scenario.incumbentRequests.map((request) =>
-                request.tools.includes("message"),
-              ),
-              targetTools: scenario.targetRequests.map((request) =>
-                request.tools.includes("message"),
-              ),
-              deliveries,
-            }),
-          );
-          if (scenario.targetKey === sourceKey) {
-            expect
-              .soft(
-                outbound.filter((entry) => entry.to === scenario.sourceRecipient),
-                spec.name,
-              )
-              .toEqual([
-                {
-                  to: scenario.sourceRecipient,
-                  text: `TARGET_COMPLETE_${spec.id}`,
-                  accountId: "default",
-                },
-              ]);
-          }
-        } finally {
-          scenario.releaseIncumbent.resolve();
-          scenario.releaseTarget.resolve();
-          await Promise.allSettled([source, incumbent]);
-          await waitForGatewayActiveWork(30_000);
-          if (changedQueuedPolicy) {
-            await updateSenderPolicies({ "id:guest": { deny: ["message"] } });
-          }
+          incumbent = gateway.client.request<RunResult>("agent.wait", {
+            runId: scenario.bootstrapAccepted?.runId,
+            timeoutMs: 30_000,
+          });
+        } else {
+          incumbent = runProofIngress({
+            abortSignal: signal,
+            agentId: "main",
+            sessionKey: scenario.targetKey,
+            message: scenario.incumbentPrompt,
+            senderId: "trusted",
+            to: `${scenario.sourceRecipient}-incumbent`,
+          });
         }
-      }
-    },
-  );
-});
-
-// The same real reply admission that commits Bob's queued message emits the notice.
-// Holding Alice's outbound I/O proves the notice arrives before her work finishes.
-describe("shared conversation requester admission", () => {
-  it("acknowledges Bob's separate turn and resolves its policy when admitted", async ({
-    signal,
-  }) => {
-    const scenario = createScenario(
-      {
-        name: "cross-human followup",
-        id: "mixed_human",
-        sender: "bob",
-        agent: "main",
-        denied: true,
-      },
-      "agent:main:telegram:group:provenance-mixed-human",
-    );
-    scenario.releaseTarget.resolve();
-    let alice: ReturnType<typeof runHuman> | undefined;
-    try {
-      alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
-        (result) => {
+        incumbent = incumbent.then((result) => {
           scenario.incumbentCompleted = true;
           return result;
-        },
-      );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          scenario.incumbentStarted.promise,
-          alice,
-          "Alice settled before her first delivery",
-        ),
-        signal,
-      );
-      const receipt = await runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
-      expect(receipt.deferredToActiveRun).toBe("followup");
-      expect(humanReplies.filter((reply) => reply.sender === "bob")).toEqual([
-        {
-          sender: "bob",
-          text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
-        },
-      ]);
-      expect(scenario.incumbentCompleted).toBe(false);
-      expect(scenario.sourceRequests).toEqual([]);
-      await updateSenderPolicies({
-        "id:alice": { deny: ["message"] },
-        "id:bob": { deny: ["message"] },
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            scenario.incumbentStarted.promise,
+            incumbent,
+            "Authorized receiver settled before its first delivery",
+          ),
+          signal,
+        );
+      }
+      source = runProofIngress({
+        abortSignal: signal,
+        agentId: spec.agent,
+        sessionKey: sourceKey,
+        message: scenario.sourcePrompt,
+        senderId: spec.sender,
+        to: scenario.sourceRecipient,
       });
-      expect(getRuntimeConfig().tools?.toolsBySender?.["id:bob"]).toEqual({ deny: ["message"] });
-      scenario.releaseIncumbent.resolve();
-      await alice;
+      const sourceResult = await source;
+      scenario.sourceCompleted = true;
+      expect(sourceResult).toMatchObject({
+        payloads: [expect.objectContaining({ text: `SOURCE_COMPLETE_${spec.id}` })],
+      });
+      const rejectedSteering = spec.mode === "steer" && spec.denied;
+      expect(
+        scenario.accepted,
+        JSON.stringify({ accepted: scenario.accepted, providerErrors }),
+      ).toMatchObject({
+        status: rejectedSteering ? "error" : "accepted",
+        runId: expect.any(String),
+      });
+      if (rejectedSteering) {
+        expect(scenario.accepted?.error).toMatch(/different requester.*followup/);
+      }
+      expect(scenario.sourceRequests[0]?.tools).toContain("sessions_send");
+      if (spec.denied || spec.id === "delegate") {
+        expect(scenario.sourceRequests[0]?.tools).not.toContain("message");
+      } else {
+        expect(scenario.sourceRequests[0]?.tools).toContain("message");
+      }
+      if (spec.busy) {
+        if (!rejectedSteering) {
+          expect(scenario.accepted).toMatchObject({
+            targetDisposition: spec.mode === "steer" ? "steered" : "queued",
+          });
+        }
+        if (!spec.bootstrap) {
+          expect(scenario.incumbentCompleted).toBe(false);
+          expect(scenario.targetRequests).toEqual([]);
+        } else {
+          scenario.releaseTarget.resolve();
+        }
+        if (spec.id === "busy_followup") {
+          // Native acceptance already prepared this execution, unlike a human
+          // input still waiting for admission in the shared-conversation case.
+          await updateSenderPolicies({ "id:guest": { deny: null } });
+          changedQueuedPolicy = true;
+          expect(getRuntimeConfig().tools?.toolsBySender?.["id:guest"]?.deny).toBeUndefined();
+        }
+        scenario.releaseIncumbent.resolve();
+        expect(await incumbent).toMatchObject(
+          spec.bootstrap
+            ? { status: "ok" }
+            : {
+                payloads: [expect.objectContaining({ text: `INCUMBENT_COMPLETE_${spec.id}` })],
+              },
+        );
+        expect(
+          scenario.incumbentRequests.every((request) => request.tools.includes("message")),
+        ).toBe(true);
+        expect(outbound.filter((entry) => entry.to === `${scenario.recipient}-incumbent`)).toEqual(
+          [1, 2].map((index) => ({
+            to: `${scenario.recipient}-incumbent`,
+            text: `${scenario.marker}_INCUMBENT_${index}`,
+            accountId: "default",
+          })),
+        );
+      }
+      if (rejectedSteering) {
+        await waitForGatewayActiveWork(30_000);
+        expect(scenario.targetRequests).toEqual([]);
+        expect(outbound.filter((entry) => entry.to === scenario.recipient)).toEqual([]);
+        expect(providerErrors).toEqual([]);
+        continue;
+      }
+      if (spec.mode !== "steer") {
+        expect(outbound.filter((entry) => entry.text === scenario.marker)).toEqual([]);
+      }
       await withinTest(scenario.targetStarted.promise, signal);
+      scenario.releaseTarget.resolve();
+      if (!spec.bootstrap) {
+        const terminal = await gateway.client.request<RunResult>("agent.wait", {
+          runId: scenario.accepted?.runId,
+          timeoutMs: 30_000,
+        });
+        expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
+      }
       await waitForGatewayActiveWork(30_000);
       expect(providerErrors).toEqual([]);
-      expect(scenario.accepted).toMatchObject({ status: "accepted" });
-      expect(scenario.incumbentRequests.every((request) => request.tools.includes("message"))).toBe(
-        true,
+      const deliveries = outbound.filter((entry) => entry.to === scenario.recipient);
+      expect
+        .soft(deliveries, spec.name)
+        .toEqual(
+          spec.denied
+            ? []
+            : [{ to: scenario.recipient, text: scenario.marker, accountId: "default" }],
+        );
+      if (spec.mode !== "steer") {
+        expect
+          .soft(scenario.effectAfterSourceCompletion, spec.name)
+          .toEqual(spec.denied ? [] : [true]);
+      }
+      expect
+        .soft(
+          scenario.targetRequests.map((request) => request.tools.includes("message")),
+          spec.name,
+        )
+        .toEqual(scenario.targetRequests.map(() => !spec.denied));
+      console.log(
+        "[busy receiver proof]",
+        JSON.stringify({
+          case: spec.id,
+          accepted: scenario.accepted,
+          incumbentTools: scenario.incumbentRequests.map((request) =>
+            request.tools.includes("message"),
+          ),
+          targetTools: scenario.targetRequests.map((request) => request.tools.includes("message")),
+          deliveries,
+        }),
       );
-      expect(scenario.sourceRequests.every((request) => !request.tools.includes("message"))).toBe(
-        true,
-      );
-      expect(scenario.targetRequests.every((request) => !request.tools.includes("message"))).toBe(
-        true,
-      );
-      expect(outbound.filter((item) => item.to === scenario.recipient)).toEqual([]);
-      expect(
-        outbound
-          .filter((item) => item.to === `${scenario.recipient}-incumbent`)
-          .map((item) => item.text),
-      ).toEqual([`${scenario.marker}_INCUMBENT_1`, `${scenario.marker}_INCUMBENT_2`]);
+      if (scenario.targetKey === sourceKey) {
+        expect
+          .soft(
+            outbound.filter((entry) => entry.to === scenario.sourceRecipient),
+            spec.name,
+          )
+          .toEqual([
+            {
+              to: scenario.sourceRecipient,
+              text: `TARGET_COMPLETE_${spec.id}`,
+              accountId: "default",
+            },
+          ]);
+      }
     } finally {
       scenario.releaseIncumbent.resolve();
       scenario.releaseTarget.resolve();
-      await Promise.allSettled([alice]);
+      await Promise.allSettled([source, incumbent]);
       await waitForGatewayActiveWork(30_000);
+      if (changedQueuedPolicy) {
+        await updateSenderPolicies({ "id:guest": { deny: ["message"] } });
+      }
     }
-  }, 90_000);
-});
+  }
+}
+
+async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean) {
+  const marker = `native_spawn_requester_${collect}`;
+  const sourcePrompt = `PROVENANCE_SOURCE_${marker}`;
+  const childPrompt = `PROVENANCE_TARGET_${marker}`;
+  const steerPrompt = `PROVENANCE_TARGET_${marker}_steer`;
+  const spawned = createDeferred();
+  const childStarted = createDeferred();
+  const issueSteer = createDeferred();
+  const releaseChild = createDeferred();
+  let spawnResult: Record<string, unknown> | undefined;
+  let steerResult: Record<string, unknown> | undefined;
+  let sourceRequests = 0;
+  let sourceCompleted = false;
+  const steeringAfterSourceCompletion: boolean[] = [];
+  registerProofModelScript(marker, async (request) => {
+    if (request.prompt.includes(steerPrompt)) {
+      steeringAfterSourceCompletion.push(sourceCompleted);
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(childPrompt)) {
+      childStarted.resolve();
+      await releaseChild.promise;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    sourceRequests++;
+    if (sourceRequests === 1) {
+      return {
+        tool: {
+          name: "sessions_spawn",
+          args: {
+            task: childPrompt,
+            collect,
+            cleanup: "keep",
+            expectsCompletionMessage: false,
+          },
+        },
+      };
+    }
+    if (sourceRequests === 2) {
+      spawnResult = request.result;
+      spawned.resolve();
+      await issueSteer.promise;
+      return {
+        tool: {
+          name: "sessions_send",
+          args: {
+            sessionKey: spawnResult?.childSessionKey,
+            mode: "steer",
+            message: steerPrompt,
+            timeoutSeconds: 0,
+          },
+        },
+      };
+    }
+    steerResult = request.result;
+    return { text: `PROVENANCE_COMPLETE_${marker}` };
+  });
+  // The operator client manages the fixture only. This run has channel ingress
+  // identity and no linked operator profile, with optional audit capture disabled.
+  expect(getRuntimeConfig().logging?.audit).toMatchObject({
+    enabled: false,
+    executionIdentity: false,
+  });
+  const source = runProofIngress({
+    abortSignal: signal,
+    agentId: "boundary",
+    sessionKey: `agent:boundary:telegram:direct:${marker}`,
+    message: sourcePrompt,
+    senderId: marker,
+    to: `provenance-${marker}`,
+  }).then((result) => {
+    sourceCompleted = true;
+    return result;
+  });
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(spawned.promise, source, "Spawn did not return"),
+      signal,
+    );
+    expect(spawnResult).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.any(String),
+      runId: expect.any(String),
+    });
+    await withinTest(
+      awaitGateBeforeSettlement(childStarted.promise, source, "Child did not start"),
+      signal,
+    );
+    issueSteer.resolve();
+    await source;
+    expect(steerResult, JSON.stringify(steerResult)).toMatchObject({
+      status: "accepted",
+      targetDisposition: "steered",
+    });
+    releaseChild.resolve();
+    expect(
+      await gateway.client.request<RunResult>("agent.wait", {
+        runId: spawnResult?.runId,
+        timeoutMs: 30_000,
+      }),
+    ).toMatchObject({ status: "ok" });
+    await waitForGatewayActiveWork(30_000);
+    expect(steeringAfterSourceCompletion).toEqual([true]);
+    expect(providerErrors).toEqual([]);
+  } finally {
+    issueSteer.resolve();
+    releaseChild.resolve();
+    await Promise.allSettled([source]);
+    await waitForGatewayActiveWork(30_000);
+  }
+}
+
+async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
+  const marker = "queued_collector_requester";
+  const sourceKey = `agent:boundary:telegram:direct:${marker}`;
+  const sourcePrompt = `PROVENANCE_SOURCE_${marker}_spawn`;
+  const steerSourcePrompt = `PROVENANCE_SOURCE_${marker}_steer`;
+  const blockerPrompt = `PROVENANCE_TARGET_${marker}_blocker`;
+  const queuedPrompt = `PROVENANCE_TARGET_${marker}_queued`;
+  const steerInput = `PROVENANCE_TARGET_${marker}_steer`;
+  const blockerStarted = createDeferred();
+  const queuedStarted = createDeferred();
+  const releaseBlocker = createDeferred();
+  const releaseQueued = createDeferred();
+  const blockerRequests: ProofModelRequest[] = [];
+  const queuedRequests: ProofModelRequest[] = [];
+  const queuedAfterSourceCompletion: boolean[] = [];
+  let blockerResult: Record<string, unknown> | undefined;
+  let queuedResult: Record<string, unknown> | undefined;
+  let steerResult: Record<string, unknown> | undefined;
+  let sourceRequests = 0;
+  let steeringRequests = 0;
+  let sourceCompleted = false;
+  registerProofModelScript(marker, async (request) => {
+    if (request.prompt.includes(steerInput)) {
+      queuedRequests.push(request);
+      queuedAfterSourceCompletion.push(sourceCompleted);
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(queuedPrompt)) {
+      queuedRequests.push(request);
+      queuedAfterSourceCompletion.push(sourceCompleted);
+      queuedStarted.resolve();
+      await releaseQueued.promise;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(blockerPrompt)) {
+      blockerRequests.push(request);
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(steerSourcePrompt)) {
+      steeringRequests++;
+      if (steeringRequests === 1) {
+        return {
+          tool: {
+            name: "sessions_send",
+            args: {
+              sessionKey: queuedResult?.childSessionKey,
+              mode: "steer",
+              message: steerInput,
+              timeoutSeconds: 0,
+            },
+          },
+        };
+      }
+      steerResult = request.result;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    sourceRequests++;
+    if (sourceRequests === 1) {
+      return {
+        tool: {
+          name: "sessions_spawn",
+          args: { task: blockerPrompt, collect: true, groupId: marker, cleanup: "keep" },
+        },
+      };
+    }
+    if (sourceRequests === 2) {
+      blockerResult = request.result;
+      if (blockerResult?.status !== "accepted") {
+        return { text: `PROVENANCE_COMPLETE_${marker}` };
+      }
+      await blockerStarted.promise;
+      return {
+        tool: {
+          name: "sessions_spawn",
+          args: { task: queuedPrompt, collect: true, groupId: marker, cleanup: "keep" },
+        },
+      };
+    }
+    queuedResult = request.result;
+    return { text: `PROVENANCE_COMPLETE_${marker}` };
+  });
+  const previousSwarm = getRuntimeConfig().tools?.swarm;
+  const ingress = {
+    abortSignal: signal,
+    agentId: "boundary",
+    sessionKey: sourceKey,
+    senderId: marker,
+    to: `provenance-${marker}`,
+  };
+  let source: ReturnType<typeof runProofIngress> | undefined;
+  let queuedCompletion: Promise<RunResult> | undefined;
+  let changedConfig = false;
+  try {
+    await patchProofConfig({ tools: { swarm: { enabled: true, maxConcurrent: 1 } } });
+    changedConfig = true;
+    source = runProofIngress({ ...ingress, message: sourcePrompt }).then((result) => {
+      sourceCompleted = true;
+      return result;
+    });
+    await withinTest(
+      awaitGateBeforeSettlement(blockerStarted.promise, source, "Collector did not start"),
+      signal,
+    );
+    await source;
+    for (const accepted of [blockerResult, queuedResult]) {
+      expect(accepted).toMatchObject({
+        status: "accepted",
+        childSessionKey: expect.any(String),
+        runId: expect.any(String),
+      });
+    }
+    expect(blockerRequests.length).toBeGreaterThan(0);
+    expect(blockerRequests.every((request) => request.tools.includes("exec"))).toBe(true);
+    expect(queuedRequests).toEqual([]);
+    await updateSenderPolicies({ [`id:${marker}`]: { deny: ["exec"] } });
+    queuedCompletion = gateway.client.request<RunResult>("agent.wait", {
+      runId: queuedResult?.runId,
+      timeoutMs: 30_000,
+    });
+    releaseBlocker.resolve();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        queuedStarted.promise,
+        queuedCompletion,
+        "Queued child did not start",
+      ),
+      signal,
+    );
+    expect(queuedRequests.every((request) => !request.tools.includes("exec"))).toBe(true);
+    await runProofIngress({ ...ingress, message: steerSourcePrompt });
+    expect(steerResult, JSON.stringify(steerResult)).toMatchObject({
+      status: "accepted",
+      targetDisposition: "steered",
+    });
+    releaseQueued.resolve();
+    expect(await queuedCompletion).toMatchObject({ status: "ok" });
+    expect(
+      await gateway.client.request<RunResult>("agent.wait", {
+        runId: blockerResult?.runId,
+        timeoutMs: 30_000,
+      }),
+    ).toMatchObject({ status: "ok" });
+    await waitForGatewayActiveWork(30_000);
+    expect(queuedRequests.some((request) => request.prompt.includes(steerInput))).toBe(true);
+    expect(queuedRequests.every((request) => !request.tools.includes("exec"))).toBe(true);
+    expect(queuedAfterSourceCompletion).toEqual(queuedRequests.map(() => true));
+    expect(providerErrors).toEqual([]);
+  } finally {
+    blockerStarted.resolve();
+    releaseBlocker.resolve();
+    releaseQueued.resolve();
+    await Promise.allSettled([source, queuedCompletion]);
+    await waitForGatewayActiveWork(30_000);
+    if (changedConfig) {
+      await patchProofConfig(
+        {
+          tools: {
+            swarm: previousSwarm ?? null,
+            toolsBySender: { [`id:${marker}`]: { deny: null } },
+          },
+        },
+        ["tools.swarm", `tools.toolsBySender.id:${marker}.deny`],
+      );
+    }
+  }
+}
+
+async function verifyCompletedChildFollowup(signal: AbortSignal) {
+  const marker = "completed_child_policy";
+  const sourceKey = `agent:boundary:telegram:direct:${marker}`;
+  const spawnPrompt = `PROVENANCE_SOURCE_${marker}_spawn`;
+  const sourceFollowupPrompt = `PROVENANCE_SOURCE_${marker}_followup`;
+  const childPrompt = `PROVENANCE_TARGET_${marker}_initial`;
+  const childFollowupPrompt = `PROVENANCE_TARGET_${marker}_followup`;
+  let spawnResult: Record<string, unknown> | undefined;
+  let followupResult: Record<string, unknown> | undefined;
+  const initialRequests: ProofModelRequest[] = [];
+  const followupRequests: ProofModelRequest[] = [];
+  let spawnRequests = 0;
+  let sourceFollowupRequests = 0;
+  registerProofModelScript(marker, (request) => {
+    if (request.prompt.includes(childFollowupPrompt)) {
+      followupRequests.push(request);
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(childPrompt)) {
+      initialRequests.push(request);
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    if (request.prompt.includes(sourceFollowupPrompt)) {
+      sourceFollowupRequests++;
+      if (sourceFollowupRequests === 1) {
+        return {
+          tool: {
+            name: "sessions_send",
+            args: {
+              sessionKey: spawnResult?.childSessionKey,
+              mode: "followup",
+              message: childFollowupPrompt,
+              timeoutSeconds: 0,
+            },
+          },
+        };
+      }
+      followupResult = request.result;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    spawnRequests++;
+    if (spawnRequests === 1) {
+      return {
+        tool: {
+          name: "sessions_spawn",
+          args: { task: childPrompt, cleanup: "keep", expectsCompletionMessage: false },
+        },
+      };
+    }
+    spawnResult = request.result;
+    return { text: `PROVENANCE_COMPLETE_${marker}` };
+  });
+  const ingress = {
+    abortSignal: signal,
+    agentId: "boundary",
+    sessionKey: sourceKey,
+    senderId: marker,
+    to: `provenance-${marker}`,
+  };
+  let changedPolicy = false;
+  try {
+    await runProofIngress({ ...ingress, message: spawnPrompt });
+    expect(spawnResult).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.any(String),
+      runId: expect.any(String),
+    });
+    const initialCompletion = await gateway.client.request<RunResult>("agent.wait", {
+      runId: spawnResult?.runId,
+      timeoutMs: 30_000,
+    });
+    expect(
+      initialCompletion,
+      JSON.stringify({ initialCompletion, spawnResult, providerErrors }),
+    ).toMatchObject({ status: "ok" });
+    await waitForGatewayActiveWork(30_000);
+    expect(initialRequests.length).toBeGreaterThan(0);
+    expect(initialRequests.every((request) => request.tools.includes("exec"))).toBe(true);
+    await updateSenderPolicies({ [`id:${marker}`]: { deny: ["exec"] } });
+    changedPolicy = true;
+    await runProofIngress({ ...ingress, message: sourceFollowupPrompt });
+    expect(
+      followupResult,
+      JSON.stringify({
+        sourceFollowupRequests,
+        initialRequests: initialRequests.length,
+        followupRequests: followupRequests.length,
+      }),
+    ).toMatchObject({ status: "accepted", targetDisposition: "queued" });
+    expect(
+      await gateway.client.request<RunResult>("agent.wait", {
+        runId: followupResult?.runId,
+        timeoutMs: 30_000,
+      }),
+    ).toMatchObject({ status: "ok" });
+    await waitForGatewayActiveWork(30_000);
+    expect(followupRequests.length).toBeGreaterThan(0);
+    expect(followupRequests.map((request) => request.tools.includes("exec"))).toEqual(
+      followupRequests.map(() => false),
+    );
+    expect(providerErrors).toEqual([]);
+  } finally {
+    await waitForGatewayActiveWork(30_000);
+    if (changedPolicy) {
+      await updateSenderPolicies({ [`id:${marker}`]: { deny: null } });
+    }
+  }
+}
+
+async function verifySteeringPolicyCompatibility(
+  signal: AbortSignal,
+  publishDenyAfterAdmission: boolean,
+) {
+  const marker = `conversation_policy_steer_${publishDenyAfterAdmission}`;
+  const groupId = publishDenyAfterAdmission
+    ? "provenance-restricted-late"
+    : "provenance-restricted";
+  let changedGroupPolicy = false;
+  const targetKey = `agent:boundary:telegram:direct:${marker}`;
+  const incumbentPrompt = `PROVENANCE_INCUMBENT_${marker}`;
+  const restrictedPrompt = `PROVENANCE_SOURCE_${marker}_restricted`;
+  const compatiblePrompt = `PROVENANCE_SOURCE_${marker}_compatible`;
+  const restrictedInput = `PROVENANCE_TARGET_${marker}_restricted`;
+  const compatibleInput = `PROVENANCE_TARGET_${marker}_compatible`;
+  const started = createDeferred();
+  const release = createDeferred();
+  const requests: ProofModelRequest[] = [];
+  const results = new Map<string, Record<string, unknown> | undefined>();
+  const sourceCalls = new Map<string, number>();
+  registerProofModelScript(marker, async (request) => {
+    requests.push(request);
+    if (request.prompt.includes(incumbentPrompt)) {
+      started.resolve();
+      await release.promise;
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    const source = request.prompt.includes(restrictedPrompt)
+      ? restrictedPrompt
+      : request.prompt.includes(compatiblePrompt)
+        ? compatiblePrompt
+        : undefined;
+    if (!source) {
+      return { text: `PROVENANCE_COMPLETE_${marker}` };
+    }
+    const count = (sourceCalls.get(source) ?? 0) + 1;
+    sourceCalls.set(source, count);
+    if (count === 1) {
+      return {
+        tool: {
+          name: "sessions_send",
+          args: {
+            sessionKey: targetKey,
+            mode: "steer",
+            message: source === restrictedPrompt ? restrictedInput : compatibleInput,
+            timeoutSeconds: 0,
+          },
+        },
+      };
+    }
+    results.set(source, request.result);
+    return { text: `PROVENANCE_COMPLETE_${marker}` };
+  });
+  const ingress = { abortSignal: signal, agentId: "boundary", senderId: marker };
+  const incumbent = runProofIngress({
+    ...ingress,
+    sessionKey: targetKey,
+    message: incumbentPrompt,
+    to: `provenance-${marker}`,
+  });
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, incumbent, "DM did not start"),
+      signal,
+    );
+    expect(requests[0]?.tools).toContain("exec");
+    if (publishDenyAfterAdmission) {
+      await patchProofConfig({
+        channels: { telegram: { groups: { [groupId]: { tools: { deny: ["exec"] } } } } },
+      });
+      changedGroupPolicy = true;
+    }
+    expect(getRuntimeConfig()?.channels?.telegram?.groups?.[groupId]?.tools).toEqual({
+      deny: ["exec"],
+    });
+    await runProofIngress({
+      ...ingress,
+      sessionKey: `agent:boundary:telegram:group:${groupId}`,
+      groupId,
+      message: restrictedPrompt,
+      to: groupId,
+    });
+    expect(
+      requests.find((request) => request.prompt.includes(restrictedPrompt))?.tools,
+      JSON.stringify({ groupId, result: results.get(restrictedPrompt) }),
+    ).not.toContain("exec");
+    expect.soft(results.get(restrictedPrompt)).toMatchObject({ status: "error" });
+    expect.soft(results.get(restrictedPrompt)?.error).toMatch(/followup/);
+    await runProofIngress({
+      ...ingress,
+      sessionKey: `agent:boundary:telegram:direct:${marker}-compatible`,
+      message: compatiblePrompt,
+      to: `provenance-${marker}-compatible`,
+    });
+    expect(results.get(compatiblePrompt)).toMatchObject({
+      status: "accepted",
+      targetDisposition: "steered",
+    });
+    release.resolve();
+    await incumbent;
+    await waitForGatewayActiveWork(30_000);
+    expect(requests.some((request) => request.prompt.includes(restrictedInput))).toBe(false);
+    expect(requests.some((request) => request.prompt.includes(compatibleInput))).toBe(true);
+    expect(providerErrors).toEqual([]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([incumbent]);
+    await waitForGatewayActiveWork(30_000);
+    if (changedGroupPolicy) {
+      await patchProofConfig({ channels: { telegram: { groups: { [groupId]: null } } } }, [
+        `channels.telegram.groups.${groupId}.tools.deny`,
+      ]);
+    }
+  }
+}
+
+// Holding Alice's outbound I/O proves Bob's queue notice arrives before her work finishes.
+async function verifyCrossHumanAdmission(signal: AbortSignal) {
+  const scenario = createScenario(
+    {
+      name: "cross-human followup",
+      id: "mixed_human",
+      sender: "bob",
+      agent: "main",
+      denied: true,
+    },
+    "agent:main:telegram:group:provenance-mixed-human",
+  );
+  scenario.releaseTarget.resolve();
+  let alice: ReturnType<typeof runHuman> | undefined;
+  try {
+    alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
+      (result) => {
+        scenario.incumbentCompleted = true;
+        return result;
+      },
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        scenario.incumbentStarted.promise,
+        alice,
+        "Alice settled before her first delivery",
+      ),
+      signal,
+    );
+    const receipt = await runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
+    expect(receipt.deferredToActiveRun).toBe("followup");
+    expect(humanReplies.filter((reply) => reply.sender === "bob")).toEqual([
+      {
+        sender: "bob",
+        text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+      },
+    ]);
+    expect(scenario.incumbentCompleted).toBe(false);
+    expect(scenario.sourceRequests).toEqual([]);
+    await updateSenderPolicies({
+      "id:alice": { deny: ["message"] },
+      "id:bob": { deny: ["message"] },
+    });
+    expect(getRuntimeConfig().tools?.toolsBySender?.["id:bob"]).toEqual({ deny: ["message"] });
+    scenario.releaseIncumbent.resolve();
+    await alice;
+    await withinTest(scenario.targetStarted.promise, signal);
+    await waitForGatewayActiveWork(30_000);
+    expect(providerErrors).toEqual([]);
+    expect(scenario.accepted).toMatchObject({ status: "accepted" });
+    expect(scenario.incumbentRequests.every((request) => request.tools.includes("message"))).toBe(
+      true,
+    );
+    expect(scenario.sourceRequests.every((request) => !request.tools.includes("message"))).toBe(
+      true,
+    );
+    expect(scenario.targetRequests.every((request) => !request.tools.includes("message"))).toBe(
+      true,
+    );
+    expect(outbound.filter((item) => item.to === scenario.recipient)).toEqual([]);
+    expect(
+      outbound
+        .filter((item) => item.to === `${scenario.recipient}-incumbent`)
+        .map((item) => item.text),
+    ).toEqual([`${scenario.marker}_INCUMBENT_1`, `${scenario.marker}_INCUMBENT_2`]);
+  } finally {
+    scenario.releaseIncumbent.resolve();
+    scenario.releaseTarget.resolve();
+    await Promise.allSettled([alice]);
+    await waitForGatewayActiveWork(30_000);
+  }
+}
+
+// Global runtime cleanup retires the Gateway's plugin owner after each test.
+// Keep this shared Gateway and all registered boundary scenarios in one lifetime.
+it(
+  "preserves requester provenance across delegation, steering, and queued human input",
+  { timeout: 90_000 },
+  async ({ signal }) => {
+    await verifyRegisteredRequesterPolicy(signal);
+    await verifyNativeSpawnRequester(signal, false);
+    await verifyNativeSpawnRequester(signal, true);
+    await verifyQueuedCollectorAdmission(signal);
+    await verifyCompletedChildFollowup(signal);
+    await verifySteeringPolicyCompatibility(signal, false);
+    await verifySteeringPolicyCompatibility(signal, true);
+    await verifyCrossHumanAdmission(signal);
+  },
+);

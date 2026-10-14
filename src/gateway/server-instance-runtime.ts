@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
@@ -227,6 +228,12 @@ export function createGatewayInstanceRuntime(
         }
       };
       assertRecoveryTarget();
+      if (
+        (recoveryTarget || requesterTarget) &&
+        (dispatchOptions.operatorRunAuthority || dispatchOptions.agentToolCaller)
+      ) {
+        throw new Error("Recovery dispatch cannot combine different source owners.");
+      }
       const context = options.getContext();
       let startOwner: AgentTurnStartOwner | undefined;
       let ownerLost = false;
@@ -244,32 +251,39 @@ export function createGatewayInstanceRuntime(
           throw new Error("Restart recovery operator run is no longer active.");
         }
       };
-      const restoredOperator = recoveryTarget
+      const target = recoveryTarget ?? requesterTarget;
+      const restored = target
         ? await (
             await loadOperatorRecovery()
-          ).restoreGatewayOperatorRecovery({
-            target: recoveryTarget,
+          ).restoreGatewayRunRecovery({
+            target,
             context,
             assertCurrent: assertRecoveryCurrent,
+            restoreOperator: recoveryTarget !== undefined,
+            restoreRequester: requesterTarget !== undefined,
           })
         : undefined;
+      let releaseOperatorAuthority: (() => void) | undefined;
       let delegatedToolPolicyHandoffId: string | undefined;
       try {
-        const requesterOrigin = requesterTarget
-          ? await (
-              await loadOperatorRecovery()
-            ).restoreGatewayRequesterRecovery({
-              target: requesterTarget,
-              assertCurrent: assertRecoveryCurrent,
-            })
-          : undefined;
+        const operatorAuthority =
+          restored?.operator?.authority ?? dispatchOptions.operatorRunAuthority;
+        if (operatorAuthority) {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+          operatorAuthority.assertCurrent();
+          if (!restored?.operator) {
+            releaseOperatorAuthority = operatorAuthority.retain?.();
+          }
+        }
+        const requesterOrigin =
+          restored?.requesterOrigin ?? dispatchOptions.agentToolCaller?.requesterOrigin;
         assertRecoveryCurrent();
         if (requesterTarget && !requesterOrigin) {
           throw new Error("Restart recovery requester source is unavailable; send a new request.");
         }
         if (
           requesterOrigin?.operatorProfileId &&
-          requesterOrigin.operatorProfileId !== restoredOperator?.authority.profileId
+          requesterOrigin.operatorProfileId !== operatorAuthority?.profileId
         ) {
           throw new Error("Restart recovery requester has no matching operator authority.");
         }
@@ -283,7 +297,8 @@ export function createGatewayInstanceRuntime(
           dispatchOptions.runtimeContextFragments ||
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
-          restoredOperator ||
+          operatorAuthority ||
+          dispatchOptions.agentToolCaller ||
           requesterOrigin ||
           dispatchOptions.scopes ||
           dispatchOptions.syntheticScopes,
@@ -291,18 +306,19 @@ export function createGatewayInstanceRuntime(
         const agentTurns = needsDedicatedPrincipal
           ? createAgentTurnFacade({
               client: createSyntheticPluginRuntimeClient({
-                operatorRoleActor: restoredOperator
-                  ? { kind: "operator", profileId: restoredOperator.authority.profileId }
+                operatorRoleActor: operatorAuthority
+                  ? { kind: "operator", profileId: operatorAuthority.profileId }
                   : { kind: "system" },
-                operatorRunAuthority: restoredOperator?.authority,
+                operatorRunAuthority: operatorAuthority,
                 agentToolCaller:
-                  requesterOrigin && requesterTarget
+                  dispatchOptions.agentToolCaller ??
+                  (requesterOrigin && requesterTarget
                     ? {
                         agentId: requesterTarget.agentId,
                         sessionKey: requesterTarget.sessionKey,
                         requesterOrigin,
                       }
-                    : undefined,
+                    : undefined),
                 allowModelOverride:
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,
@@ -310,8 +326,8 @@ export function createGatewayInstanceRuntime(
                 runtimeContextFragments: dispatchOptions.runtimeContextFragments,
                 internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
                 delegatedToolPolicyHandoffId,
-                scopes: restoredOperator
-                  ? [...restoredOperator.authority.scopes]
+                scopes: operatorAuthority
+                  ? [...operatorAuthority.scopes]
                   : (dispatchOptions.scopes ?? dispatchOptions.syntheticScopes),
               }),
               // The start owner's observe closure calls this assertion. Keep it
@@ -340,7 +356,8 @@ export function createGatewayInstanceRuntime(
         });
       } finally {
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
-        restoredOperator?.release();
+        releaseOperatorAuthority?.();
+        restored?.operator?.release();
       }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {

@@ -87,16 +87,17 @@ it.each(["missing", "different", "different account"] as const)(
       { agentId: "re-portal", sessionKey: requesterKey, storePath },
       { sessionId: "requester-session", updatedAt: 1 },
     );
+    const testConfig = { ...config, session: { ...config.session, store: storePath } };
     const queue = await activeRun(targetKey, {
+      config: testConfig,
       requesterSessionKey: requesterKey,
-      storeScope: storePath,
     });
     const caller = createSessionsSendTestCaller(requesterKey);
     const tool = createSessionsSendTool({
       agentSessionKey: requesterKey,
       agentChannel: "telegram",
       callGateway: callGatewayMock,
-      config: { ...config, session: { ...config.session, store: storePath } },
+      config: testConfig,
     });
     const result = await withGatewayToolCallerIdentity(
       identity === "missing"
@@ -158,6 +159,15 @@ it.each([
       storePath: alternateStore
         ? resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" })
         : path.join(dir, "sessions.json"),
+    };
+    const testConfig = {
+      ...config,
+      session: {
+        ...config.session,
+        store: alternateStore
+          ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
+          : scope.storePath,
+      },
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     const sessionManager = SessionManager.open(scope, dir);
@@ -223,6 +233,7 @@ it.each([
         },
         runScopedCallerKey,
         requesterKey,
+        testConfig,
         scope.storePath,
       );
       if (hiddenRun) {
@@ -243,15 +254,7 @@ it.each([
         callGateway: callGatewayMock,
         agentSessionKey: requesterKey,
         agentChannel: "telegram",
-        config: {
-          ...config,
-          session: {
-            ...config.session,
-            store: alternateStore
-              ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
-              : scope.storePath,
-          },
-        },
+        config: testConfig,
       });
 
       if (mode === "steer") {

@@ -351,6 +351,7 @@ describe("sessions_send child coordination", () => {
           handleB,
           childSessionKey,
           requesterSessionKey,
+          config,
         );
       };
       const queueA = vi.fn(async () => {
@@ -370,7 +371,13 @@ describe("sessions_send child coordination", () => {
           options?.onQueueAccepted?.(true);
         },
       };
-      await setSessionsSendTestActiveRun(sessionId, handleA, childSessionKey, requesterSessionKey);
+      await setSessionsSendTestActiveRun(
+        sessionId,
+        handleA,
+        childSessionKey,
+        requesterSessionKey,
+        config,
+      );
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
         .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")

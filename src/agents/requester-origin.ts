@@ -15,7 +15,6 @@ export type RequesterOrigin = Readonly<{
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  memberRoleIds?: readonly string[];
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -69,9 +68,6 @@ export function resolveRequesterPrincipalKey(params: RequesterPrincipalFacts): s
   ]);
 }
 
-const snapshotSet = (values: readonly string[] | undefined) =>
-  values ? Object.freeze([...new Set(values)].toSorted()) : undefined;
-
 /** Capture once at preparation; inherited facts never fall back to the receiver's route. */
 export function captureRequesterOrigin(
   params: RequesterOriginCaptureInput,
@@ -95,7 +91,6 @@ export function captureRequesterOrigin(
     groupId: facts.groupId,
     groupChannel: facts.groupChannel,
     groupSpace: facts.groupSpace,
-    memberRoleIds: snapshotSet(facts.memberRoleIds),
     senderId: facts.senderId,
     senderName: facts.senderName,
     senderUsername: facts.senderUsername,
@@ -166,12 +161,5 @@ export function decodeRequesterOrigin(value: unknown): RequesterOrigin | undefin
     return undefined;
   }
   facts.messageThreadId = thread;
-  const roles = record.memberRoleIds;
-  if (roles !== undefined) {
-    if (!Array.isArray(roles) || !roles.every((role): role is string => typeof role === "string")) {
-      return undefined;
-    }
-    facts.memberRoleIds = roles;
-  }
   return captureRequesterOrigin({ requesterOrigin: facts });
 }

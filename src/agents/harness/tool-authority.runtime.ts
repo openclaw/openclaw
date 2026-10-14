@@ -7,6 +7,10 @@ import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.j
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
+} from "../../sessions/session-controller.contracts.js";
 import {
   assertSessionControllerOperation,
   readSessionControllerOperationState,
@@ -304,6 +308,64 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
           registered = true;
+          const project = (caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
+            assertRegistered();
+            if (!ownsOperation()) {
+              return undefined;
+            }
+            const projected =
+              "requesterOrigin" in caller
+                ? operation
+                  ? operation.projectRequesterToolAuthorityFingerprint?.(caller)
+                  : direct?.projectRequester(caller, route)
+                : operation
+                  ? operation.projectToolAuthorityFingerprint(caller)
+                  : direct?.project(caller, route);
+            assertRegistered();
+            return ownsOperation() ? projected : undefined;
+          };
+          const projectAsync = async (
+            caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester,
+          ) => {
+            assertRegistered();
+            if (!ownsOperation()) {
+              return undefined;
+            }
+            const prepared =
+              !operation && direct
+                ? await prepareReplyToolAuthorityCallerRead(
+                    "requesterOrigin" in caller
+                      ? direct.projectRequesterAsync
+                      : direct.projectAsync,
+                    caller,
+                    fingerprint,
+                    route,
+                    assertRegistered,
+                  )
+                : undefined;
+            if (prepared) {
+              await prepared.prepareCurrent();
+              assertRegistered();
+              return ownsOperation() ? fingerprint : undefined;
+            }
+            if (!operation && direct) {
+              const current = await direct.fingerprintAsync(route);
+              assertRegistered();
+              if (!ownsOperation() || current !== fingerprint) {
+                return undefined;
+              }
+            }
+            const projected =
+              "requesterOrigin" in caller
+                ? operation
+                  ? await operation.projectRequesterToolAuthorityFingerprintAsync?.(caller)
+                  : await direct?.projectRequesterAsync(caller, route)
+                : operation
+                  ? await operation.projectToolAuthorityFingerprintAsync(caller)
+                  : await direct?.projectAsync(caller, route);
+            assertRegistered();
+            return ownsOperation() ? projected : undefined;
+          };
           return {
             watchdogAttempt,
             personalToolParticipants,
@@ -320,50 +382,10 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                 hasSameRequesterOrigin(requesterOrigin, incoming),
               );
             },
-            project: (overlay) => {
-              assertRegistered();
-              if (!ownsOperation()) {
-                return undefined;
-              }
-              const projected = operation
-                ? operation.projectToolAuthorityFingerprint(overlay)
-                : direct?.project(overlay, route);
-              assertRegistered();
-              return ownsOperation() ? projected : undefined;
-            },
-            projectAsync: async (overlay) => {
-              assertRegistered();
-              if (!ownsOperation()) {
-                return undefined;
-              }
-              const prepared =
-                !operation && direct
-                  ? await prepareReplyToolAuthorityCallerRead(
-                      direct.projectAsync,
-                      overlay,
-                      fingerprint,
-                      route,
-                      assertRegistered,
-                    )
-                  : undefined;
-              if (prepared) {
-                await prepared.prepareCurrent();
-                assertRegistered();
-                return ownsOperation() ? fingerprint : undefined;
-              }
-              if (!operation && direct) {
-                const current = await direct.fingerprintAsync(route);
-                assertRegistered();
-                if (!ownsOperation() || current !== fingerprint) {
-                  return undefined;
-                }
-              }
-              const projected = operation
-                ? await operation.projectToolAuthorityFingerprintAsync(overlay)
-                : await direct?.projectAsync(overlay, route);
-              assertRegistered();
-              return ownsOperation() ? projected : undefined;
-            },
+            project,
+            projectAsync,
+            projectRequester: project,
+            projectRequesterAsync: projectAsync,
           };
         },
       },

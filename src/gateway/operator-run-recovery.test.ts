@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
+import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
@@ -23,6 +25,7 @@ import {
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
 import {
   linkEmail,
@@ -39,10 +42,13 @@ import {
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   readGatewayOperatorRecoverySource,
   restoreGatewayOperatorSource,
-  restoreGatewayRequesterRecovery,
+  restoreGatewayRunRecovery,
+  restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -195,24 +201,68 @@ describe("restart recovery authenticated operator source", () => {
         { scopes: ["operator.write"] },
       ),
   );
+  it("resumes a queued channel source after ingress completion but rejects an unlink and relink", async () => {
+    await withAdminIngress(
+      async ({ admins, context, gateway, retire }) => {
+        const admin = expectDefined(admins[0], "linked administrator");
+        const original = expectDefined(
+          getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
+          "authenticated channel operator",
+        );
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(original),
+          "queued source",
+        );
+        expect(source.kind).toBe("channel");
+        const serializedSource = JSON.stringify(source);
+        const persisted: unknown = JSON.parse(serializedSource);
+        retire();
+        expect(original.assertCurrent).toThrow();
+        const restore = () =>
+          restoreGatewayQueuedOperatorRecovery({
+            source: decodeQueuedOperatorRecoverySource(persisted),
+            context: gateway,
+            assertCurrent: () => {},
+          });
+        const restored = await restore();
+        try {
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(restored.authority.profileId).toBe(admin.profile.id);
+          await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
+          await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
+          expect(restored.authority.assertCurrent).toThrow();
+          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+        } finally {
+          restored.release();
+        }
+      },
+      "role",
+      "slack",
+    );
+  });
+
   it("restores only the requester bound to the current durable source claim", () =>
     withRecovery(async (fixture) => {
       let current = true;
-      const restore = () =>
-        restoreGatewayRequesterRecovery({
-          target: fixture.target,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("recovery claim retired");
-            }
-          },
-        });
+      const restore = async () =>
+        (
+          await restoreGatewayRunRecovery({
+            target: fixture.target,
+            context: fixture.context,
+            restoreOperator: false,
+            restoreRequester: true,
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("recovery claim retired");
+              }
+            },
+          })
+        ).requesterOrigin;
       await expect(restore()).resolves.toBeUndefined();
       const origin = {
         sessionKey: "agent:research:telegram:group:requesters",
         messageProvider: "telegram",
         senderId: "bob",
-        memberRoleIds: ["member"],
       };
       const source = expectDefined(
         createRestartRecoveryRequesterSource({
@@ -225,10 +275,10 @@ describe("restart recovery authenticated operator source", () => {
       const bound = { ...fixture.entry, restartRecoveryRequesterSource: source };
       await replaceSessionEntry(fixture.target, bound);
       origin.senderId = "alice";
-      origin.memberRoleIds.push("admin");
+      origin.sessionKey = "agent:research:telegram:group:replacement";
       await expect(restore()).resolves.toMatchObject({
         senderId: "bob",
-        memberRoleIds: ["member"],
+        sessionKey: "agent:research:telegram:group:requesters",
       });
       const historical = structuredClone(source);
       Object.assign(historical.requesterOrigin, {
@@ -258,7 +308,6 @@ describe("restart recovery authenticated operator source", () => {
         { ...source.requesterOrigin, sessionKey: "" },
         { ...source.requesterOrigin, senderId: 7 },
         { ...source.requesterOrigin, senderId: undefined },
-        { ...source.requesterOrigin, memberRoleIds: [7] },
         { ...source.requesterOrigin, messageThreadId: {} },
       ]) {
         const invalid = structuredClone(source);

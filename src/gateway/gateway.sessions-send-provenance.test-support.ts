@@ -1,11 +1,10 @@
 /** Isolated Gateway and scripted provider for requester admission boundary proof. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
@@ -27,6 +26,11 @@ import {
 import type { Deferred } from "../shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import {
+  lastUserText,
+  respond,
+  toolResult,
+} from "./gateway.sessions-send-provenance.provider-test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -52,6 +56,22 @@ export type ProofCase = {
 type Outbound = { to: string; text: string; accountId?: string };
 export type RunResult = { runId?: string; status?: string; error?: unknown };
 type ModelRequest = { raw: string; tools: string[] };
+export type ProofModelRequest = ModelRequest & {
+  prompt: string;
+  result?: Record<string, unknown>;
+};
+type ProofModelReply = { tool?: { name: string; args: unknown }; text?: string };
+const modelScripts: Array<{
+  marker: string;
+  respond: (request: ProofModelRequest) => Promise<ProofModelReply> | ProofModelReply;
+}> = [];
+
+export function registerProofModelScript(
+  marker: string,
+  handleRequest: (request: ProofModelRequest) => Promise<ProofModelReply> | ProofModelReply,
+) {
+  modelScripts.push({ marker, respond: handleRequest });
+}
 export type Scenario = {
   spec: ProofCase;
   sourcePrompt: string;
@@ -99,81 +119,6 @@ async function readBody(request: IncomingMessage): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-function respond(
-  response: ServerResponse,
-  tool?: { name: string; args: unknown },
-  text = "NO_REPLY",
-) {
-  const id = randomUUID();
-  const item = tool
-    ? {
-        type: "function_call",
-        id: `fc_${id}`,
-        call_id: `call_${id}`,
-        name: tool.name,
-        arguments: JSON.stringify(tool.args),
-        status: "completed",
-      }
-    : {
-        type: "message",
-        id: `msg_${id}`,
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: tool ? { ...item, status: "in_progress", arguments: "" } : item,
-    },
-    ...(tool
-      ? [
-          {
-            type: "response.function_call_arguments.done",
-            item_id: item.id,
-            output_index: 0,
-            arguments: JSON.stringify(tool.args),
-          },
-        ]
-      : []),
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
-}
-
-function toolResult(body: Record<string, unknown>): Record<string, unknown> | undefined {
-  const inputs = Array.isArray(body.input) ? body.input : [];
-  const result = inputs.findLast((item) => isRecord(item) && item.type === "function_call_output");
-  if (!isRecord(result)) {
-    return undefined;
-  }
-  const parsed: unknown =
-    typeof result.output === "string" ? JSON.parse(result.output) : result.output;
-  return isRecord(parsed) ? parsed : undefined;
-}
-
-function lastUserText(body: Record<string, unknown>): string {
-  const input = Array.isArray(body.input) ? body.input : [];
-  const user = input.findLast(
-    (item) =>
-      isRecord(item) &&
-      item.role === "user" &&
-      /PROVENANCE_(?:SOURCE|TARGET|INCUMBENT|BOOTSTRAP)_|Agent-to-agent (?:announce|reply) step[.:]/.test(
-        JSON.stringify(item.content),
-      ),
-  );
-  return isRecord(user) ? JSON.stringify(user.content) : "";
 }
 
 async function startProviderAndSink() {
@@ -234,6 +179,18 @@ async function startProviderAndSink() {
         respond(response, undefined, "REPLY_SKIP");
         return;
       }
+      const modelRequest = {
+        raw,
+        tools: (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
+          isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+        ),
+      };
+      const script = modelScripts.find((candidate) => prompt.includes(candidate.marker));
+      if (script) {
+        const reply = await script.respond({ ...modelRequest, prompt, result: toolResult(body) });
+        respond(response, reply.tool, reply.text);
+        return;
+      }
       const scenario = scenarios.find(
         (candidate) =>
           prompt.includes(candidate.sourcePrompt) ||
@@ -244,12 +201,6 @@ async function startProviderAndSink() {
       if (!scenario) {
         throw new Error(`Unexpected proof prompt ${prompt.slice(0, 300)}`);
       }
-      const modelRequest = {
-        raw,
-        tools: (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
-          isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-        ),
-      };
       if (prompt.includes(scenario.targetPrompt)) {
         scenario.targetRequests.push(modelRequest);
         if (scenario.targetRequests.length === 1) {
@@ -372,8 +323,8 @@ async function writeSinkPlugin(sinkUrl: string) {
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
-  // The configured plugin owns only a synthetic outbound transport. Core message
-  // policy, action dispatch, input admission, and both agent executions stay real.
+  // The configured plugin owns synthetic channel I/O and group configuration.
+  // Core policy composition, action dispatch, and execution admission stay real.
   await fs.writeFile(
     path.join(directory, "index.cjs"),
     `module.exports = {
@@ -383,6 +334,7 @@ async function writeSinkPlugin(sinkUrl: string) {
           id: "telegram",
           meta: { id: "telegram", label: "Proof sink", selectionLabel: "Proof sink", docsPath: "/proof", blurb: "Isolated proof transport" },
           capabilities: { chatTypes: ["direct", "group"] },
+          reload: { configPrefixes: [], noopPrefixes: ["channels.telegram.groups"] },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
@@ -390,6 +342,9 @@ async function writeSinkPlugin(sinkUrl: string) {
             isConfigured: () => true,
           },
           actions: { describeMessageTool: () => ({ actions: ["send"], capabilities: [] }) },
+          groups: {
+            resolveToolPolicy: ({ cfg, groupId }) => cfg.channels?.telegram?.groups?.[groupId]?.tools,
+          },
           messaging: {
             normalizeTarget: (value) => value,
             targetResolver: { looksLikeId: (value) => value.startsWith("provenance-") },
@@ -442,18 +397,18 @@ beforeAll(async () => {
     HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_GATEWAY_TOKEN: token,
-    OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_CRON: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_PROVIDERS: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundled,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   })) {
     setTestEnvValue(key, value);
   }
   for (const key of [
+    "OPENCLAW_SKIP_CHANNELS",
+    "OPENCLAW_SKIP_PROVIDERS",
     "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
     "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
@@ -483,10 +438,12 @@ beforeAll(async () => {
         main: {},
         research: { tools: { deny: ["message"] } },
         deployment: {},
+        boundary: { tools: { profile: "full" } },
       },
     },
     gateway: { auth: { mode: "token", token } },
     hooks: { enabled: false },
+    logging: { audit: { enabled: false, executionIdentity: false } },
     models: {
       mode: "replace",
       providers: {
@@ -508,6 +465,7 @@ beforeAll(async () => {
         botToken: "123456:isolated-proof",
         dmPolicy: "open",
         allowFrom: ["*"],
+        groups: { "provenance-restricted": { tools: { deny: ["exec"] } } },
       },
     },
     tools: {
@@ -547,7 +505,7 @@ beforeAll(async () => {
   }
 }, 90_000);
 
-// Global afterEach retires prepared model runtimes even while this suite's Gateway stays open.
+// Prepare the single test lifetime against this fixture's live Gateway registry.
 beforeEach(async () => {
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
@@ -587,6 +545,7 @@ export function runProofIngress(params: {
   message: string;
   senderId: string;
   to: string;
+  groupId?: string;
 }) {
   // Identity comes from the trusted host/channel boundary, never model text.
   return withPluginRuntimeGatewayRequestScope(
@@ -613,6 +572,8 @@ export function runProofIngress(params: {
           senderId: params.senderId,
           messageChannel: "telegram",
           accountId: "default",
+          groupId: params.groupId,
+          chatId: params.to,
         },
       }),
   );

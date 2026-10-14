@@ -210,6 +210,9 @@ it("keeps requester facts with exact accepted custody through projection edits a
     requesterOrigin: { ...requesterOrigin, senderId: "alice" },
   };
   expect(readSessionPendingInputRequesterOrigin(receipt)).toMatchObject(requesterOrigin);
+  const captured = readSessionPendingInputRequesterOrigin(receipt);
+  expect(Object.isFrozen(captured)).toBe(true);
+  expect(captured?.sessionKey).toBe(requesterOrigin.sessionKey);
   expect(readSessionPendingInputRequesterOrigin({ ...receipt })).toBeUndefined();
   receipt.finish("interrupted");
   await receipt.settled?.();
@@ -277,6 +280,9 @@ it.each([
     }
     receipt.finish("interrupted");
     await receipt.settled?.();
+    expect(() => readSessionPendingInputRequesterOrigin(receipt)).toThrow(
+      SessionPendingInputCustodyError,
+    );
     if (restart) {
       rotateAgentEventLifecycleGeneration();
     }

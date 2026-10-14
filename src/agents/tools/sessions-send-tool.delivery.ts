@@ -119,6 +119,7 @@ function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | un
 
 type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
+  admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
@@ -204,7 +205,8 @@ export async function trySessionsSendActiveRunDelivery(
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
     if (activeOperation && activeRunSessionId && messageText) {
-      if (!caller?.requesterOrigin) {
+      const requesterOrigin = caller?.requesterOrigin;
+      if (!requesterOrigin) {
         if (params.mode === "steer") {
           throw new Error('Cannot verify requester identity for steering; use mode: "followup".');
         }
@@ -226,7 +228,10 @@ export async function trySessionsSendActiveRunDelivery(
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
-          requesterOrigin: caller.requesterOrigin,
+          requesterToolAuthority: {
+            requesterOrigin,
+            config: params.admissionConfig,
+          },
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
@@ -257,7 +262,7 @@ export async function trySessionsSendActiveRunDelivery(
             input: {
               text: messageText,
               provenance: inputProvenance,
-              requesterOrigin: caller.requesterOrigin,
+              requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
               idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
             },
@@ -315,9 +320,16 @@ export async function trySessionsSendActiveRunDelivery(
         // Consumed without a confirmed commit: never replay it as a new turn.
         throw new Error(steer.errorMessage);
       }
-      if (steer.reason === "requester_origin_mismatch") {
+      if (
+        steer.reason === "requester_origin_mismatch" ||
+        steer.reason === "tool_authority_mismatch"
+      ) {
         if (params.mode === "steer") {
-          throw new Error('Active run has a different requester; use mode: "followup".');
+          throw new Error(
+            steer.reason === "requester_origin_mismatch"
+              ? 'Active run has a different requester; use mode: "followup".'
+              : 'Requester policy does not match the active run; use mode: "followup".',
+          );
         }
         return {};
       }

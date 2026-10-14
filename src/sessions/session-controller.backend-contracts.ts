@@ -11,6 +11,7 @@ import type {
 import type { OriginatingChannelType } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../llm/types.js";
@@ -57,8 +58,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
-  /** Original requester checked by the host and never forwarded to the backend. */
-  requesterOrigin?: RequesterOrigin;
+  /** Fresh requester authority checked by the host and never forwarded to the backend. */
+  requesterToolAuthority?: ReplyToolAuthorityRequester;
   /** Host admission after policy preparation; false leaves the input for follow-up. */
   canAdmit?: () => boolean;
   toolAuthorityPreparation?: ReplyToolAuthorityPreparation & {
@@ -121,6 +122,12 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
+/** Fresh delegation facts projected at its destination, separate from a source tool ceiling. */
+export type ReplyToolAuthorityRequester = Readonly<{
+  requesterOrigin: RequesterOrigin;
+  config: OpenClawConfig;
+}>;
+
 export type ReplyTurnParticipantInput = Pick<
   ReplyToolAuthorityOverlay,
   "operatorAuthority" | "senderId" | "senderName" | "gatewayUiCommandTarget"
@@ -140,6 +147,11 @@ export type ReplyToolAuthoritySnapshot = Readonly<{
   fingerprintAsync?(route?: ReplyToolAuthorityRoute): Promise<string>;
   projectAsync?(
     overlay: ReplyToolAuthorityOverlay,
+    route: ReplyToolAuthorityRoute,
+  ): Promise<string>;
+  projectRequester?(requester: ReplyToolAuthorityRequester, route: ReplyToolAuthorityRoute): string;
+  projectRequesterAsync?(
+    requester: ReplyToolAuthorityRequester,
     route: ReplyToolAuthorityRoute,
   ): Promise<string>;
 }>;

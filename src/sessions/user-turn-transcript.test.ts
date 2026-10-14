@@ -88,7 +88,6 @@ describe("user turn transcript persistence", () => {
         sessionKey: "agent:main:telegram:group:requesters",
         messageProvider: "telegram",
         senderId: "bob",
-        memberRoleIds: ["member"],
       };
       const original = structuredClone(requesterOrigin);
       const input = { text: "continue", idempotencyKey: "requester-custody:user", requesterOrigin };
@@ -111,7 +110,7 @@ describe("user turn transcript persistence", () => {
       });
       const recorders = [recorder, copied];
       requesterOrigin.senderId = "alice";
-      requesterOrigin.memberRoleIds.push("admin");
+      requesterOrigin.sessionKey = "agent:main:replacement";
       exposedMessage["__openclaw"] = { requesterOrigin: { ...original, senderId: "alice" } };
       expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(original);
       expect(readUserTurnRequesterOrigin({ ...recorder })).toBeUndefined();

@@ -346,7 +346,7 @@ describe("host-prepared embedded tool authority", () => {
         const pending = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
           ...(input === "human"
             ? { isInboundUserMessage: true, toolAuthorityOverlay: own }
-            : { requesterOrigin: origin }),
+            : { requesterToolAuthority: { requesterOrigin: origin, config: attempt.config } }),
           assertCurrent: () => {},
         });
         await entered.promise;

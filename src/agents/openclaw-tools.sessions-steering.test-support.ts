@@ -1,7 +1,7 @@
 import { afterEach, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
@@ -44,14 +44,13 @@ export async function setSessionsSendTestActiveRun(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
   sessionKey: string,
-  requesterSessionKey?: string,
+  requesterSessionKey: string | undefined,
+  config: OpenClawConfig,
   storeScope?: string,
 ) {
   const caller = createSessionsSendTestCaller(requesterSessionKey);
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
-  const storePath =
-    storeScope ??
-    resolveSessionStorePathCore(getRuntimeConfigSnapshot()?.session?.store, { agentId });
+  const storePath = storeScope ?? resolveSessionStorePathCore(config.session?.store, { agentId });
   const target = captureSessionTarget({
     storeScope: storePath,
     sessionKey,
@@ -62,7 +61,7 @@ export async function setSessionsSendTestActiveRun(
   const runId = handle.runId ?? `sessions-target:${sessionId}`;
   const sessionFile = `/tmp/${sessionId}.jsonl`;
   const admission = prepareAgentRunAdmission({
-    cfg: {},
+    cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
       agentId,
@@ -87,7 +86,7 @@ export async function setSessionsSendTestActiveRun(
           sessionFile,
           sessionTarget: { agentId, sessionId, sessionKey, storePath },
           workspaceDir: "/tmp/sessions-send-test",
-          config: {},
+          config,
           provider: "openai",
           modelId: "gpt-test",
           requesterOrigin: caller.requesterOrigin,
@@ -128,13 +127,14 @@ export async function setSessionsSendTestActiveRun(
 export async function activeRun(
   sessionKey: string,
   options: {
+    config: OpenClawConfig;
     sessionId?: string;
     storeScope?: string;
     requesterSessionKey?: string;
     streaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     rejects?: boolean;
-  } = {},
+  },
 ) {
   const queueMessage = vi.fn(async (_text: string, _options?: EmbeddedAgentQueueMessageOptions) => {
     if (options.rejects) {
@@ -163,6 +163,7 @@ export async function activeRun(
     },
     sessionKey,
     options.requesterSessionKey,
+    options.config,
     options.storeScope,
   );
   return queueMessage;

@@ -1,5 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {

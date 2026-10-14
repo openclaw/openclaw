@@ -80,9 +80,7 @@ export function readSessionPendingInputRequesterOrigin(
     return undefined;
   }
   assertSessionPendingInputLifetimeCurrent(owner);
-  return decodeRequesterOrigin(
-    parseSessionPendingInputMessage(owner.messageJson)["__openclaw"]?.requesterOrigin,
-  );
+  return owner.requesterOrigin;
 }
 
 export function readWithdrawnSessionPendingInputId(
@@ -93,6 +91,8 @@ export function readWithdrawnSessionPendingInputId(
 }
 
 function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
+  const message = parseSessionPendingInputMessage(owner.messageJson);
+  owner.requesterOrigin ??= decodeRequesterOrigin(message["__openclaw"]?.requesterOrigin);
   const receipt: SessionPendingInputReceipt = {
     get state() {
       return owner.consumed || owner.sources?.every((source) => source.consumed)
@@ -100,7 +100,7 @@ function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputRecei
         : "queued";
     },
     inputId: owner.inputId,
-    message: parseSessionPendingInputMessage(owner.messageJson),
+    message,
     run: (operation) => runWithSessionPendingInput(owner, operation),
     runAsync: (operation) =>
       runWithSessionPendingInputPersistence(owner, () =>
@@ -180,6 +180,7 @@ export function bindSessionPendingInputSources(
   const aggregateInputId = randomUUID();
   const aggregate = ownerReceipt({
     ...first,
+    requesterOrigin: undefined,
     inputId: aggregateInputId,
     transcriptInputId: aggregateInputId,
     idempotencyKey,
