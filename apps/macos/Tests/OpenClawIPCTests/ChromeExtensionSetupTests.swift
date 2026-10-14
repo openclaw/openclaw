@@ -350,6 +350,83 @@ struct ChromeExtensionSetupTests {
         }
     }
 
+    @Test func `Chrome setup publishes remote mode after reloading remote URL without mode`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+            ]))
+            let state = AppState(preview: true)
+            #expect(state.connectionMode == .local)
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://remote.example:18789",
+                        "token": ["$secretRef": "gateway-token"],
+                    ],
+                ],
+            ]))
+            state.applyConfigFromDisk()
+            #expect(state.connectionMode == .remote)
+            #expect(state._testDirtyGatewayConfigFields == ["gateway.mode"])
+
+            var observedModes: [String?] = []
+            var observedSecretRefs: [String?] = []
+            let setup = ChromeExtensionSetup(state: state) { _ in
+                let gateway = OpenClawConfigFile.loadDict()["gateway"] as? [String: Any]
+                let remote = gateway?["remote"] as? [String: Any]
+                let tokenObj = remote?["token"] as? [String: Any]
+                observedModes.append(gateway?["mode"] as? String)
+                observedSecretRefs.append(tokenObj?["$secretRef"] as? String)
+                return self.prepared
+            }
+            defer { setup.stop() }
+
+            let result = try await setup.run(action: .install) { true }
+            #expect(result == self.prepared)
+            #expect(observedModes == ["remote"])
+            #expect(observedSecretRefs == ["gateway-token"])
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test func `Chrome inspect stays independent of unfinished Gateway drafts`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://remote.example:18789",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state.remoteUrl = "wss://"
+
+            var actionCalls = 0
+            let setup = ChromeExtensionSetup(state: state) { action in
+                #expect(action == .inspect)
+                actionCalls += 1
+                return self.prepared
+            }
+            defer { setup.stop() }
+
+            let result = try await setup.run(action: .inspect) { true }
+            #expect(result == self.prepared)
+            #expect(actionCalls == 1)
+        }
+    }
+
     @Test func `Chrome setup surfaces visible recovery when remote mode publication cannot complete`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }

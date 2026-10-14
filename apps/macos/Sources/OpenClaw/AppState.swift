@@ -1107,12 +1107,9 @@ extension AppState {
         var removesGatewayMode = false
 
         let desiredMode = draft.connectionMode == .unconfigured ? nil : draft.connectionMode.rawValue
-        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let repairsRemoteMode = draft.connectionMode == .remote &&
-            ConnectionModeResolver.resolve(root: currentRoot).mode == .remote &&
-            currentMode != ConnectionMode.remote.rawValue
 
-        if draft.dirtyFields.contains(.mode) || repairsRemoteMode {
+        if draft.dirtyFields.contains(.mode) {
+            let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let desiredMode {
                 if currentMode != desiredMode {
                     gateway["mode"] = desiredMode
@@ -1126,17 +1123,7 @@ extension AppState {
 
         var remote = gateway["remote"] as? [String: Any] ?? [:]
         var remoteChanged = false
-        var remoteDirtyFields = draft.dirtyFields
-        if repairsRemoteMode, GatewayRemoteConfig.resolveUrlString(root: currentRoot) == nil {
-            remoteDirtyFields.formUnion([
-                .remoteTransport,
-                .remoteUrl,
-                .remoteTarget,
-                .remoteIdentity,
-                .remoteToken,
-            ])
-        }
-        if remoteDirtyFields.contains(where: { $0.remoteKey != nil }) {
+        if draft.dirtyFields.contains(where: { $0.remoteKey != nil }) {
             let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
             let updated = Self.updatedRemoteGatewayConfig(
                 current: remote,
@@ -1147,7 +1134,7 @@ extension AppState {
                     remoteTarget: draft.remoteTarget,
                     remoteIdentity: draft.remoteIdentity,
                     remoteToken: draft.remoteToken,
-                    dirtyFields: remoteDirtyFields))
+                    dirtyFields: draft.dirtyFields))
             remote = updated.remote
             remoteChanged = updated.changed
         }

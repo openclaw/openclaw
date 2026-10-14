@@ -28,15 +28,17 @@ final class ChromeExtensionSetup {
     {
         if let performAction {
             self.performAction = { action, _ in
-                if let state {
+                if action != .inspect, let state {
                     try state.prepareGatewayConfigForChromeExtensionSetup()
                 }
                 return try await performAction(action)
             }
         } else {
             self.performAction = { action, isCurrent in
-                let targetState = state ?? AppStateStore.shared
-                try targetState.prepareGatewayConfigForChromeExtensionSetup()
+                if action != .inspect {
+                    let targetState = state ?? AppStateStore.shared
+                    try targetState.prepareGatewayConfigForChromeExtensionSetup()
+                }
                 return try await Self.runAction(action: action, isCurrent: isCurrent)
             }
         }
