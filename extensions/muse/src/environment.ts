@@ -5,24 +5,39 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 export async function museEnvironment(
   apiKey?: string,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<NodeJS.ProcessEnv> {
+): Promise<{ env: NodeJS.ProcessEnv; credentialSource: string }> {
   const inherited = { ...process.env, ...env };
   const managedHome = path.join(resolveStateDir(inherited), "muse");
-  let managed = true;
+  const authPath = path.join(managedHome, "muse", "auth.json");
+  let credentialSource: string;
   try {
-    await fs.access(path.join(managedHome, "muse", "auth.json"));
+    const stat = await fs.stat(authPath);
+    credentialSource = JSON.stringify([
+      "managed",
+      authPath,
+      stat.dev,
+      stat.ino,
+      stat.size,
+      stat.mtimeMs,
+      stat.ctimeMs,
+    ]);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      managed = false;
+      credentialSource = "native";
     } else {
       throw error;
     }
   }
   // An existing managed store remains authoritative even if its contents are unusable.
   return {
-    ...inherited,
-    MUSE_NO_AUTO_UPDATE: "1",
-    ...(managed ? { TBH_CREDENTIAL_BACKEND: "file", XDG_CONFIG_HOME: managedHome } : {}),
-    ...(apiKey ? { META_API_KEY: apiKey } : {}),
+    credentialSource,
+    env: {
+      ...inherited,
+      MUSE_NO_AUTO_UPDATE: "1",
+      ...(credentialSource !== "native"
+        ? { TBH_CREDENTIAL_BACKEND: "file", XDG_CONFIG_HOME: managedHome }
+        : {}),
+      ...(apiKey ? { META_API_KEY: apiKey } : {}),
+    },
   };
 }

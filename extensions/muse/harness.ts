@@ -33,7 +33,7 @@ import {
 import { createApprovalHandler } from "./src/approvals.js";
 import { prepareMuseSessionContext } from "./src/context.js";
 import { consumeTurn } from "./src/events.js";
-import { credentialFingerprint, MusePool, openMuseSession } from "./src/runtime.js";
+import { MusePool, openMuseSession } from "./src/runtime.js";
 import { readMuseCatalog, verifyMuseSetup } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
@@ -166,16 +166,16 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         : security === "full" && ask === "off"
           ? "allowAll"
           : "promptUnmatched";
-      const compatibility = JSON.stringify([
-        workspace,
-        params.modelId,
-        credentialFingerprint(apiKey),
-        readOnly,
-        approvalMode,
-      ]);
       params.hostCapabilities.assertActive();
       const lease = await pool.acquire(workspace, apiKey, readOnly);
       const { runtime } = lease;
+      const compatibility = JSON.stringify([
+        workspace,
+        params.modelId,
+        runtime.credentialIdentity,
+        readOnly,
+        approvalMode,
+      ]);
       let session: Session | undefined;
       let turn: Turn | undefined;
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;

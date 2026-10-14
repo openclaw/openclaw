@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  withTestTimeout,
+  withinTest,
 } from "../../test/helpers/promise.js";
 import * as oauthLocks from "../agents/auth-profiles/oauth-profile-lock.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
@@ -130,7 +130,9 @@ describe("native setup authority", () => {
     vi.unstubAllEnvs();
   });
 
-  it("blocks native Muse login after the admin connection is invalidated without aborting", async () => {
+  it("blocks native Muse login after the admin connection is invalidated without aborting", async ({
+    signal,
+  }) => {
     const setup = await fixture({ surface: "gateway" });
     const binaryPath = path.join(path.dirname(setup.configPath), "muse");
     const attemptsPath = path.join(path.dirname(setup.configPath), "muse-attempts");
@@ -202,9 +204,16 @@ process.exit(1);
         client,
         isWebchatConnect: () => false,
       });
-      await withTestTimeout(entered.promise, 5_000, "Provider login did not start");
       const session = tracker.wizardSessions.get(params.sessionId);
       assert.ok(session);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          whenAdmittedWizardSessionSettled(session),
+          "Provider login did not start",
+        ),
+        signal,
+      );
       client.invalidated = true;
       expect(controller.signal.aborted).toBe(false);
       expect(providerSignal?.aborted).toBe(false);

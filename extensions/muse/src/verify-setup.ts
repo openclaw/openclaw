@@ -10,7 +10,7 @@ export async function readMuseCatalog(
   ctx: Pick<AgentHarnessSetupVerificationContext, "config" | "signal" | "assertCurrent">,
 ): Promise<MuseCatalogEntry[]> {
   const config = ctx.config.plugins?.entries?.muse?.config;
-  const env = await museEnvironment();
+  const { env } = await museEnvironment();
   ctx.signal.throwIfAborted();
   ctx.assertCurrent();
   const host = spawnMspConnection({

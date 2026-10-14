@@ -14,7 +14,6 @@ import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
 import { createApprovalHandler } from "./src/approvals.js";
-import { MusePool } from "./src/runtime.js";
 
 const writes = vi.hoisted(() => ({
   append: vi.fn(async (params: { messages: unknown[] }) => params.messages),
@@ -932,26 +931,46 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("isolates pooled credentials, reuses matching hosts, and closes idle hosts", async () => {
-    const pool = new MusePool(fixture);
+  it("starts fresh sessions when managed auth appears, changes, or disappears", async () => {
+    const { harness, params, bindings } = setup();
+    const stateDir = await mkdtemp(join(workspace, "session-auth-"));
+    const authDir = join(stateDir, "muse", "muse");
+    const authFile = join(authDir, "auth.json");
+    const log = join(stateDir, "requests.jsonl");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("META_API_KEY", undefined);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
     try {
-      const first = await pool.acquire(workspace, "key-a", false);
-      const same = await pool.acquire(workspace, "key-a", false);
-      const other = await pool.acquire(workspace, "key-b", false);
-      expect(same.runtime).toBe(first.runtime);
-      expect(other.runtime).not.toBe(first.runtime);
-      vi.useFakeTimers();
-      first.release();
-      same.release();
-      other.release();
-      await vi.advanceTimersByTimeAsync(300_000);
-      vi.useRealTimers();
-      await first.runtime.host.exited;
-      expect(first.runtime.closing).toBe(true);
-      await other.runtime.host.exited;
+      const native = await harness.runAttempt(params);
+      expect(terminal(native).kind).toBe("ok");
+      const identities = [bindings.get(params.sessionId)];
+      await mkdir(authDir, { recursive: true });
+      await writeFile(authFile, '{"account":"managed"}');
+      const managed = await harness.runAttempt(params);
+      expect(terminal(managed).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      await writeFile(authFile, '{"account":"replacement-account"}');
+      const changed = await harness.runAttempt(params);
+      expect(terminal(changed).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      await rm(authFile);
+      const restored = await harness.runAttempt(params);
+      expect(terminal(restored).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      expect(identities.every((binding) => binding !== undefined)).toBe(true);
+      expect(new Set(identities.map((binding) => binding?.sessionId)).size).toBe(4);
+      expect(identities[1]?.compatibility).not.toBe(identities[0]?.compatibility);
+      expect(identities[2]?.compatibility).not.toBe(identities[1]?.compatibility);
+      expect(identities[3]?.compatibility).not.toBe(identities[2]?.compatibility);
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.filter((request) => request.method === "session/start")).toHaveLength(4);
+      expect(requests.filter((request) => request.method === "session/resume")).toHaveLength(0);
     } finally {
-      vi.useRealTimers();
-      await pool.dispose();
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
     }
   });
 

@@ -8,6 +8,7 @@ import { runMuseLogin } from "./muse-login.js";
 
 const directories: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
@@ -27,7 +28,7 @@ if (process.argv[2] !== 'login') process.exit(9);
 fs.appendFileSync(path.join(dir, 'attempts'), 'login\\n');
 if (process.env.TBH_CREDENTIAL_BACKEND !== 'file') process.exit(1);
 fs.writeFileSync(path.join(dir, 'environment'), JSON.stringify({ backend: process.env.TBH_CREDENTIAL_BACKEND, home: process.env.XDG_CONFIG_HOME, key: process.env.META_API_KEY }));
-const watcher = fs.watch(dir, (_, name) => { if (name === 'approve') { watcher.close(); process.exit(0); } });
+const watcher = fs.watch(dir, (_, name) => { if (name === 'approve') { fs.writeFileSync(path.join(dir, 'credential'), 'saved'); watcher.close(); process.exit(0); } });
 process.on('SIGTERM', () => { fs.writeFileSync(path.join(dir, 'cancelled'), 'yes'); watcher.close(); process.exit(0); });
 process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth/device/?code=ABCD-1234\\nconfirm this code matches:\\n  ABCD-1234\\n');
 `,
@@ -96,6 +97,30 @@ describe("Muse Code browser sign-in", () => {
     await expect(runMuseLogin(ctx)).rejects.toThrow("cancelled while showing code");
     expect(await readFile(path.join(directory, "cancelled"), "utf8")).toBe("yes");
     expect(ctx.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("kills a pending login when authority is revoked without aborting the signal", async ({
+    signal,
+  }) => {
+    const { ctx, directory } = await fixture();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    ctx.signal = signal;
+    let active = true;
+    ctx.assertCurrent = () => {
+      if (!active) {
+        throw new Error("Login authority revoked");
+      }
+    };
+    ctx.openUrl = async () => {
+      active = false;
+      await vi.advanceTimersByTimeAsync(100);
+    };
+    await expect(runMuseLogin(ctx)).rejects.toThrow("Login authority revoked");
+    expect(signal.aborted).toBe(false);
+    expect(await readFile(path.join(directory, "cancelled"), "utf8")).toBe("yes");
+    await expect(readFile(path.join(directory, "credential"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("gives the install command when the configured binary is missing", async () => {

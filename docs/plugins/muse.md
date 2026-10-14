@@ -129,6 +129,8 @@ it.
 
 Each credential gets its own `muse serve` process. Changing the key starts a
 new Muse session instead of resuming one that belongs to another credential.
+Switching between native and Gateway-managed credentials, or changing the
+managed credential file, retires the pooled process and starts a fresh session.
 
 If Muse rejects the credential, or finds none, the turn fails. Chat shows
 OpenClaw's generic failure notice; the Gateway log (`openclaw logs --follow`)

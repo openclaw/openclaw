@@ -27,8 +27,10 @@ async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promi
   let presentation: Promise<void> = Promise.resolve();
   let failure: unknown;
   let killTimer: NodeJS.Timeout | undefined;
+  let authorityTimer: NodeJS.Timeout | undefined;
   const stop = (error: unknown) => {
     failure ??= error;
+    clearInterval(authorityTimer);
     child.kill("SIGTERM");
     killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1000);
     killTimer.unref();
@@ -39,6 +41,17 @@ async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promi
     10 * 60_000,
   );
   timer.unref();
+  // Device-token invalidation can revoke authority without aborting the wizard signal.
+  if (ctx.assertCurrent) {
+    authorityTimer = setInterval(() => {
+      try {
+        ctx.assertCurrent?.();
+      } catch (error) {
+        stop(error);
+      }
+    }, 100);
+    authorityTimer.unref();
+  }
   ctx.signal?.addEventListener("abort", abort, { once: true });
   // Cover cancellation between the initial authority check and listener installation.
   if (ctx.signal?.aborted) {
@@ -81,6 +94,7 @@ async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promi
   child.once("close", (code) => {
     clearTimeout(timer);
     clearTimeout(killTimer);
+    clearInterval(authorityTimer);
     ctx.signal?.removeEventListener("abort", abort);
     if (failure) {
       reject(failure);
