@@ -61,7 +61,8 @@ vi.mock("./transcript-mirror.js", async (importOriginal) => ({
   importCodexThreadHistoryToTranscript: transcriptMocks.importHistory,
 }));
 
-vi.mock("./upstream-fork-boundary.js", () => ({
+vi.mock("./upstream-fork-boundary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./upstream-fork-boundary.js")>()),
   resolveCodexUpstreamForkBoundary: vi.fn(async () => ({
     ok: true,
     boundary,
