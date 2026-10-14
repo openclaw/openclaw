@@ -294,6 +294,19 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
   return [...new Set(resolved.filter((value): value is string => value !== null))];
 }
 
+/** Discovery read failures mean presence is unknown, not absent. */
+function isBlockedReadError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES";
+}
+
+function blockedInspectionIssue(label: string, error: unknown): string {
+  const message = `${label}: could not list profiles (${String(error)})`;
+  return process.platform === "darwin" && isBlockedReadError(error)
+    ? `${message}; on macOS, grant Full Disk Access to the app running OpenClaw, then check again`
+    : message;
+}
+
 /** Discover exact Store identity separately from approved unpacked path records. */
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
@@ -303,6 +316,8 @@ export async function discoverChromeExtensionIds(params: {
   storeDiscovered: DiscoveredChromeStoreExtension[];
   issues: string[];
   identityMismatches: string[];
+  /** Browsers whose profile files could not be read; installation cannot be confirmed or denied. */
+  blocked: string[];
 }> {
   const platform = process.platform;
   const approved = new Set(
@@ -312,6 +327,7 @@ export async function discoverChromeExtensionIds(params: {
   const storeDiscovered: DiscoveredChromeStoreExtension[] = [];
   const issues: string[] = [];
   const identityMismatches: string[] = [];
+  const blocked = new Set<string>();
   for (const root of chromeProductRoots()) {
     if (!(await lstatIfExists(root.userDataDir, "ENOENT"))) {
       continue;
@@ -320,13 +336,15 @@ export async function discoverChromeExtensionIds(params: {
       await assertOwnedPath(root.userDataDir, "directory");
     } catch (error) {
       issues.push(`${root.label}: ${error instanceof Error ? error.message : String(error)}`);
+      blocked.add(root.label);
       continue;
     }
     let profiles: Dirent[];
     try {
       profiles = await fs.readdir(root.userDataDir, { withFileTypes: true });
     } catch (error) {
-      issues.push(`${root.label}: could not list profiles (${String(error)})`);
+      issues.push(blockedInspectionIssue(root.label, error));
+      blocked.add(root.label);
       continue;
     }
     for (const profileEntry of profiles) {
@@ -337,11 +355,11 @@ export async function discoverChromeExtensionIds(params: {
       // Chromium partitions extension settings by enforcement policy across both stores.
       for (const filename of ["Preferences", "Secure Preferences"]) {
         const preferencesPath = path.join(profileDir, filename);
-        const preferencesInfo = await lstatIfExists(preferencesPath, "ENOENT");
-        if (!preferencesInfo) {
-          continue;
-        }
         try {
+          const preferencesInfo = await lstatIfExists(preferencesPath, "ENOENT");
+          if (!preferencesInfo) {
+            continue;
+          }
           await assertOwnedPath(profileDir, "directory");
           await assertOwnedPath(preferencesPath, "file");
           if (preferencesInfo.size > PREFERENCES_MAX_BYTES) {
@@ -425,6 +443,7 @@ export async function discoverChromeExtensionIds(params: {
           issues.push(
             `${root.label} profile ${profileEntry.name} (${filename}): ${error instanceof Error ? error.message : String(error)}`,
           );
+          blocked.add(root.label);
         }
       }
     }
@@ -450,5 +469,6 @@ export async function discoverChromeExtensionIds(params: {
     storeDiscovered: uniqueSorted(storeDiscovered, () => ""),
     issues,
     identityMismatches,
+    blocked: [...blocked].toSorted(),
   };
 }

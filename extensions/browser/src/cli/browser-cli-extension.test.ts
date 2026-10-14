@@ -55,6 +55,8 @@ const createExtensionStatus = () => ({
   discovered: [],
   storeDiscovered: [],
   storeInstallRequests: [],
+  discoveryBlocked: [],
+  chromeDiscoveryBlocked: false,
   manualSetupRequired: false,
   issues: [],
 });

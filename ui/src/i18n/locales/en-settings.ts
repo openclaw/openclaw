@@ -1364,6 +1364,9 @@ const enSettings = {
       chromeExtensionDetected: "Installed",
       chromeExtensionNotInstalled: "Not installed",
       chromeExtensionUnknown: "Status unavailable",
+      chromeExtensionInspectionBlocked:
+        "Chrome profile files are unreadable, so installation cannot be confirmed. On macOS, grant Full Disk Access to the app running OpenClaw. " +
+        "Choose Verify connection to check the live relay instead.",
       chromeExtensionEnableHint:
         "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
       chromeExtensionStatusUnsupported:

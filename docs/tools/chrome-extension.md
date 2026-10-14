@@ -693,6 +693,13 @@ openclaw doctor
   is expected for direct extension-only remote Gateway setups. On Windows, first
   check that the packaged native executable and matching local CLI are installed
   and that their private ACL/context checks succeed.
+- **"could not list profiles" / unknown install state:** OpenClaw cannot read
+  Chrome's profile files, so it cannot confirm or deny an installation even when
+  the extension is connected. On macOS this is usually privacy protection:
+  grant Full Disk Access to the app running OpenClaw (System Settings → Privacy &
+  Security → Full Disk Access), restart it, then rerun `extension status`. Use the
+  extension popup's connection state or
+  `openclaw browser extension setup --action verify` to confirm a live pairing.
 - **Relay unavailable:** for `/browser/extension` pairings, confirm the target
   Gateway is running. For direct loopback `/extension` pairings, check native
   host registration, wake-up support in the extension build, automatic setup,
