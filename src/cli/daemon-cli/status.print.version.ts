@@ -1,5 +1,6 @@
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { resolveDaemonServiceInstallGuidance, type createCliStatusTextStyles } from "./shared.js";
 import type { DaemonStatus } from "./status.gather.js";
 
@@ -40,7 +41,13 @@ function printGatewayBuildIdentity(
       `Restart required: the running Gateway loaded build ${runningBuildId}, but the installation on disk is build ${installedBuildId}. Imports it has not already loaded will fail until it restarts.`,
     ),
   );
-  defaultRuntime.error(warnText("Restart it with: openclaw gateway restart"));
+  // The restart has to reach the same Gateway this status read, and profile selection
+  // lives only in this process, so the printed command must carry it forward; pasting a
+  // bare `openclaw gateway restart` into another shell would restart the default
+  // profile's Gateway and leave this one stale.
+  defaultRuntime.error(
+    warnText(`Restart it with: ${formatCliCommand("openclaw gateway restart")}`),
+  );
 }
 
 export function printDaemonStatusVersions(

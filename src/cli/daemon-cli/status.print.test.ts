@@ -933,6 +933,50 @@ describe("printDaemonStatus", () => {
       "Restart required: the running Gateway loaded build build-loaded, but the installation on disk is build build-on-disk.",
     );
     expect(errors).toContain("Imports it has not already loaded will fail until it restarts.");
-    expect(errors).toContain("openclaw gateway restart");
+    expect(errors).toContain(`Restart it with: ${formatCliCommand("openclaw gateway restart")}`);
+  });
+
+  // The restart has to reach the Gateway this status read. Profile and container
+  // selection is applied inside this CLI process only, so an instruction printed
+  // without it restarts the default target when pasted into another shell.
+  function printRebuiltUnderRunningGateway() {
+    printDaemonStatus({
+      cli: { version: "2026.9.5" },
+      gateway: {
+        ...gateway,
+        buildId: "build-loaded",
+        installedBuildId: "build-on-disk",
+        restartRequired: true,
+      },
+      rpc: { ok: true, url: "ws://127.0.0.1:18789", version: "2026.9.5" },
+    });
+  }
+
+  it("carries the selected profile into the restart instruction", () => {
+    withEnv({ OPENCLAW_PROFILE: "rescue", OPENCLAW_CONTAINER_HINT: undefined }, () => {
+      printRebuiltUnderRunningGateway();
+    });
+
+    const errors = output(runtime.error);
+    expect(errors).toContain("Restart it with: openclaw --profile rescue gateway restart");
+    expect(errors).not.toContain("Restart it with: openclaw gateway restart");
+  });
+
+  it("carries the selected container into the restart instruction", () => {
+    withEnv({ OPENCLAW_PROFILE: undefined, OPENCLAW_CONTAINER_HINT: "openclaw-rescue" }, () => {
+      printRebuiltUnderRunningGateway();
+    });
+
+    expect(output(runtime.error)).toContain(
+      "Restart it with: openclaw --container openclaw-rescue gateway restart",
+    );
+  });
+
+  it("leaves the restart instruction bare for the default profile", () => {
+    withEnv({ OPENCLAW_PROFILE: "default", OPENCLAW_CONTAINER_HINT: undefined }, () => {
+      printRebuiltUnderRunningGateway();
+    });
+
+    expect(output(runtime.error)).toContain("Restart it with: openclaw gateway restart");
   });
 });
