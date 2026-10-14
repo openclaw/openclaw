@@ -275,9 +275,10 @@ export async function installPackageDir<
   // A retry cannot revive a refused transaction or borrow a successor's lease.
   // Publication-only cancellation remains separate so the owner can still roll back.
   const assertOwned = retainMutationAuthority(transactionRequest?.assertOwned ?? (() => {}));
-  const assertSettlementOwned = retainMutationAuthority((assertCurrent?: () => void) =>
-    (assertCurrent ?? assertOwned)(),
-  );
+  const assertSettlementOwned = retainMutationAuthority((assertCurrent?: () => void) => {
+    assertOwned();
+    assertCurrent?.();
+  });
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   let initialInstallBaseRealPath: string;

@@ -766,7 +766,7 @@ describe("installPluginFromClawHub", () => {
       version: "2026.6.10",
       host: "2026.6.8",
       recovery: "absent",
-      error: "2026.6.10",
+      error: "Upgrade OpenClaw or choose an explicit compatible plugin version.",
     },
   ])("$name", async ({ version, host, recovery, error }) => {
     const pinned = version === "2026.6.8";
