@@ -773,7 +773,9 @@ bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
 enabled, it checks for passive on-disk changes about once per minute. Edits made
 outside OpenClaw may therefore take up to about a minute to appear, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace.
+workspace. Each discovery pass reads a shared root once for matching discovery
+limits and file policies, then applies each workspace's precedence separately.
+The next pass reads those roots again to observe changes.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;

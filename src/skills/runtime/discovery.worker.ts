@@ -15,6 +15,7 @@ import {
   appendLowerPrecedenceSkillRecords,
   mergeSkillRecords,
 } from "../loading/skill-precedence.js";
+import type { SkillSourceReadBatch } from "../loading/skill-root-loader.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
@@ -85,6 +86,7 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   }
   // Share physical inventory facts across workspaces, then discard them for the next pass.
   const pluginCache = createPluginCache();
+  const sourceReads = new Map<string, SkillSourceReadBatch>();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
   const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
     const key = JSON.stringify(sourceInput);
@@ -109,7 +111,13 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
             ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
             : resolvedPlan,
       };
-      const sources = readWorkspaceSkillSources(sourceRequest);
+      const environmentKey = JSON.stringify(environment);
+      let batch = sourceReads.get(environmentKey);
+      if (!batch) {
+        batch = new Map();
+        sourceReads.set(environmentKey, batch);
+      }
+      const sources = readWorkspaceSkillSources(sourceRequest, batch);
       const entries = mergeSkillRecords(sources.entries, key, []);
       appendLowerPrecedenceSkillRecords(
         entries,
