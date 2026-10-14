@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -138,6 +139,11 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
+import type { RequesterOrigin } from "../requester-origin.js";
+import {
+  createRestartRecoveryRequesterSource,
+  readRestartRecoveryRequesterSource,
+} from "../requester-run-recovery-source.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
   resolveAgentRunErrorLifecycleFields,
@@ -530,6 +536,7 @@ function getHarnessRecoveryFixture() {
 
 async function runRecoveryCommandDuringStop(params: {
   entry: SessionEntry;
+  requesterOrigin: RequesterOrigin;
   runId: string;
   sessionKey: string;
   storePath: string;
@@ -547,6 +554,7 @@ async function runRecoveryCommandDuringStop(params: {
   ]);
   const opts = {
     message: "Resume the interrupted task.",
+    requesterOrigin: params.requesterOrigin,
     abortSignal: params.signal,
     mainRestartRecoveryAdmitted: true,
     mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
@@ -4220,6 +4228,26 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
         restartRecoveryDeliveryContext: discordDeliveryContext,
       });
+      const entry = expectDefined(readEntry(), "interrupted source session");
+      const requesterSource = expectDefined(
+        createRestartRecoveryRequesterSource({
+          agentId: "main",
+          sessionKey,
+          sourceRunId: "source-main",
+          entry,
+          requesterOrigin: {
+            sessionKey: "agent:research:telegram:group:requesters",
+            messageProvider: "telegram",
+            accountId: "work",
+            senderId: "bob",
+          },
+        }),
+        "original channel requester source",
+      );
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { ...entry, restartRecoveryRequesterSource: requesterSource },
+      );
       await writeTranscript(sessionsDir, "main-session", [
         { role: "user", content: "recover without losing the owner" },
       ]);
@@ -4256,6 +4284,23 @@ describe("main-session-restart-recovery", () => {
         });
         options?.onAccepted?.({ runId, status: "accepted" });
         const admittedEntry = readEntry()!;
+        const requesterTarget = expectDefined(
+          options?.restartRecoveryRequesterTarget,
+          "successor dispatch requester custody",
+        );
+        expect(requesterTarget).toEqual({
+          agentId: "main",
+          sessionKey,
+          sessionId: "main-session",
+          storePath,
+          sourceRunId: "source-main",
+          recoveryRunId: runId,
+        });
+        const requesterOrigin = expectDefined(
+          readRestartRecoveryRequesterSource({ ...requesterTarget, entry: admittedEntry }),
+          "requester restored from the successor's current claim",
+        );
+        expect(requesterOrigin).toEqual(requesterSource.requesterOrigin);
         const terminalEvents: Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"][] =
           [];
         const terminalObserved =
@@ -4273,6 +4318,7 @@ describe("main-session-restart-recovery", () => {
         // Observe the expected rejection immediately, then join its real lifecycle settlement.
         const commandSettlement = runRecoveryCommandDuringStop({
           entry: admittedEntry,
+          requesterOrigin,
           runId,
           sessionKey,
           storePath,
@@ -4354,12 +4400,14 @@ describe("main-session-restart-recovery", () => {
           }),
         ]);
         expect(persistedEntries[0]?.status).toBeUndefined();
+        expect(persistedEntries[0]?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(persistedEntries[0]).toMatchObject({
           mainRestartRecovery: { cycleId: "interrupted-cycle", chargedAttempts: 1 },
           restartRecoveryRuns: [
             { runId: "recovery-main", lifecycleGeneration: getAgentEventLifecycleGeneration() },
           ],
         });
+        expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(readEntry()).toMatchObject({
           status: "interrupted",
           abortedLastRun: true,
@@ -4381,8 +4429,10 @@ describe("main-session-restart-recovery", () => {
           await expect(
             recoverRestartAbortedMainSessions({ cfg: {}, gatewayRuntime }),
           ).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
           expect(readEntry()).toMatchObject({
             status: "interrupted",
+            restartRecoveryDeliverySourceRunId: "source-main",
             mainRestartRecovery: { chargedAttempts: attempt },
           });
           expect(dispatchAgent).toHaveBeenCalledTimes(attempt);
