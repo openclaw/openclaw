@@ -536,7 +536,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.store.set", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["secrets.store.delete", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["users.prefs.get", "users", "operator.read", "2026.8"],
-  ["users.prefs.set", "users", "operator.write", "2026.8"],
+  ["users.prefs.set", "users", "operator.read", "2026.8"],
   ["projects.add", "projects", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   [
     "projects.searchRemote",

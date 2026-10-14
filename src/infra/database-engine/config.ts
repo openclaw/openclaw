@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveCanonicalConfiguredSecretInputString as resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
-
-export type DatabaseEngineInput = { connection: string; schemaPrefix: string } | undefined;
+import type { DatabaseEngineInput } from "./types.js";
+export type { DatabaseEngineInput } from "./types.js";
 
 /** Resolve on the host; the existing broker input transport keeps credentials out of config/logs. */
 export async function resolveDatabaseEngineInput(

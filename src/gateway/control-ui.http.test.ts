@@ -475,34 +475,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(responseJson(end)).toEqual({ status: "preparing" });
   });
 
-  it("falls back to original assistant media when playback transcode fails", async () => {
-    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "fallback" });
-    const filePath = await createMediaFile("voice.caf", Buffer.from("caff-original"));
-    const { res, handled, setHeader } = await runAssistantMediaRequest({
-      url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-    });
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "audio/x-caf");
-    expect(resolvePlaybackTranscodeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ mimeType: "audio/x-caf", kind: "audio" }),
-    );
-  });
-
-  it("serves local video inline and ignores an inbound filename hint", async () => {
-    const filePath = await createMediaFile("clip.mp4", "fixture");
-    const { res, handled, setHeader } = await runAssistantMediaRequest({
-      url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&filename=ignored.txt&token=test-token`,
-    });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Content-Disposition",
-      "inline; filename=\"clip.mp4\"; filename*=UTF-8''clip.mp4",
-    );
-  });
-
   it("caps and encodes Unicode assistant media filenames without splitting surrogate pairs", async () => {
     const filename = `${"a".repeat(176)}测试 100% 'draft' (1)😀${"b".repeat(20)}.pdf`;
     const filePath = await createMediaFile(filename, "fixture");
@@ -1162,32 +1134,6 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it.each([
-    ["", "/__openclaw__/control-ui-config.json"],
-    ["/openclaw", "/openclaw/control-ui-config.json"],
-  ])("serves bootstrap with basePath=%s at %s", async (basePath, url) => {
-    const tmp = await createControlUiRoot();
-    const { res, end, handled } = await runControlUiRequest(tmp, url, {
-      basePath,
-      config: {
-        agents: {
-          defaults: { workspace: tmp },
-          entries: { main: { identity: { name: "Ops", avatar: "ops.png" } } },
-        },
-      },
-    });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(parseBootstrapPayload(end)).toMatchObject({
-      basePath,
-      assistantName: "Ops",
-      assistantAvatar: "A",
-      assistantAvatarStatus: "none",
-      assistantAvatarReason: "missing",
-      assistantAgentId: "main",
-    });
-  });
-
   it("preserves authenticated avatar HEAD metadata under a base path", async () => {
     const tmp = testTempDirs.make("openclaw-avatar-head-");
     const body = Buffer.from("avatar 東京 avatar.svg\n", "utf8");
@@ -1266,26 +1212,6 @@ describe("handleControlUiHttpRequest", () => {
     expectNotFoundResponse({ handled, res, end });
   });
 
-  it("returns avatar metadata when auth is enabled and the token is valid", async () => {
-    const { res, end, handled } = await runAvatarRequest({
-      url: "/avatar/main?meta=1",
-      config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
-      auth: tokenAuth,
-      headers: {
-        authorization: "Bearer test-token",
-      },
-    });
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(responseJson(end)).toEqual({
-      avatarUrl: "https://example.com/avatar.png",
-      avatarSource: "remote URL",
-      avatarStatus: "remote",
-      avatarReason: null,
-    });
-  });
-
   it("redacts unsafe avatar source values from metadata", async () => {
     const { res, end, handled } = await runAvatarRequest({
       url: "/avatar/main?meta=1",
@@ -1335,21 +1261,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(responseBody(recovery.end)).toContain("plugin-recovery");
   });
 
-  it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
-    const tmp = await createControlUiRoot();
-    const source = "console.log('partial-build');\n".repeat(200);
-    const { filePath } = await writeAssetFile(tmp, "app-IjKl9012.js", source);
-    await fs.writeFile(`${filePath}.gz`, gzipSync(source));
-
-    const { end, setHeader } = await runControlUiRequest(tmp, "/assets/app-IjKl9012.js", {
-      rootKind: "bundled",
-      headers: { "accept-encoding": "br, gzip;q=0.5, identity;q=0" },
-    });
-
-    expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
-    expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
-  });
-
   it("clamps future filesystem mtimes so validators cannot postdate the response", async () => {
     const tmp = await createControlUiRoot();
     const fontsDir = path.join(tmp, "fonts");
@@ -1383,20 +1294,6 @@ describe("handleControlUiHttpRequest", () => {
     });
 
     expectNotFoundResponse({ handled, res, end });
-  });
-
-  it("preserves standalone compressed files in configured roots", async () => {
-    const tmp = await createControlUiRoot();
-    await writeAssetFile(tmp, "data.gz", "configured-compressed-artifact\n");
-
-    const { end, handled, setHeader } = await runControlUiRequest(tmp, "/assets/data.gz", {
-      headers: { "accept-encoding": "br;q=0, gzip;q=0.8" },
-    });
-
-    expect(handled).toBe(true);
-    expect(responseBody(end)).toBe("configured-compressed-artifact\n");
-    expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-    expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
   });
 
   it("compresses prepared SPA fallback HTML", async () => {

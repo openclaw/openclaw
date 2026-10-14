@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
-import { sessionEmojiPickerShortcut } from "../../../components/session-icon-picker.ts";
+import { sessionEmojiPickerShortcut } from "../../../components/session-icon-choices.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";

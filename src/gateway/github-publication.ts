@@ -450,7 +450,7 @@ export function createGitHubPublicationCoordinator(params: {
   return {
     ...methods,
     ...personal,
-    /** @deprecated Use requestForClaimV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use requestForClaimV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     requestForClaim: async (
       _request: GitHubPublicationClaimRequest,
     ): Promise<SessionGitHubPublicationResult> => {
@@ -480,14 +480,14 @@ export function createGitHubPublicationCoordinator(params: {
       );
       await repository.prepareClaimWorkspace(claim);
     },
-    /** @deprecated Use deferClaimPreparationAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use deferClaimPreparationAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     deferClaimPreparation(_claim: WorkerSessionTurnClaim): void {
       return refuseLegacyPublication("deferClaimPreparation", "deferClaimPreparationAsync");
     },
     async deferClaimPreparationAsync(claim: WorkerSessionTurnClaim) {
       await runGitHubPublicationMaintenanceAsync({ operation: "deferClaim", claim }, assertCurrent);
     },
-    /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use requestForSessionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async requestForSession(
       _input: GitHubPublicationSessionRequest,
     ): Promise<SessionGitHubPublicationResult> {
@@ -515,7 +515,7 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestForSessionV2(input)
         : methods.requestForSessionV2(input);
     },
-    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use requestPersonalForSessionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async requestPersonalForSession(
       ..._args: Parameters<typeof personal.requestPersonalForSession>
     ): Promise<SessionGitHubPublicationResult> {
@@ -554,7 +554,7 @@ export function createGitHubPublicationCoordinator(params: {
     async personalPending(...args: Parameters<typeof personal.personalPending>) {
       return (await repository.personalPending(...args)) ?? personal.personalPending(...args);
     },
-    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use confirmPersonalV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     confirmPersonal(
       ..._args: Parameters<typeof personal.confirmPersonal>
     ): Promise<SessionGitHubPublicationResult> {
@@ -590,7 +590,7 @@ export function createGitHubPublicationCoordinator(params: {
         );
       }
     },
-    /** @deprecated Use deferOrphanedRequestsAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use deferOrphanedRequestsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     deferOrphanedRequests(): void {
       return refuseLegacyPublication("deferOrphanedRequests", "deferOrphanedRequestsAsync");
     },
@@ -598,7 +598,7 @@ export function createGitHubPublicationCoordinator(params: {
       await methods.deferOrphanedRequestsAsync();
       await repository.deferOrphanedRequestsAsync();
     },
-    /** @deprecated Use listUnreportedResultsAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use listUnreportedResultsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listUnreportedResults(): Array<{
       sessionId: string;
       sessionKey: string;
@@ -620,7 +620,7 @@ export function createGitHubPublicationCoordinator(params: {
     async readAsync(requestId: string) {
       return (await repository.readAsync(requestId)) ?? methods.readAsync(requestId);
     },
-    /** @deprecated Use markReportedAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use markReportedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     markReported(_requestId: string): void {
       return refuseLegacyPublication("markReported", "markReportedAsync");
     },

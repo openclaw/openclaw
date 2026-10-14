@@ -148,6 +148,10 @@ bypass the proxy's loopback traffic policy.
   `src/test-utils/prepare-compiled-subprocesses.ts` in core. Extension tests use
   `import "openclaw/plugin-sdk/compiled-subprocess-testing";` instead. Add the
   preload only to suites that already load a declaration.
+- Nested shutdown fixtures prepare one generation during collection, then borrow it
+  through the supervisor and `run-vitest.mjs` forwarding shim. Keep the descriptor
+  on the existing bootstrap/IPC contract so each owner joins its child before
+  returning the loan; do not put cold compilation inside a shutdown deadline.
 
 Replace grandfathered `withTestTimeout`/`raceWithTimeoutResult` races with
 `awaitGateBeforeSettlement(gate, operation, message)` or `withinTest(work, signal)`

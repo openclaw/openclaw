@@ -93,7 +93,7 @@ export async function withWorkerTranscriptWriteLock<T>(
   try {
     const owned = await prepareSessionSourceAuthority(assertOwned);
     if (owned.nativeSource) {
-      // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+      // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
       try {
         execution.assertCurrent();
         releaseExecution = false;
@@ -353,7 +353,7 @@ export async function withWorkerTranscriptWriteLock<T>(
               ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
-              // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+              // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
               try {
                 return await native(
                   fenced,
