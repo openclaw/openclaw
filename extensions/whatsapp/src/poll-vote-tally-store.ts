@@ -146,10 +146,14 @@ async function findVoterRows(
   return [...found.values()];
 }
 
+/** "stale": older than the voter's stored row; "skipped": not stored (bad ids, no store, failure). */
+export type WhatsAppPollVoteApplyResult = "applied" | "stale" | "skipped";
+
 /**
  * Applies one decrypted vote. Callers rely on the per-chat ingress lane being
  * serial, so the read-then-write below cannot interleave with another vote on
- * the same poll. Returns false when the vote was stale or not stored.
+ * the same poll. A retraction keeps a selection-less row as a watermark, so an
+ * older vote delivered after it stays stale instead of reviving the voter.
  */
 export async function applyWhatsAppPollVote(params: {
   record: WhatsAppPollRecord;
@@ -159,17 +163,17 @@ export async function applyWhatsAppPollVote(params: {
   selected: string[];
   votedAtMs: number;
   errors?: WhatsAppPollStoreErrorMode;
-}): Promise<boolean> {
+}): Promise<WhatsAppPollVoteApplyResult> {
   const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
   const accountId = params.accountId.trim();
   const voterJids = normalizeWhatsAppPollJids(params.voter.jids);
   const voterKey = resolveVoterKey(voterJids);
   if (!pollMessageId || !accountId || !voterKey) {
-    return false;
+    return "skipped";
   }
-  return await runWhatsAppPollStoreOperation({
+  return await runWhatsAppPollStoreOperation<WhatsAppPollVoteApplyResult>({
     operation: "tally write",
-    fallback: false,
+    fallback: "skipped",
     errors: params.errors,
     transient: "write",
     run: async () => {
@@ -177,27 +181,25 @@ export async function applyWhatsAppPollVote(params: {
         WHATSAPP_POLL_TALLY_STORES[params.record.origin],
       );
       if (!store) {
-        return false;
+        return "skipped";
       }
       const prefix = tallyPrefix(accountId, pollMessageId);
       const existing = await findVoterRows(store, prefix, voterJids);
       if (existing.some(({ value }) => value.votedAtMs > params.votedAtMs)) {
-        return false;
+        return "stale";
       }
-      if (params.selected.length === 0) {
-        for (const { key } of existing) {
-          await store.delete(key);
-        }
-        return true;
-      }
+      const retracted = params.selected.length === 0;
       const knownJids = normalizeWhatsAppPollJids([
         ...voterJids,
         ...existing.flatMap(({ value }) => value.voterJids),
       ]);
-      const name =
-        params.voter.name?.trim() || existing.find(({ value }) => value.name)?.value.name;
-      const e164 =
-        params.voter.e164?.trim() || existing.find(({ value }) => value.e164)?.value.e164;
+      // A watermark row carries no name or number; the voter is not shown again until a new vote.
+      const name = retracted
+        ? undefined
+        : params.voter.name?.trim() || existing.find(({ value }) => value.name)?.value.name;
+      const e164 = retracted
+        ? undefined
+        : params.voter.e164?.trim() || existing.find(({ value }) => value.e164)?.value.e164;
       // Keep the PN key even when this update only carries the LID.
       const voterRowKey = `${prefix}${resolveVoterKey(knownJids) ?? voterKey}`;
       await store.register(
@@ -217,7 +219,7 @@ export async function applyWhatsAppPollVote(params: {
           await store.delete(key);
         }
       }
-      return true;
+      return "applied";
     },
   });
 }
@@ -264,6 +266,10 @@ export async function readWhatsAppPollTally(params: {
         }
         for (const jid of jids) {
           seenJids.add(jid);
+        }
+        // A retraction watermark still shadows the voter's older rows above, but is no vote.
+        if (value.selected.length === 0) {
+          continue;
         }
         voters.push({
           voterKey,

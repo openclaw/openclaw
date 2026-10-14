@@ -40,6 +40,7 @@ import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
+  resolveVisibleWhatsAppPollVoters,
   resolveVisibleWhatsAppReplyContext,
   type GroupHistoryEntry,
 } from "./inbound-context.js";
@@ -398,7 +399,16 @@ export async function processMessage(params: {
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     // Stored poll results for this chat only; a copy, so broadcast agents never stack blocks.
-    msg: await attachWhatsAppPollResultsContext(params.msg),
+    msg: await attachWhatsAppPollResultsContext(params.msg, (voters) =>
+      resolveVisibleWhatsAppPollVoters({
+        voters,
+        isGroup: conversationKind === "group",
+        mode: contextVisibilityMode,
+        groupPolicy: inboundPolicy.groupPolicy,
+        groupAllowFrom: inboundPolicy.groupAllowFrom,
+        authDir: account.authDir,
+      }),
+    ),
     rawBody: commandBody,
     route: params.route,
     buildContext: params.buildContext,

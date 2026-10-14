@@ -143,7 +143,47 @@ describe("resolveWhatsAppPollVote", () => {
     expect((result as { message: WAMessage }).message.message?.extendedTextMessage?.text).toBe(
       "Poll vote removed",
     );
-    expect(await tallyRows("sent")).toEqual([]);
+    expect((await tallyRows("sent")).map((row) => row.value)).toEqual([
+      { v: 1, voterJids: [DM], selected: [], votedAtMs: 1_760_000_000_500 },
+    ]);
+  });
+
+  it("counts a late older vote as stale and does not wake the agent", async () => {
+    await addPoll({ origin: "sent", chatJid: DM });
+    const fresh = await resolveWhatsAppPollVote(voteMessage({ senderTimestampMs: 5000 }), deps);
+    expect(fresh.kind).toBe("deliver");
+    const late = voteMessage({ id: "VOTE2", selectedOptions: ["Pizza"], senderTimestampMs: 4000 });
+    expect(await resolveWhatsAppPollVote(late, deps)).toEqual({ kind: "completed" });
+    expect((await tallyRows("sent")).map((row) => row.value)).toEqual([
+      expect.objectContaining({ selected: ["Sushi"], votedAtMs: 5000 }),
+    ]);
+    expect(env.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not wake the agent for a vote older than a retraction", async () => {
+    await addPoll({ origin: "sent", chatJid: DM });
+    await resolveWhatsAppPollVote(voteMessage({ senderTimestampMs: 1000 }), deps);
+    const removed = await resolveWhatsAppPollVote(
+      voteMessage({ id: "VOTE2", selectedOptions: [], senderTimestampMs: 3000 }),
+      deps,
+    );
+    expect(removed.kind).toBe("deliver");
+    const late = voteMessage({ id: "VOTE3", selectedOptions: ["Pizza"], senderTimestampMs: 2000 });
+    expect(await resolveWhatsAppPollVote(late, deps)).toEqual({ kind: "completed" });
+  });
+
+  it("still delivers a direct-chat vote when the tally store refuses it permanently", async () => {
+    await addPoll({ origin: "sent", chatJid: DM });
+    env.faults.push({
+      namespace: WHATSAPP_POLL_TALLY_STORES.sent.namespace,
+      method: "register",
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+    });
+    const result = await resolveWhatsAppPollVote(voteMessage(), deps);
+    expect(result.kind).toBe("deliver");
+    expect(env.logger.warn).toHaveBeenCalledWith("whatsapp poll store tally write failed", {
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+    });
   });
 
   it("counts but does not deliver a direct-chat vote on the other side's poll", async () => {

@@ -67,10 +67,15 @@ async function tally(record = pollRecord(), pollMessageId = "POLL1") {
   return await readWhatsAppPollTally({ record, accountId: "default", pollMessageId });
 }
 
+async function storedRows() {
+  const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
+  return rows.map(({ key, value }) => ({ key, value }));
+}
+
 describe("WhatsApp poll tally store", () => {
   it("stores a vote, replaces it on change, and removes it on retraction", async () => {
     expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 1000, name: "Dana" })).toBe(
-      true,
+      "applied",
     );
     expect(await tally()).toEqual([
       {
@@ -89,14 +94,58 @@ describe("WhatsApp poll tally store", () => {
 
     await vote({ jids: [PN], selected: [], votedAtMs: 3000 });
     expect(await tally()).toEqual([]);
-    expect(await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries()).toEqual([]);
+    expect(await storedRows()).toEqual([
+      {
+        key: `default:POLL1:${PN}`,
+        value: { v: 1, voterJids: [PN], selected: [], votedAtMs: 3000 },
+      },
+    ]);
   });
 
   it("ignores a vote older than the stored one", async () => {
     await vote({ jids: [PN], selected: ["Sushi"], votedAtMs: 5000 });
-    expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 4000 })).toBe(false);
-    expect(await vote({ jids: [PN], selected: [], votedAtMs: 4999 })).toBe(false);
+    expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 4000 })).toBe("stale");
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 4999 })).toBe("stale");
     expect((await tally())?.[0]?.selected).toEqual(["Sushi"]);
+  });
+
+  it("keeps a retraction's timestamp so an older vote arriving late stays retracted", async () => {
+    await vote({ jids: [PN], selected: ["Sushi"], votedAtMs: 1000, name: "Dana" });
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe("applied");
+    expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 2000 })).toBe("stale");
+    expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 2999 })).toBe("stale");
+    expect(await tally()).toEqual([]);
+    expect(await storedRows()).toEqual([
+      {
+        key: `default:POLL1:${PN}`,
+        value: { v: 1, voterJids: [PN], selected: [], votedAtMs: 3000 },
+      },
+    ]);
+  });
+
+  it("lets a vote at or after the retraction replace the watermark", async () => {
+    await vote({ jids: [PN], selected: ["Sushi"], votedAtMs: 1000 });
+    await vote({ jids: [PN], selected: [], votedAtMs: 3000 });
+    expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 3000, name: "Dana" })).toBe(
+      "applied",
+    );
+    expect(await tally()).toEqual([
+      { voterKey: PN, voterJids: [PN], name: "Dana", selected: ["Pizza"], votedAtMs: 3000 },
+    ]);
+    expect(await storedRows()).toHaveLength(1);
+  });
+
+  it("rejects a late LID-only vote older than a PN+LID retraction", async () => {
+    await vote({ jids: [PN, LID], selected: ["Sushi"], votedAtMs: 1000 });
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe("applied");
+    expect(await vote({ jids: [LID], selected: ["Pizza"], votedAtMs: 2000 })).toBe("stale");
+    expect(await tally()).toEqual([]);
+  });
+
+  it("hides a watermark row from the tally even when it is the voter's only row", async () => {
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 1000 })).toBe("applied");
+    expect(await tally()).toEqual([]);
+    expect(await storedRows()).toHaveLength(1);
   });
 
   it("keeps one row when the same voter arrives as LID and later as PN", async () => {
@@ -115,19 +164,25 @@ describe("WhatsApp poll tally store", () => {
 
   it("retracts a PN+LID vote when the retraction arrives with the LID only", async () => {
     await vote({ jids: [PN, LID], selected: ["Pizza"], votedAtMs: 1000 });
-    expect(await vote({ jids: [LID], selected: [], votedAtMs: 2000 })).toBe(true);
+    expect(await vote({ jids: [LID], selected: [], votedAtMs: 2000 })).toBe("applied");
     expect(await tally()).toEqual([]);
-    expect(await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries()).toEqual([]);
+    expect(await storedRows()).toEqual([
+      {
+        key: `default:POLL1:${PN}`,
+        value: { v: 1, voterJids: [LID, PN], selected: [], votedAtMs: 2000 },
+      },
+    ]);
   });
 
   it("ignores a stale LID-only vote after a newer PN+LID vote, and a PN-only retraction clears all", async () => {
     await vote({ jids: [PN, LID], selected: ["Sushi"], votedAtMs: 2000 });
-    expect(await vote({ jids: [LID], selected: ["Pizza"], votedAtMs: 1000 })).toBe(false);
+    expect(await vote({ jids: [LID], selected: ["Pizza"], votedAtMs: 1000 })).toBe("stale");
     const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
     expect(rows.map((row) => row.key)).toEqual([`default:POLL1:${PN}`]);
 
-    expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe(true);
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe("applied");
     expect(await tally()).toEqual([]);
+    expect(await storedRows()).toHaveLength(1);
   });
 
   it("replaces a PN+LID vote when the change arrives with the LID only", async () => {
@@ -198,20 +253,28 @@ describe("WhatsApp poll tally store", () => {
   );
 
   it.each(["PLUGIN_STATE_LIMIT_EXCEEDED", "PLUGIN_STATE_CORRUPT"])(
-    "returns false with one warning for %s",
+    "returns skipped with one warning for %s",
     async (code) => {
       env.faults.push({
         namespace: WHATSAPP_POLL_TALLY_STORES.sent.namespace,
         method: "register",
         code,
       });
-      expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 1000 })).toBe(false);
+      expect(await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 1000 })).toBe("skipped");
       expect(env.logger.warn).toHaveBeenCalledTimes(1);
       expect(env.logger.warn).toHaveBeenCalledWith("whatsapp poll store tally write failed", {
         code,
       });
     },
   );
+
+  it("skips a vote without a poll id or voter JID", async () => {
+    expect(await vote({ pollMessageId: " ", jids: [PN], selected: ["Pizza"], votedAtMs: 1 })).toBe(
+      "skipped",
+    );
+    expect(await vote({ jids: [], selected: ["Pizza"], votedAtMs: 1 })).toBe("skipped");
+    expect(await storedRows()).toEqual([]);
+  });
 
   it("drops selections that are not options of the recorded poll", async () => {
     await vote({ jids: [PN], selected: ["Pizza"], votedAtMs: 1000 });

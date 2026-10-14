@@ -16,6 +16,7 @@ import {
 import {
   applyWhatsAppPollVote,
   normalizeWhatsAppPollVoteTimestampMs,
+  type WhatsAppPollVoteApplyResult,
 } from "../poll-vote-tally-store.js";
 import { isJidGroup, normalizeMessageContent } from "./runtime-api.js";
 
@@ -97,7 +98,9 @@ function buildDerivedVoteMessage(
 /**
  * Votes never wake the agent in a group, on someone else's poll, or when the
  * vote is our own; those end as "completed" once counted. Only a direct-chat
- * vote on a poll the agent sent is delivered, as a message quoting the poll.
+ * vote on a poll the agent sent is delivered, as a message quoting the poll,
+ * and only when it is not older than the voter's stored row. A store that
+ * cannot take the vote still delivers it.
  * Transient store failures propagate so durable ingress replays the vote.
  */
 export async function resolveWhatsAppPollVote(
@@ -155,8 +158,9 @@ export async function resolveWhatsAppPollVote(
     return { kind: "completed" };
   }
   const deliver = !group && !fromMe && record.origin === "sent";
+  let applied: WhatsAppPollVoteApplyResult = "skipped";
   try {
-    await applyWhatsAppPollVote({
+    applied = await applyWhatsAppPollVote({
       record,
       accountId: deps.accountId,
       pollMessageId,
@@ -181,7 +185,8 @@ export async function resolveWhatsAppPollVote(
       code: readPluginStateErrorCode(error) ?? "unknown",
     });
   }
-  if (!deliver) {
+  // A stale vote was superseded before it arrived; the agent already saw the newer one.
+  if (!deliver || applied === "stale") {
     return { kind: "completed" };
   }
   return {

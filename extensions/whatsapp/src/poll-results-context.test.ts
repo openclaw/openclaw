@@ -121,6 +121,43 @@ describe("readWhatsAppPollResultsContext", () => {
     expect(polls[2]?.created_by).toBe("Dana");
   });
 
+  it("counts and names only the voters the visibility filter keeps", async () => {
+    await addPoll({ id: "P1", recordedAt: Date.now(), options: ["Pizza", "Sushi"] });
+    await addVote("P1", "15550000001@s.whatsapp.net", ["Pizza"], "Avi");
+    await addVote("P1", "15550000002@s.whatsapp.net", ["Pizza", "Sushi"], "Mallory");
+    const context = await readWhatsAppPollResultsContext({
+      accountId: "default",
+      chatJids: [HOME],
+      filterVoters: (voters) => voters.filter((voter) => voter.name !== "Mallory"),
+    });
+    expect(context?.payload.polls[0]).toMatchObject({
+      voters_total: 1,
+      options: [
+        { option: "Pizza", votes: 1, voters: ["Avi"] },
+        { option: "Sushi", votes: 0, voters: [] },
+      ],
+    });
+    expect(JSON.stringify(context)).not.toContain("Mallory");
+    expect(JSON.stringify(context)).not.toContain("15550000002");
+  });
+
+  it("does not count a retracted voter", async () => {
+    await addPoll({ id: "P1", recordedAt: Date.now() });
+    await addVote("P1", "15550000001@s.whatsapp.net", ["Yes"], "Avi");
+    await addVote("P1", "15550000001@s.whatsapp.net", []);
+    const context = await readWhatsAppPollResultsContext({
+      accountId: "default",
+      chatJids: [HOME],
+    });
+    expect(context?.payload.polls[0]).toMatchObject({
+      voters_total: 0,
+      options: [
+        { option: "Yes", votes: 0, voters: [] },
+        { option: "No", votes: 0, voters: [] },
+      ],
+    });
+  });
+
   it("returns nothing for another chat or another account", async () => {
     await addPoll({ id: "P1", recordedAt: Date.now() });
     expect(

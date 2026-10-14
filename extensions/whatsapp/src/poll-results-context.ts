@@ -60,13 +60,19 @@ function describeCreator(record: WhatsAppPollRecord): string {
   return record.creatorName || record.creatorJids.map(pnJidToE164).find(Boolean) || "unknown";
 }
 
+/** Drops voters the chat's context visibility policy hides; they are neither named nor counted. */
+export type WhatsAppPollVoterFilter = (
+  voters: WhatsAppPollTallyVoter[],
+) => WhatsAppPollTallyVoter[];
+
 function buildPoll(
   pollMessageId: string,
   record: WhatsAppPollRecord,
   tally: WhatsAppPollTallyVoter[],
+  filterVoters: WhatsAppPollVoterFilter | undefined,
 ): WhatsAppPollResultsPoll {
   // First voters first, so the list reads in the order people answered.
-  const voters = tally
+  const voters = (filterVoters ? filterVoters(tally) : tally)
     .filter((voter) => voter.selected.length > 0)
     .toSorted((a, b) => a.votedAtMs - b.votedAtMs || a.voterKey.localeCompare(b.voterKey));
   return {
@@ -130,6 +136,7 @@ function fitPayload(polls: WhatsAppPollResultsPoll[]): WhatsAppPollResultsPoll[]
 export async function readWhatsAppPollResultsContext(params: {
   accountId: string;
   chatJids: readonly (string | null | undefined)[];
+  filterVoters?: WhatsAppPollVoterFilter;
 }): Promise<WhatsAppPollResultsContextEntry | undefined> {
   try {
     const chatJids = new Set(normalizeWhatsAppPollJids(params.chatJids));
@@ -156,7 +163,7 @@ export async function readWhatsAppPollResultsContext(params: {
         pollMessageId,
         errors: "throw",
       });
-      polls.push(buildPoll(pollMessageId, record, tally ?? []));
+      polls.push(buildPoll(pollMessageId, record, tally ?? [], params.filterVoters));
     }
     const fitted = fitPayload(polls);
     if (fitted.length === 0) {
@@ -181,9 +188,11 @@ export async function readWhatsAppPollResultsContext(params: {
  * message itself when there is none. Broadcast agents share the original
  * object, so it is never mutated. Direct chats also look up the PN JID derived
  * from the conversation's E.164, since the chat may arrive under a LID.
+ * Callers pass the voter filter for the chat's context visibility policy.
  */
 export async function attachWhatsAppPollResultsContext(
   msg: AdmittedWebInboundMessage,
+  filterVoters: WhatsAppPollVoterFilter,
 ): Promise<AdmittedWebInboundMessage> {
   const admission = requireWhatsAppInboundAdmission(msg);
   const digits = /^\+(\d+)$/.exec(admission.conversation.id)?.[1];
@@ -193,6 +202,7 @@ export async function attachWhatsAppPollResultsContext(
       msg.platform.chatJid,
       admission.conversation.kind === "direct" && digits ? `${digits}@s.whatsapp.net` : undefined,
     ],
+    filterVoters,
   });
   if (!entry) {
     return msg;

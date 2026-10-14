@@ -160,7 +160,6 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
     logVerbose: () => {},
     normalizeE164: (v: string) => v,
     recordSessionMetaFromInbound: async () => {},
-    resolveChannelContextVisibilityMode: () => "off",
     resolveInboundSessionEnvelopeContext: () => ({
       storePath: "/tmp",
       envelopeOptions: {},
@@ -192,14 +191,14 @@ const PEER_LID = "88880002222@lid";
 
 let env: WhatsAppPollStateRuntimeForTest;
 
-function makePolicy() {
+function makePolicy(overrides: { groupPolicy?: string; groupAllowFrom?: string[] } = {}) {
   return {
     account: { accountId: "default", authDir: "/tmp/wa-test-auth", groups: {} },
     dmPolicy: "pairing",
-    groupPolicy: "open",
+    groupPolicy: overrides.groupPolicy ?? "open",
     configuredAllowFrom: [],
     dmAllowFrom: [],
-    groupAllowFrom: [],
+    groupAllowFrom: overrides.groupAllowFrom ?? [],
     isSelfChat: false,
     providerMissingFallbackApplied: false,
     isSamePhone: () => false,
@@ -237,9 +236,9 @@ function makeMsg(params: { kind: "group" | "direct"; withMedia?: boolean }) {
   });
 }
 
-function callProcessMessage(msg: unknown, agentId = "main") {
+function callProcessMessage(msg: unknown, agentId = "main", cfg: unknown = {}) {
   return processMessage({
-    cfg: {} as never,
+    cfg: cfg as never,
     msg: msg as never,
     route: {
       agentId,
@@ -262,6 +261,13 @@ function callProcessMessage(msg: unknown, agentId = "main") {
   });
 }
 
+function preparedPollPayload(callIndex = 0) {
+  const entry = preparedEntries(callIndex).find((item) => item.type === "poll_results") as
+    | { payload: { polls: Array<Record<string, unknown>> } }
+    | undefined;
+  return entry?.payload;
+}
+
 function preparedEntries(callIndex = 0) {
   const params = buildContextMock.mock.calls.at(callIndex)?.[0] as
     | { msg: { payload: { channelStructuredContext?: Array<{ type?: string }> } } }
@@ -270,6 +276,21 @@ function preparedEntries(callIndex = 0) {
     throw new Error(`expected prepared context call ${callIndex}`);
   }
   return params.msg.payload.channelStructuredContext ?? [];
+}
+
+async function addVote(voter: { jids: string[]; name: string; e164?: string }, selected: string[]) {
+  const record = await readWhatsAppPollRecord("default", "POLL1");
+  if (!record) {
+    throw new Error("expected poll record");
+  }
+  await applyWhatsAppPollVote({
+    record,
+    accountId: "default",
+    pollMessageId: "POLL1",
+    voter,
+    selected,
+    votedAtMs: 2000,
+  });
 }
 
 async function addPoll(chatJid: string) {
@@ -364,5 +385,62 @@ describe("processMessage poll results context", () => {
     await addPoll("120363000000000002@g.us");
     await callProcessMessage(makeMsg({ kind: "group" }));
     expect(preparedEntries()).toEqual([]);
+  });
+
+  describe("context visibility", () => {
+    const STRANGER_PN = "15550009999@s.whatsapp.net";
+    const allowlistPolicy = makePolicy({ groupPolicy: "allowlist", groupAllowFrom: [PEER_E164] });
+    const visibility = (mode: string) => ({ channels: { whatsapp: { contextVisibility: mode } } });
+
+    async function addPollWithStranger() {
+      await addPoll(GROUP_JID);
+      await addVote({ jids: [STRANGER_PN], name: "Mallory" }, ["Pizza", "Sushi"]);
+    }
+
+    it.each(["allowlist", "allowlist_quote"])(
+      "drops voters the group allowlist blocks under %s",
+      async (mode) => {
+        await addPollWithStranger();
+        resolvePolicyMock.mockReturnValue(allowlistPolicy);
+        await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility(mode));
+        const payload = preparedPollPayload();
+        expect(payload?.polls[0]).toMatchObject({
+          voters_total: 1,
+          options: [
+            { option: "Pizza", votes: 0, voters: [] },
+            { option: "Sushi", votes: 1, voters: ["Alice"] },
+          ],
+        });
+        expect(JSON.stringify(payload)).not.toContain("Mallory");
+        expect(JSON.stringify(payload)).not.toContain("15550009999");
+      },
+    );
+
+    it("keeps a LID-only voter whose stored number is on the allowlist", async () => {
+      await addPoll(GROUP_JID);
+      await addVote({ jids: [PEER_LID], name: "Alice2", e164: PEER_E164 }, ["Pizza"]);
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({ voters_total: 2 });
+    });
+
+    it("shows every voter when contextVisibility is not configured", async () => {
+      await addPollWithStranger();
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({
+        voters_total: 2,
+        options: [
+          { option: "Pizza", votes: 1, voters: ["Mallory"] },
+          { option: "Sushi", votes: 2, voters: ["Alice", "Mallory"] },
+        ],
+      });
+    });
+
+    it("shows every voter in an open group even under allowlist visibility", async () => {
+      await addPollWithStranger();
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({ voters_total: 2 });
+    });
   });
 });
