@@ -4,7 +4,7 @@ export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: b
 type ModelRequestBodyState = {
   enabled?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
-  onEncoded?: (encoded: EncodedModelRequestBody, payload: unknown) => void;
+  onEncoded?: (body: Blob, payload: unknown) => void;
   onBytes?: (bytes: number) => void;
 };
 
@@ -52,9 +52,11 @@ export function prepareModelRequestBody(options: object | undefined) {
   state.enabled = true;
   return async (payload: unknown) => {
     const encoded = state.encode ? await state.encode(payload) : serializeModelRequestBody(payload);
-    state.onEncoded?.(encoded, payload);
-    state.onBytes?.(encoded.body.byteLength);
-    encodedBodyStreams.set(encoded.body, encoded.stream);
-    return { body: encoded.body, headers: { "content-type": "application/json" } };
+    // Fetch copies mutable byte arrays; an immutable body can also serve retained fork replay.
+    const body = new Blob([encoded.body]);
+    state.onEncoded?.(body, payload);
+    state.onBytes?.(body.size);
+    encodedBodyStreams.set(body, encoded.stream);
+    return { body, headers: { "content-type": "application/json" } };
   };
 }
