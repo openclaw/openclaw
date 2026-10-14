@@ -12,9 +12,10 @@ const INSTALL_COMMAND = "curl -fsSL https://dev.meta.ai/install.sh | bash";
 async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promise<boolean> {
   ctx.signal?.throwIfAborted();
   ctx.assertCurrent?.();
+  // ctx.env is the host process environment chosen by the auth caller (it defaults to
+  // process.env); it is the single base, never merged with a second source.
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...ctx.env,
+    ...(ctx.env ?? process.env),
     MUSE_NO_AUTO_UPDATE: "1",
     TBH_CREDENTIAL_BACKEND: "file",
   };
