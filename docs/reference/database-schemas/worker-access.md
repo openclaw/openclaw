@@ -5921,6 +5921,13 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Awaited metadata and compaction retain the database executor without opening a
+native handle on the Gateway thread. The worker prepares storage and publishes
+its physical identity; transcript and session-entry hooks use that identity for
+the existing commit receipts. Manager ordering, live write authority, and committed
+view adoption remain unchanged. Released synchronous persistence methods retain
+their separate native adapter.
+
 Transcript rewrite preparation and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain

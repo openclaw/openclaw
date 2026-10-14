@@ -21,7 +21,6 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -98,14 +97,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         if (!admission && persistCompaction) {
           throw new Error("Compaction boundary validation failed");
         }
-        if (
-          !admission ||
-          (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
-            !("actor" in admission) &&
-            "db" in admission.database &&
-            !(canonical.type === "compaction" && persistCompaction))
-        ) {
-          // Incognito retains its host-owned store until actor activation; detached views do not write.
+        if (!admission) {
           if (canonical.type === "message") {
             const result = this.appendMessageWithTranscriptAnchorSync(canonical.message, options);
             canonical.id = result.entryId;

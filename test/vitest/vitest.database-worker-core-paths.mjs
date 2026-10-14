@@ -691,6 +691,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner.direct-replies.test.ts",
   "src/agents/sessions/session-manager-target-capture.test.ts",
   "src/agents/sessions/sdk.metadata-admission.test.ts",
+  "src/agents/sessions/session-manager-metadata-runtime.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
