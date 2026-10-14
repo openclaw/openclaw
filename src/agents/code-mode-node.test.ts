@@ -76,7 +76,7 @@ describe("Node Code Mode executor", () => {
         const config = ${JSON.stringify(config)};
         const result = await host.run(() => nodeCodeModeExecutor.execute({
           kind: "exec", config, catalog: [], namespaces: [],
-          source: "await yield_control(); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;",
+          source: 'await yield_control(); text("before allocation"); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;',
         }, { timeoutMs: 7000, inlineHost: {
           onBoundary: async (boundary, context) => {
             boundaries++;
@@ -152,6 +152,10 @@ describe("Node Code Mode executor", () => {
         status: "failed",
         code: "runtime_unavailable",
         error: expect.stringContaining("exhausted its 64 MiB JavaScript heap"),
+        output: {
+          count: 1,
+          source: { kind: "complete", json: '[{"type":"text","text":"before allocation"}]' },
+        },
       },
       failure: {
         code: "ERR_WORKER_OUT_OF_MEMORY",
