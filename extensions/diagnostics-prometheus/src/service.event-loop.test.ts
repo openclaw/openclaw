@@ -219,7 +219,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
     }
   });
 
-  it("retains runtime durations across repeated HTTP scrapes without labels", async () => {
+  it("retains runtime durations across scrapes with bounded GC kind and thread labels", async () => {
     const metrics = createMetricsHarness();
     await withMetricsServer(metrics, async (url) => {
       const scrape = async () => {
@@ -228,18 +228,25 @@ describe("diagnostics-prometheus runtime metrics", () => {
         return await response.text();
       };
       metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
-      metrics.record({ type: "diagnostic.gc", durationMs: 1_250 });
+      metrics.record({
+        type: "diagnostic.gc",
+        kind: "scavenge",
+        thread: "main",
+        durationMs: 1_250,
+      });
       const first = await scrape();
       expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
       expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
-      expect(first).toContain("openclaw_gc_duration_seconds_count 1");
+      expect(first).toContain(
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
+      );
       expect(await scrape()).toBe(first);
       metrics.record(
         { type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record(
-        { type: "diagnostic.gc", durationMs: 20 },
+        { type: "diagnostic.gc", kind: "scavenge", thread: "main", durationMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record({ type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
@@ -258,15 +265,30 @@ describe("diagnostics-prometheus runtime metrics", () => {
         "openclaw_gateway_event_loop_delay_max_seconds_count 2",
         "openclaw_gateway_event_loop_delay_max_seconds_sum 1.27",
         "openclaw_gateway_event_loop_observed_seconds_total 10",
-        'openclaw_gc_duration_seconds_bucket{le="1"} 1',
-        'openclaw_gc_duration_seconds_bucket{le="2.5"} 2',
-        "openclaw_gc_duration_seconds_count 2",
-        "openclaw_gc_duration_seconds_sum 1.27",
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="1",thread="main"} 1',
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="2.5",thread="main"} 2',
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
+        'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
       ]) {
         expect(second).toContain(expected);
       }
       expect(await scrape()).toBe(second);
-      expect(second).not.toMatch(/\{(?!le=)/);
+      metrics.record({
+        type: "diagnostic.gc",
+        kind: "mark_sweep_compact",
+        thread: "sqlite-store.worker.js",
+        durationMs: 8,
+      });
+      const workerSample = await scrape();
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 1',
+      );
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_sum{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 0.008',
+      );
+      expect(workerSample).toContain(
+        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
+      );
     });
   });
 });
