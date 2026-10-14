@@ -249,9 +249,10 @@ function readTalkCatalog(
   }
   let entries = talkCatalogs.get(owner);
   if (!entries) {
-    entries = new Map();
+    const ownedEntries = new Map<string, TalkCatalogEntry>();
+    entries = ownedEntries;
     talkCatalogs.set(owner, entries);
-    lifetime?.addEventListener("abort", () => entries.clear(), { once: true });
+    lifetime?.addEventListener("abort", () => ownedEntries.clear(), { once: true });
   }
   const key = JSON.stringify([agentId, params.provider?.trim(), params.model?.trim()]);
   let entry = entries.get(key);
