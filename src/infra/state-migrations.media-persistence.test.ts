@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -63,30 +64,32 @@ describe("legacy media persistence doctor migration", () => {
     const { DatabaseSync } = requireNodeSqlite();
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Invoked with its original DatabaseSync receiver below.
     const originalPrepare = DatabaseSync.prototype.prepare;
-    const prepareSpy = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (sql) {
-        const statement = originalPrepare.call(this, sql);
-        if (sql.includes('from "transcript_events"') && sql.includes('as "event_json"')) {
-          // A real blocked parent and independent heartbeat are the failure boundary.
-          // Shorten the lease and emulate expensive native payload hydration per row.
-          const delay = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 70);
-          const all = statement.all.bind(statement);
-          statement.all = (...args) =>
-            all(...args).map((row) => {
-              delay();
-              return row;
-            });
-          const iterate = statement.iterate.bind(statement);
-          statement.iterate = function* (...args) {
-            for (const row of iterate(...args)) {
-              delay();
-              yield row;
-            }
-          };
-        }
-        return statement;
-      });
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      const statement = originalPrepare.call(this, sql);
+      if (sql.includes('from "transcript_events"') && sql.includes('as "event_json"')) {
+        // A real blocked parent and independent heartbeat are the failure boundary.
+        // Shorten the lease and emulate expensive native payload hydration per row.
+        const delay = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 70);
+        const all = statement.all.bind(statement);
+        statement.all = () =>
+          all().map((row) => {
+            delay();
+            return row;
+          });
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = function* (): Generator<Record<string, SQLOutputValue>, undefined> {
+          for (const row of iterate()) {
+            delay();
+            yield row;
+          }
+          return undefined;
+        };
+      }
+      return statement;
+    });
     try {
       expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
     } finally {
@@ -125,14 +128,16 @@ describe("legacy media persistence doctor migration", () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Invoked with its original DatabaseSync receiver below.
     const originalPrepare = DatabaseSync.prototype.prepare;
     let revoked = false;
-    const prepareSpy = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (sql) {
-        const statement = originalPrepare.call(this, sql);
-        if (this.location() === first && sql.startsWith('update "transcript_events"')) {
-          const run = statement.run.bind(statement);
-          statement.run = (...args) => {
-            const result = run(...args);
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      const statement = originalPrepare.call(this, sql);
+      if (this.location() === first && sql.startsWith('update "transcript_events"')) {
+        const run = statement.run.bind(statement);
+        statement.run = new Proxy(run, {
+          apply(target, receiver, args) {
+            const result = Reflect.apply(target, receiver, args);
             if (revoked) {
               return result;
             }
@@ -148,10 +153,11 @@ describe("legacy media persistence doctor migration", () => {
             }
             revoked = true;
             return result;
-          };
-        }
-        return statement;
-      });
+          },
+        });
+      }
+      return statement;
+    });
     let result: Awaited<ReturnType<typeof migrateLegacyMediaPersistence>>;
     try {
       result = await migrateLegacyMediaPersistence({ env });
