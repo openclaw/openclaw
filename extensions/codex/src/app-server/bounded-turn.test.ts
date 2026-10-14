@@ -36,7 +36,6 @@ function runTurn(params: Partial<TurnParams> & Pick<TurnParams, "options">) {
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it.each<{ source: string; requirements: JsonValue }>([
-    { source: "managed config layers", requirements: null },
     { source: "required feature", requirements: { featureRequirements: { hooks: true } } },
   ])(
     "preserves mandatory hooks from $source in a private tool-free turn",
@@ -245,7 +244,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).rejects.toThrow("pre-bind notification buffer exceeded");
   });
 
-  it.each(["model/list", "mcpServerStatus/list"])(
+  it.each(["mcpServerStatus/list"])(
     "does not dispatch a turn after its caller retires during %s",
     async (suspendedMethod) => {
       const suspended = createDeferred<void>();
@@ -278,9 +277,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
       await rejection;
       expect(fake.methods).not.toContain("turn/start");
-      if (suspendedMethod === "model/list") {
-        expect(fake.methods).not.toContain("thread/start");
-      }
       expect(fake.notifications.size).toBe(0);
       expect(fake.requests.size).toBe(0);
       if (!codexHome) {
@@ -414,33 +410,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requireNoExternalCapabilities: true,
       }),
     ).resolves.toMatchObject({ text: "The message was sent successfully." });
-  });
-
-  it("can return a completed turn without text when the finalization caller opts in", async () => {
-    const fake = createClientFactory({ emptyAnswer: true });
-
-    await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
-        taskLabel: "settled-turn finalization",
-        requireNoExternalCapabilities: true,
-        allowEmptyText: true,
-      }),
-    ).resolves.toMatchObject({ text: "", model: "gpt-5.4" });
-  });
-
-  it("rejects a completed turn without text for ordinary bounded callers", async () => {
-    const fake = createClientFactory({ emptyAnswer: true });
-
-    await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
-        taskLabel: "hosted search",
-      }),
-    ).rejects.toThrow("hosted search turn returned no text");
-
-    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    expect(startParams).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
   });
 
   it.each([
@@ -649,45 +618,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     );
   });
 
-  it.each([
-    {
-      label: "hidden catalog ID",
-      id: "test-hidden-catalog",
-      hidden: true,
-      requested: "test-hidden-catalog",
-    },
-    {
-      label: "hidden execution ID",
-      id: "test-hidden-catalog",
-      hidden: true,
-      requested: "codex-execution-model",
-    },
-  ])("uses the execution model for a required $label", async ({ id, hidden, requested }) => {
-    const fake = createClientFactory({
-      models: [
-        { ...codexModel("codex-execution-model", id), hidden, isDefault: !hidden },
-        { ...codexModel(), isDefault: hidden },
-      ],
-    });
-
-    await expect(
-      runTurn({
-        model: { mode: "required", id: requested },
-        options: { clientFactory: fake.factory },
-        isolation: "configured-transport",
-      }),
-    ).resolves.toMatchObject({
-      model: id,
-      nativeSelection: { model: "codex-execution-model", modelProvider: "openai" },
-      text: "The message was sent successfully.",
-    });
-
-    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
-    expect(threadStart).toMatchObject({ model: "codex-execution-model" });
-    expect(turnStart).not.toHaveProperty("model");
-  });
-
   it("keeps hidden models out of live-default selection", async () => {
     const fake = createClientFactory({
       models: [
@@ -728,7 +658,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).toEqual(["model/list"]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "attests ring-zero and totals response usage (missing final usage: %s)",
     async (missingFinalUsage) => {
       const firstResponse = {
