@@ -117,4 +117,46 @@ describe("command-startup-policy", () => {
       originalEnv.restore();
     }
   });
+  it("suppresses startup stdout for the mcp serve protocol", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("reserves stdout for the browser native-host protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
+
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
+  it("reserves stdout for the node worker protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["node", "worker"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+    expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
+  });
+
+  it("isolates cloud worker startup", () => {
+    const policy = resolvePolicy({ commandPath: ["worker"] });
+
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
+  it("suppresses startup stdout for the bare acp protocol", () => {
+    expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("keeps startup stdout for non-protocol commands", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "list"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["acp", "client"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["status"] }).suppressDoctorStdout).toBe(false);
+  });
 });

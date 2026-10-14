@@ -651,6 +651,96 @@ describe("createPersistCronSessionEntry", () => {
     },
   );
 
+  it("claims an initial row after a concurrent pin and rename", async () => {
+    const sessionKey = "agent:main:session";
+    const lifecycleRevision = crypto.randomUUID();
+    const initialSessionEntry = makeSessionEntry({ lifecycleRevision: "initial-revision" });
+    const cronSession = {
+      ...makeCronSession(
+        makeSessionEntry({
+          lifecycleRevision,
+        }),
+      ),
+      initialSessionEntry,
+      lifecycleRevision,
+    } as MutableCronSession;
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        ...initialSessionEntry,
+        label: "Renamed before claim",
+        pinnedAt: 2000,
+        updatedAt: 2000,
+      },
+    };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+
+    await expect(persist()).resolves.toBeUndefined();
+    expect(persistedStore[sessionKey]).toMatchObject({
+      label: "Renamed before claim",
+      lifecycleRevision,
+      pinnedAt: 2000,
+      updatedAt: 2000,
+    });
+    expect(persistedStore[sessionKey]?.status).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "pin and rename",
+      current: { label: "Renamed", pinnedAt: 2000, updatedAt: 2000 },
+      expected: { label: "Renamed", pinnedAt: 2000, updatedAt: 2000 },
+    },
+    {
+      name: "unpin and clear the label",
+      current: { label: undefined, pinnedAt: undefined, updatedAt: 2000 },
+      expected: { label: undefined, pinnedAt: undefined, updatedAt: 2000 },
+    },
+  ])("preserves a concurrent $name during cron persistence", async ({ current, expected }) => {
+    const sessionKey = "agent:main:session";
+    const lifecycleRevision = crypto.randomUUID();
+    const runEntry = makeSessionEntry({
+      lifecycleRevision,
+      label: "Original",
+      pinnedAt: 1000,
+      status: "done",
+    });
+    const cronSession = {
+      ...makeCronSession(runEntry),
+      initialSessionEntry: { ...runEntry },
+      lifecycleRevision,
+    } as MutableCronSession;
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        ...cronSession.sessionEntry,
+        ...current,
+      },
+    };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+
+    await persist();
+
+    expect(persistedStore[sessionKey]).toMatchObject({
+      lifecycleRevision,
+      status: "done",
+      updatedAt: expected.updatedAt,
+    });
+    expect(persistedStore[sessionKey]?.label).toBe(expected.label);
+    expect(persistedStore[sessionKey]?.pinnedAt).toBe(expected.pinnedAt);
+    expect(cronSession.sessionEntry.label).toBe(expected.label);
+    expect(cronSession.sessionEntry.pinnedAt).toBe(expected.pinnedAt);
+    expect(cronSession.sessionEntry.updatedAt).toBe(expected.updatedAt);
+  });
+
   it("does not restore session policy cleared while a cron run is active", async () => {
     const sessionKey = "agent:main:session";
     const lifecycleRevision = crypto.randomUUID();

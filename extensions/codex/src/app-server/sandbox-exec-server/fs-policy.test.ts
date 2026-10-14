@@ -98,6 +98,22 @@ describe("sandbox fs glob matching", () => {
     expect(matcher("/work/private/a.txtx")).toBe(false);
   });
 
+  it("matches optional and crossing globstars", () => {
+    const optional = createGlobReadMatcher("/work/**/secret");
+    expect(optional("/work/secret")).toBe(true);
+    expect(optional("/work/a/b/secret")).toBe(true);
+    expect(optional("/work/a/secret/b")).toBe(false);
+
+    const crossing = createGlobReadMatcher("/work/**");
+    expect(crossing("/work/a/b/c")).toBe(true);
+    expect(crossing("/other/a")).toBe(false);
+
+    const trailing = createGlobReadMatcher("/work/**/");
+    expect(trailing("/work/")).toBe(true);
+    expect(trailing("/work/a/")).toBe(true);
+    expect(trailing("/work")).toBe(false);
+  });
+
   it("matches question marks and character classes", () => {
     const question = createGlobReadMatcher("/work/?");
     expect(question("/work/a")).toBe(true);

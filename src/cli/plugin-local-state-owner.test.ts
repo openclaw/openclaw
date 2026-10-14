@@ -35,7 +35,16 @@ const fixture = vi.hoisted(() => ({
   memoryManager: vi.fn(),
   search: vi.fn<MemorySearchManager["search"]>(),
   searchClose: vi.fn(async () => {}),
+  status: vi.fn(),
+  bootstrap: vi.fn(),
+  recovery: vi.fn(),
   memory: vi.fn(async () => {}),
+  matrix: vi.fn(async (): Promise<unknown[]> => []),
+  config: vi.fn(() => ({
+    channels: {
+      matrix: { homeserver: "https://matrix.example.org", userId: "@fixture:example.org" },
+    },
+  })),
 }));
 
 vi.mock("../plugins/memory-runtime.js", async (importOriginal) => ({
@@ -92,6 +101,16 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
     registerOwnedMethod(`fixture.batch.${operation}.owner`, async (params) => ({
       execution: await fixture.executeBatch(),
       ownerId: params.expectedOwnerId,
+    }));
+  }
+  for (const [operation, mock] of [
+    ["status", fixture.status],
+    ["bootstrap", fixture.bootstrap],
+    ["recoveryKey", fixture.recovery],
+  ] as const) {
+    registerOwnedMethod(`fixture.verify.${operation}.owner`, async (params) => ({
+      result: await mock({ cfg: api.runtime.config.current(), accountId: params.accountId }),
+      accountId: params.accountId,
     }));
   }
   api.registerCli(({ program }) => {
@@ -163,6 +182,36 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
           }
         },
       );
+    program
+      .command("matrix")
+      .command("verify <operation> [value]")
+      .option("--json")
+      .option("--account <id>")
+      .option("--include-recovery-key")
+      .action(async (operation: string, _value: string | undefined, opts: { account?: string }) => {
+        try {
+          const routed = ["status", "bootstrap", "device"].includes(operation);
+          const result = await runWithLocalStateOwner<{ result: unknown }>({
+            method: routed
+              ? `fixture.verify.${operation === "device" ? "recoveryKey" : operation}.owner`
+              : "fixture.offline",
+            target: "fixture account",
+            params: { accountId: opts.account },
+            ...(routed ? {} : { onForeignOwner: "refuse" as const }),
+            runLocal: async () => {
+              fixture.config();
+              return { result: await fixture.matrix() };
+            },
+          });
+          printJson(result.result);
+          if (operation === "bootstrap" && !(result.result as { success: boolean }).success) {
+            process.exitCode = 1;
+          }
+        } catch (error) {
+          process.exitCode = 1;
+          printJson({ error: String(error) });
+        }
+      });
   });
 }
 
@@ -221,6 +270,7 @@ const methods = new Map<string, GatewayRequestHandler>();
 const gatewayConfig = {
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
   agents: { entries: { main: {} } },
+  channels: { matrix: { accounts: { ops: { homeserver: "https://gateway.example.org" } } } },
 };
 
 async function dispatchToGateway(options: CallGatewayOptions) {
@@ -303,6 +353,8 @@ beforeEach(() => {
   resetConfigRuntimeState();
   fixture.external = false;
   fixture.memory.mockClear();
+  fixture.matrix.mockClear();
+  fixture.config.mockClear();
   fixture.callGateway.mockReset().mockImplementation(dispatchToGateway);
   fixture.executeBatch.mockReset().mockResolvedValue(backfillExecution());
   fixture.search.mockReset().mockResolvedValue([]);
@@ -315,6 +367,9 @@ beforeEach(() => {
     },
     searchForCli,
   });
+  fixture.status.mockReset();
+  fixture.bootstrap.mockReset();
+  fixture.recovery.mockReset();
   process.exitCode = 0;
 });
 
@@ -415,31 +470,65 @@ describe("synthetic plugin commands respect the local state owner", () => {
     expect(fs.existsSync(ownerPath)).toBe(false);
   });
 
-  it("does not disclose a completed search result after owner revocation", async () => {
-    await occupyState();
-    const entered = createDeferred();
-    const finish = createDeferred();
-    fixture.searchClose.mockImplementationOnce(async () => {
-      entered.resolve();
-      await finish.promise;
-    });
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const operation = runCli(["memory", "search", "query", "--json"]);
-    const outcome = operation.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await awaitGateBeforeSettlement(entered.promise, operation, "Gateway handler did not enter");
-      await owner?.release();
-      owner = null;
-    } finally {
-      finish.resolve();
-    }
-    expect(await outcome).toMatchObject({ code: "OUTCOME_UNKNOWN" });
-    expect(output).not.toHaveBeenCalled();
-    expect(fixture.memory).not.toHaveBeenCalled();
-  });
+  it.each(["memory", "matrix", "search"] as const)(
+    "does not disclose a completed %s result after owner revocation",
+    async (family) => {
+      await occupyState();
+      const entered = createDeferred();
+      const finish = createDeferred();
+      if (family === "memory") {
+        fixture.executeBatch.mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
+          return backfillExecution();
+        });
+      } else if (family === "search") {
+        fixture.searchClose.mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
+        });
+      } else {
+        fixture.status.mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
+          return { recoveryKey: "synthetic-key-must-not-escape" };
+        });
+      }
+      const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const operation = runCli(
+        family === "memory"
+          ? ["memory", "session-backfill", "--apply", "--json"]
+          : family === "search"
+            ? ["memory", "search", "query", "--json"]
+            : ["matrix", "verify", "status", "--include-recovery-key", "--json"],
+      );
+      const outcome = operation.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          operation,
+          "Gateway handler did not enter",
+        );
+        await owner?.release();
+        owner = null;
+      } finally {
+        finish.resolve();
+      }
+      if (family !== "matrix") {
+        expect(await outcome).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+        expect(output).not.toHaveBeenCalled();
+      } else {
+        await outcome;
+        expect(process.exitCode).toBe(1);
+        expect(output.mock.calls.at(-1)?.[0]).toContain("No local fallback was attempted");
+        expect(output.mock.calls.flat().join("")).not.toContain("synthetic-key-must-not-escape");
+      }
+      expect(fixture.memory).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not continue a routed backfill locally when its Gateway stops between batches", async () => {
     await occupyState();

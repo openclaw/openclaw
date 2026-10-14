@@ -93,7 +93,7 @@ describe("resolveCommandAuthorization", () => {
     setActivePluginRegistry(createTestRegistry(plugins));
   }
 
-  it.each(["explicit"] as const)(
+  it.each(["explicit", "inferred"] as const)(
     "uses asynchronous channel allowlists for %s command authorization",
     async (providerSource) => {
       const resolveLegacy = vi.fn(() => ["legacy-owner"]);

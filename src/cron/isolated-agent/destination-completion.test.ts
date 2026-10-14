@@ -3,6 +3,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
+  deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -789,37 +790,51 @@ describe("destination-owned completion", () => {
     },
   );
 
-  it("records a delivery failure when the creating conversation is reset", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const fixture = await createCompletionFixture(state, "isolated");
-      try {
-        fixture.params.deliveryPayloads = [{ text: "tick" }];
-        fixture.params.synthesizedText = "tick";
-        await resetSessionEntryLifecycle({
-          storePath: fixture.scope.storePath,
-          target: {
-            canonicalKey: fixture.scope.sessionKey,
-            storeKeys: [fixture.scope.sessionKey],
-          },
-          buildNextEntry: () => ({
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-generation",
-            updatedAt: 3000,
-          }),
-        });
+  it.each(["deleted", "reset"] as const)(
+    "records a delivery failure when the creating conversation is %s",
+    async (change) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        try {
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.synthesizedText = "tick";
+          if (change === "deleted") {
+            await deleteSessionEntryLifecycle({
+              archiveTranscript: false,
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+            });
+          } else {
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+          }
 
-        const delivery = await dispatchCronDelivery(fixture.params);
-        expect(delivery).toMatchObject({
-          delivered: false,
-          deliveryAttempted: true,
-          deliveryError: expect.stringContaining("session rebound"),
-          disposition: { kind: "error", errorKind: "delivery-target" },
-        });
-        expect(await fixture.messages()).toEqual([]);
-        expect(fixture.updates()).toBe(0);
-      } finally {
-        await fixture.dispose();
-      }
-    });
-  });
+          const delivery = await dispatchCronDelivery(fixture.params);
+          expect(delivery).toMatchObject({
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: expect.stringContaining("session rebound"),
+            disposition: { kind: "error", errorKind: "delivery-target" },
+          });
+          expect(await fixture.messages()).toEqual([]);
+          expect(fixture.updates()).toBe(0);
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    },
+  );
 });
