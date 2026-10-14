@@ -18,16 +18,7 @@ import { sendDiceTelegram, sendStickerTelegram } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { resolveTelegramToken } from "./token.js";
 
-const MISSING_TOKEN_MESSAGE =
-  "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.";
-const STICKER_DISABLED_MESSAGE =
-  "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.";
-
-/**
- * The actions this module owns. The dispatcher narrows on this list instead of calling
- * unconditionally, so its own trailing throw still sees an exhausted union and keeps proving that
- * every Telegram action has a handler.
- */
+/** The dispatcher narrows on this list, so its trailing throw keeps seeing an exhausted union. */
 const TELEGRAM_NATIVE_MEDIA_ACTIONS = [
   "searchSticker",
   "sendDice",
@@ -37,14 +28,10 @@ const TELEGRAM_NATIVE_MEDIA_ACTIONS = [
 
 export type TelegramNativeMediaActionName = (typeof TELEGRAM_NATIVE_MEDIA_ACTIONS)[number];
 
-const TELEGRAM_NATIVE_MEDIA_ACTION_SET: ReadonlySet<string> = new Set(
-  TELEGRAM_NATIVE_MEDIA_ACTIONS,
-);
-
 export function isTelegramNativeMediaAction(
   action: string,
 ): action is TelegramNativeMediaActionName {
-  return TELEGRAM_NATIVE_MEDIA_ACTION_SET.has(action);
+  return TELEGRAM_NATIVE_MEDIA_ACTIONS.some((owned) => owned === action);
 }
 
 export type TelegramNativeMediaActionContext = {
@@ -60,48 +47,61 @@ export type TelegramNativeMediaActionContext = {
   assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
 };
 
-function readTelegramSendTarget(params: Record<string, unknown>): string {
-  return readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
-}
-
 /**
- * Dice and stickers are native Telegram message types that carry no text body, so they bypass the
- * text send pipeline and are dispatched here together with the sticker cache queries that serve
- * them.
+ * Dice and stickers carry no text body, so they bypass the text send pipeline and are handled here
+ * together with the sticker cache queries that serve them.
  */
 export async function handleTelegramNativeMediaAction(
   context: TelegramNativeMediaActionContext,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg, accountId, isActionEnabled } = context;
 
-  if (action === "sendSticker" || action === "searchSticker") {
-    if (!isActionEnabled("sticker", false)) {
-      throw new Error(STICKER_DISABLED_MESSAGE);
-    }
+  if (action === "sendDice" && !isActionEnabled("sendMessage")) {
+    throw new Error("Telegram sendMessage is disabled.");
+  }
+  if (
+    (action === "sendSticker" || action === "searchSticker") &&
+    !isActionEnabled("sticker", false)
+  ) {
+    throw new Error(
+      "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
+    );
   }
 
-  if (action === "sendDice") {
-    if (!isActionEnabled("sendMessage")) {
-      throw new Error("Telegram sendMessage is disabled.");
-    }
-    const to = readTelegramSendTarget(params);
-    const emoji = readStringParam(params, "diceEmoji");
-    const replyToMessageId = readTelegramReplyToMessageId(params);
+  if (action === "sendDice" || action === "sendSticker") {
+    const to =
+      readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
     const messageThreadId = readTelegramThreadId(params);
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
-      throw new Error(MISSING_TOKEN_MESSAGE);
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
     }
-    const result = await sendDiceTelegram(to, emoji, {
+    const sendOpts = {
       cfg,
       token,
       accountId,
-      silent: readBooleanParam(params, "silent"),
-      replyToMessageId,
+      replyToMessageId: readTelegramReplyToMessageId(params),
       messageThreadId,
       gatewayClientScopes: context.gatewayClientScopes,
-      onPlatformSendDispatch: context.onPlatformSendDispatch,
+      // Passing this callback is what binds authority to every request in withTelegramApiContext.
       assertPlatformSendAuthorized: context.assertDirectAdapterHandoff,
+    };
+    if (action === "sendSticker") {
+      const fileId =
+        readStringParam(params, "fileId") ?? readStringArrayParam(params, "stickerId")?.[0];
+      if (!fileId) {
+        throw new Error("fileId is required.");
+      }
+      const sticker = await sendStickerTelegram(to, fileId, sendOpts);
+      context.notifyVisibleOutboundSuccess(to, messageThreadId);
+      return jsonResult({ ok: true, messageId: sticker.messageId, chatId: sticker.chatId });
+    }
+    const result = await sendDiceTelegram(to, readStringParam(params, "diceEmoji"), {
+      ...sendOpts,
+      silent: readBooleanParam(params, "silent"),
+      onPlatformSendDispatch: context.onPlatformSendDispatch,
     });
     context.notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -110,45 +110,10 @@ export async function handleTelegramNativeMediaAction(
       chatId: result.chatId,
       emoji: result.emoji,
       value: result.value,
-      // Source-reply classification matches the delivered target against the run's
-      // conversation through the receipt's thread, so a roll into a forum topic reports a
-      // bare chat without this and loses the current-source completion it just earned.
+      // The receipt's thread is what matches a topic-addressed roll to its source conversation.
       ...(result.receipt
         ? { receipt: { threadId: result.receipt.threadId, replyToId: result.receipt.replyToId } }
         : {}),
-    });
-  }
-
-  if (action === "sendSticker") {
-    const to = readTelegramSendTarget(params);
-    const fileId =
-      readStringParam(params, "fileId") ?? readStringArrayParam(params, "stickerId")?.[0];
-    if (!fileId) {
-      throw new Error("fileId is required.");
-    }
-    const replyToMessageId = readTelegramReplyToMessageId(params);
-    const messageThreadId = readTelegramThreadId(params);
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(MISSING_TOKEN_MESSAGE);
-    }
-    const result = await sendStickerTelegram(to, fileId, {
-      cfg,
-      token,
-      accountId,
-      replyToMessageId,
-      messageThreadId,
-      gatewayClientScopes: context.gatewayClientScopes,
-      // Passing the callback is what installs the bound fetch in withTelegramApiContext, so
-      // every request revalidates authority after the awaited chat lookup. Omitting it here
-      // would silently leave the sticker send unguarded.
-      assertPlatformSendAuthorized: context.assertDirectAdapterHandoff,
-    });
-    context.notifyVisibleOutboundSuccess(to, messageThreadId);
-    return jsonResult({
-      ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
     });
   }
 
@@ -173,7 +138,6 @@ export async function handleTelegramNativeMediaAction(
     return jsonResult({ ok: true, ...stats });
   }
 
-  // `action` is `never` here: the caller's guard admits only handled names. `String()` keeps the
-  // template legal, matching the dispatcher's own unreachable throw.
+  // `action` is `never` here; `String()` keeps the template legal, as in the dispatcher's own throw.
   throw new Error(`Unsupported Telegram native media action: ${String(action)}`);
 }

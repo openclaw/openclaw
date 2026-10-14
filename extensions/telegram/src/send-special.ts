@@ -100,85 +100,62 @@ export type TelegramDiceSendResult = TelegramSendResult & {
   value?: number;
 };
 
-const TELEGRAM_DICE_EMOJI_SET: ReadonlySet<string> = new Set(TELEGRAM_DICE_EMOJI);
-
-// Keyboards and models routinely append the emoji presentation selector (⚽️ vs ⚽), which
-// Telegram does not accept for sendDice. Strip it before the allowlist lookup, the same way
-// the reaction path does, so a legitimate face is not rejected locally.
-function normalizeTelegramDiceEmoji(value: string | undefined): string {
-  return (value ?? "").trim().replace(/[\uFE0E\uFE0F]/gu, "") || "🎲";
-}
-
-function isTelegramDiceEmoji(value: string): value is TelegramDiceEmoji {
-  return TELEGRAM_DICE_EMOJI_SET.has(value);
-}
-
-/**
- * Send an animated dice/dart/basketball/football/bowling/slot roll.
- * The outcome is chosen by Telegram and returned in the sent message, so the
- * caller learns the value immediately even though it cannot influence it.
- * @param to - Chat ID or username (e.g., "123456789" or "@username")
- * @param emoji - One of TELEGRAM_DICE_EMOJI; defaults to 🎲
- * @param opts - Optional configuration
- */
+/** Send an animated roll; Telegram picks the outcome and returns it in the sent message. */
 export async function sendDiceTelegram(
   to: string,
   emoji: string | undefined,
   opts: TelegramDiceOpts,
 ): Promise<TelegramDiceSendResult> {
-  const normalized = normalizeTelegramDiceEmoji(emoji);
-  if (!isTelegramDiceEmoji(normalized)) {
+  // Keyboards and models routinely append the presentation selector (\u26BD\uFE0F vs \u26BD), which
+  // Telegram rejects for sendDice; strip it before the allowlist lookup as the reaction path does.
+  const normalized = (emoji ?? "").trim().replace(/[\uFE0E\uFE0F]/gu, "") || "\u{1F3B2}";
+  const face = TELEGRAM_DICE_EMOJI.find((candidate) => candidate === normalized);
+  if (!face) {
     throw new Error(
       `Unsupported Telegram dice emoji "${normalized}". Use one of: ${TELEGRAM_DICE_EMOJI.join(" ")}`,
     );
   }
 
-  return withTelegramApiContext(opts, async (context): Promise<TelegramDiceSendResult> =>
-    sendDiceTelegramWithContext(to, normalized, opts, context),
-  );
-}
+  return withTelegramApiContext(opts, async (context): Promise<TelegramDiceSendResult> => {
+    const { api } = context;
+    const prepared = await prepareTelegramOutbound({
+      to,
+      context,
+      opts,
+      thread: {
+        messageThreadId: opts.messageThreadId,
+        replyToMessageId: opts.replyToMessageId,
+      },
+      useApiErrorLogging: false,
+    });
+    const diceParams = {
+      ...prepared.threadParams,
+      ...(opts.silent ? { disable_notification: true } : {}),
+    };
 
-async function sendDiceTelegramWithContext(
-  to: string,
-  emoji: TelegramDiceEmoji,
-  opts: TelegramDiceOpts,
-  context: TelegramApiContext,
-): Promise<TelegramDiceSendResult> {
-  const { api } = context;
-  const prepared = await prepareTelegramOutbound({
-    to,
-    context,
-    opts,
-    thread: {
-      messageThreadId: opts.messageThreadId,
-      replyToMessageId: opts.replyToMessageId,
-    },
-    useApiErrorLogging: false,
+    // Target preparation above is awaited, so custody can be revoked while it runs; record the
+    // platform-send boundary and revalidate authority immediately before the roll.
+    await opts.onPlatformSendDispatch?.();
+    const result = await prepared.request(() => {
+      opts.assertPlatformSendAuthorized?.();
+      return api.sendDice(
+        prepared.chatId,
+        face,
+        Object.keys(diceParams).length > 0 ? diceParams : undefined,
+      );
+    }, "dice");
+    const finalized = await finalizeTelegramOutbound({
+      context,
+      prepared,
+      result,
+      resultContext: "dice send",
+    });
+    return {
+      ...finalized,
+      emoji: face,
+      value: typeof result?.dice?.value === "number" ? result.dice.value : undefined,
+    };
   });
-  const diceParams = {
-    ...prepared.threadParams,
-    ...(opts.silent ? { disable_notification: true } : {}),
-  };
-
-  // Record the platform-send boundary and revalidate authority immediately before the roll:
-  // target preparation above is awaited, so custody can be revoked while it runs.
-  await opts.onPlatformSendDispatch?.();
-  const result = await prepared.request(() => {
-    opts.assertPlatformSendAuthorized?.();
-    return api.sendDice(
-      prepared.chatId,
-      emoji,
-      Object.keys(diceParams).length > 0 ? diceParams : undefined,
-    );
-  }, "dice");
-  const finalized = await finalizeTelegramOutbound({
-    context,
-    prepared,
-    result,
-    resultContext: "dice send",
-  });
-  const value = typeof result?.dice?.value === "number" ? result.dice.value : undefined;
-  return { ...finalized, emoji, value };
 }
 
 /**

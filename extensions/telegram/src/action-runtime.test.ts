@@ -86,6 +86,8 @@ describe("Telegram registered action authority and input contracts", () => {
       method: "sendPoll",
       revoke: true,
     },
+    { action: "dice", params: {}, method: "sendDice", revoke: false },
+    { action: "dice", params: {}, revoke: true },
     { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
     { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
     { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
@@ -548,9 +550,7 @@ describe("Telegram registered action authority and input contracts", () => {
   );
 
   it("forwards the silent option to a dice roll and withdraws dice with the send gate", async () => {
-    // The shared schema accepts `silent` for dice and Bot API supports it; dropping it on the way
-    // out made silent rolls notify recipients anyway. Dice also has no gate of its own, so
-    // disabling sendMessage must reject it rather than reach the API.
+    // Bot API supports silent rolls, and dice rides the sendMessage gate rather than one of its own.
     await invoke("dice", { to: "-1001", diceEmoji: "\u{1F3B2}", silent: true });
 
     expect(endpoints).toEqual(["/bot123456:telegram-send-http-fixture/sendDice"]);
@@ -573,10 +573,7 @@ describe("Telegram registered action authority and input contracts", () => {
   });
 
   it("reports a dice roll's topic receipt so a roll into a forum topic completes its reply", async () => {
-    // Source-reply classification matches the delivered target against the run's conversation
-    // through receipt.threadId. Reporting only the bare chat makes a topic-addressed roll miss
-    // its current-source completion, and the run then sends the redundant fallback reply this
-    // action exists to suppress.
+    // Only receipt.threadId can match a topic-addressed roll back to its source conversation.
     await expect(invoke("dice", { to: "-1001", messageThreadId: 77 })).resolves.toMatchObject({
       details: { ok: true, receipt: { threadId: "77" } },
     });
