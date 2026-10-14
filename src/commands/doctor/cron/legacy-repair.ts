@@ -24,6 +24,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
+import { applyCronJobRuntimeStateRepairs } from "../../../cron/store/state-repair.js";
 import type { CronJob } from "../../../cron/types.js";
 import {
   collectErrorGraphCandidates,
@@ -62,6 +63,7 @@ import {
   canRepairCronDeliveryForDoctor,
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
+  normalizeLegacyRestartInterruption,
   normalizeStoredCronJobs,
   recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
@@ -342,6 +344,7 @@ export async function applyLegacyCronStoreRepair(params: {
     return { changes, warnings };
   }
 
+  let repairedRuntimeStateJobCount = 0;
   const quarantineEntries: (QuarantinedCronConfigJob | CronQuarantinedJob)[] = [
     ...(params.recoverQuarantinedScheduleJobs === true
       ? quarantineRecovery.retainedEntries.filter(
@@ -399,9 +402,28 @@ export async function applyLegacyCronStoreRepair(params: {
           );
           changes.push(`Saved pre-repair cron backup: ${backupPath}`);
         }
+        // preserveRuntimeState keeps this definition write from replacing
+        // scheduler-owned runtime state, so a normalization that repaired only
+        // runtime fields has to be persisted separately — inside the same
+        // transaction, behind the same snapshot guard and pre-repair backup.
+        const repairRuntimeState = (db: DatabaseSync): undefined => {
+          const persisted = applyCronJobRuntimeStateRepairs(
+            db,
+            cronStoreKey(state.storePath),
+            normalized.legacyRestartInterruptionJobIds,
+            normalizeLegacyRestartInterruption,
+          );
+          repairedRuntimeStateJobCount = persisted.length;
+          return undefined;
+        };
         await saveCronJobsStore(state.storePath, store, {
           ...saveOptions,
-          transactionHooks: { beforeWrite: assertSnapshotCurrent },
+          transactionHooks: {
+            beforeWrite: assertSnapshotCurrent,
+            ...(normalized.legacyRestartInterruptionJobIds.length > 0
+              ? { afterWrite: repairRuntimeState }
+              : {}),
+          },
         });
       } else if (quarantine) {
         await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
@@ -419,6 +441,11 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   changes.push(...retirementChanges);
+  if (repairedRuntimeStateJobCount > 0) {
+    changes.push(
+      `Recorded a retained gateway-restart interruption on ${pluralize(repairedRuntimeStateJobCount, "cron job")} so auto-disable spends only the job's own failures.`,
+    );
+  }
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

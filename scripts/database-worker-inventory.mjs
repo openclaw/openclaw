@@ -692,6 +692,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/cron/store/state-repair.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["applyCronJobRuntimeStateRepairs"],
+        evidence:
+          "Doctor legacy-repair.ts afterWrite transactionHook only; the definition save preserves runtime state, so this re-applies the repair inside that same transaction",
+      },
+    ],
+  ],
+  [
     "src/agents/workspace-state-store.kernel.ts",
     [
       {

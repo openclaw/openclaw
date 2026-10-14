@@ -35,24 +35,40 @@
  *  5. A quiet (non-firing) trigger evaluation after a real restart clears the
  *     error streak, so the interruption offset it was subtracted from must go
  *     with it; ten later genuine failures then still auto-disable on the tenth.
- *  6. A v2026.9.9 row (eight genuine failures plus one gateway restart, no
- *     offset) keeps its full budget after Doctor's migration owner attributes
- *     the one interruption it proves, and still auto-disables on the tenth
- *     genuine failure. The scenario runs its own control first, showing the
- *     un-normalized row disabling on the ninth.
+ *  6. A persisted v2026.9.9 row (eight genuine failures plus one gateway
+ *     restart, no offset) is repaired by the real `openclaw doctor --fix` cron
+ *     path — `loadLegacyCronRepairState` then `applyLegacyCronStoreRepair`,
+ *     including its pre-repair backup and snapshot guards — and the repair is
+ *     then read back out of the store. This crosses the existing-row write that
+ *     `preserveRuntimeState` governs, which the earlier version of this
+ *     scenario did not: it normalized in memory and re-saved by hand, so it
+ *     certified a repair the operator's store never received. The scenario runs
+ *     its own control first, showing the un-repaired row disabling on the ninth
+ *     genuine failure, and then that the repaired row still auto-disables on
+ *     the tenth.
+ *  7. The scheduler commits a successful run between Doctor's read and its
+ *     write. Doctor's snapshot guard fingerprints definitions only, so that
+ *     write is invisible to it; the repair must leave the cleared streak alone
+ *     instead of restoring Doctor's stale view of the row.
  *
  * Run: pnpm tsx scripts/proof-3i95-cron-restart-interrupt-budget.ts
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeStoredCronJobs } from "../src/commands/doctor/cron/store-migration.js";
+import {
+  applyLegacyCronStoreRepair,
+  loadLegacyCronRepairState,
+} from "../src/commands/doctor/cron/legacy-repair.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { CronService } from "../src/cron/service.js";
 import { createCronServiceState } from "../src/cron/service/state.js";
 import { applyJobResult, applyTriggerNoFireResult } from "../src/cron/service/timer-outcomes.js";
 import { loadCronStore, saveCronStore } from "../src/cron/store.js";
+import { cronStoreKey } from "../src/cron/store/key.js";
 import type { CronJob } from "../src/cron/types.js";
 import { GatewayScheduler } from "../src/infra/gateway-scheduler.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 
 // Isolate every durable side effect from the operator's real state directory.
 // The state database is opened lazily, so setting this before any cron call is
@@ -363,6 +379,18 @@ async function scenarioQuietTriggerClearsOffset(tmpDir: string): Promise<void> {
   );
 }
 
+/** Drives the production `openclaw doctor --fix` cron repair over one store. */
+async function loadDoctorRepairState(storePath: string) {
+  const cfg = { cron: { store: storePath } } as OpenClawConfig;
+  const state = await loadLegacyCronRepairState({ cfg, storePath });
+  assert(state, `doctor could not load repair state for ${storePath}`);
+  return { cfg, state };
+}
+
+async function repairLegacyStore(storePath: string) {
+  return await applyLegacyCronStoreRepair(await loadDoctorRepairState(storePath));
+}
+
 async function scenarioLegacyUpgradeKeepsBudget(tmpDir: string): Promise<void> {
   // A v2026.9.9 row: eight genuine failures plus one gateway restart, recorded
   // before the interruption counters existed, so there is no offset at all.
@@ -387,22 +415,38 @@ async function scenarioLegacyUpgradeKeepsBudget(tmpDir: string): Promise<void> {
     "control invalid: an un-normalized legacy row should disable on its ninth genuine failure",
   );
 
-  // Doctor's migration owner attributes the one interruption the row proves.
+  // The real upgrade path: the legacy row is already persisted, and `openclaw
+  // doctor --fix` repairs it in place. Going through `applyLegacyCronStoreRepair`
+  // rather than calling the migration owner and re-saving by hand is the point
+  // of this scenario — Doctor saves with `preserveRuntimeState`, so the existing
+  // row's conflict update excludes `state_json` and an earlier version of this
+  // scenario certified a repair the operator's store never received.
   const storePath = path.join(tmpDir, "legacy-upgrade.json");
-  const legacyRow = recurringJob("legacy-upgrade", BASE_MS, { ...legacyState });
-  const normalized = normalizeStoredCronJobs([legacyRow as unknown as Record<string, unknown>]);
+  await saveCronStore(storePath, {
+    version: 1,
+    jobs: [recurringJob("legacy-upgrade", BASE_MS, { ...legacyState })],
+  });
+  const repaired = await repairLegacyStore(storePath);
   assert(
-    normalized.issues.legacyRestartInterruption === 1,
-    "the migration owner did not report the legacy interruption",
+    repaired.warnings.length === 0,
+    `doctor reported warnings while repairing the legacy row: ${repaired.warnings.join("; ")}`,
   );
-  // Normalization repairs the row in place, so this persists the repaired shape.
-  await saveCronStore(storePath, { version: 1, jobs: [legacyRow] });
 
+  // Read the operator's store back, not doctor's in-memory result: the defect
+  // this scenario pins was entirely in the write.
   const job = (await loadCronStore(storePath)).jobs[0];
-  assert(job, "expected the normalized job to survive the store");
+  assert(job, "expected the repaired job to survive the store");
   assert(
     readCounter(job, "consecutiveRestartInterruptions") === 1,
-    "the normalized interruption offset did not survive persistence",
+    "doctor's repaired interruption offset did not survive the existing-row write",
+  );
+  assert(
+    job.state.lastRunInterruptionReason === "gateway-restart",
+    "doctor's repaired interruption reason did not survive the existing-row write",
+  );
+  assert(
+    repaired.changes.some((change) => change.includes("gateway-restart interruption")),
+    "doctor did not report persisting the legacy gateway-restart interruption",
   );
   const state = offlineServiceState(storePath, BASE_MS);
   applyGenuineFailure(state, job, 0);
@@ -418,7 +462,55 @@ async function scenarioLegacyUpgradeKeepsBudget(tmpDir: string): Promise<void> {
   );
 
   console.log(
-    "  scenario 6: an upgraded v2026.9.9 row keeps its full budget and still disables on the tenth genuine failure",
+    "  scenario 6: doctor --fix persists the upgrade repair; the row keeps its full budget and still disables on the tenth genuine failure",
+  );
+}
+
+async function scenarioRepairPreservesConcurrentRuntimeState(tmpDir: string): Promise<void> {
+  const storePath = path.join(tmpDir, "legacy-concurrent.json");
+  await saveCronStore(storePath, {
+    version: 1,
+    jobs: [
+      recurringJob("legacy-concurrent", BASE_MS, {
+        nextRunAtMs: BASE_MS,
+        consecutiveErrors: 9,
+        lastRunStatus: "error" as const,
+        lastStatus: "error" as const,
+        lastError: "cron: job interrupted by gateway restart",
+      }),
+    ],
+  });
+  const { cfg, state } = await loadDoctorRepairState(storePath);
+
+  // The scheduler commits a successful run while doctor is still deciding.
+  // `preserveRuntimeState` exists for exactly this, and doctor's snapshot guard
+  // fingerprints definitions only, so this write is invisible to it: persisting
+  // doctor's earlier read wholesale would resurrect the streak that just
+  // cleared and attribute an interruption to a job that no longer has one.
+  const scheduled = { nextRunAtMs: BASE_MS + EVERY_MS, consecutiveErrors: 0, lastRunStatus: "ok" };
+  openOpenClawStateDatabase()
+    .db.prepare(`UPDATE cron_jobs SET state_json = ? WHERE store_key = ? AND job_id = ?`)
+    .run(JSON.stringify(scheduled), cronStoreKey(storePath), "legacy-concurrent");
+
+  const repaired = await applyLegacyCronStoreRepair({ cfg, state });
+  assert(
+    repaired.warnings.length === 0,
+    `doctor reported warnings while repairing a concurrently updated row: ${repaired.warnings.join("; ")}`,
+  );
+
+  const job = (await loadCronStore(storePath)).jobs[0];
+  assert(job, "expected the concurrently updated job to survive the repair");
+  assert(
+    readCounter(job, "consecutiveErrors") === 0,
+    "doctor's stale read overwrote the successful run the scheduler had committed",
+  );
+  assert(
+    readCounter(job, "consecutiveRestartInterruptions") === undefined,
+    "doctor attributed an interruption to a streak that no longer existed at write time",
+  );
+
+  console.log(
+    "  scenario 7: doctor's repair leaves a run the scheduler committed after the snapshot intact",
   );
 }
 
@@ -460,6 +552,7 @@ async function main(): Promise<void> {
     scenarioSuccessClearsStreak(tmpDir);
     await scenarioQuietTriggerClearsOffset(tmpDir);
     await scenarioLegacyUpgradeKeepsBudget(tmpDir);
+    await scenarioRepairPreservesConcurrentRuntimeState(tmpDir);
     console.log("All runtime assertions passed.");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

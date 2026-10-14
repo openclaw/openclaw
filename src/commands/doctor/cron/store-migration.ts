@@ -105,6 +105,8 @@ type NormalizeCronStoreJobsResult = {
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
+  /** Canonical ids whose runtime state this normalization repaired, for the persistence step. */
+  legacyRestartInterruptionJobIds: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -151,8 +153,14 @@ const LEGACY_CRON_RESTART_INTERRUPTED_ERROR = "cron: job interrupted by gateway 
  * most recent run, so exactly one interruption is provable; defaulting the
  * offset to zero instead would disable an upgraded job one genuine failure
  * early.
+ *
+ * Exported because the repair is runtime state: Doctor's definition write
+ * preserves runtime state rather than replacing it, so the persistence step
+ * re-applies this predicate to the row's live state inside the write
+ * transaction. It is a no-op once the field exists, which is what makes that
+ * re-application safe.
  */
-function normalizeLegacyRestartInterruption(state: Record<string, unknown>): boolean {
+export function normalizeLegacyRestartInterruption(state: Record<string, unknown>): boolean {
   if (
     state.consecutiveRestartInterruptions !== undefined ||
     state.lastError !== LEGACY_CRON_RESTART_INTERRUPTED_ERROR
@@ -204,6 +212,7 @@ export function normalizeStoredCronJobs(
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
+  const legacyRestartInterruptionJobIds: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
   const unresolvedAgentTurnPromptJobsByKind = {
@@ -247,6 +256,11 @@ export function normalizeStoredCronJobs(
       setField(raw, "state", {});
     } else if (normalizeLegacyRestartInterruption(raw.state)) {
       trackChange("legacyRestartInterruption");
+      // Identity normalization above already settled the canonical id.
+      const repairedId = storedCronJobId(raw);
+      if (repairedId) {
+        legacyRestartInterruptionJobIds.push(repairedId);
+      }
     }
 
     if (typeof raw.schedule === "string") {
@@ -588,6 +602,7 @@ export function normalizeStoredCronJobs(
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,
+    legacyRestartInterruptionJobIds,
     jobs,
     mutated,
     removedJobs,
