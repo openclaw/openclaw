@@ -24,7 +24,7 @@ import {
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
-import { scanEnvTemplateTokens } from "../config/env-substitution.js";
+import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -291,8 +291,17 @@ function hasLiteralSensitiveValue(value: unknown): boolean {
   if (typeof value !== "string" || !value.trim()) {
     return false;
   }
-  const references = scanEnvTemplateTokens(value).filter((token) => token.kind === "substitution");
-  return references.length === 0 || references.some((token) => Boolean(token.defaultValue?.trim()));
+  const tokens = scanEnvTemplateTokens(value);
+  let literal = value;
+  for (const token of tokens) {
+    if (token.kind === "escaped" || token.defaultValue?.trim()) {
+      return true;
+    }
+    literal = literal.replaceAll(renderEnvTemplateToken(token), "");
+  }
+  return (
+    tokens.length === 0 || (literal.trim().length > 0 && !/^(Bearer|Basic)$/i.test(literal.trim()))
+  );
 }
 
 function resolveConfiguredPath(filePath: string, cwd: unknown): string {

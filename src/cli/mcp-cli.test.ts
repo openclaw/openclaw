@@ -442,7 +442,8 @@ describe("mcp cli", () => {
           headers: {
             Authorization: "Bearer literal",
             "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-literal-fallback}",
-            "Proxy-Authorization": "$${MCP_DOCTOR_AUTHORED_TOKEN}",
+            "Proxy-Authorization": "$${MCP_DOCTOR_AUTHORED_TOKEN} ${MCP_DOCTOR_AUTHORED_TOKEN}",
+            "Api-Key": "Basic ${MCP_DOCTOR_AUTHORED_TOKEN}:literal-password",
           },
         }),
       ]);
@@ -480,6 +481,9 @@ describe("mcp cli", () => {
               "headers.Proxy-Authorization contains a literal sensitive value",
             ),
           }),
+          expect.objectContaining({
+            message: expect.stringContaining("headers.Api-Key contains a literal sensitive value"),
+          }),
         ]),
       );
     });
@@ -509,6 +513,7 @@ describe("mcp cli", () => {
                 Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
                 "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
                 "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
+                api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
               },
               env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
             },
