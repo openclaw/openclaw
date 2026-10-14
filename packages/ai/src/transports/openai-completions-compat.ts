@@ -56,6 +56,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     requiresNonEmptyUserOrAssistantMessage: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     reasoningEffortForOff: "none" | null;
+    thinkingOffControlUndeclared: boolean;
   };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -305,6 +306,10 @@ export function resolveOpenAICompletionsCompat(
   const { defaults, capabilities } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;
   const thinkingFormat = configured?.thinkingFormat ?? defaults.thinkingFormat;
+  const thinkingOffControlUndeclared =
+    capabilities.usesExplicitProxyLikeEndpoint &&
+    thinkingFormat === "zai" &&
+    configured?.thinkingFormat === undefined;
   return {
     supportsStore: configured?.supportsStore ?? defaults.supportsStore,
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
@@ -316,11 +321,11 @@ export function resolveOpenAICompletionsCompat(
     // Explicit Z.AI formats and effort mappings still own their off contract.
     reasoningEffortForOff:
       capabilities.usesExplicitProxyLikeEndpoint &&
-      (thinkingFormat === "openai" ||
-        (thinkingFormat === "zai" && configured?.thinkingFormat === undefined)) &&
+      (thinkingFormat === "openai" || thinkingOffControlUndeclared) &&
       !configured?.supportedReasoningEfforts?.includes("none")
         ? null
         : "none",
+    thinkingOffControlUndeclared,
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,
