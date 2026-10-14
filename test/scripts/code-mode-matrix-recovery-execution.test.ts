@@ -4,18 +4,18 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRecoveryMatrixFixture } from "../../scripts/lib/code-mode-matrix-recovery-tasks.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog } from "../../src/agents/code-mode.js";
 import {
   createCodeModeHarness,
   resetCodeModeTestState,
   runUntilCompleted,
   testing,
-} from "./code-mode.test-support.js";
-import { createReadTool } from "./sessions/tools/read.js";
-import { createWriteTool } from "./sessions/tools/write.js";
-import type { AnyAgentTool } from "./tools/common.js";
+} from "../../src/agents/code-mode.test-support.js";
+import { createReadTool } from "../../src/agents/sessions/tools/read.js";
+import { createWriteTool } from "../../src/agents/sessions/tools/write.js";
+import type { AnyAgentTool } from "../../src/agents/tools/common.js";
+import { setPluginToolMeta } from "../../src/plugins/tool-metadata.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(async () => {
