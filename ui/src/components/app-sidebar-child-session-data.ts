@@ -263,7 +263,7 @@ export function scheduleSidebarChildSessions(
 }
 
 /** Publish an observed child window through the sidebar's existing lineage admission. */
-export async function hydrateSidebarChildSessions(params: {
+async function hydrateSidebarChildSessions(params: {
   owner: {
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
     loadedChildSessionKeys: ReadonlySet<string>;
