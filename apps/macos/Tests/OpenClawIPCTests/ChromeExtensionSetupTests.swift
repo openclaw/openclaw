@@ -303,7 +303,7 @@ struct ChromeExtensionSetupTests {
             "nativeHostRegistered": true, "installRequested": true, "installedProfiles": 1, "discoveredProfiles": 0,
             "discoveryBlocked": true,
         ])
-        #expect(ChromeExtensionSetup.readResult(Self.pending, action: .install).installation.discoveryBlocked == nil)
+        #expect(try ChromeExtensionSetup.readResult(Self.pending, action: .install).installation.discoveryBlocked == nil)
     }
 
     @Test func `registration and pending approval preserve controller state without claiming connected`() throws {
