@@ -46,7 +46,25 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           ...(audio ? {} : { surface: "infer video describe" }),
         });
         const activeModel = requireProviderModelOverride(opts.model);
-        const input = { filePath: path.resolve(file), cfg, agentId, agentDir, activeModel };
+        const runCfg = activeModel
+          ? {
+              ...cfg,
+              tools: {
+                ...cfg.tools,
+                media: {
+                  ...cfg.tools?.media,
+                  models: [{ ...activeModel, capabilities: [kind] }],
+                },
+              },
+            }
+          : cfg;
+        const input = {
+          filePath: path.resolve(file),
+          cfg: runCfg,
+          agentId,
+          agentDir,
+          activeModel,
+        };
         const result = audio
           ? await transcribeAudioFile({
               ...input,
