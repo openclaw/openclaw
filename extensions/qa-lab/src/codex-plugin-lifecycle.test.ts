@@ -1,6 +1,10 @@
 // Qa Lab tests cover codex plugin lifecycle plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   QA_CODEX_OAUTH_PROFILE_ID,
@@ -20,22 +24,25 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
 
-async function createAgentDir(prefix: string) {
-  const root = await tempDirs.makeTempDir(prefix);
-  const agentDir = path.join(root, "agents", "qa", "agent");
+async function createAgentState(prefix: string) {
+  const stateDir = await tempDirs.makeTempDir(prefix);
+  const agentId = "qa";
+  const agentDir = path.join(stateDir, "agents", agentId, "agent");
   await fs.mkdir(agentDir, { recursive: true });
-  return agentDir;
+  return { agentDir, agentId, stateDir };
 }
 
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   await tempDirs.cleanup();
 });
 
 describe("codex plugin lifecycle: cold install", () => {
   it("repairs a missing codex plugin before the retry succeeds without leaking to the API-key path", async () => {
-    const agentDir = await createAgentDir("qa-codex-plugin-cold-");
+    const { agentDir, agentId, stateDir } = await createAgentState("qa-codex-plugin-cold-");
     await removeCodexPluginFixture(agentDir);
-    await seedAuthProfiles("mixed", agentDir);
+    await seedAuthProfiles("mixed", { agentId, stateDir });
 
     const missing = evaluateCodexPluginLifecycle({
       plugin: await snapshotCodexPluginState(agentDir),
@@ -61,8 +68,8 @@ describe("codex plugin lifecycle: cold install", () => {
 
 describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
   it("selects openai OAuth when openai API-key profiles are present", async () => {
-    const agentDir = await createAgentDir("qa-codex-auth-mixed-");
-    await seedAuthProfiles("mixed", agentDir);
+    const { agentDir, agentId, stateDir } = await createAgentState("qa-codex-auth-mixed-");
+    await seedAuthProfiles("mixed", { agentId, stateDir });
 
     const selection = resolveCodexAuthProfile(await snapshotAuthProfiles(agentDir));
 
@@ -98,15 +105,15 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
     {
       name: "mixed profile with main-agent OpenClaw pin",
       profileShape: "mixed" as const,
-      config: { agents: { list: { main: { agentRuntime: { id: "openclaw" } } } } },
+      config: { agents: { entries: { main: { agentRuntime: { id: "openclaw" } } } } },
       expectedRemovedRuntimePins: ["agentRuntime.id=openclaw"],
     },
   ])(
     "keeps codex auth and strips stale OpenClaw runtime pins for $name",
     async ({ profileShape, config, expectedRemovedRuntimePins = [] }) => {
-      const agentDir = await createAgentDir("qa-codex-doctor-matrix-");
+      const { agentDir, agentId, stateDir } = await createAgentState("qa-codex-doctor-matrix-");
       await installCodexPluginFixture(agentDir);
-      await seedAuthProfiles(profileShape, agentDir);
+      await seedAuthProfiles(profileShape, { agentId, stateDir });
 
       const result = evaluateCodexPluginLifecycle({
         plugin: await snapshotCodexPluginState(agentDir),

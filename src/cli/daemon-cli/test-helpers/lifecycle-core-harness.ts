@@ -20,7 +20,17 @@ type LifecycleServiceHarness = GatewayService & {
   restart: MockFn<GatewayService["restart"]>;
 };
 
-export const defaultRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
+export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
+
+export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true as const },
+    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+  };
+}
 
 export const service: LifecycleServiceHarness = {
   label: "TestService",

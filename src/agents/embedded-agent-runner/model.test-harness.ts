@@ -1,8 +1,9 @@
 // Shared model fixtures for embedded runner model resolution tests.
 import { vi } from "vitest";
+import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 
-type DiscoverModelsMock = typeof import("../agent-model-discovery.js").discoverModels;
+type DiscoverModelsMock = typeof import("../agent-model-discovery.js").discoverModelsAsync;
 
 export const makeModel = (id: string): ModelDefinitionConfig => ({
   // Smallest valid model row used when tests only care about inheritance or
@@ -15,6 +16,10 @@ export const makeModel = (id: string): ModelDefinitionConfig => ({
   contextWindow: 1,
   maxTokens: 1,
 });
+
+export function makeOpenClawConfigFixture(input: OpenClawConfigInput = {}): OpenClawConfig {
+  return input as OpenClawConfig;
+}
 
 export const OPENAI_CODEX_TEMPLATE_MODEL = {
   id: "gpt-5.3-codex",
@@ -93,9 +98,9 @@ export function buildOpenAICodexForwardCompatExpectation(
 }
 
 export function resetMockDiscoverModels(discoverModelsMock: DiscoverModelsMock): void {
-  vi.mocked(discoverModelsMock).mockReturnValue({
+  vi.mocked(discoverModelsMock).mockResolvedValue({
     find: vi.fn(() => null),
-  } as unknown as ReturnType<DiscoverModelsMock>);
+  } as unknown as Awaited<ReturnType<DiscoverModelsMock>>);
 }
 
 export function mockDiscoveredModel(
@@ -108,12 +113,12 @@ export function mockDiscoveredModel(
 ): void {
   // Discovery mock returns exactly one template row so fallback tests cannot
   // accidentally pass by matching a sibling model.
-  vi.mocked(discoverModelsMock).mockReturnValue({
+  vi.mocked(discoverModelsMock).mockResolvedValue({
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {
         return params.templateModel;
       }
       return null;
     }),
-  } as unknown as ReturnType<DiscoverModelsMock>);
+  } as unknown as Awaited<ReturnType<DiscoverModelsMock>>);
 }

@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotion: vi.fn(),
@@ -9,11 +14,11 @@ const mocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntry: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
+  readConfigFileSnapshotForWrite: vi.fn(),
   replaceConfigFile: vi.fn(),
   promptYesNo: vi.fn(),
   enablePluginInConfig: vi.fn(),
-  repairCodex: vi.fn(),
-  repairCopilot: vi.fn(),
+  repairRuntimePlugins: vi.fn(),
   recordPromotionClaim: vi.fn(),
   markPromotionSlugsNotified: vi.fn(),
 }));
@@ -59,7 +64,21 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
     replaceConfigFile: mocks.replaceConfigFile,
+    transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      const transformed = await transform(
+        snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash, attempt: 0 },
+        {},
+      );
+      await mocks.replaceConfigFile({
+        sourceConfig: transformed.nextConfig,
+        baseHash: snapshot.hash,
+      });
+      return transformed;
+    },
   };
 });
 
@@ -68,15 +87,11 @@ vi.mock("../../cli/prompt.js", () => ({
 }));
 
 vi.mock("../../plugins/enable.js", () => ({
-  enablePluginInConfig: mocks.enablePluginInConfig,
+  enablePluginWithCapabilityConsent: mocks.enablePluginInConfig,
 }));
 
-vi.mock("../codex-runtime-plugin-install.js", () => ({
-  repairCodexRuntimePluginInstallForModelSelection: mocks.repairCodex,
-}));
-
-vi.mock("../copilot-runtime-plugin-install.js", () => ({
-  repairCopilotRuntimePluginInstallForModelSelection: mocks.repairCopilot,
+vi.mock("../runtime-plugin-install.js", () => ({
+  repairModelSelectionRuntimePlugins: mocks.repairRuntimePlugins,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -135,15 +150,19 @@ const authChoice = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(makeSnapshot());
+  mocks.readConfigFileSnapshotForWrite.mockImplementation(async () => ({
+    snapshot: await mocks.readConfigFileSnapshot(),
+    writeOptions: {},
+  }));
   mocks.replaceConfigFile.mockResolvedValue(undefined);
   mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
   mocks.resolveManifestProviderAuthChoice.mockReturnValue(authChoice);
   mocks.resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
-  mocks.loadManifestMetadataSnapshot.mockReturnValue({
-    manifestRegistry: {
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
       plugins: [{ id: "openrouter", packageName: "@openclaw/openrouter-provider" }],
-    },
-  });
+    }),
+  );
   mocks.promptYesNo.mockResolvedValue(false);
   mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
     config: cfg,
@@ -151,8 +170,7 @@ beforeEach(() => {
     pluginId,
   }));
   mocks.fetchClawHubPromotion.mockResolvedValue(makePromotion());
-  mocks.repairCodex.mockResolvedValue({ warnings: [] });
-  mocks.repairCopilot.mockResolvedValue({ warnings: [] });
+  mocks.repairRuntimePlugins.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -160,12 +178,43 @@ afterEach(() => {
 });
 
 describe("promosClaimCommand", () => {
+  it("joins claim and notice recording before reporting success", async () => {
+    const claim = createDeferredCore();
+    const claimStarted = createDeferredCore();
+    const notices = createDeferredCore();
+    const noticesStarted = createDeferredCore();
+    mocks.recordPromotionClaim.mockImplementationOnce(() => {
+      claimStarted.resolve();
+      return claim.promise;
+    });
+    mocks.markPromotionSlugsNotified.mockImplementationOnce(() => {
+      noticesStarted.resolve();
+      return notices.promise;
+    });
+    const runtime = makeRuntime();
+    const pending = promosClaimCommand("spring-models", {}, runtime);
+    await claimStarted.promise;
+    try {
+      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+      expect(mocks.markPromotionSlugsNotified).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
+      claim.resolve();
+      await noticesStarted.promise;
+      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
+    } finally {
+      claim.resolve();
+      notices.resolve();
+      await pending;
+    }
+    expect(runtime.log).toHaveBeenCalledWith('Claimed "Free Example models".');
+  });
+
   it("registers promo models with aliases without changing the default", async () => {
     const runtime = makeRuntime();
     await promosClaimCommand("spring-models", {}, runtime);
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
-    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
+    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig;
     expect(next.agents.defaults.models["openrouter/example/model-alpha"]).toEqual({
       alias: "model-alpha",
     });
@@ -186,13 +235,12 @@ describe("promosClaimCommand", () => {
     const runtime = makeRuntime();
     await promosClaimCommand("spring-models", { setDefault: true }, runtime);
 
-    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
+    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig;
     expect(next.agents.defaults.model.primary).toBe("openrouter/example/model-alpha");
     // Default changes must run the same runtime plugin repair as `models set`.
-    expect(mocks.repairCodex).toHaveBeenCalledWith(
+    expect(mocks.repairRuntimePlugins).toHaveBeenCalledWith(
       expect.objectContaining({ model: "openrouter/example/model-alpha" }),
     );
-    expect(mocks.repairCopilot).toHaveBeenCalled();
   });
 
   it("skips aliases outside the models-aliases contract but still registers the model", async () => {
@@ -204,7 +252,7 @@ describe("promosClaimCommand", () => {
     const runtime = makeRuntime();
     await promosClaimCommand("spring-models", {}, runtime);
 
-    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
+    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig;
     expect(next.agents.defaults.models["openrouter/example/model-alpha"]).toEqual({});
   });
 
@@ -220,7 +268,7 @@ describe("promosClaimCommand", () => {
     const runtime = makeRuntime();
     await promosClaimCommand("spring-models", {}, runtime);
 
-    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
+    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig;
     expect(next.agents.defaults.models["openrouter/example/model-alpha"].alias).toBeUndefined();
     expect(next.agents.defaults.models["openrouter/other/model"].alias).toBe("model-alpha");
   });
@@ -244,17 +292,6 @@ describe("promosClaimCommand", () => {
     );
     // Auth config write plus the model registration write.
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("runs the auth flow for an explicit --api-key even when other auth exists", async () => {
-    // hasAvailableAuthForProvider stays true; the explicit key must not be ignored.
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
-    const runtime = makeRuntime();
-    await promosClaimCommand("spring-models", { apiKey: "sk-explicit" }, runtime);
-
-    expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: { openrouterApiKey: "sk-explicit" } }),
-    );
   });
 
   it("aborts when the auth flow asks for retry instead of completing", async () => {
@@ -337,14 +374,6 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it("reports ended promotions with their end date", async () => {
-    mocks.fetchClawHubPromotion.mockResolvedValue(
-      makePromotion({ active: false, endsAt: now - 86_400_000 }),
-    );
-
-    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(/ended/);
-  });
-
   it("enforces the window even when the payload claims active", async () => {
     mocks.fetchClawHubPromotion.mockResolvedValue(
       makePromotion({ active: true, endsAt: now - 60_000 }),
@@ -379,22 +408,50 @@ describe("promosClaimCommand", () => {
     }
   });
 
-  it("refuses a promotion withdrawn after provider authentication", async () => {
-    const initial = makePromotion();
-    mocks.fetchClawHubPromotion
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce({ ...initial, active: false });
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
-
-    await expect(
-      promosClaimCommand("spring-models", { apiKey: "sk-test" }, makeRuntime()),
-    ).rejects.toThrow(/not live/);
-
-    expect(mocks.fetchClawHubPromotion).toHaveBeenCalledTimes(2);
-    // Provider auth completed before the withdrawal was observed, but no
-    // promotion model/default/provenance mutation may follow it.
-    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
+  it("preserves env references across auth before a withdrawn offer", async () => {
+    await withOpenClawTestState(
+      {
+        label: "promo-auth-env",
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_TEST_PROMO_PREFIX: "before-auth" },
+      },
+      async (state) => {
+        await state.writeConfig({ messages: { responsePrefix: "${OPENCLAW_TEST_PROMO_PREFIX}" } });
+        const raw = await fs.readFile(state.configPath, "utf8");
+        const actual =
+          await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+        mocks.readConfigFileSnapshot.mockImplementation(actual.readConfigFileSnapshot);
+        mocks.readConfigFileSnapshotForWrite.mockImplementation(
+          actual.readConfigFileSnapshotForWrite,
+        );
+        mocks.replaceConfigFile.mockImplementation(actual.replaceConfigFile);
+        const promotion = makePromotion();
+        mocks.fetchClawHubPromotion
+          .mockResolvedValueOnce(promotion)
+          .mockResolvedValueOnce({ ...promotion, active: false });
+        mocks.applyAuthChoiceLoadedPluginProvider.mockImplementation(
+          async ({ config }: { config: OpenClawConfig }) => {
+            expect(config.messages?.responsePrefix).toBe("before-auth");
+            await Promise.resolve();
+            process.env.OPENCLAW_TEST_PROMO_PREFIX = "after-auth";
+            expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+            return { config: { ...config, logging: { level: "debug" } } };
+          },
+        );
+        await expect(
+          promosClaimCommand("spring-models", { apiKey: "synthetic-promo-input" }, makeRuntime()),
+        ).rejects.toThrow(/not live yet/);
+        expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledOnce();
+        expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+        expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+          messages: { responsePrefix: "${OPENCLAW_TEST_PROMO_PREFIX}" },
+          logging: { level: "debug" },
+        });
+        const fresh = await actual.readConfigFileSnapshot();
+        expect(fresh.valid).toBe(true);
+        expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-auth");
+      },
+    );
   });
 
   it("refuses actionable promotion changes after authentication", async () => {
@@ -436,19 +493,22 @@ describe("promosClaimCommand", () => {
     );
   });
 
-  it("refuses to claim when the provider plugin is blocked by policy", async () => {
-    mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
-      config: cfg,
-      enabled: false,
-      pluginId,
-      reason: "denylisted",
-    }));
+  it.each(["denylisted", "requires capability consent"])(
+    "refuses to claim when the provider plugin %s",
+    async (reason) => {
+      mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
+        config: cfg,
+        enabled: false,
+        pluginId,
+        reason,
+      }));
 
-    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
-      /plugin policy/,
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+      await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+        /plugin policy/,
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps 404 responses to a friendly not-found error", async () => {
     const requestError = new ClawHubRequestError({

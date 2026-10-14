@@ -13,31 +13,21 @@ import {
 } from "./delivery-observations.js";
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(
   accountId = "default",
   overrides: Partial<ResolvedSmsAccount> = {},
 ): ResolvedSmsAccount {
-  return {
-    accountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId, ...overrides });
 }
 
 function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
   const values = new Map<string, SmsDeliveryRecord>();
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)),
+    comparison: JSON.stringify(values.get(key)) ?? "missing",
+  });
   return {
     async register(key, value) {
       values.set(key, value);
@@ -49,20 +39,22 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, value);
       return true;
     },
-    async update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (!next) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
+    async observe(key) {
+      return observe(key);
     },
-    async deleteIf(key, predicate) {
-      const value = values.get(key);
-      if (!value || !predicate(value)) {
-        return false;
+    async compareAndApply(key, comparison, intent) {
+      const current = observe(key);
+      if (comparison !== current.comparison) {
+        return { status: "conflict", current };
       }
-      return values.delete(key);
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "delete") {
+        return { status: values.delete(key) ? "applied" : "unchanged" };
+      }
+      values.set(key, structuredClone(intent.value));
+      return { status: "applied" };
     },
     async lookup(key) {
       return values.get(key);
@@ -76,13 +68,11 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       return values.delete(key);
     },
     async entries() {
-      return [...values.entries()].map(
-        ([key, value]): PluginStateEntry<SmsDeliveryRecord> => ({
-          key,
-          value,
-          createdAt: value.lastObservedAt,
-        }),
-      );
+      return [...values.entries()].map(([key, value]): PluginStateEntry<SmsDeliveryRecord> => ({
+        key,
+        value,
+        createdAt: value.lastObservedAt,
+      }));
     },
     async clear() {
       values.clear();
@@ -188,20 +178,14 @@ describe("SMS delivery observations", () => {
     expect(JSON.stringify(current.record)).not.toContain("AC123");
   });
 
-  it.each(["receiving", "received"])(
-    "leaves legacy inbound SmsStatus=%s on the inbound path",
-    async (status) => {
-      const form = {
-        MessageSid: "SM123",
-        SmsStatus: status,
-      };
+  it("rejects legacy inbound status observations", async () => {
+    const form = { MessageSid: "SM123", SmsStatus: "receiving" };
 
-      expect(isTwilioDeliveryStatusForm(form)).toBe(false);
-      await expect(recordCallback(createStore(), form)).rejects.toThrow(
-        "Invalid Twilio delivery status callback.",
-      );
-    },
-  );
+    expect(isTwilioDeliveryStatusForm(form)).toBe(false);
+    await expect(recordCallback(createStore(), form)).rejects.toThrow(
+      "Invalid Twilio delivery status callback.",
+    );
+  });
 
   it.each(["accepted", "scheduled"])(
     "advances a message from its %s initial state through sent",
@@ -308,6 +292,45 @@ describe("SMS delivery observations", () => {
         record: { observations: [{ status: "delivered" }] },
       },
     );
+  });
+
+  it.each([
+    {
+      secondStatus: "delivered",
+      status: "delivered",
+      duplicates: [false, true],
+      lastObservedAt: 100,
+      observations: [{ status: "delivered", observedAt: 100 }],
+    },
+    {
+      secondStatus: "failed",
+      status: "conflicted",
+      duplicates: [false, false],
+      lastObservedAt: 101,
+      observations: [
+        { status: "delivered", observedAt: 100 },
+        { status: "failed", observedAt: 101 },
+      ],
+    },
+  ])("retains concurrent $secondStatus observations", async (expected) => {
+    const store = createStore();
+    const results = await Promise.all(
+      ["delivered", expected.secondStatus].map((status, index) =>
+        recordInitialSmsDeliveryResult({
+          account: createAccount(),
+          result: { sid: "SM123", to: "+15551234567", status },
+          nowMs: 100 + index,
+          store,
+        }),
+      ),
+    );
+
+    expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
+    const record = await latestRecord(store);
+    expect(record.status).toBe(expected.status);
+    expect(record.firstObservedAt).toBe(100);
+    expect(record.lastObservedAt).toBe(expected.lastObservedAt);
+    expect(record.observations).toMatchObject(expected.observations);
   });
 
   it("isolates records by local account and account SID but survives token rotation", async () => {

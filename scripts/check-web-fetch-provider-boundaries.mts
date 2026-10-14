@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Checks core web-fetch surfaces for provider-owned Firecrawl coupling.
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
@@ -31,12 +30,7 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
-type ScriptIo = {
-  stdout: { write(chunk: string): unknown };
-  stderr: { write(chunk: string): unknown };
-};
-
-async function scanWebFetchProviderBoundaryViolations() {
+async function main() {
   const violations = [];
   const files = await collectSourceFileContents({
     repoRoot,
@@ -67,66 +61,15 @@ async function scanWebFetchProviderBoundaryViolations() {
       });
     }
   }
-  return violations.toSorted(
+  for (const violation of violations.toSorted(
     (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
-  );
+  )) {
+    process.stderr.write(`${violation.file}:${violation.line} ${violation.reason}\n`);
+  }
+  if (violations.length > 0) {
+    process.exit(1);
+  }
+  return 0;
 }
 
-let webFetchProviderViolationsPromise:
-  | ReturnType<typeof scanWebFetchProviderBoundaryViolations>
-  | undefined;
-
-/**
- * Collects web-fetch provider boundary violations in core source files.
- */
-async function collectWebFetchProviderBoundaryViolations() {
-  if (!webFetchProviderViolationsPromise) {
-    webFetchProviderViolationsPromise = scanWebFetchProviderBoundaryViolations();
-    try {
-      return await webFetchProviderViolationsPromise;
-    } catch (error) {
-      webFetchProviderViolationsPromise = undefined;
-      throw error;
-    }
-  }
-  return await webFetchProviderViolationsPromise;
-}
-
-/**
- * Runs the web-fetch provider boundary check.
- */
-export async function main(argv?: string[], io?: ScriptIo) {
-  const args = argv ?? process.argv.slice(2);
-  const json = args.includes("--json");
-  const violations = await collectWebFetchProviderBoundaryViolations();
-  const writeStdout = (chunk: string) => {
-    if (io?.stdout?.write) {
-      io.stdout.write(chunk);
-      return;
-    }
-    process.stdout.write(chunk);
-  };
-  const writeStderr = (chunk: string) => {
-    if (io?.stderr?.write) {
-      io.stderr.write(chunk);
-      return;
-    }
-    process.stderr.write(chunk);
-  };
-  if (json) {
-    writeStdout(`${JSON.stringify(violations, null, 2)}\n`);
-  } else if (violations.length > 0) {
-    for (const violation of violations) {
-      writeStderr(`${violation.file}:${violation.line} ${violation.reason}\n`);
-    }
-  }
-  return violations.length === 0 ? 0 : 1;
-}
-
-runAsScript(import.meta.url, async (argv?: string[], io?: ScriptIo) => {
-  const exitCode = await main(argv, io);
-  if (!io && exitCode !== 0) {
-    process.exit(exitCode);
-  }
-  return exitCode;
-});
+runAsScript(import.meta.url, main);

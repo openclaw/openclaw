@@ -1,0 +1,113 @@
+import { createEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import {
+  createAssistantStreamBlockState,
+  createThinkingTagStreamState,
+} from "./embedded-agent-utils.js";
+import { collectAgentInternalEventMedia } from "./internal-events.js";
+
+export function createEmbeddedAgentSubscribeState(
+  params: Pick<
+    SubscribeEmbeddedAgentSessionParams,
+    | "reasoningMode"
+    | "thinkingLevel"
+    | "internalEvents"
+    | "blockReplyBreak"
+    | "onBlockReply"
+    | "streamReasoningInNonStreamModes"
+    | "onReasoningStream"
+    | "onBeforeTerminalDelivery"
+    | "deferTerminalDelivery"
+    | "initialReplayState"
+  >,
+): EmbeddedAgentSubscribeState {
+  const reasoningMode = params.reasoningMode ?? "off";
+  const canShowReasoning = params.thinkingLevel !== "off";
+  const initialPendingToolMedia = collectAgentInternalEventMedia(params.internalEvents);
+  return {
+    assistantTexts: [],
+    answerSegments: [],
+    toolMetas: [],
+    acceptedSessionSpawns: [],
+    toolMetaById: new Map(),
+    toolSummaryById: new Set(),
+    liveEditDiffStateById: new Map(),
+    itemActiveIds: new Set(),
+    itemStartedCount: 0,
+    itemCompletedCount: 0,
+    assistantTurnCount: 0,
+    lastToolError: undefined,
+    blockReplyBreak: params.blockReplyBreak ?? "text_end",
+    reasoningMode,
+    includeReasoning: reasoningMode === "on" && canShowReasoning,
+    shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
+    streamReasoning:
+      (params.streamReasoningInNonStreamModes === true
+        ? reasoningMode !== "on"
+        : reasoningMode === "stream") &&
+      canShowReasoning &&
+      typeof params.onReasoningStream === "function",
+    deltaBuffer: "",
+    streamBlockText: "",
+    streamBlockFinal: false,
+    blockReplyScopeStart: undefined,
+    thinkingTagStream: createThinkingTagStreamState(),
+    deltaBufferIsCommentary: false,
+    hasFlushedPartialText: false,
+    partialBlockState: createAssistantStreamBlockState(),
+    lastAssistantAudioDirectiveCount: 0,
+    assistantStream: undefined,
+    lastStreamedReasoning: undefined,
+    lastBlockReplyText: undefined,
+    lastDeliveredBlockReplyText: undefined,
+    deferBlockReplyDelivery:
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false,
+    deferredBlockReplies: [],
+    toolExecutionSinceLastBlockReply: false,
+    reasoningStreamOpen: false,
+    assistantMessageIndex: 0,
+    assistantMessageStartIndex: 0,
+    lastAssistantStreamContentIndex: undefined,
+    lastAssistantStreamItemId: undefined,
+    lastAssistantTextMessageIndex: -1,
+    lastAssistantTextContentIndex: undefined,
+    lastAssistantTextItemId: undefined,
+    lastAssistantTextNormalized: undefined,
+    lastAssistantTextTrimmed: undefined,
+    assistantTextBaseline: 0,
+    suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
+    lastReasoningSent: undefined,
+    compactionInFlight: false,
+    lastCompactionTokensAfter: undefined,
+    pendingCompactionRetry: 0,
+    unsubscribed: false,
+    replayState: createEmbeddedRunReplayState(params.initialReplayState),
+    livenessState: "working",
+    hadDeterministicSideEffect: false,
+    pendingEventChain: null,
+    messagingToolSentTexts: [],
+    messagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolHeldPartial: undefined,
+    messagingToolSentTargets: [],
+    heartbeatToolResponse: undefined,
+    messagingToolSentMediaUrls: [],
+    messagingToolSourceReplyPayloads: [],
+    messageToolOnlySourceReplyDelivered: false,
+    sourceReplyDeliveryState: "missing",
+    successfulCronAdds: 0,
+    pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
+    pendingToolMediaAttachments: initialPendingToolMedia.attachments,
+    pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
+    toolAutoDeliveryMediaUrls: new Set(),
+    pendingToolAudioAsVoice: false,
+    pendingToolMediaDeliveryFailed: false,
+    hasToolMediaBlockReply: false,
+    visibleBlockReplyCount: 0,
+    pendingAssistantReplyDirectives: undefined,
+    deterministicApprovalPromptPending: false,
+    deterministicApprovalPromptSent: false,
+  };
+}

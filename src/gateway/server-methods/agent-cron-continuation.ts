@@ -1,11 +1,11 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { hasNewGeneratedMediaTaskForSessionKey } from "../../agents/media-generation-activity.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { hasNewGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import {
   CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS,
   waitForCronContinuationReleaseRecovery,
@@ -36,6 +36,7 @@ export function createCronContinuationController(params: {
       try {
         const released = await applySessionEntryReplacements({
           activeSessionKey: activeClaim.sessionKey,
+          agentId: activeClaim.sessionAgentId,
           requireWriteSuccess: true,
           sessionKeys:
             baseSessionKey && baseSessionKey !== activeClaim.sessionKey
@@ -53,6 +54,7 @@ export function createCronContinuationController(params: {
               !current ||
               marker?.phase !== "continuing" ||
               marker.ownerRunId !== params.runId ||
+              marker.ownerLifecycleGeneration !== params.lifecycleGeneration ||
               marker.lifecycleRevision !== activeClaim.lifecycleRevision
             ) {
               return { result: false };
@@ -62,6 +64,7 @@ export function createCronContinuationController(params: {
               hasNewGeneratedMediaTaskForSessionKey(
                 activeClaim.sessionKey,
                 activeClaim.mediaTaskIdsBefore,
+                activeClaim.sessionAgentId,
               );
             if (!continuationCommittedWork) {
               current = structuredClone(activeClaim.initialEntry);
@@ -116,6 +119,7 @@ export function createCronContinuationController(params: {
         if (released && baseSessionKey) {
           emitSessionsChanged(params.context, {
             sessionKey: baseSessionKey,
+            agentId: activeClaim.sessionAgentId,
             reason: "cron-continuation",
           });
         }
@@ -162,7 +166,7 @@ export function createCronContinuationController(params: {
       params.context.logGateway.warn(
         `cron continuation release recovery exhausted for ${params.runId}`,
       );
-    });
+    }, "cron:continuation-recovery");
     return false;
   };
 

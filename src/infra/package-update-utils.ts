@@ -1,9 +1,25 @@
-// Inspects installed package metadata for update/install verification.
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver } from "./semver.js";
 
-// Package update utilities inspect installed package metadata without trusting
-// paths outside the provided package root.
-/** Return expected integrity only for concrete semver package specs. */
+export function comparePackageUpdateVersions(left: string, right: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareValidSemver(left, right) ?? 0;
+}
+
+export function isPackageVersionDowngrade(
+  currentVersion: string | undefined,
+  nextVersion: string | undefined,
+): boolean {
+  if (!currentVersion || !nextVersion) {
+    return false;
+  }
+  return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
+}
+
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
@@ -35,7 +51,6 @@ export function readInstalledPackageManifest(dir: string): Record<string, unknow
   return result.ok ? result.value : undefined;
 }
 
-/** Read the installed package version from a package root. */
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;

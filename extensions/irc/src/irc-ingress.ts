@@ -72,6 +72,11 @@ function inspectRawPrivmsg(rawLine: string): {
   };
 }
 
+type IrcIngressRaw = {
+  body: IrcIngressBody;
+  claimedProjection?: ReturnType<typeof inspectRawPrivmsg>;
+};
+
 function decodeIrcIngressPayload(
   payload: unknown,
   claimedId: string,
@@ -108,15 +113,19 @@ function decodeIrcIngressPayload(
 }
 
 function inspectIrcIngress(
-  raw: IrcIngressBody,
+  raw: IrcIngressRaw,
   phase: "admission" | "claim",
 ): { eventId: string; laneKey: string } {
   try {
-    return { eventId: raw.eventId, laneKey: inspectRawPrivmsg(raw.rawLine).laneKey };
+    const projection = inspectRawPrivmsg(raw.body.rawLine);
+    if (phase === "claim") {
+      raw.claimedProjection = projection;
+    }
+    return { eventId: raw.body.eventId, laneKey: projection.laneKey };
   } catch (error) {
     if (phase === "admission" && error instanceof IrcIngressPayloadError) {
       // IRC cannot replay a rejected socket line; persist it for claim-side dead-lettering.
-      return { eventId: raw.eventId, laneKey: `invalid:${raw.eventId}` };
+      return { eventId: raw.body.eventId, laneKey: `invalid:${raw.body.eventId}` };
     }
     throw error;
   }
@@ -128,18 +137,7 @@ function resolveIrcIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-type IrcIngressConnection = {
-  connectionEpoch: string;
-  accept: (rawLine: string, connectedNick: string) => Promise<void>;
-};
-
-export type IrcIngressMonitor = {
-  openConnection: (connectionEpoch?: string) => IrcIngressConnection;
-  start: () => void;
-  pause: () => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
+export type IrcIngressMonitor = ReturnType<typeof createIrcIngressMonitor>;
 
 export function createIrcIngressMonitor(options: {
   accountId: string;
@@ -148,8 +146,8 @@ export function createIrcIngressMonitor(options: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
-}): IrcIngressMonitor {
-  const monitor = createChannelIngressMonitor<IrcIngressBody, IrcIngressBody, IrcIngressPayload>({
+}) {
+  const monitor = createChannelIngressMonitor<IrcIngressRaw, IrcIngressBody, IrcIngressPayload>({
     queue:
       options.queue ??
       (() =>
@@ -159,23 +157,25 @@ export function createIrcIngressMonitor(options: {
     inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
     payload: {
       version: IRC_INGRESS_PAYLOAD_VERSION,
-      serialize: (raw) => raw,
-      deserialize: (body) => body,
+      serialize: (raw) => raw.body,
+      deserialize: (body) => ({ body }),
       encode: ({ body }) => ({ version: IRC_INGRESS_PAYLOAD_VERSION, ...body }),
       decode: (payload, { claim }) => decodeIrcIngressPayload(payload, claim.id),
       createClaimError: (_kind, claim) =>
         new IrcIngressPayloadError(`IRC ingress row ${claim.id} has invalid metadata.`),
     },
     deliver: (raw, lifecycle, claim) => {
-      const inspected = inspectRawPrivmsg(raw.rawLine);
+      // Claim inspection populates this on the same transient raw object immediately before
+      // delivery; malformed or identity-mismatched rows exit before reaching this callback.
+      const projection = raw.claimedProjection!;
       const message: IrcInboundMessage = {
-        ...inspected.message,
+        ...projection.message,
         messageId: claim.id,
-        timestamp: raw.receivedAt,
+        timestamp: raw.body.receivedAt,
       };
       return options.dispatch(message, lifecycle, {
-        connectedNick: raw.connectedNick.trim(),
-        connectionEpoch: raw.connectionEpoch.trim(),
+        connectedNick: raw.body.connectedNick.trim(),
+        connectionEpoch: raw.body.connectionEpoch.trim(),
       });
     },
     pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
@@ -195,7 +195,7 @@ export function createIrcIngressMonitor(options: {
   });
 
   return {
-    openConnection: (connectionEpoch = randomUUID()) => {
+    openConnection: (connectionEpoch: string = randomUUID()) => {
       const epoch = connectionEpoch.trim();
       if (!epoch) {
         throw new Error("IRC ingress connection epoch is required.");
@@ -203,7 +203,7 @@ export function createIrcIngressMonitor(options: {
       let sequence = 0;
       return {
         connectionEpoch: epoch,
-        accept: (rawLine, connectedNick) => {
+        accept: (rawLine: string, connectedNick: string) => {
           if (monitor.isStopped()) {
             return Promise.reject(new Error("IRC ingress is stopped."));
           }
@@ -219,11 +219,13 @@ export function createIrcIngressMonitor(options: {
           return monitor
             .admit(
               {
-                eventId,
-                rawLine,
-                receivedAt,
-                connectionEpoch: epoch,
-                connectedNick: normalizedNick,
+                body: {
+                  eventId,
+                  rawLine,
+                  receivedAt,
+                  connectionEpoch: epoch,
+                  connectedNick: normalizedNick,
+                },
               },
               { receivedAt },
             )

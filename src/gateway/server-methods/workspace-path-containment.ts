@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -8,21 +9,13 @@ async function resolveRequestedRealPath(
   requestedPath: string,
   allowMissing: boolean,
 ): Promise<string | null> {
-  try {
-    return await fs.realpath(requestedPath);
-  } catch (error) {
-    if (!allowMissing || !isNotFoundPathError(error)) {
-      return null;
-    }
-  }
-
-  let ancestor = path.dirname(requestedPath);
+  let ancestor = requestedPath;
   for (;;) {
     try {
       const ancestorRealPath = await fs.realpath(ancestor);
       return path.resolve(ancestorRealPath, path.relative(ancestor, requestedPath));
     } catch (error) {
-      if (!isNotFoundPathError(error)) {
+      if (!allowMissing || !isNotFoundPathError(error)) {
         return null;
       }
     }
@@ -71,4 +64,21 @@ export async function resolveWorkspacePathContainment(
     .filter((root) => isPathInside(root, requestedRealPath))
     .toSorted((left, right) => right.length - left.length)[0];
   return workspaceRoot ? { path: requestedRealPath, workspaceRoot } : null;
+}
+
+/** Revalidates an async containment result against the current workspace configuration. */
+export function isWorkspacePathContainmentCurrent(
+  containment: { path: string; workspaceRoot: string },
+  cfg: OpenClawConfig,
+): boolean {
+  return listAgentIds(cfg).some((agentId) => {
+    try {
+      const currentRoot = fsSync.realpathSync(resolveAgentWorkspaceDir(cfg, agentId));
+      return (
+        currentRoot === containment.workspaceRoot && isPathInside(currentRoot, containment.path)
+      );
+    } catch {
+      return false;
+    }
+  });
 }

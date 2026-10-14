@@ -72,6 +72,9 @@ export const SessionTypingParamsSchema = closedObject({
   ...SessionSuggestionTargetParamsSchema,
   sessionId: NonEmptyString,
   typing: Type.Boolean(),
+  preview: Type.Optional(Type.String({ maxLength: 400 })),
+  // UTF-16 offset in preview, matching textarea selection offsets.
+  cursor: Type.Optional(Type.Integer({ minimum: 0, maximum: 800 })),
 });
 
 export const SessionTypingResultSchema = closedObject({
@@ -85,6 +88,9 @@ export const SessionTypingEventSchema = closedObject({
   agentId: NonEmptyString,
   actor: SessionSharingIdentitySchema,
   typing: Type.Boolean(),
+  preview: Type.Optional(Type.String({ maxLength: 400 })),
+  // UTF-16 offset in preview, matching textarea selection offsets.
+  cursor: Type.Optional(Type.Integer({ minimum: 0, maximum: 800 })),
   ts: Type.Integer({ minimum: 0 }),
 });
 

@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import {
   collectModuleExportNames,
   isExcludedExportCollisionSource,
@@ -10,12 +8,11 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveSourceRoots,
-  runAsScript,
-} from "./lib/ts-guard-utils.mts";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
+import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 export type WrapperShadowingViolation = {
   name: string;
@@ -23,20 +20,6 @@ export type WrapperShadowingViolation = {
   wrapper: string;
   via?: string;
 };
-
-const violationSchema = z
-  .object({
-    name: z.string(),
-    wrapped: z.string(),
-    wrapper: z.string(),
-    via: z.string().optional(),
-  })
-  .strict();
-const baselineSchema = z.array(violationSchema);
-
-const baselineRelativePath = "scripts/lib/wrapper-shadowing-baseline.json";
-const baselineRegenCommand = "pnpm check:wrapper-shadowing:gen";
-const failurePrefix = "check-wrapper-shadowing";
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -55,9 +38,7 @@ export function isExcludedWrapperShadowingSource(filePath: string) {
 }
 
 function compareViolations(left: WrapperShadowingViolation, right: WrapperShadowingViolation) {
-  return `${left.name}\0${left.wrapper}\0${left.wrapped}\0${left.via ?? ""}`.localeCompare(
-    `${right.name}\0${right.wrapper}\0${right.wrapped}\0${right.via ?? ""}`,
-  );
+  return violationKey(left).localeCompare(violationKey(right));
 }
 
 function violationKey(violation: WrapperShadowingViolation) {
@@ -94,40 +75,66 @@ function resolveWrappedDefinition(
   if (!importedPath) {
     return null;
   }
-  const importedModule = modulesByPath.get(importedPath);
-  if (!importedModule) {
-    return null;
-  }
-  if (importedModule.valueDefinitions.has(exportName)) {
-    return { wrapped: importedPath };
-  }
 
-  for (const reExport of importedModule.namedReExports) {
-    if (reExport.exportedName !== exportName || reExport.importedName !== exportName) {
+  const reachablePaths = new Set([importedPath]);
+  const wrappedPaths = new Set<string>();
+  // Set iteration visits newly discovered modules once, including cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    const wrapped = resolveSourceModulePath(importedPath, reExport.moduleSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
+    if (moduleExports.valueDefinitions.has(exportName)) {
+      wrappedPaths.add(modulePath);
+      if (wrappedPaths.size > 1) {
+        return null;
+      }
+      continue;
+    }
+
+    const namedExports = moduleExports.namedReExports.filter(
+      (reExport) => reExport.exportedName === exportName,
+    );
+    // An explicit binding shadows stars, even when its renamed target is outside
+    // this same-name guard. Falling through would attribute a different function.
+    const specifiers =
+      namedExports.length > 0
+        ? namedExports
+            .filter((reExport) => reExport.importedName === exportName)
+            .map((reExport) => reExport.moduleSpecifier)
+        : moduleExports.starExportSpecifiers;
+    for (const specifier of specifiers) {
+      const target = resolveSourceModulePath(modulePath, specifier, modulesByPath);
+      if (target) {
+        reachablePaths.add(target);
+      }
     }
   }
-  for (const reExportSpecifier of importedModule.starExportSpecifiers) {
-    const wrapped = resolveSourceModulePath(importedPath, reExportSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
-    }
-  }
-  return null;
+
+  const [wrapped] = wrappedPaths;
+  return wrapped ? { wrapped, ...(wrapped !== importedPath ? { via: importedPath } : {}) } : null;
 }
 
 /** Finds exported wrappers that shadow the same imported source symbol. */
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
-  for (const sourceModule of modules.toSorted((left, right) =>
-    left.path.localeCompare(right.path),
-  )) {
-    const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(modulePath, collectModuleExportNames(sourceModule.content, modulePath));
+  const sortedModules = modules.toSorted((left, right) => left.path.localeCompare(right.path));
+  // Reload native roots once per bounded batch, retaining only the export graph.
+  const batchSize = 32;
+  for (let offset = 0; offset < sortedModules.length; offset += batchSize) {
+    const batch = sortedModules.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((sourceModule) => ({
+        fileName: normalizeRelativePath(sourceModule.path),
+        text: sourceModule.content,
+      })),
+    );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const sourceModule = batch[index]!;
+      const modulePath = normalizeRelativePath(sourceModule.path);
+      modulesByPath.set(modulePath, collectModuleExportNames(modulePath, sourceFile));
+    }
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();
@@ -160,104 +167,35 @@ export function findWrapperShadowingViolations(modules: SourceModule[]) {
 }
 
 export async function collectRepositoryWrapperShadowing(repoRoot: string) {
-  const collectedFiles = await collectTypeScriptFilesFromRoots(
-    resolveSourceRoots(repoRoot, ["src"]),
-    {
-      fileExtensions: [".ts", ".mts", ".js", ".mjs"],
-      includeTests: true,
-      skipDirectories: ["test", "__fixtures__"],
-    },
-  );
-  const files = collectedFiles.filter((filePath) => !isExcludedWrapperShadowingSource(filePath));
-  const modules = await Promise.all(
-    files.map(async (filePath) => ({
-      content: await fs.readFile(filePath, "utf8"),
-      path: normalizeRelativePath(path.relative(repoRoot, filePath)),
-    })),
-  );
+  const files = await collectSourceFileContents({
+    repoRoot,
+    scanRoots: ["src"],
+    scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
+    ignoredDirNames: new Set(["node_modules", "test", "__fixtures__"]),
+  });
+  const modules = files
+    .filter(({ relativeFile }) => !isExcludedWrapperShadowingSource(relativeFile))
+    .map(({ content, relativeFile }) => ({ content, path: relativeFile }));
   return findWrapperShadowingViolations(modules);
-}
-
-function resolveBaselinePath(repoRoot: string) {
-  return path.join(repoRoot, ...baselineRelativePath.split("/"));
-}
-
-async function readBaseline(repoRoot: string) {
-  try {
-    return baselineSchema.parse(
-      JSON.parse(await fs.readFile(resolveBaselinePath(repoRoot), "utf8")),
-    );
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-export function findNewWrapperShadowingViolations(
-  current: WrapperShadowingViolation[],
-  baseline: WrapperShadowingViolation[],
-) {
-  const baselineKeys = new Set(baseline.map(violationKey));
-  return current.filter((violation) => !baselineKeys.has(violationKey(violation)));
-}
-
-export async function evaluateWrapperShadowing(repoRoot: string) {
-  const baseline = await readBaseline(repoRoot);
-  if (!baseline) {
-    return {
-      baseline: null,
-      current: await collectRepositoryWrapperShadowing(repoRoot),
-      regressions: [] as WrapperShadowingViolation[],
-    };
-  }
-  const current = await collectRepositoryWrapperShadowing(repoRoot);
-  return {
-    baseline,
-    current,
-    regressions: findNewWrapperShadowingViolations(current, baseline),
-  };
-}
-
-async function writeBaseline(repoRoot: string) {
-  const violations = await collectRepositoryWrapperShadowing(repoRoot);
-  await fs.writeFile(resolveBaselinePath(repoRoot), `${JSON.stringify(violations, null, 2)}\n`);
-  return violations.length;
 }
 
 export async function main(
   repoRoot = resolveRepoRoot(import.meta.url),
   argv = process.argv.slice(2),
 ) {
-  const updateBaseline = argv.includes("--update-debt-baseline");
-  const unknownArgs = argv.filter((arg) => arg !== "--update-debt-baseline");
-  if (unknownArgs.length > 0) {
-    console.error(`Unknown argument(s): ${unknownArgs.join(", ")}`);
+  if (argv.length > 0) {
+    console.error(`Unknown argument(s): ${argv.join(", ")}`);
     return 2;
   }
-  if (updateBaseline) {
-    const count = await writeBaseline(repoRoot);
-    console.log(`Wrote ${baselineRelativePath} (${count} entries)`);
+
+  const violations = await collectRepositoryWrapperShadowing(repoRoot);
+  if (violations.length === 0) {
+    console.log("wrapper shadowing guard passed.");
     return 0;
   }
 
-  const result = await evaluateWrapperShadowing(repoRoot);
-  if (!result.baseline) {
-    console.error(
-      `Missing ${baselineRelativePath}; run \`${baselineRegenCommand}\` and commit it.`,
-    );
-    return 1;
-  }
-  if (result.regressions.length === 0) {
-    console.log(
-      `wrapper shadowing guard passed (${result.current.length} current, ${result.baseline.length} baselined).`,
-    );
-    return 0;
-  }
-
-  console.error(`Found new same-name wrapper shadowing beyond ${baselineRelativePath}:`);
-  for (const violation of result.regressions) {
+  console.error("Found same-name wrapper shadowing:");
+  for (const violation of violations) {
     console.error(`- ${JSON.stringify(violation)}`);
   }
   console.error(
@@ -266,15 +204,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-wrapper-shadowing", async () => {
+    process.exitCode = await main();
+  }),
+);

@@ -1,8 +1,9 @@
-// Builds diagnostics for Codex plugin config and provider wiring.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -10,7 +11,7 @@ import {
 import {
   listAgentIds,
   resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
@@ -48,6 +49,7 @@ function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
 function configuredRuntimeNeedsCodex(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  agentId?: string;
   modelId?: string;
   runtimeId?: string;
 }): boolean {
@@ -63,6 +65,7 @@ function configuredRuntimeNeedsCodex(params: {
       provider: OPENAI_PROVIDER_ID,
       modelId: params.modelId,
       config: params.cfg,
+      agentId: params.agentId,
       env: params.env,
     }) === CODEX_PLUGIN_ID
   );
@@ -87,6 +90,7 @@ export function configuredModelRouteNeedsCodex(params: {
   return configuredRuntimeNeedsCodex({
     cfg: params.cfg,
     env: params.env,
+    agentId: params.agentId,
     modelId: params.route.modelId,
     runtimeId: runtime,
   });
@@ -97,7 +101,7 @@ function resolveEffectiveSelectedModelRefs(params: { cfg: OpenClawConfig; agentI
   values: ReadonlySet<string>;
 } {
   const { cfg, agentId } = params;
-  const mainPrimaryRaw = resolveAgentEffectiveModelPrimary(cfg, agentId);
+  const mainPrimaryRaw = resolveNativeModelPrimary(cfg, agentId);
   const mainFallbacks =
     resolveAgentModelFallbacksOverride(cfg, agentId) ??
     resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
@@ -126,16 +130,22 @@ function resolveEffectiveSelectedModelRefs(params: { cfg: OpenClawConfig; agentI
 
 function configuredRefTargetsAgent(params: {
   cfg: OpenClawConfig;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: unknown;
   path: string;
   agentId: string;
 }): boolean {
   const match = /^agents\.list\.(\d+)\./.exec(params.path);
   if (match) {
-    const entry = (params.sourceConfigBeforeMigrations ?? params.cfg).agents?.list?.[
-      Number(match[1])
-    ];
-    return Boolean(entry && normalizeAgentId(entry.id) === params.agentId);
+    const roster = readAgentRosterProperty(params.sourceConfigBeforeMigrations ?? params.cfg);
+    const entry =
+      roster?.kind === "list" && Array.isArray(roster.value)
+        ? roster.value[Number(match[1])]
+        : undefined;
+    return (
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      normalizeAgentId(entry.id) === params.agentId
+    );
   }
   const keyedMatch = /^agents\.entries\.([^.]+)\./.exec(params.path);
   return !keyedMatch || normalizeAgentId(keyedMatch[1] ?? "") === params.agentId;
@@ -143,7 +153,7 @@ function configuredRefTargetsAgent(params: {
 
 function configuredRefIsEffectiveForAgent(params: {
   cfg: OpenClawConfig;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: unknown;
   path: string;
   value: string;
   agentId: string;
@@ -152,9 +162,12 @@ function configuredRefIsEffectiveForAgent(params: {
   if (!configuredRefTargetsAgent(params)) {
     return false;
   }
-  // Defaults may be shadowed by per-agent main/subagent selections. Keep only
-  // refs the runtime's inheritance rules leave reachable for this agent.
-  if (/^agents\.(?:defaults|list\.\d+)\.(?:model|subagents\.model)(?:\.|$)/.test(params.path)) {
+  // Keep only main/subagent refs reachable through this agent's native policy.
+  if (
+    /^agents\.(?:defaults|list\.\d+|entries\.[^.]+)\.(?:model|subagents\.model)(?:\.|$)/.test(
+      params.path,
+    )
+  ) {
     return params.selectedModelRefs.has(params.value);
   }
   const agent = resolveAgentConfig(params.cfg, params.agentId);
@@ -183,7 +196,7 @@ function configuredProviderPoliciesNeedCodex(
     }).policy;
     if (
       genericPolicy?.id?.trim() &&
-      configuredRuntimeNeedsCodex({ cfg, env, runtimeId: genericPolicy.id })
+      configuredRuntimeNeedsCodex({ cfg, env, agentId, runtimeId: genericPolicy.id })
     ) {
       return true;
     }
@@ -219,7 +232,7 @@ function configuredProviderPoliciesNeedCodex(
 
 function configuredModelRefsNeedCodex(params: {
   cfg: OpenClawConfig;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: unknown;
   env: NodeJS.ProcessEnv;
   agentIds: string[];
 }): { complete: boolean; needsCodex: boolean } {
@@ -283,14 +296,14 @@ function defaultOpenAiRouteNeedsCodex(
       provider: OPENAI_PROVIDER_ID,
       agentId,
     }).policy?.id;
-    return configuredRuntimeNeedsCodex({ cfg, env, runtimeId });
+    return configuredRuntimeNeedsCodex({ cfg, env, agentId, runtimeId });
   });
 }
 
 function configNeedsCodexForOpenAi(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  sourceConfigBeforeMigrations?: OpenClawConfig,
+  sourceConfigBeforeMigrations?: unknown,
 ): boolean {
   const agentIds = listAgentIds(cfg);
   const configuredRefs = configuredModelRefsNeedCodex({
@@ -312,7 +325,7 @@ function configNeedsCodexForOpenAi(
 export function shouldSuppressMissingCodexPluginDiagnostics(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  sourceConfigBeforeMigrations?: OpenClawConfig,
+  sourceConfigBeforeMigrations?: unknown,
 ): boolean {
   const entryEnabled = codexPluginEntryEnabled(cfg);
   if (entryEnabled === true) {

@@ -11,6 +11,7 @@ function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
     runner: "embedded",
     agentHarnessRuntimeOverride: "openclaw",
     runConfig: {},
+    sourceConfig: {},
     modelLabel: `${provider}/model`,
     provider,
     model: "model",
@@ -21,17 +22,36 @@ function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
 
 const config: OpenClawConfig = {
   agents: {
-    defaults: { model: { primary: "zeta/model" } },
-    list: [
-      { id: "requester", default: true, model: "zeta/model" },
-      { id: "beta", model: "beta/model" },
-      { id: "alpha", model: "alpha/model" },
-    ],
+    defaults: {
+      model: { primary: "zeta/model" },
+      systemAgent: { agentId: "requester" },
+    },
+    entries: {
+      requester: { model: "zeta/model" },
+      beta: { model: "beta/model" },
+      alpha: { model: "alpha/model" },
+    },
   },
 };
 
 describe("system-agent inference fallback", () => {
-  it("tries the default route first, then authenticated providers by provider id", async () => {
+  it("does not claim providers are unconfigured when no route can be verified", async () => {
+    const result = await verifySystemAgentInferenceWithFallback({
+      runtime,
+      deps: {
+        readConfig: async () => ({}),
+        resolveRoute: async () => null,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: "unknown",
+      error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
+    });
+  });
+
+  it("tries the system-agent route first, then authenticated providers by provider id", async () => {
     const attempts: string[] = [];
     const verify = vi.fn(async ({ agentId }: { agentId: string }) => {
       attempts.push(agentId);
@@ -102,11 +122,11 @@ describe("system-agent inference fallback", () => {
     const duplicateProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "zeta/model" } },
-        list: [
-          { id: "requester", model: "zeta/model" },
-          { id: "alpha-bad", model: "alpha/model" },
-          { id: "alpha-good", model: "alpha/model" },
-        ],
+        entries: {
+          requester: { model: "zeta/model" },
+          "alpha-bad": { model: "alpha/model" },
+          "alpha-good": { model: "alpha/model" },
+        },
       },
     };
 
@@ -136,10 +156,7 @@ describe("system-agent inference fallback", () => {
     const sameProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
+        entries: { requester: { model: "alpha/model" }, "alpha-other": { model: "alpha/model" } },
       },
     };
 
@@ -168,10 +185,7 @@ describe("system-agent inference fallback", () => {
     const sameProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
+        entries: { requester: { model: "alpha/model" }, "alpha-other": { model: "alpha/model" } },
       },
     };
 
@@ -200,11 +214,11 @@ describe("system-agent inference fallback", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
+        entries: {
+          requester: { model: "alpha/model" },
+          "alpha-other": { model: "alpha/model" },
+          beta: { model: "beta/model" },
+        },
       },
     };
 
@@ -234,11 +248,11 @@ describe("system-agent inference fallback", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
+        entries: {
+          requester: { model: "alpha/model" },
+          "alpha-other": { model: "alpha/model" },
+          beta: { model: "beta/model" },
+        },
       },
     };
 

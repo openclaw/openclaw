@@ -1,27 +1,29 @@
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
-import {
+import type {
   createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
 >[0];
 export type PlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
-type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentService["create"]>>;
+type DispatchEnvironmentRecord = Awaited<
+  ReturnType<WorkerDispatchEnvironmentService["createWithRequest"]>
+>;
 export type DispatchStage =
   | "barrier"
   | "workspace"
   | "preflight"
   | "create"
-  | "tunnel:ready"
   | "sync"
   | "attach"
   | "tunnel:attached"
@@ -34,28 +36,47 @@ export const REQUEST: WorkerDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "development",
+  executionMode: "worker-turn",
 };
 
-export function seedStartingPlacement(
+export async function seedProvisioningPlacement(
   store: PlacementStore,
   environmentId: string,
-): WorkerSessionPlacementRecord {
-  let current = store.startDispatch(REQUEST);
-  current = store.transition({
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
+): Promise<WorkerSessionPlacementRecord> {
+  const requested = await store.startDispatch({ ...REQUEST, executionMode });
+  return store.transition({
     sessionId: REQUEST.sessionId,
     from: "requested",
     to: "provisioning",
-    expectedGeneration: current.generation,
+    expectedGeneration: requested.generation,
     patch: { environmentId },
   });
-  current = store.transition({
+}
+
+export async function seedSyncingPlacement(
+  store: PlacementStore,
+  environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
+): Promise<WorkerSessionPlacementRecord> {
+  let current = await seedProvisioningPlacement(store, environmentId, executionMode);
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: current.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
-  current = store.transition({
+  return current;
+}
+
+export async function seedStartingPlacement(
+  store: PlacementStore,
+  environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
+): Promise<WorkerSessionPlacementRecord> {
+  let current = await seedSyncingPlacement(store, environmentId, executionMode);
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
     to: "starting",
@@ -68,11 +89,15 @@ export function seedStartingPlacement(
   return current;
 }
 
-export function seedActivePlacement(
+export async function seedActivePlacement(
   store: PlacementStore,
-  params: { environmentId: string; ownerEpoch: number },
-): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId);
+  params: {
+    environmentId: string;
+    ownerEpoch: number;
+    executionMode?: WorkerDispatchRequest["executionMode"];
+  },
+): Promise<WorkerSessionPlacementRecord> {
+  const current = await seedStartingPlacement(store, params.environmentId, params.executionMode);
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
@@ -83,14 +108,17 @@ export function seedActivePlacement(
 }
 
 export function createDispatchEnvironmentFixtures(generation = 1) {
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
+  const environmentId = deriveEnvironmentIntent(
     `session-dispatch:${REQUEST.sessionId}:${generation}`,
-  );
+  ).environmentId;
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    protocolFeatures: [
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+    ],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",
@@ -104,7 +132,9 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     providerId: "fake",
     profileId: "development",
     profileSnapshot,
-    provisionOperationId: "provision-1",
+    provisionOperationId: `provision:${environmentId}`,
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,
@@ -113,8 +143,10 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     updatedAtMs: 1,
     stateChangedAtMs: 1,
     idleSinceAtMs: null,
+    lastActivatedAtMs: null,
+    preparation: null,
     destroyRequestedAtMs: null,
-    leaseId: "lease-1",
+    leaseId: `lease:${environmentId}`,
     sshEndpoint,
     desktop: null,
     desktopAvailable: false,

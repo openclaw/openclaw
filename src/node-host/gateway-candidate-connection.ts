@@ -1,0 +1,188 @@
+import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
+import {
+  GatewayClient,
+  type GatewayClientCloseInfo,
+  type GatewayClientOptions,
+  type GatewayClientRequestOptions,
+  type GatewayReconnectPausedInfo,
+} from "../gateway/client.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
+import type { NodeHostGatewayConfig } from "./config.js";
+
+type GatewayCandidateEvent = Parameters<NonNullable<GatewayClientOptions["onEvent"]>>[0];
+type GatewayCandidateHello = Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0];
+
+type CandidateConnectionOptions = Omit<
+  GatewayClientOptions,
+  | "url"
+  | "tlsFingerprint"
+  | "edgeAuthHeaders"
+  | "onEvent"
+  | "onHelloOk"
+  | "onConnectError"
+  | "onReconnectPaused"
+  | "onClose"
+>;
+
+type GatewayCandidateConnectionParams = {
+  candidates: readonly NodeHostGatewayConfig[];
+  cloudflareAccessByCandidate?: ReadonlyMap<NodeHostGatewayConfig, CloudflareAccessCredentials>;
+  clientOptions: CandidateConnectionOptions;
+  onEvent: (event: GatewayCandidateEvent) => void;
+  onHelloOk: (
+    hello: GatewayCandidateHello,
+    url: string,
+    tlsFingerprint?: string,
+    cloudflareAccess?: CloudflareAccessCredentials,
+  ) => void;
+  onConnectError: (error: Error) => void;
+  onReconnectPaused: (info: GatewayReconnectPausedInfo) => void;
+  onClose: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
+  onWinningCandidate: (candidate: NodeHostGatewayConfig) => void;
+};
+
+export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
+  const host = gateway.host ?? "127.0.0.1";
+  const urlHost =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
+  const port = gateway.port ?? 18789;
+  const scheme = gateway.tls ? "wss" : "ws";
+  const contextPath = gateway.contextPath
+    ? gateway.contextPath.startsWith("/")
+      ? gateway.contextPath
+      : `/${gateway.contextPath}`
+    : "";
+  return `${scheme}://${urlHost}:${port}${contextPath}`;
+}
+
+export function createNodeHostGatewayCandidateConnection(params: GatewayCandidateConnectionParams) {
+  if (params.candidates.length === 0) {
+    throw new Error("node host gateway candidate list cannot be empty");
+  }
+
+  let currentCandidateIndex = 0;
+  let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+  const candidateClients: GatewayClient[] = [];
+  let winnerSelected = params.candidates.length === 1;
+  let latestManifest:
+    | { caps: string[]; commands: string[]; computerUse?: ComputerUseCapabilityDescriptor }
+    | undefined;
+  let currentClient = createCandidateClient(currentCandidateIndex);
+
+  function createCandidateClient(candidateIndex: number): GatewayClient {
+    const candidate = params.candidates[candidateIndex];
+    if (!candidate) {
+      throw new Error(`node host gateway candidate ${candidateIndex} is unavailable`);
+    }
+    const url = formatGatewayCandidateUrl(candidate);
+    const cloudflareAccess = params.cloudflareAccessByCandidate?.get(candidate);
+    const candidateClient = new GatewayClient({
+      ...params.clientOptions,
+      url,
+      tlsFingerprint: candidate.tlsFingerprint,
+      ...(cloudflareAccess
+        ? { edgeAuthHeaders: buildCloudflareAccessHeaders(cloudflareAccess) }
+        : {}),
+      onEvent: (event) => {
+        if (currentCandidateIndex === candidateIndex) {
+          params.onEvent(event);
+        }
+      },
+      onHelloOk: (hello) => {
+        if (currentCandidateIndex !== candidateIndex) {
+          return;
+        }
+        if (!winnerSelected) {
+          winnerSelected = true;
+          params.onWinningCandidate(candidate);
+        }
+        params.onHelloOk(hello, url, candidate.tlsFingerprint, cloudflareAccess);
+      },
+      onConnectError: (error) => {
+        if (currentCandidateIndex === candidateIndex) {
+          params.onConnectError(error);
+        }
+      },
+      onReconnectPaused: (info) => {
+        if (currentCandidateIndex === candidateIndex) {
+          params.onReconnectPaused(info);
+        }
+      },
+      onClose: (code, reason, info) => {
+        if (stopped || currentCandidateIndex !== candidateIndex) {
+          return;
+        }
+        params.onClose(code, reason, info);
+        const nextCandidateIndex = candidateIndex + 1;
+        if (
+          stopped ||
+          // A successful hello redeems setup credentials and promotes this
+          // endpoint. Its own reconnect path owns durable device auth from here.
+          winnerSelected ||
+          nextCandidateIndex >= params.candidates.length ||
+          info?.phase !== "pre-hello" ||
+          info.connectRequestSent !== false
+        ) {
+          return;
+        }
+        currentCandidateIndex = nextCandidateIndex;
+        candidateClient.stop();
+        queueMicrotask(() => {
+          if (stopped || currentCandidateIndex !== nextCandidateIndex) {
+            return;
+          }
+          currentClient = createCandidateClient(nextCandidateIndex);
+          currentClient.start();
+        });
+      },
+    });
+    if (latestManifest) {
+      candidateClient.updateNodeManifest(latestManifest);
+    }
+    candidateClients.push(candidateClient);
+    return candidateClient;
+  }
+
+  return {
+    start(): void {
+      if (!stopped) {
+        currentClient.start();
+      }
+    },
+    stop(): Promise<void> {
+      stopped = true;
+      // Retired candidates can still own accepted storage work. Keep terminal failures
+      // because the client's next drain may have already consumed its first error.
+      stopPromise ??= Promise.resolve().then(async () => {
+        const results = await Promise.allSettled(
+          candidateClients.map((client) => client.stopAndWait()),
+        );
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        throwNodeHostCleanupErrors(failures, "node host gateway cleanup failed");
+      });
+      return stopPromise;
+    },
+    request<T = Record<string, unknown>>(
+      ...requestArgs: [method: string, params?: unknown, options?: GatewayClientRequestOptions]
+    ): Promise<T> {
+      return currentClient.request<T>(...requestArgs);
+    },
+    updateNodeManifest(manifest: {
+      caps: string[];
+      commands: string[];
+      computerUse?: ComputerUseCapabilityDescriptor;
+    }): void {
+      // Availability may change before the first hello. Every later candidate
+      // must start with the newest manifest rather than the constructor snapshot.
+      latestManifest = manifest;
+      currentClient.updateNodeManifest(manifest);
+    },
+  };
+}

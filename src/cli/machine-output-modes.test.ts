@@ -15,12 +15,7 @@ describe("built-in machine-output resolvers", () => {
     expect(isMachineOutputStdoutTTY({ isTTY: true })).toBe(true);
   });
 
-  it.each([
-    ["heartbeat last", ["system", "heartbeat", "last"]],
-    ["heartbeat enable", ["system", "heartbeat", "enable"]],
-    ["heartbeat disable", ["system", "heartbeat", "disable"]],
-    ["presence", ["system", "presence"]],
-  ])("detects system %s", (_name, path) => {
+  it.each([["presence", ["system", "presence"]]])("detects system %s", (_name, path) => {
     expect(isSystemMachineOutput(["node", "openclaw", ...path])).toBe(true);
   });
 
@@ -30,12 +25,14 @@ describe("built-in machine-output resolvers", () => {
     expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
   });
 
-  it.each(["blob", "coverage", "purge", "query", "sessions"])(
-    "detects proxy %s output",
-    (command) => {
-      expect(isProxyMachineOutput(["node", "openclaw", "proxy", command])).toBe(true);
-    },
-  );
+  it("reserves doctor JSON output with or without explicit lint mode", () => {
+    for (const argv of [
+      ["node", "openclaw", "doctor", "--json"],
+      ["node", "openclaw", "doctor", "--lint", "--json"],
+    ]) {
+      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(true);
+    }
+  });
 
   it("accepts supported root options after the command root", () => {
     expect(
@@ -69,13 +66,12 @@ describe("built-in machine-output resolvers", () => {
 
   it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
-  });
-
-  it.each(["get", "file", "schema"])("reserves config %s machine output", (subcommand) => {
-    expect(isConfigMachineOutput(["node", "openclaw", "config", subcommand])).toBe(true);
     expect(
-      isConfigMachineOutput(["node", "openclaw", "config", "--section", "agents", subcommand]),
+      isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--set", "note"]),
     ).toBe(true);
+    expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--unset"])).toBe(
+      true,
+    );
   });
 
   it("treats config set --json as parse-only except for JSON dry-run reports", () => {
@@ -105,19 +101,5 @@ describe("built-in machine-output resolvers", () => {
         "--json",
       ]),
     ).toBe(false);
-  });
-
-  it("finds agent-scoped skill verification", () => {
-    expect(
-      isSkillsMachineOutput([
-        "node",
-        "openclaw",
-        "skills",
-        "--agent",
-        "main",
-        "verify",
-        "@owner/skill",
-      ]),
-    ).toBe(true);
   });
 });

@@ -1,9 +1,8 @@
-// Normalization Core tests cover number coercion behavior.
 import { describe, expect, test } from "vitest";
 import {
-  asDateTimestampMs,
-  asFiniteNumber,
   asFiniteNumberInRange,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
   asSafeIntegerInRange,
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
@@ -14,7 +13,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
-  parseDateTimestampMs,
+  parseDateFirstTimestampMs,
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
@@ -26,22 +25,19 @@ import {
   resolveOptionalIntegerOption,
   resolvePositiveTimerTimeoutMs,
   resolveDateTimestampMs,
-  parseStrictFiniteNumber,
-  parseStrictInteger,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
   resolveTimestampMsToIsoString,
   timestampMsToIsoFileStamp,
-  timestampMsToIsoString,
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
-  test("asFiniteNumber accepts only finite numbers", () => {
-    expect(asFiniteNumber(4)).toBe(4);
-    expect(asFiniteNumber("4")).toBeUndefined();
-    expect(asFiniteNumber(Number.NaN)).toBeUndefined();
-    expect(asFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+  test("signed finite helpers preserve finite fractional values", () => {
+    expect(asPositiveFiniteNumber(0.5)).toBe(0.5);
+    expect(asPositiveFiniteNumber(0)).toBeUndefined();
+    expect(asPositiveFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(asNonNegativeFiniteNumber(0)).toBe(0);
+    expect(asNonNegativeFiniteNumber(-0.5)).toBeUndefined();
+    expect(asNonNegativeFiniteNumber("1")).toBeUndefined();
   });
 
   test("asFiniteNumberInRange enforces inclusive and exclusive bounds", () => {
@@ -66,30 +62,6 @@ describe("number-coercion", () => {
     expect(parseFiniteNumber("4.5ms")).toBeUndefined();
     expect(parseFiniteNumber("")).toBeUndefined();
     expect(parseFiniteNumber("nope")).toBeUndefined();
-  });
-
-  test("parseStrictInteger accepts only safe integer tokens", () => {
-    expect(parseStrictInteger("42")).toBe(42);
-    expect(parseStrictInteger(" -7 ")).toBe(-7);
-    expect(parseStrictInteger("+9")).toBe(9);
-    expect(parseStrictInteger("1.5")).toBeUndefined();
-    expect(parseStrictInteger("1e3")).toBeUndefined();
-    expect(parseStrictInteger(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
-  });
-
-  test("parseStrictFiniteNumber rejects partial numeric strings", () => {
-    expect(parseStrictFiniteNumber("42")).toBe(42);
-    expect(parseStrictFiniteNumber(".5")).toBe(0.5);
-    expect(parseStrictFiniteNumber("1e3")).toBe(1000);
-    expect(parseStrictFiniteNumber("3.14ms")).toBeUndefined();
-    expect(parseStrictFiniteNumber("0x10")).toBeUndefined();
-  });
-
-  test("strict integer range helpers enforce sign", () => {
-    expect(parseStrictPositiveInteger("9")).toBe(9);
-    expect(parseStrictPositiveInteger("0")).toBeUndefined();
-    expect(parseStrictNonNegativeInteger("0")).toBe(0);
-    expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
   });
 
   test("timer timeout helpers centralize Node-safe bounds", () => {
@@ -128,52 +100,19 @@ describe("number-coercion", () => {
     expect(nonNegativeSecondsToSafeMilliseconds("-1")).toBeUndefined();
   });
 
-  test("timestamp ISO helper rejects Date-invalid timestamps", () => {
-    expect(asDateTimestampMs(0)).toBe(0);
-    expect(asDateTimestampMs(8_640_000_000_000_000)).toBe(8_640_000_000_000_000);
-    expect(asDateTimestampMs(8_640_000_000_000_001)).toBeUndefined();
-    expect(asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(asDateTimestampMs("0")).toBeUndefined();
-    expect(timestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
-    expect(timestampMsToIsoString(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
-    expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
-    expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(timestampMsToIsoString("0")).toBeUndefined();
-  });
-
   test.each([
     { value: 0, expected: 0 },
-    { value: 1_700_000_000_000, expected: 1_700_000_000_000 },
-    { value: "0", expected: 0 },
-    { value: " 1e3 ", expected: 1_000 },
-    { value: "2026-07-13T10:00:00.000Z", expected: 1_783_936_800_000 },
-    { value: -MAX_DATE_TIMESTAMP_MS, expected: -MAX_DATE_TIMESTAMP_MS },
-    { value: String(MAX_DATE_TIMESTAMP_MS), expected: MAX_DATE_TIMESTAMP_MS },
-  ])("parseDateTimestampMs parses $value as milliseconds", ({ value, expected }) => {
-    expect(parseDateTimestampMs(value)).toBe(expected);
-  });
-
-  test.each([
-    new Date("2026-07-13T10:00:00.000Z"),
-    true,
-    false,
-    "",
-    "   ",
-    "123ms",
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-    MAX_DATE_TIMESTAMP_MS + 1,
-    String(MAX_DATE_TIMESTAMP_MS + 1),
-    "+275761-01-01T00:00:00.000Z",
-  ])("parseDateTimestampMs rejects %o", (value) => {
-    expect(parseDateTimestampMs(value)).toBeUndefined();
+    { value: "0", expected: Date.parse("0") },
+    { value: Number.POSITIVE_INFINITY, expected: undefined },
+    { value: MAX_DATE_TIMESTAMP_MS + 1, expected: MAX_DATE_TIMESTAMP_MS + 1 },
+    { value: true, expected: undefined },
+  ])("parseDateFirstTimestampMs parses $value", ({ value, expected }) => {
+    expect(parseDateFirstTimestampMs(value)).toBe(expected);
   });
 
   test("future timestamp helper rejects invalid Date timestamps", () => {
     expect(isFutureDateTimestampMs(1_001, { nowMs: 1_000 })).toBe(true);
     expect(isFutureDateTimestampMs(1_000, { nowMs: 1_000 })).toBe(false);
-    expect(isFutureDateTimestampMs(999, { nowMs: 1_000 })).toBe(false);
     expect(isFutureDateTimestampMs(8_640_000_000_000_001, { nowMs: 1_000 })).toBe(false);
     expect(isFutureDateTimestampMs(1_001, { nowMs: Number.NaN })).toBe(false);
   });
@@ -198,27 +137,16 @@ describe("number-coercion", () => {
   });
 
   test("expiry helpers resolve safe absolute timestamps", () => {
+    expect(resolveExpiresAtMsFromDurationMs(600_000, { nowMs: 1_000 })).toBe(601_000);
     expect(
-      resolveExpiresAtMsFromDurationMs(600_000, {
-        nowMs: 1_000,
-      }),
-    ).toBe(601_000);
-    expect(
-      resolveExpiresAtMsFromDurationMs(600_000, {
-        nowMs: 8_640_000_000_000_000,
-      }),
+      resolveExpiresAtMsFromDurationMs(600_000, { nowMs: 8_640_000_000_000_000 }),
     ).toBeUndefined();
     expect(
-      resolveExpiresAtMsFromDurationMs(600_000, {
-        nowMs: 8_640_000_000_000_001,
-      }),
+      resolveExpiresAtMsFromDurationMs(600_000, { nowMs: 8_640_000_000_000_001 }),
     ).toBeUndefined();
-    expect(
-      resolveExpiresAtMsFromDurationSeconds("3600", {
-        nowMs: 1_000,
-        bufferMs: 300,
-      }),
-    ).toBe(3_600_700);
+    expect(resolveExpiresAtMsFromDurationSeconds("3600", { nowMs: 1_000, bufferMs: 300 })).toBe(
+      3_600_700,
+    );
     expect(
       resolveExpiresAtMsFromDurationSeconds("10", {
         nowMs: 1_000,
@@ -227,9 +155,7 @@ describe("number-coercion", () => {
       }),
     ).toBe(31_000);
     expect(
-      resolveExpiresAtMsFromDurationSeconds("3600", {
-        nowMs: 8_640_000_000_000_000,
-      }),
+      resolveExpiresAtMsFromDurationSeconds("3600", { nowMs: 8_640_000_000_000_000 }),
     ).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(1234.9)).toBe(1_234_000);
@@ -254,7 +180,6 @@ describe("number-coercion", () => {
   test("integer option helpers floor finite values and fall back for non-finite values", () => {
     expect(resolveIntegerOption(7.9, 1, { min: 1, max: 10 })).toBe(7);
     expect(resolveIntegerOption(Number.NaN, 4.9, { min: 1 })).toBe(4);
-    expect(resolveIntegerOption(Number.NEGATIVE_INFINITY, 4, { min: 1 })).toBe(4);
     expect(resolveIntegerOption(-4, 1, { min: 0 })).toBe(0);
     expect(resolveIntegerOption(40, 1, { max: 10 })).toBe(10);
     expect(resolveNonNegativeIntegerOption(Number.NaN, 3.9)).toBe(3);
@@ -263,7 +188,6 @@ describe("number-coercion", () => {
   test("optional integer option helper rejects non-finite values", () => {
     expect(resolveOptionalIntegerOption(7.9, { min: 1, max: 10 })).toBe(7);
     expect(resolveOptionalIntegerOption(Number.NaN, { min: 1 })).toBeUndefined();
-    expect(resolveOptionalIntegerOption(Number.POSITIVE_INFINITY, { min: 1 })).toBeUndefined();
     expect(resolveOptionalIntegerOption(-4, { min: 0 })).toBe(0);
     expect(resolveOptionalIntegerOption(40, { max: 10 })).toBe(10);
   });

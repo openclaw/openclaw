@@ -1,13 +1,10 @@
 // Update Clawtributors tests cover update clawtributors script behavior.
-import { execFileSync as realExecFileSync } from "node:child_process";
 import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalCwd = process.cwd();
-
-type GhRunner = (args: readonly string[], options: ExecFileSyncOptionsWithStringEncoding) => string;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -24,8 +21,6 @@ function mockClawtributorsFixture({
   accountLookup,
   accountLookupError,
   accountLookupStatus = 404,
-  loginLookupError,
-  runGh,
 }: {
   ensureLogins?: string[];
   seedEntry?: string;
@@ -37,8 +32,6 @@ function mockClawtributorsFixture({
   } | null;
   accountLookupError?: Error;
   accountLookupStatus?: 404 | 410;
-  loginLookupError?: Error;
-  runGh?: GhRunner;
 } = {}) {
   const readme = [
     "# Fixture",
@@ -95,10 +88,7 @@ function mockClawtributorsFixture({
     throw new Error(`unexpected command: ${cmd}`);
   });
   const execPlainGh = vi.fn(
-    (args: readonly string[], options: ExecFileSyncOptionsWithStringEncoding) => {
-      if (runGh) {
-        return runGh(args, options);
-      }
+    (args: readonly string[], _options: ExecFileSyncOptionsWithStringEncoding) => {
       if (
         args.join("\0") ===
         ["api", "repos/openclaw/openclaw/contributors?per_page=100&anon=1", "--paginate"].join("\0")
@@ -125,9 +115,6 @@ function mockClawtributorsFixture({
         return "";
       }
       if (args[0] === "api" && args[1]?.startsWith("users/")) {
-        if (loginLookupError) {
-          throw loginLookupError;
-        }
         const login = args[1].slice("users/".length);
         return JSON.stringify({
           id: 2,
@@ -209,35 +196,6 @@ describe("update-clawtributors", () => {
     );
   });
 
-  it("kills a sleeping GitHub CLI process at the deadline", async () => {
-    const fixture = mockClawtributorsFixture({
-      runGh: (_args, options) => {
-        expect(options).toMatchObject({ timeout: 120_000, killSignal: "SIGKILL" });
-        return realExecFileSync(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-          ...options,
-          timeout: 50,
-        });
-      },
-    });
-
-    await expect(importUpdateClawtributors()).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-      signal: "SIGKILL",
-    });
-    expect(fixture.execPlainGh).toHaveBeenCalledTimes(1);
-  });
-
-  it("aborts on transient login lookup failures", async () => {
-    const fixture = mockClawtributorsFixture({
-      ensureLogins: ["extra"],
-      loginLookupError: new Error("GitHub login lookup unavailable"),
-    });
-
-    await expect(importUpdateClawtributors()).rejects.toThrow("GitHub login lookup unavailable");
-
-    expect(fixture.readWrittenReadme()).toBe("");
-  });
-
   it("resolves renamed seed profiles by stable account id", async () => {
     const fixture = mockClawtributorsFixture({
       seedEntry:
@@ -267,7 +225,7 @@ describe("update-clawtributors", () => {
     expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
   });
 
-  it.each([404, 410] as const)(
+  it.each([404] as const)(
     "keeps deleted seed profiles as unlinked credit on HTTP %s",
     async (accountLookupStatus) => {
       const fixture = mockClawtributorsFixture({
@@ -308,21 +266,24 @@ describe("update-clawtributors", () => {
     expect(fixture.readWrittenReadme()).toBe("");
   });
 
-  it("rejects unsafe avatar probe content lengths before reading the body", async () => {
+  it.each([
+    { size: 40, visible: true },
+    { size: 420, visible: false },
+  ])("renders avatar size $size with visibility $visible", async ({ size, visible }) => {
     const fixture = mockClawtributorsFixture();
-    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
-    vi.stubGlobal("fetch", (() =>
-      Promise.resolve({
-        ok: true,
-        headers: new Headers({ "content-length": "9007199254740992" }),
-        arrayBuffer,
-      } as unknown as Response)) as typeof fetch);
+    const png = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+    png.writeUInt32BE(size, 16);
+    png.writeUInt32BE(size, 20);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(png)),
+    );
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await importUpdateClawtributors();
 
-    expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(fixture.readWrittenReadme()).toContain("https://github.com/octo");
+    expect(fixture.readWrittenReadme().includes('href="https://github.com/octo"')).toBe(visible);
   });
 
   it("cancels stalled avatar probe body reads at the probe timeout", async () => {

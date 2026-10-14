@@ -1,6 +1,9 @@
-/** Prepares embedded-agent SettingsManager instances from project and plugin settings. */
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   buildEmbeddedAgentSettingsSnapshot,
   loadEnabledBundleAgentSettingsSnapshot,
@@ -9,47 +12,28 @@ import {
 import { applyAgentCompactionSettingsFromConfig } from "./agent-settings.js";
 import { SettingsManager } from "./sessions/index.js";
 
-function createEmbeddedAgentSettingsManager(params: {
+type PreparedSettings = {
   cwd: string;
   agentDir: string;
-  cfg?: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-}): SettingsManager {
-  const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
-  const policy = resolveEmbeddedAgentProjectSettingsPolicy(params.cfg);
-  const pluginSettings = loadEnabledBundleAgentSettingsSnapshot({
-    cwd: params.cwd,
-    cfg: params.cfg,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-  });
-  const hasPluginSettings = Object.keys(pluginSettings).length > 0;
-  if (policy === "trusted" && !hasPluginSettings) {
-    return fileSettingsManager;
+  configKey: string | undefined;
+  pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  snapshot: ReturnType<typeof buildEmbeddedAgentSettingsSnapshot>;
+};
+
+const preparedSessionSettings = new Map<string, PreparedSettings>();
+const MAX_PREPARED_SESSION_SETTINGS = 64;
+registerPluginMetadataProcessMemoLifecycleClear(() => preparedSessionSettings.clear());
+
+export function clearPreparedEmbeddedAgentSettings(sessionIds: Iterable<string | undefined>): void {
+  for (const sessionId of sessionIds) {
+    if (sessionId) {
+      preparedSessionSettings.delete(sessionId);
+    }
   }
-  const settings = buildEmbeddedAgentSettingsSnapshot({
-    globalSettings: fileSettingsManager.getGlobalSettings(),
-    pluginSettings,
-    projectSettings: fileSettingsManager.getProjectSettings(),
-    policy,
-  });
-  return SettingsManager.inMemory(settings);
 }
 
-function createRuntimeEmbeddedAgentSettingsManager(
-  settingsManager: SettingsManager,
-): SettingsManager {
-  return SettingsManager.inMemory(
-    buildEmbeddedAgentSettingsSnapshot({
-      globalSettings: settingsManager.getGlobalSettings(),
-      pluginSettings: {},
-      projectSettings: settingsManager.getProjectSettings(),
-      policy: "trusted",
-    }),
-  );
-}
-
-/** Creates the runtime SettingsManager with project/plugin settings and compaction overrides. */
 export function createPreparedEmbeddedAgentSettingsManager(params: {
+  sessionId: string;
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
@@ -57,18 +41,43 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
 }): SettingsManager {
-  const settingsManager = createRuntimeEmbeddedAgentSettingsManager(
-    createEmbeddedAgentSettingsManager(params),
-  );
+  const configKey = params.cfg ? resolveRuntimeConfigCacheKey(params.cfg) : undefined;
+  let prepared = preparedSessionSettings.get(params.sessionId);
+  if (
+    !prepared ||
+    prepared.cwd !== params.cwd ||
+    prepared.agentDir !== params.agentDir ||
+    prepared.configKey !== configKey ||
+    prepared.pluginMetadataSnapshot !== params.pluginMetadataSnapshot
+  ) {
+    const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
+    prepared = {
+      cwd: params.cwd,
+      agentDir: params.agentDir,
+      configKey,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      snapshot: freezeJsonSnapshot(
+        buildEmbeddedAgentSettingsSnapshot({
+          globalSettings: fileSettingsManager.getGlobalSettings(),
+          pluginSettings: loadEnabledBundleAgentSettingsSnapshot(params),
+          projectSettings: fileSettingsManager.getProjectSettings(),
+          policy: resolveEmbeddedAgentProjectSettingsPolicy(params.cfg),
+        }),
+      ),
+    };
+  }
+  preparedSessionSettings.delete(params.sessionId);
+  preparedSessionSettings.set(params.sessionId, prepared);
+  pruneMapToMaxSize(preparedSessionSettings, MAX_PREPARED_SESSION_SETTINGS);
+  // File edits join the next session or explicit invalidation; attempt mutations
+  // and model-dependent compaction settings never flow back into the shared snapshot.
+  const settingsManager = SettingsManager.inMemory(prepared.snapshot);
   applyAgentCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
-  // Disable the session runtime auto-retry. OpenClaw has its own comprehensive
-  // retry layer (failover rotation, auth profile rotation, empty-error retry,
-  // thinking-level fallback) in run.ts. Having both layers active creates a
-  // double-retry that can replay failed tool calls in an unbounded loop (#73781).
+  // The embedded runner owns retries; session auto-retry could replay tool calls (#73781).
   settingsManager.setRetryEnabled(false);
   return settingsManager;
 }

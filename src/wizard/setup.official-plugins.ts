@@ -1,5 +1,7 @@
-// Official plugin setup helpers install and configure bundled onboarding plugins.
-import { ensureOnboardingPluginInstalled } from "../commands/onboarding-plugin-install.js";
+import {
+  ensureOnboardingPluginInstalled,
+  type OnboardingPluginInstallEntry,
+} from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import {
@@ -17,12 +19,8 @@ const SKIP_VALUE = "__skip__";
 
 // Official plugin onboarding lists generic official plugins not already
 // configured and installs the selected ones through the trusted install flow.
-type OfficialPluginOnboardingInstallEntry = {
-  pluginId: string;
-  label: string;
+type OfficialPluginOnboardingInstallEntry = OnboardingPluginInstallEntry & {
   description?: string;
-  install: PluginPackageInstall;
-  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 function isInstalledOrConfigured(config: OpenClawConfig, pluginId: string): boolean {
@@ -45,9 +43,7 @@ function isGenericOfficialPluginEntry(entry: { source?: string; kind?: string })
 
 function formatInstallHint(install: PluginPackageInstall): string {
   if (install.clawhubSpec && install.npmSpec) {
-    return install.defaultChoice === "clawhub"
-      ? "ClawHub, with npm fallback"
-      : "npm, with ClawHub fallback";
+    return "npm, with ClawHub fallback";
   }
   if (install.clawhubSpec) {
     return "ClawHub";

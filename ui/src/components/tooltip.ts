@@ -1,582 +1,318 @@
-// Control UI adapter for Web Awesome tooltips. OpenClaw keeps its terse
-// wrapper API; Web Awesome owns popup positioning, rendering, and dismissal.
-import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { css, html } from "lit";
-import { property, query } from "lit/decorators.js";
-import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import type { TemplateResult } from "lit";
+import { isTooltipTriggerElement } from "./tooltip-content.ts";
+import {
+  TooltipController,
+  consumeTooltipEscape,
+  type TooltipPolicyProps,
+} from "./tooltip-controller.ts";
 
-const HOVER_DELAY = 150;
-const TOUCH_DELAY = 450;
-const TOUCH_VISIBLE = 900;
+export { consumeTooltipEscape };
+
+export interface TooltipProps extends TooltipPolicyProps {
+  contentTemplate?: TemplateResult;
+}
+export interface TooltipRuntime {
+  request(open: boolean): boolean;
+  update(): void;
+  retire(): void;
+  dispose(): void;
+}
+
 const SKIP_DELAY = 300;
-const MOVE_LIMIT = 10;
-const RICH_CONTENT_CLOSE_DELAY = 100;
 
-let nextTooltipId = 0;
+export class TooltipProvider extends HTMLElement {
+  delayed = true;
+  #focusInput: "keyboard" | "pointer" = "keyboard";
+  #skipDelayTimer: number | null = null;
 
-function createTooltipId() {
-  nextTooltipId += 1;
-  return `openclaw-tooltip-${nextTooltipId}`;
-}
-
-function normalizeTooltipText(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-class TooltipProvider extends OpenClawLitElement {
-  @property({ type: Number }) delay = HOVER_DELAY;
-  @property({ type: Number }) skipDelay = SKIP_DELAY;
-  @property({ type: Number }) touchDelay = TOUCH_DELAY;
-
-  private activeTooltip: Tooltip | null = null;
-  private delayed = true;
-  private skipDelayTimer: number | null = null;
-
-  override connectedCallback() {
-    super.connectedCallback();
+  connectedCallback() {
     this.style.display = "contents";
+    this.#focusInput = "keyboard";
+    // Pointer focus can arrive after an action re-renders. Keep modality at
+    // the provider so delayed focus cannot reopen the action's tooltip.
+    this.ownerDocument.addEventListener("keydown", this.#handleDocumentKeyDown, true);
+    this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentPointerDown, true);
   }
 
-  override disconnectedCallback() {
-    const activeTooltip = this.activeTooltip;
-    this.activeTooltip = null;
-    activeTooltip?.closeFromProvider();
-    this.clearSkipDelayTimer();
+  disconnectedCallback() {
+    this.ownerDocument.removeEventListener("keydown", this.#handleDocumentKeyDown, true);
+    this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentPointerDown, true);
+    TooltipController.closeForProvider(this);
+    this.#clearSkipDelayTimer();
     this.delayed = true;
-    super.disconnectedCallback();
   }
 
-  openTooltip(tooltip: Tooltip) {
-    if (this.activeTooltip && this.activeTooltip !== tooltip) {
-      this.activeTooltip.closeFromProvider();
-    }
-    this.activeTooltip = tooltip;
+  focusOpensTooltip() {
+    return this.#focusInput === "keyboard";
+  }
+
+  openTooltip() {
     this.delayed = false;
-    this.clearSkipDelayTimer();
+    this.#clearSkipDelayTimer();
   }
 
-  closeTooltip(tooltip: Tooltip) {
-    if (this.activeTooltip !== tooltip) {
-      return;
-    }
-    this.activeTooltip = null;
-    this.clearSkipDelayTimer();
-    if (this.skipDelay <= 0) {
+  closeTooltip() {
+    this.#clearSkipDelayTimer();
+    this.#skipDelayTimer = window.setTimeout(() => {
+      this.#skipDelayTimer = null;
       this.delayed = true;
-      return;
-    }
-    this.skipDelayTimer = window.setTimeout(() => {
-      this.skipDelayTimer = null;
-      this.delayed = true;
-    }, this.skipDelay);
+    }, SKIP_DELAY);
   }
 
-  shouldDelayOpen() {
-    return this.delayed;
-  }
-
-  private clearSkipDelayTimer() {
-    if (this.skipDelayTimer !== null) {
-      window.clearTimeout(this.skipDelayTimer);
-      this.skipDelayTimer = null;
+  #clearSkipDelayTimer() {
+    if (this.#skipDelayTimer !== null) {
+      window.clearTimeout(this.#skipDelayTimer);
+      this.#skipDelayTimer = null;
     }
   }
 
-  override render() {
-    return html`<slot></slot>`;
-  }
+  readonly #handleDocumentKeyDown = (event: KeyboardEvent) => {
+    if (!["Alt", "Control", "Meta", "Shift"].includes(event.key)) {
+      this.#focusInput = "keyboard";
+    }
+  };
+
+  readonly #handleDocumentPointerDown = () => {
+    this.#focusInput = "pointer";
+  };
 }
 
-class Tooltip extends OpenClawLitElement {
-  @property() content = "";
+const defaults = {
+  content: "",
+  contentTemplate: undefined,
+  placement: "top",
+  closeDelay: 100,
+  hoverDismissDelay: undefined,
+  delay: undefined,
+  describe: true,
+  autoSize: false,
+  disabled: false,
+  openOnClick: false,
+  anchor: null,
+};
+const attributes = new Map([
+  ["content", "content"],
+  ["placement", "placement"],
+  ["closedelay", "closeDelay"],
+  ["hoverdismissdelay", "hoverDismissDelay"],
+  ["delay", "delay"],
+  ["describe", "describe"],
+  ["auto-size", "autoSize"],
+  ["disabled", "disabled"],
+  ["open-on-click", "openOnClick"],
+]);
+type MountTooltipView = typeof import("./solid/tooltip.tsx").mountTooltipView;
+let viewImport: Promise<MountTooltipView> | undefined;
 
-  /** Let a reveal-only trigger open on click instead of dismissing. */
-  @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
+/** Policy and descriptions are eager; presentation loads only for actual reveal intent. */
+export class TooltipElement extends HTMLElement implements TooltipProps {
+  static observedAttributes = [...attributes.keys()];
+  declare content: string;
+  declare contentTemplate: TemplateResult | undefined;
+  declare placement: TooltipPolicyProps["placement"];
+  declare closeDelay: number;
+  declare hoverDismissDelay: number | undefined;
+  declare delay: number | undefined;
+  declare describe: boolean;
+  declare autoSize: boolean;
+  declare disabled: boolean;
+  declare openOnClick: boolean;
+  declare anchor: HTMLElement | SVGElement | null;
 
-  @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
+  readonly #values = new Map<string, unknown>(Object.entries(defaults));
+  readonly #triggerSlot: HTMLSlotElement;
+  readonly #contentSlot: HTMLSlotElement;
+  readonly #surface: HTMLDivElement;
+  readonly #rich: HTMLSpanElement;
+  readonly #controller: TooltipController;
+  readonly #children: MutationObserver;
+  #runtime: TooltipRuntime | undefined;
+  #pendingUpdate: Promise<boolean> | undefined;
+  #loading: Promise<boolean> | undefined;
+  #wanted = false;
 
-  private triggerElement: HTMLElement | null = null;
-  private openTimer: number | null = null;
-  private closeTimer: number | null = null;
-  private touchTimer: number | null = null;
-  private touchCloseTimer: number | null = null;
-  private touchStart: { x: number; y: number } | null = null;
-  private triggerHovered = false;
-  private contentHovered = false;
-  private suppressPointerFocus = false;
-  private describedBy: string | null = null;
-  private descriptionCaptured = false;
-  private descriptionElement: HTMLSpanElement | null = null;
-  private richContentObserver: MutationObserver | null = null;
-  private tooltipProvider: TooltipProvider | null = null;
-  private readonly tooltipId = createTooltipId();
-  private readonly descriptionId = `${this.tooltipId}-description`;
-
-  static override styles = css`
-    :host {
-      display: contents;
+  constructor() {
+    super();
+    for (const [key, value] of Object.entries(defaults)) {
+      const initial = Object.hasOwn(this, key) ? Reflect.get(this, key) : value;
+      this.#values.set(key, initial);
+      Object.defineProperty(this, key, {
+        configurable: true,
+        get: () => this.#values.get(key),
+        set: (next: unknown) => {
+          if (!Object.is(this.#values.get(key), next)) {
+            this.#values.set(key, next);
+            this.#scheduleUpdate();
+          }
+        },
+      });
     }
+    const root = this.attachShadow({ mode: "open" });
+    this.#triggerSlot = this.ownerDocument.createElement("slot");
+    this.#surface = this.ownerDocument.createElement("div");
+    this.#surface.className = "oc-overlay tooltip-surface";
+    this.#surface.setAttribute("popover", "manual");
+    this.#surface.setAttribute("role", "tooltip");
+    this.#surface.dataset.phase = "hidden";
+    this.#surface.inert = true;
+    this.#rich = this.ownerDocument.createElement("span");
+    this.#rich.className = "tooltip-rich-content";
+    this.#rich.setAttribute("inert", "");
+    this.#contentSlot = this.ownerDocument.createElement("slot");
+    this.#contentSlot.name = "content";
+    this.#rich.append(this.#contentSlot);
+    this.#surface.append(this.#rich);
+    root.append(this.#triggerSlot, this.#surface);
+    this.#controller = new TooltipController(this, {
+      props: () => this,
+      trigger: () =>
+        this.#triggerSlot.assignedElements({ flatten: true }).find(isTooltipTriggerElement) ?? null,
+      richContent: () => this.#contentSlot.assignedNodes({ flatten: true }),
+      richContainer: () => this.#rich,
+      preview: (anchor, content) => {
+        this.anchor = anchor;
+        this.content = content;
+      },
+      retire: () => this.#retire(),
+      requestOpen: (open) => this.#requestOpen(open),
+    });
+    this.#surface.id = this.#controller.id;
+    this.#children = new MutationObserver(() => this.#controller.refresh());
+    this.#triggerSlot.addEventListener("slotchange", () => this.#controller.refresh());
+    this.#contentSlot.addEventListener("slotchange", () => this.#controller.contentChanged());
+    this.#rich.addEventListener("pointerenter", (event) =>
+      this.#controller.handleContentPointerEnter(event),
+    );
+    this.#rich.addEventListener("pointerleave", (event) =>
+      this.#controller.handleContentPointerLeave(event),
+    );
+    this.#rich.addEventListener("focusin", () => this.#controller.handleFocusIn());
+    this.#rich.addEventListener("focusout", (event) => this.#controller.handleFocusOut(event));
+  }
 
-    wa-tooltip {
-      --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: 6px;
-      --wa-tooltip-background-color: color-mix(in srgb, var(--card) 94%, black 6%);
-      --wa-tooltip-border-color: color-mix(in srgb, var(--border-strong) 84%, transparent);
-      --wa-tooltip-border-width: 1px;
-      --wa-tooltip-border-style: solid;
-      --wa-tooltip-content-color: var(--text);
-      --wa-tooltip-border-radius: var(--radius-md);
-      font-family: var(--font-body);
-    }
+  get updateComplete(): Promise<boolean> {
+    return this.#pendingUpdate
+      ? this.#pendingUpdate.then(() => this.#loading ?? true)
+      : (this.#loading ?? Promise.resolve(true));
+  }
 
-    wa-tooltip::part(body) {
-      padding: 7px 9px;
-      box-shadow: var(--shadow-md);
-      font-size: 12px;
-      font-weight: 500;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }
-
-    .tooltip-content {
-      display: block;
-      text-align: center;
-      white-space: pre-line;
-    }
-
-    .tooltip-rich-content {
-      display: block;
-      pointer-events: auto;
-      text-align: left;
-    }
-  `;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.tooltipProvider = this.closest<TooltipProvider>("openclaw-tooltip-provider");
+  connectedCallback() {
     this.style.display = "contents";
+    this.#children.observe(this, { childList: true });
+    this.#controller.refresh();
   }
 
-  protected override updated() {
-    this.attachTrigger();
-    this.syncDescription();
-    this.syncWebAwesomeTooltip();
+  connectedMoveCallback() {
+    // Native atomic parking preserves the controller and its current presentation.
   }
 
-  override disconnectedCallback() {
-    this.close();
-    this.triggerHovered = false;
-    this.contentHovered = false;
-    this.richContentObserver?.disconnect();
-    this.richContentObserver = null;
-    this.tooltipProvider = null;
-    this.detachTrigger();
-    super.disconnectedCallback();
+  disconnectedCallback() {
+    this.#retire();
+    this.#children.disconnect();
+    this.#controller.dispose();
+    this.#runtime?.dispose();
+    this.#runtime = undefined;
   }
 
-  private get provider() {
-    return this.tooltipProvider ?? this.closest<TooltipProvider>("openclaw-tooltip-provider");
-  }
-
-  private get hoverDelay() {
-    return Math.max(0, this.provider?.delay ?? HOVER_DELAY);
-  }
-
-  private get touchDelay() {
-    return Math.max(0, this.provider?.touchDelay ?? TOUCH_DELAY);
-  }
-
-  private attachTrigger() {
-    const slot = this.renderRoot.querySelector<HTMLSlotElement>("slot:not([name])");
-    const trigger = slot
-      ?.assignedElements({ flatten: true })
-      .find((element): element is HTMLElement => element instanceof HTMLElement);
-    if (trigger === this.triggerElement) {
-      return;
+  attributeChangedCallback(name: string, _old: string | null, value: string | null) {
+    const key = attributes.get(name);
+    if (key) {
+      const next = ["describe", "autoSize", "disabled", "openOnClick"].includes(key)
+        ? value !== null
+        : ["closeDelay", "hoverDismissDelay", "delay"].includes(key) && value !== null
+          ? Number(value)
+          : value;
+      Reflect.set(this, key, next);
     }
-    this.close();
-    this.detachTrigger();
-    if (!trigger) {
-      return;
-    }
-    this.triggerElement = trigger;
-    trigger.addEventListener("pointerenter", this.handlePointerEnter);
-    trigger.addEventListener("pointerleave", this.handlePointerLeave);
-    trigger.addEventListener("pointerdown", this.handlePointerDown);
-    trigger.addEventListener("pointermove", this.handlePointerMove);
-    trigger.addEventListener("pointerup", this.handlePointerUp);
-    trigger.addEventListener("pointercancel", this.handlePointerCancel);
-    trigger.addEventListener("focusin", this.handleFocusIn);
-    trigger.addEventListener("focusout", this.handleFocusOut);
-    trigger.addEventListener("click", this.handleClick, true);
-    trigger.addEventListener("keydown", this.handleKeyDown);
-    this.syncDescription();
-    this.syncWebAwesomeTooltip();
   }
 
-  private detachTrigger() {
-    const trigger = this.triggerElement;
-    if (!trigger) {
-      return;
-    }
-    trigger.removeEventListener("pointerenter", this.handlePointerEnter);
-    trigger.removeEventListener("pointerleave", this.handlePointerLeave);
-    trigger.removeEventListener("pointerdown", this.handlePointerDown);
-    trigger.removeEventListener("pointermove", this.handlePointerMove);
-    trigger.removeEventListener("pointerup", this.handlePointerUp);
-    trigger.removeEventListener("pointercancel", this.handlePointerCancel);
-    trigger.removeEventListener("focusin", this.handleFocusIn);
-    trigger.removeEventListener("focusout", this.handleFocusOut);
-    trigger.removeEventListener("click", this.handleClick, true);
-    trigger.removeEventListener("keydown", this.handleKeyDown);
-    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
-    this.suppressPointerFocus = false;
-    this.restoreDescription();
-    this.triggerElement = null;
+  previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
+    this.#controller.previewForAnchor(anchor, content, input);
   }
 
-  private syncWebAwesomeTooltip() {
-    const tooltip = this.webAwesomeTooltip;
-    if (!tooltip) {
-      return;
-    }
-    tooltip.showDelay = 0;
-    tooltip.hideDelay = 0;
-    const trigger = this.triggerElement;
-    // WaTooltip's initial `for` watcher clears a directly assigned anchor.
-    // Reapply it after that update or an open tooltip has no popup geometry.
-    void tooltip.updateComplete.then(() => {
-      if (this.webAwesomeTooltip === tooltip && this.triggerElement === trigger) {
-        tooltip.anchor = trigger;
+  focusTriggerWithoutOpening(target: HTMLElement) {
+    this.#controller.focusTriggerWithoutOpening(target);
+  }
+
+  #scheduleUpdate() {
+    this.#pendingUpdate ??= Promise.resolve().then(() => {
+      this.#pendingUpdate = undefined;
+      if (this.isConnected) {
+        this.#controller.refresh();
+        this.#runtime?.update();
       }
+      return true;
     });
   }
 
-  private readonly handlePointerEnter = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.triggerHovered = true;
-      this.clearCloseTimer();
-      this.scheduleOpen();
-    }
-  };
-
-  private readonly handlePointerLeave = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.triggerHovered = false;
-      this.maybeClose();
-    }
-  };
-
-  private readonly handleContentPointerEnter = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.contentHovered = true;
-      this.clearCloseTimer();
-      this.show();
-    }
-  };
-
-  private readonly handleContentPointerLeave = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.contentHovered = false;
-      this.maybeClose();
-    }
-  };
-
-  private readonly handlePointerDown = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.suppressPointerFocus = true;
-      document.removeEventListener("pointerup", this.handleDocumentPointerUp);
-      document.addEventListener("pointerup", this.handleDocumentPointerUp, { once: true });
-      this.close();
-      return;
-    }
-    this.clearTimers();
-    this.touchStart = { x: event.clientX, y: event.clientY };
-    this.touchTimer = window.setTimeout(() => {
-      this.touchTimer = null;
-      this.show();
-    }, this.touchDelay);
-  };
-
-  private readonly handlePointerMove = (event: PointerEvent) => {
-    if (
-      event.pointerType === "touch" &&
-      this.touchStart &&
-      Math.hypot(event.clientX - this.touchStart.x, event.clientY - this.touchStart.y) > MOVE_LIMIT
-    ) {
-      this.close();
-    }
-  };
-
-  private readonly handlePointerUp = (event: PointerEvent) => {
-    if (event.pointerType !== "touch") {
-      this.handleDocumentPointerUp();
-      return;
-    }
-    this.clearTouchTimer();
-    this.touchStart = null;
-    if (this.webAwesomeTooltip?.open) {
-      this.touchCloseTimer = window.setTimeout(() => this.close(), TOUCH_VISIBLE);
-    }
-  };
-
-  private readonly handlePointerCancel = () => {
-    this.handleDocumentPointerUp();
-    this.close();
-  };
-  private readonly handleFocusIn = () => {
-    if (!this.suppressPointerFocus) {
-      this.show();
-    }
-  };
-  private readonly handleFocusOut = (event: FocusEvent) => {
-    if (
-      (event.relatedTarget instanceof Node && this.contains(event.relatedTarget)) ||
-      this.triggerHovered ||
-      this.contentHovered
-    ) {
-      return;
-    }
-    this.close();
-  };
-  // Pointer activation normally dismisses, so an action button never strands an
-  // open tooltip. A trigger whose only job is to reveal the tip opts out: on
-  // touch and in browsers that do not focus buttons on click there is no other
-  // way to read it.
-  private readonly handleClick = () => {
-    if (this.openOnClick) {
-      this.show();
-      return;
-    }
-    this.close();
-  };
-  private readonly handleDocumentPointerUp = () => {
-    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
-    this.suppressPointerFocus = false;
-  };
-  private readonly handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      this.close();
-    }
-  };
-
-  private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null || this.isRedundant()) {
-      return;
-    }
-    const delay = this.provider?.shouldDelayOpen() === false ? 0 : this.hoverDelay;
-    this.openTimer = window.setTimeout(() => {
-      this.openTimer = null;
-      this.show();
-    }, delay);
-  }
-
-  private show() {
-    const tooltip = this.webAwesomeTooltip;
-    if (!tooltip || !this.triggerElement || !this.tooltipText || this.isRedundant()) {
-      return;
-    }
-    this.clearTimers(false);
-    this.provider?.openTooltip(this);
-    this.syncDescription();
-    tooltip.open = true;
-  }
-
-  private close() {
-    this.clearTimers();
-    this.triggerHovered = false;
-    this.contentHovered = false;
-    this.touchStart = null;
-    if (this.webAwesomeTooltip?.open) {
-      this.webAwesomeTooltip.open = false;
-    }
-    this.provider?.closeTooltip(this);
-  }
-
-  closeFromProvider() {
-    this.clearTimers();
-    if (this.webAwesomeTooltip?.open) {
-      this.webAwesomeTooltip.open = false;
-    }
-  }
-
-  private isRedundant() {
-    if (this.richContentText) {
-      return false;
-    }
-    const trigger = this.triggerElement;
-    if (!trigger) {
-      return false;
-    }
-    const content = normalizeTooltipText(this.content);
-    const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => element instanceof HTMLElement && element.scrollWidth > element.clientWidth,
-    );
-    return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
-  }
-
-  private syncDescription() {
-    const trigger = this.triggerElement;
-    if (!trigger) {
-      return;
-    }
-    const current = trigger.getAttribute("aria-describedby");
-    if (!this.descriptionCaptured) {
-      this.describedBy = current;
-      this.descriptionCaptured = true;
-    }
-    if (!this.descriptionElement) {
-      const description = document.createElement("span");
-      description.id = this.descriptionId;
-      description.hidden = true;
-      this.append(description);
-      this.descriptionElement = description;
-    }
-    this.descriptionElement.textContent = this.tooltipText;
-    const ids = new Set((current ?? "").split(/\s+/u).filter(Boolean));
-    ids.add(this.descriptionId);
-    trigger.setAttribute("aria-describedby", [...ids].join(" "));
-  }
-
-  private restoreDescription() {
-    if (!this.triggerElement) {
-      return;
-    }
-    if (this.describedBy) {
-      this.triggerElement.setAttribute("aria-describedby", this.describedBy);
+  #retire() {
+    this.#wanted = false;
+    if (this.#runtime) {
+      this.#runtime.retire();
     } else {
-      this.triggerElement.removeAttribute("aria-describedby");
-    }
-    this.descriptionElement?.remove();
-    this.descriptionElement = null;
-    this.describedBy = null;
-    this.descriptionCaptured = false;
-  }
-
-  private clearTouchTimer() {
-    if (this.touchTimer !== null) {
-      window.clearTimeout(this.touchTimer);
-      this.touchTimer = null;
+      this.#controller.acceptedOpen(false);
     }
   }
 
-  private clearCloseTimer() {
-    if (this.closeTimer !== null) {
-      window.clearTimeout(this.closeTimer);
-      this.closeTimer = null;
+  #requestOpen(open: boolean): boolean {
+    this.#wanted = open;
+    if (this.#runtime) {
+      return this.#runtime.request(open);
     }
-  }
-
-  private shouldRemainOpen() {
-    const activeElement = document.activeElement;
-    return (
-      this.triggerHovered ||
-      this.contentHovered ||
-      (activeElement instanceof Node && this.contains(activeElement))
-    );
-  }
-
-  private maybeClose() {
-    this.clearCloseTimer();
-    if (this.shouldRemainOpen()) {
-      return;
+    if (!open) {
+      this.#controller.acceptedOpen(false);
+      return true;
     }
-    if (!this.richContentText) {
-      this.close();
-      return;
-    }
-    this.closeTimer = window.setTimeout(() => {
-      this.closeTimer = null;
-      if (!this.shouldRemainOpen()) {
-        this.close();
-      }
-    }, RICH_CONTENT_CLOSE_DELAY);
-  }
-
-  private clearTimers(resetHover = true) {
-    if (this.openTimer !== null) {
-      window.clearTimeout(this.openTimer);
-      this.openTimer = null;
-    }
-    this.clearCloseTimer();
-    if (resetHover) {
-      this.triggerHovered = false;
-      this.contentHovered = false;
-    }
-    this.clearTouchTimer();
-    if (this.touchCloseTimer !== null) {
-      window.clearTimeout(this.touchCloseTimer);
-      this.touchCloseTimer = null;
-    }
-  }
-
-  private get richContentText() {
-    const slot = this.renderRoot.querySelector<HTMLSlotElement>('slot[name="content"]');
-    return normalizeTooltipText(
-      slot
-        ?.assignedNodes({ flatten: true })
-        .map((node) => node.textContent ?? "")
-        .join(" ") ?? "",
-    );
-  }
-
-  private get tooltipText() {
-    return this.richContentText || this.content;
-  }
-
-  private observeRichContent() {
-    this.richContentObserver?.disconnect();
-    this.richContentObserver ??= new MutationObserver(() => this.syncDescription());
-    const slot = this.renderRoot.querySelector<HTMLSlotElement>('slot[name="content"]');
-    for (const node of slot?.assignedNodes({ flatten: true }) ?? []) {
-      this.richContentObserver.observe(node, {
-        characterData: true,
-        childList: true,
-        subtree: true,
+    this.#controller.pendingOpen();
+    // Even a cached view mounts after the caller's Solid focus effect has finished.
+    viewImport ??= import("./solid/tooltip.tsx")
+      .then((module) => module.mountTooltipView)
+      .catch((error: unknown) => {
+        viewImport = undefined;
+        throw error;
       });
-    }
-  }
-
-  private readonly handleContentSlotChange = () => {
-    this.observeRichContent();
-    this.syncDescription();
-    if (!this.tooltipText) {
-      this.close();
-    }
-  };
-
-  override render() {
-    return html`
-      <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">
-        <span class="tooltip-content">${this.content}</span>
-        <span
-          class="tooltip-rich-content"
-          @pointerenter=${this.handleContentPointerEnter}
-          @pointerleave=${this.handleContentPointerLeave}
-          @focusin=${this.handleFocusIn}
-          @focusout=${this.handleFocusOut}
-        >
-          <slot name="content" @slotchange=${this.handleContentSlotChange}></slot>
-        </span>
-      </wa-tooltip>
-    `;
+    this.#loading ??= viewImport
+      .then((mount) => {
+        if (this.isConnected && this.#wanted) {
+          this.#runtime ??= mount(this, this.#surface, this.#rich, this.#controller);
+          if (!this.#runtime.request(true)) {
+            this.#controller.acceptedOpen(false);
+          }
+        }
+        return true;
+      })
+      .catch((error: unknown) => {
+        this.#wanted = false;
+        this.#controller.acceptedOpen(false);
+        console.warn("OpenClaw tooltip could not load.", error);
+        return false;
+      })
+      .finally(() => {
+        this.#loading = undefined;
+      });
+    return true;
   }
 }
 
-if (!customElements.get("openclaw-tooltip-provider")) {
-  customElements.define("openclaw-tooltip-provider", TooltipProvider);
+export function focusWithoutTooltip(target: HTMLElement | null | undefined) {
+  const tooltip = target?.closest<TooltipElement>("openclaw-tooltip");
+  if (tooltip && target) {
+    tooltip.focusTriggerWithoutOpening(target);
+  } else {
+    target?.focus();
+  }
 }
 
 if (!customElements.get("openclaw-tooltip")) {
-  customElements.define("openclaw-tooltip", Tooltip);
+  customElements.define("openclaw-tooltip", TooltipElement);
+}
+if (!customElements.get("openclaw-tooltip-provider")) {
+  customElements.define("openclaw-tooltip-provider", TooltipProvider);
 }
 
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-tooltip-provider": TooltipProvider;
-    "openclaw-tooltip": Tooltip;
+    "openclaw-tooltip": TooltipElement;
   }
 }

@@ -7,22 +7,22 @@ title: "Onboarding overview"
 sidebarTitle: "Onboarding Overview"
 ---
 
-OpenClaw has terminal and macOS app onboarding. Both establish inference first:
-they detect existing AI access, require a live completion, and only then start
-OpenClaw to configure the remaining setup. A reachable, configured Gateway
-whose default agent already has a configured model skips onboarding and opens
-the normal agent UI. The terminal flow also offers the full classic wizard for
-detailed setup.
+OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
+desktop companion. Every path establishes inference first. On macOS, a fresh
+Gateway automatically picks available AI access and verifies a real completion
+before configuring the remaining setup. An existing configured model is kept.
+The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding                                          |
-| -------------- | -------------------------------------- | ------------------------------------------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                                                    |
-| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw                                |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                                     |
-| **Automation** | `--non-interactive` for scripts        | Manual only                                                   |
-| **Command**    | `openclaw onboard`                     | [Download the app](/platforms/macos#download), then launch it |
+|                | CLI onboarding                         | macOS app onboarding                                | Linux app onboarding                      |
+| -------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS                                               | Linux                                     |
+| **Interface**  | Terminal or guided setup               | Automatic first run with guided fallback            | Native desktop setup                      |
+| **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
+| **Automation** | `--non-interactive` for scripts        | Automatic for fresh local installs                  | Manual only                               |
+| **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -54,25 +54,20 @@ Run in any terminal:
 openclaw onboard
 ```
 
-The guided flow detects existing AI access, live-tests candidates in order,
-and falls through on failure. If detection is exhausted, it shows OpenAI,
-Anthropic, xAI (Grok), Google, and OpenRouter first. **More…** contains the
-remaining providers in provider groups, with regions, plans, and supported
-browser, device, API-key, or token methods in a second menu. It saves the model
-and credential only after a passing completion, then starts OpenClaw to
-configure the workspace, Gateway, channels, agents, plugins, and other optional
-features. **Skip for now** exits without starting OpenClaw. There is no
-in-flow classic handoff; exit and run `openclaw onboard --classic` when you want
-the classic wizard instead.
+On a fresh install the guided flow offers **Quick start** and **Custom setup**,
+detects the AI access you already have, verifies your one chosen connection with
+a real completion, and only then configures the rest of the setup. Both lanes,
+the provider picker, **Skip for now**, and the foreground Gateway are described
+step by step in [Onboarding (CLI)](/start/wizard#guided-default).
 
 After inference passes, OpenClaw can hand channel setup to a masked terminal
-wizard. It does not open guided or classic provider setup; exit OpenClaw and
+wizard. It does not open guided or classic provider setup. Exit OpenClaw and
 run `openclaw onboard` to change the model provider or its authentication.
 
 Use `openclaw onboard --classic` for detailed model/auth, channel, skill,
 remote Gateway, or import setup. Adding `--install-daemon` also selects the
 classic flow and installs the background service in one step. Use `openclaw
-openclaw` for conversational non-inference setup and repair. `openclaw
+setup` for conversational non-inference setup and repair. `openclaw
 onboard --modern` is a compatibility alias that uses the same live-inference
 gate.
 
@@ -81,17 +76,53 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-[Download the macOS app](/platforms/macos#download), then open it. If its
-configured local or remote Gateway is reachable
-and the default agent already has a configured model, the app skips onboarding
-and OpenClaw and opens the normal agent UI immediately.
+[Download the macOS app](/platforms/macos#download), then open it. On a fresh
+install with no existing connection or configuration, a progress window shows the
+app preparing its local runtime, starting its own Gateway, and opening guided
+onboarding in the dashboard. **Set up manually** opens native setup instead.
+It does not automatically connect to a discovered Gateway. Existing local and
+remote setups keep their connection and native onboarding behavior.
 
-For a fresh or incomplete Gateway, the first-run flow detects existing AI
-access (Claude Code, Codex, or API keys), live-tests the best
-option, and saves it only after a real reply — falling back automatically and
-offering a verified manual API-key step when nothing is found. Sensitive
-credentials use masked input. Once inference passes, OpenClaw starts and
-helps configure the rest.
+The dashboard shows **Connecting your AI…** while automatic setup runs, then a
+summary of the selected provider, model, and Gateway. You can select another
+available provider, use a different Gateway, or review device permissions. If
+sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
+If automatic setup is unavailable, the summary explains the failed attempts and
+offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+
+Automatic setup keeps an existing configured model. Otherwise it tries usable
+connections in this order:
+
+1. Saved OpenClaw auth profiles.
+2. Codex with stored credentials on the Gateway host.
+3. A Claude CLI login.
+4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
+5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
+
+The first connection that passes a live completion becomes the primary model.
+If none works, OpenClaw installs or enables the official Codex plugin and uses
+its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
+is a utility option and is never chosen as the primary model.
+
+When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
+(or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
+authentication and token refresh; OpenClaw does not copy the OAuth tokens into
+its auth store. Choose **Use a separate login** on the setup card, or sign in
+with ChatGPT or an OpenAI API key through **Model Setup**, to use an isolated
+OpenClaw agent home, even after reusing a native login.
+See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
+to switch between these modes.
+
+After inference works, OpenClaw continues its existing guided conversation for
+optional setup, including memory import and channels. You can dismiss the
+summary; it stays dismissed for that Gateway. Fresh installs leave native
+Claude/Codex conversation discovery off. Permissions are requested when needed
+and remain available in **Settings → Permissions**.
+
+If runtime preparation, Gateway startup, authentication, or dashboard loading
+fails, native onboarding opens at the relevant step with the error visible.
+The app menu also keeps native onboarding available for manual setup. Gateways
+without automatic setup use the existing native AI setup flow.
 
 Gemini CLI remains available as an explicitly configured runtime after setup,
 but Gemini CLI and Antigravity are not offered as detected inference routes.
@@ -100,16 +131,47 @@ CLI runtime specifically requires an AI Studio API-key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 
+## Linux app onboarding
+
+[Install the Linux desktop companion](/platforms/linux), then open it. The
+welcome screen lets you choose a Gateway on **this computer** or **another
+computer**. Local setup installs any missing CLI and Node in a private managed
+runtime, then starts the systemd user service. Remote setup connects to a
+discovered Gateway, a manually entered Gateway URL, or a Gateway reached through
+an SSH tunnel;
+token and password authentication are supported.
+
+Model Setup checks existing provider access and offers sign-in or API-key entry
+when needed. The selected Gateway verifies a real model response before guided
+onboarding begins. An already configured Gateway opens the normal agent UI
+after verification instead. Restart/reopen recovery uses a temporary record
+bound to the Gateway, agent, and authentication: a known model is verified
+without repeating activation, while an unknown result needs the explicit
+**Verify & use selected model** action. Expiry, cleared or unavailable browser
+storage, or changed connection ownership can prevent recovery. See
+[First-run setup](/platforms/linux#first-run-setup) for recovery details.
+
+Platform and remote-access details: [Linux app](/platforms/linux) and
+[Remote access](/gateway/remote).
+
 ## Custom or unlisted providers
 
-If your provider is not listed, run `openclaw onboard --classic`, choose
-**Custom Provider**, and enter:
+If your provider is not listed, run `openclaw onboard` in a terminal on the
+Gateway host, choose **Custom Provider** (under **More…** when shown), and enter:
 
-- Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (probes all three and auto-detects)
+- Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (checks all three and auto-detects)
 - Base URL and API key (API key is optional if the endpoint does not require one)
 - Model ID and optional model alias
 
-Multiple custom endpoints can coexist — each gets its own endpoint ID.
+Multiple custom endpoints can coexist — each gets its own endpoint ID. Guided
+setup verifies a real model reply before saving the provider and activating its
+model. A failed or cancelled check preserves the previous configuration. The
+classic wizard also retains its custom-provider setup.
+
+If the endpoint refuses the connection or its hostname cannot be found, setup
+reports the failed connection immediately instead of waiting through normal
+chat retries. Start the server or correct the URL and network settings on the
+Gateway host, then retry. Ordinary agent sessions keep their connection retries.
 
 ## Related
 

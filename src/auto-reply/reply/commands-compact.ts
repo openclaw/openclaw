@@ -1,14 +1,10 @@
-// Implements compaction commands for session context and model state.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   classifyCompactionReason,
@@ -21,24 +17,18 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
-import {
-  resolvePersistedSessionRuntimeId,
-  resolveSessionRuntimeOverrideForProvider,
-} from "../../agents/session-runtime-compat.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CommandHandler } from "./commands-types.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
+import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
-
-function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
-  return compactRuntimeLoader.load();
-}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -52,15 +42,10 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!trimmed) {
+  if (!trimmed.toLowerCase().startsWith("/compact")) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) {
-    return undefined;
-  }
-  let rest = trimmed.slice(prefix.length).trimStart();
+  let rest = trimmed.slice("/compact".length).trimStart();
   if (rest.startsWith(":")) {
     rest = rest.slice(1).trimStart();
   }
@@ -72,21 +57,29 @@ function formatCompactionReason(reason?: string): string | undefined {
   if (!text) {
     return undefined;
   }
-
   const classification = classifyCompactionReason(reason);
-  const lower = normalizeLowercaseStringOrEmpty(reason);
-  switch (classification) {
-    case "no_compactable_entries":
-      return "nothing compactable in this session yet";
-    case "below_threshold":
-      return lower.includes("already under target")
-        ? "context is already under the compaction target"
-        : "context is below the compaction threshold";
-    case "already_compacted":
-      return "session is already compacted";
-    default:
-      return text;
+  if (classification === "no_compactable_entries") {
+    return "nothing compactable in this session yet";
   }
+  if (classification === "already_compacted") {
+    return "session is already compacted";
+  }
+  return classification === "below_threshold"
+    ? normalizeLowercaseStringOrEmpty(reason).includes("already under target")
+      ? "context is already under the compaction target"
+      : "context is below the compaction threshold"
+    : text;
+}
+
+function compactionUnavailable(reason: string, interruptionNotice = ""): CommandHandlerResult {
+  return {
+    shouldContinue: false,
+    sessionCompaction: { compacted: false, reason },
+    reply: {
+      text: `⚙️ Compaction unavailable: ${reason}.${interruptionNotice}`,
+      isStatusNotice: true,
+    },
+  };
 }
 
 function resolveManualCompactContextTokenBudget(params: {
@@ -98,20 +91,12 @@ function resolveManualCompactContextTokenBudget(params: {
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
-  const inheritedContextTokens =
-    typeof params.liveContextTokens === "number" &&
-    Number.isFinite(params.liveContextTokens) &&
-    params.liveContextTokens > 0
-      ? Math.floor(params.liveContextTokens)
-      : undefined;
-  const liveContextTokens =
-    resolvePersistedContextTokens(resolveAgentConfig(params.cfg, params.agentId)?.contextTokens) ??
-    inheritedContextTokens;
+  const liveContextTokens = normalizeContextTokenBudget(params.liveContextTokens);
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
   if (!model || !provider) {
-    return liveContextTokens ?? resolvePersistedContextTokens(params.persistedContextTokens);
+    return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
   }
 
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -143,14 +128,10 @@ function resolveManualCompactContextTokenBudget(params: {
       : configuredBudget;
   }
 
-  if (liveContextTokens !== undefined) {
-    return liveContextTokens;
-  }
-
-  return resolvePersistedContextTokens(params.persistedContextTokens);
+  return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
 }
 
-function resolvePersistedContextTokens(value: number | undefined): number | undefined {
+function normalizeContextTokenBudget(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
@@ -161,7 +142,7 @@ function resolveManualCompactContextModelId(params: {
   contextConfigProvider: string;
   model: string;
 }): string {
-  const model = params.model.trim();
+  const model = params.model;
   const slashIndex = model.indexOf("/");
   if (slashIndex <= 0) {
     return model;
@@ -186,46 +167,34 @@ function resolveManualCompactContextModelId(params: {
   return model;
 }
 
-export const handleCompactCommand: CommandHandler = async (params) => {
-  const compactRequested =
-    params.command.commandBodyNormalized === "/compact" ||
-    params.command.commandBodyNormalized.startsWith("/compact ");
-  if (!compactRequested) {
+export async function handleCompactCommand(
+  params: Parameters<CommandHandler>[0],
+  _allowTextCommands: boolean,
+  assertOwnerCurrent?: () => void,
+): ReturnType<CommandHandler> {
+  if (matchCommandPrefix(params.command.commandBodyNormalized, "/compact") === null) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/compact");
+  if (unauthorized) {
+    return unauthorized;
   }
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const operatorAuthority = params.opts?.operatorAuthority;
+  operatorAuthority?.assertCurrent();
+  const targetSessionEntry = params.commandInvocationSignal
+    ? params.compactionSessionEntry
+    : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
   if (!targetSessionEntry?.sessionId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Compaction unavailable (missing session id).",
-        isStatusNotice: true,
-      },
-    };
+    return compactionUnavailable("missing session id");
   }
-  const runtime = await loadCompactRuntime();
+  const runtime = await import("./commands-compact.runtime.js");
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
-    runtime.abortEmbeddedAgentRun(sessionId);
-    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
-    if (!drained) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
-          isStatusNotice: true,
-        },
-      };
-    }
-  }
   const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+        agentId: params.agentId,
+      })
     : (params.agentId ?? "main");
   const currentAgentId = params.agentId ?? "main";
   const sessionAgentDir =
@@ -248,98 +217,239 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: targetSessionEntry,
-  });
   const compactionStorePath = resolveSessionStorePathForScope({
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     storePath:
-      params.storePath ?? resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId }),
+      params.storePath ??
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId: sessionAgentId }),
   });
-  const result = await runtime.compactEmbeddedAgentSession({
-    abortSignal: params.opts?.abortSignal,
-    sessionId,
-    sessionKey: params.sessionKey,
-    sessionTarget: {
+  let expectedSession: InternalSessionEntry = targetSessionEntry;
+  let compactionAccepted = false;
+  let ingressAdopted = false;
+  const assertOwnerBeforeAcceptance = () => {
+    operatorAuthority?.assertCurrent();
+    if (!compactionAccepted) {
+      params.command.assertOwnerCurrent?.();
+      assertOwnerCurrent?.();
+    }
+  };
+  let currentRead: Awaited<ReturnType<typeof runtime.prepareCurrentSessionEntry>>;
+  using _ = { [Symbol.dispose]: () => currentRead?.release() };
+  const prepareCurrentEntry = async () => {
+    const prepared = await runtime.prepareCurrentSessionEntry({
       agentId: sessionAgentId,
-      sessionId,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
-    },
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.command.channel,
-    clientCaps: params.ctx.GatewayClientCaps,
-    conversationToolPolicy: params.ctx.ConversationToolPolicy,
-    groupId: targetSessionEntry.groupId,
-    groupChannel: targetSessionEntry.groupChannel,
-    groupSpace: targetSessionEntry.space,
-    spawnedBy: targetSessionEntry.spawnedBy,
-    senderId: params.command.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
-    inputProvenance: params.ctx.InputProvenance,
-    sessionFile: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    agentDir: sessionAgentDir,
-    config: params.cfg,
-    skillsSnapshot: targetSessionEntry.skillsSnapshot,
+      expected: expectedSession,
+    });
+    currentRead?.release();
+    currentRead = prepared;
+    return prepared;
+  };
+  let interruptionNotice = "";
+  const authorityFailure = () => {
+    const reason =
+      params.commandInvocationSignal?.aborted || params.opts?.abortSignal?.aborted
+        ? "command invocation closed"
+        : undefined;
+    return reason ? compactionUnavailable(reason, interruptionNotice) : undefined;
+  };
+  let failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  assertOwnerBeforeAcceptance();
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
+    // Preserve the pending answer when the active turn can finish on its own.
+    const settled = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 60_000);
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
+    assertOwnerBeforeAcceptance();
+    if (!settled) {
+      if (!(await prepareCurrentEntry())) {
+        return compactionUnavailable("command session changed", interruptionNotice);
+      }
+      params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+      await params.opts?.turnAdoptionLifecycle?.onAdopted();
+      ingressAdopted = true;
+      failure = authorityFailure();
+      if (failure) {
+        return failure;
+      }
+      assertOwnerBeforeAcceptance();
+      currentRead?.assertCurrent();
+      interruptionNotice = runtime.abortEmbeddedAgentRun(sessionId)
+        ? "\n⚠️ Your in-flight request was aborted by compaction — please resend it."
+        : "";
+      currentRead?.release();
+      currentRead = undefined;
+      const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+      failure = authorityFailure();
+      if (failure) {
+        return failure;
+      }
+      assertOwnerBeforeAcceptance();
+      if (!drained) {
+        return compactionUnavailable("the previous run is still stopping", interruptionNotice);
+      }
+    }
+  }
+  const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  assertOwnerBeforeAcceptance();
+  // Prepare one current row at compaction dispatch; write receipts keep its guard live.
+  const prepared = await prepareCurrentEntry();
+  if (!prepared) {
+    return compactionUnavailable("command session changed", interruptionNotice);
+  }
+  expectedSession = prepared.entry;
+  if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = prepared.entry;
+  }
+  const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: params.provider,
-    model: params.model,
-    authProfileId: targetSessionEntry.authProfileOverride,
-    authProfileIdSource: resolveSessionAuthProfileOverrideSource(targetSessionEntry),
-    contextTokenBudget,
-    agentHarnessId:
-      targetSessionEntry.modelSelectionLocked === true
-        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
-        : (selectedRuntime ??
-          (targetSessionEntry.agentRuntimeOverride
-            ? undefined
-            : targetSessionEntry.agentHarnessId)),
-    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
-    },
-    customInstructions,
-    trigger: "manual",
-    ownerNumbers: resolveOwnerPromptNumbers({
-      ownerNumbers: params.command.ownerList,
-      senderId: params.command.senderId,
-      senderIsOwner: params.command.senderIsOwner,
-    }),
+    entry: prepared.entry,
+    cfg: params.cfg,
   });
+  const assertActive = () => {
+    assertOwnerBeforeAcceptance();
+    params.opts?.abortSignal?.throwIfAborted();
+    params.commandInvocationSignal?.throwIfAborted();
+    currentRead?.assertCurrent();
+  };
+  // Keep read-only preflight retryable; adopt before the first compaction effect.
+  if (!ingressAdopted) {
+    params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+    await params.opts?.turnAdoptionLifecycle?.onAdopted();
+  }
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  assertActive();
+  const replyOperation = params.opts?.replyOperation;
+  replyOperation?.setPhase("preflight_compacting");
+  const compaction = runtime.compactEmbeddedAgentSession(
+    {
+      abortSignal: params.opts?.abortSignal,
+      contextEngineAgentId: sessionAgentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: {
+        agentId: sessionAgentId,
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: compactionStorePath,
+      },
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.command.channel,
+      clientCaps: params.ctx.GatewayClientCaps,
+      conversationToolPolicy: params.ctx.ConversationToolPolicy,
+      groupId: expectedSession.groupId,
+      groupChannel: expectedSession.groupChannel,
+      groupSpace: expectedSession.space,
+      spawnedBy: expectedSession.spawnedBy,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      inputProvenance: params.ctx.InputProvenance,
+      sessionFile: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentDir: sessionAgentDir,
+      config: params.cfg,
+      // Group session keys carry no account identity, so without this manual
+      // /compact resolves the root history limit while prompt preparation used the
+      // account limit.
+      agentAccountId: params.ctx.AccountId,
+      conversationRoutePeerId: params.ctx.ConversationRoutePeerId,
+      chatType: normalizeChatType(params.ctx.ChatType),
+      skillsSnapshot: expectedSession.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      authProfileId:
+        compactionCliTarget.cliSessionBinding?.authProfileId ?? expectedSession.authProfileOverride,
+      authProfileIdSource: resolveCollapsedSessionAuthPinSource(expectedSession),
+      contextTokenBudget,
+      agentHarnessId: compactionCliTarget.agentHarnessId,
+      cliSessionId: compactionCliTarget.cliSessionId,
+      cliSessionBinding: compactionCliTarget.cliSessionBinding,
+      sessionEntry: expectedSession,
+      modelSelectionLocked: expectedSession.modelSelectionLocked === true,
+      thinkLevel,
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      customInstructions,
+      trigger: "manual",
+      ownerNumbers: resolveOwnerPromptNumbers({
+        ownerNumbers: params.command.ownerList,
+        senderId: params.command.senderId,
+        senderIsOwner: params.command.senderIsOwner,
+      }),
+    },
+    {
+      assertActive,
+      sourceAuthority: { assertActive, operatorAuthority },
+      onCommitted: (accepted) => {
+        compactionAccepted = true;
+        currentRead?.release();
+        currentRead = undefined;
+        // Update the expectation before identity observers run, not from public result metadata.
+        expectedSession = accepted.entry;
+        if (params.sessionStore) {
+          params.sessionStore[params.sessionKey] = accepted.entry;
+        }
+      },
+      onHostCompactionCommitted: () => {
+        compactionAccepted = true;
+        currentRead?.release();
+        currentRead = undefined;
+      },
+    },
+  );
+  const result = await compaction.finally(() => replyOperation?.setPhase("running"));
+  currentRead?.release();
+  currentRead = undefined;
 
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;
-  const compactLabel =
-    result.ok || isBenignCompactionSkipResult(result)
-      ? didCompact
-        ? typeof tokensAfterCompaction !== "number"
-          ? "Compaction finished (resulting context unknown)"
-          : result.result?.tokensBefore != null
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-            : "Compacted"
-        : "Compaction skipped"
-      : "Compaction failed";
+  let compactLabel =
+    result.ok || isBenignCompactionSkipResult(result) ? "Compaction skipped" : "Compaction failed";
   if (didCompact) {
-    await runtime.incrementCompactionCount({
+    compactLabel =
+      typeof tokensAfterCompaction !== "number"
+        ? "Compaction finished (resulting context unknown)"
+        : result.result?.tokensBefore != null
+          ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+          : "Compacted";
+    const compactionCount = await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
-      cfg: params.cfg,
-      sessionEntry: targetSessionEntry,
+      sessionEntry: expectedSession,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
-      // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
-      newSessionId: result.result?.sessionId,
+      compactionKind: result.compactionKind,
+      expectedSession,
+      transcriptByteCompactionLatch: result.compactionKind === "native-harness" ? undefined : null,
     });
+    if (compactionCount === undefined) {
+      return compactionUnavailable("session accounting failed", interruptionNotice);
+    }
   }
-  // Use the post-compaction token count for context summary if available
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
   const totalTokens = didCompact
     ? tokensAfterCompaction
     : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
@@ -348,15 +458,25 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
-    : `${compactLabel} • ${contextSummary}`;
-  runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
+  const degradedNotice =
+    didCompact && parseCompactionDetails(result.result?.details)?.qualityDegraded
+      ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+      : "";
+  runtime.enqueueSystemEvent(line, {
+    sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),
+  });
   return {
     shouldContinue: false,
+    sessionCompaction: {
+      compacted: didCompact,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      tokensAfter: tokensAfterCompaction,
+    },
     reply: {
-      text: `⚙️ ${line}`,
+      text: `⚙️ ${line}${degradedNotice}${interruptionNotice}`,
       isStatusNotice: true,
     },
   };
-};
+}

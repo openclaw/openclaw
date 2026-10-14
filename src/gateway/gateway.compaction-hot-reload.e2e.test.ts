@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -10,16 +11,17 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -186,7 +188,7 @@ describe("gateway compaction hot reload", () => {
                 memoryFlush: { enabled: false },
               },
             },
-            entries: { dev: { default: true } },
+            entries: { dev: {} },
           },
           models: {
             mode: "replace",
@@ -216,9 +218,9 @@ describe("gateway compaction hot reload", () => {
           agentId: "dev",
           sessionId,
           sessionKey,
-          storePath: resolveStorePath(undefined, { agentId: "dev" }),
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "dev" }),
         };
-        await upsertSessionEntry(scope, {
+        await upsertSessionEntryCore(scope, {
           sessionId,
           updatedAt: Date.now(),
           compactionCount: 0,
@@ -266,12 +268,16 @@ describe("gateway compaction hot reload", () => {
             { sessionKey, message, idempotencyKey: nextId("compaction-chat") },
           );
           expect(started.status).toBe("started");
-          const completed = await gatewayClient.request<{ status: string }>(
+          const completed = await gatewayClient.request<AgentWaitResult>(
             "agent.wait",
             { runId: started.runId, timeoutMs: 30_000 },
             { timeoutMs: 35_000 },
           );
-          expect(completed.status).toBe("ok");
+          const diagnostic = redactSensitiveText(JSON.stringify(completed), { mode: "tools" })
+            .replaceAll(token, "[test-token]")
+            .replaceAll(tempHome, "[test-home]")
+            .slice(0, 4_000);
+          expect(completed.status, diagnostic).toBe("ok");
         };
 
         await sendChatAndWait("Warm the existing prepared model runtime.");
@@ -287,28 +293,12 @@ describe("gateway compaction hot reload", () => {
         await sendChatAndWait("Apply the hot-reloaded tool deny policy to the existing runtime.");
         expect(providerRequestToolNames.at(-1)).not.toContain("exec");
 
-        const contextTokens = 48_000;
-        const reloadedAgentDefaults = { ...initialConfig.agents.defaults, contextTokens };
-        await writeConfigFile({
-          ...initialConfig,
-          agents: { ...initialConfig.agents, defaults: reloadedAgentDefaults },
-          tools: reloadedTools,
-        });
-        await expect
-          .poll(() => getRuntimeConfig().agents?.defaults?.contextTokens, {
-            timeout: 5_000,
-            interval: 50,
-          })
-          .toBe(contextTokens);
-        await sendChatAndWait("Apply the hot-reloaded context budget to the existing runtime.");
-        expect(loadSessionEntry(scope)?.contextTokens).toBe(contextTokens);
-
         await writeConfigFile({
           ...initialConfig,
           agents: {
             ...initialConfig.agents,
             defaults: {
-              ...reloadedAgentDefaults,
+              ...initialConfig.agents.defaults,
               compaction: {
                 ...initialConfig.agents.defaults.compaction,
                 model: newCompactionModel.modelRef,

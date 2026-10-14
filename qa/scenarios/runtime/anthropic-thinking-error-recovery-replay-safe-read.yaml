@@ -14,6 +14,9 @@ scenario:
         enabled: false
     agents:
       defaults:
+        modelPolicy:
+          allow:
+            - anthropic/claude-opus-4-8
         models:
           anthropic/claude-opus-4-8:
             params: {}
@@ -27,7 +30,8 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify Anthropic stream errors after signed thinking recover after a replay-safe read.

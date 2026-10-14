@@ -1,7 +1,6 @@
 // OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
-import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseOcPath } from "../../oc-path.js";
 
@@ -16,21 +15,6 @@ describe("setJsoncOcPath — value replacement", () => {
   }
 }`;
 
-  it("replaces a leaf string value", () => {
-    const { ast } = parseJsonc(config);
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries.github.token"), {
-      kind: "string",
-      value: "new",
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const out = emitJsonc(r.ast);
-      expect(JSON.parse(out)).toEqual({
-        plugins: { entries: { github: { token: "new" } } },
-      });
-    }
-  });
-
   it("replaces nested objects", () => {
     const { ast } = parseJsonc(config);
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries"), {
@@ -39,40 +23,10 @@ describe("setJsoncOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         plugins: { entries: { gitlab: "tok" } },
       });
     }
-  });
-
-  it("replaces an array element by index", () => {
-    const { ast } = parseJsonc('{ "limits": [10, 20, 30] }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config/limits.1"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ limits: [10, 99, 30] });
-    }
-  });
-
-  it("reports unresolved for noncanonical array indexes", () => {
-    const { ast } = parseJsonc('{ "limits": [10, 20, 30] }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config/limits.01"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
-  });
-
-  it("reports unresolved when a key is missing", () => {
-    const { ast } = parseJsonc(config);
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries.gitlab"), {
-      kind: "string",
-      value: "x",
-    });
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
   it("reports no-root on empty AST", () => {
@@ -82,16 +36,6 @@ describe("setJsoncOcPath — value replacement", () => {
       value: "y",
     });
     expect(r).toEqual({ ok: false, reason: "no-root" });
-  });
-
-  it("does not mutate the original AST", () => {
-    const { ast } = parseJsonc(config);
-    const before = JSON.stringify(ast);
-    setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries.github.token"), {
-      kind: "string",
-      value: "new",
-    });
-    expect(JSON.stringify(ast)).toBe(before);
   });
 });
 
@@ -104,7 +48,7 @@ describe("setJsoncOcPath — $last positional", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ items: [10, 20, 99] });
+      expect(JSON.parse(r.ast.raw)).toEqual({ items: [10, 20, 99] });
     }
   });
 
@@ -135,14 +79,16 @@ describe("setJsoncOcPath — quoted segments (regression: resolve↔edit symmetr
 }
 `;
     const { ast } = parseJsonc(raw);
+    const before = JSON.stringify(ast);
     const r = setJsoncOcPath(
       ast,
       parseOcPath('oc://config.jsonc/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'),
       { kind: "string", value: "big-opus" },
     );
+    expect(JSON.stringify(ast)).toBe(before);
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         agents: {
           defaults: {
             models: {

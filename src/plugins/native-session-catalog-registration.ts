@@ -1,0 +1,168 @@
+import fs from "node:fs";
+import { resolveConfigPath } from "../config/paths.js";
+import {
+  hasLegacyNativeSessionCatalogDefault,
+  readNativeSessionCatalogPreference,
+} from "./native-session-catalog-config.js";
+import { runPluginCleanup } from "./plugin-instance-scope.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
+import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
+
+function hasReadableNativeCatalogConfig(): boolean {
+  try {
+    const configPath = resolveConfigPath();
+    const link = fs.lstatSync(configPath);
+    const file = link.isSymbolicLink() ? fs.statSync(configPath) : link;
+    if (!file.isFile()) {
+      return false;
+    }
+    fs.accessSync(configPath, fs.constants.R_OK);
+    return true;
+  } catch {
+    // Missing, unreadable, and dangling paths cannot establish the legacy default.
+    return false;
+  }
+}
+
+function guardCatalogListOperation(
+  initialOperation:
+    | ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>>
+    | undefined,
+  assertEnabled: () => void,
+): ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>> {
+  let operation = initialOperation;
+  let closed = false;
+  return {
+    async next() {
+      if (closed) {
+        throw new Error("Session catalog list operation is closed");
+      }
+      if (!operation) {
+        return { done: true, hosts: [] };
+      }
+      assertEnabled();
+      const step = await operation.next();
+      assertEnabled();
+      return step;
+    },
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      const closing = operation;
+      operation = undefined;
+      if (closing) {
+        runPluginCleanup(closing, () => closing.close());
+      }
+    },
+  };
+}
+
+export function createNativeSessionCatalogGate(params: {
+  pluginId: string;
+  getConfig: PluginRuntime["config"]["current"];
+}) {
+  const legacyDefaultAllowed =
+    hasLegacyNativeSessionCatalogDefault(params.pluginId) && hasReadableNativeCatalogConfig();
+  const enabled = () =>
+    readNativeSessionCatalogPreference(params.getConfig(), params.pluginId) ?? legacyDefaultAllowed;
+  const assertEnabled = () => {
+    if (!enabled()) {
+      throw new Error(
+        `Native conversation discovery is disabled for ${params.pluginId}. Enable it in that plugin's settings.`,
+      );
+    }
+  };
+  return {
+    catalog(provider: SessionCatalogProvider): SessionCatalogProvider {
+      const {
+        createListOperation,
+        continueSession,
+        copyToGatewaySession,
+        archive,
+        openTerminal,
+        checkUpstreamActivity,
+      } = provider;
+      const guard =
+        <Args extends unknown[], Result>(operation: (...args: Args) => Promise<Result>) =>
+        async (...args: Args): Promise<Result> => {
+          assertEnabled();
+          return operation.apply(provider, args);
+        };
+      return {
+        ...provider,
+        list: async (query) => (enabled() ? provider.list(query) : []),
+        ...(createListOperation
+          ? {
+              createListOperation: (query) =>
+                guardCatalogListOperation(
+                  enabled() ? createListOperation.call(provider, query) : undefined,
+                  assertEnabled,
+                ),
+            }
+          : {}),
+        read: async (request) => {
+          assertEnabled();
+          return provider.read(request);
+        },
+        ...(continueSession
+          ? {
+              continueSession: guard(continueSession),
+            }
+          : {}),
+        ...(copyToGatewaySession
+          ? {
+              copyToGatewaySession: guard(copyToGatewaySession),
+            }
+          : {}),
+        ...(archive
+          ? {
+              archive: guard(archive),
+            }
+          : {}),
+        ...(openTerminal
+          ? {
+              openTerminal: guard(openTerminal),
+            }
+          : {}),
+        ...(checkUpstreamActivity
+          ? {
+              checkUpstreamActivity: async (probes, policy) =>
+                enabled() ? checkUpstreamActivity.call(provider, probes, policy) : [],
+            }
+          : {}),
+      };
+    },
+    node(command: OpenClawPluginNodeHostCommand): OpenClawPluginNodeHostCommand {
+      const { prepare, watchAvailability } = command;
+      return {
+        ...command,
+        isAvailable: (context) => enabled() && (command.isAvailable?.(context) ?? true),
+        ...(prepare
+          ? {
+              prepare: (context) => {
+                if (enabled()) {
+                  return prepare.call(command, context);
+                }
+              },
+            }
+          : {}),
+        ...(watchAvailability
+          ? {
+              watchAvailability: (context, onChange) => {
+                if (enabled()) {
+                  return watchAvailability.call(command, context, onChange);
+                }
+              },
+            }
+          : {}),
+        handle: async (...args) => {
+          assertEnabled();
+          return command.handle(...args);
+        },
+      };
+    },
+  };
+}

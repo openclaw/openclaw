@@ -1,10 +1,13 @@
-// Control UI controller manages agent skills gateway state.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isWorkshopSkill } from "../../lib/skills-shared.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
-type AgentSkillsState = {
+export type AgentSkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
@@ -16,10 +19,7 @@ type AgentSkillsState = {
 
 export async function loadAgentSkills(state: AgentSkillsState, agentId: string) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.agentSkillsLoading) {
+  if (!client || !state.connected || state.agentSkillsLoading) {
     return;
   }
   const generation = state.requestGeneration;
@@ -35,13 +35,39 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentSkillsError = String(err);
+      state.agentSkillsError = formatUiError(err);
     }
   } finally {
     if (isCurrent()) {
       state.agentSkillsLoading = false;
     }
   }
+}
+
+/**
+ * Allowlist after toggling one skill. Without an existing filter, the first toggle snapshots
+ * the reported skills, leaving out learned Workshop skills: they bypass allowlists.
+ */
+function nextAgentSkillAllowlist(params: {
+  configured: string[] | undefined;
+  report: SkillStatusReport | null;
+  skillName: string;
+  enabled: boolean;
+}): string[] {
+  const next = new Set(
+    params.configured ??
+      params.report?.agentSkillFilter ??
+      params.report?.skills
+        .filter((skill) => skill.name && !isWorkshopSkill(skill))
+        .map((skill) => skill.name) ??
+      [],
+  );
+  if (params.enabled) {
+    next.add(params.skillName);
+  } else {
+    next.delete(params.skillName);
+  }
+  return [...next];
 }
 
 export async function clearAgentSkillFilter(
@@ -53,17 +79,59 @@ export async function clearAgentSkillFilter(
   if (!target || !Array.isArray(target.entry.skills) || !canDispatch()) {
     return false;
   }
-  const authoredAgentId = target.path[2];
+  const targetKey = target.path[2];
+  if (typeof targetKey !== "string") {
+    return false;
+  }
   return runtimeConfig.patch({
     raw: {
       agents: {
         entries: {
-          [authoredAgentId]: { skills: null },
+          [targetKey]: { skills: null },
         },
       },
     },
-    note: "Enable all agent skills",
-    replacePaths: [`agents.entries.${authoredAgentId}.skills`],
+    note: "Reset agent skills to inherited defaults",
+    replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
+}
+
+export function createAgentSkillActions(params: {
+  getRuntimeConfig: () => RuntimeConfigCapability;
+  getReport: () => SkillStatusReport | null;
+  canUpdate: (agentId: string) => boolean;
+}) {
+  return {
+    onToggle: (agentId: string, skillName: string, enabled: boolean) => {
+      if (!params.canUpdate(agentId)) {
+        return;
+      }
+      const target = params.getRuntimeConfig().agentEntry(agentId, { ensure: true });
+      if (!target || !skillName.trim()) {
+        return;
+      }
+      params.getRuntimeConfig().patchForm(
+        [...target.path, "skills"],
+        nextAgentSkillAllowlist({
+          configured: resolveAgentSkillsFilter(
+            currentConfigObject(params.getRuntimeConfig().state),
+            agentId,
+          ),
+          report: params.getReport(),
+          skillName: skillName.trim(),
+          enabled,
+        }),
+      );
+    },
+    onDisableAll: (agentId: string) => {
+      if (!params.canUpdate(agentId)) {
+        return;
+      }
+      const target = params.getRuntimeConfig().agentEntry(agentId, { ensure: true });
+      if (target) {
+        params.getRuntimeConfig().patchForm([...target.path, "skills"], []);
+      }
+    },
+  };
 }

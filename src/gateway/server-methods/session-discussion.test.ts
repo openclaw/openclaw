@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { SessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { sessionDiscussionHandlers } from "./session-discussion.js";
 
@@ -24,22 +31,45 @@ vi.mock("../../agents/utility-model.js", () => ({
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title persistence is captured by this fixture without opening a database.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  updateSessionEntry: mocks.updateSessionEntry,
+  patchSessionEntryCore: mocks.updateSessionEntry,
+}));
+// mock-isolation: Discussion title tests supply current entry facts without opening SQLite.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
+}));
+// mock-isolation: The title owner reads the same synthetic session through its worker API.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
   return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
 });
+// mock-isolation: Discussion tests supply title fields without starting transcript workers.
 vi.mock("../session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscript: mocks.readSessionTitleFields,
+  readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  loadAccessorSessionEntryForGatewayTarget: mocks.loadSessionTarget,
+// mock-isolation: Discussion fixtures own selected targets and rows without admitting physical stores.
+vi.mock("../session-utils-store-lookup.js", () => ({
+  withGatewaySessionStoreTarget: async (
+    _params: unknown,
+    consume: (target: unknown) => unknown,
+  ) => {
+    const selected = mocks.loadSessionTarget();
+    return consume({
+      ...selected.target,
+      canonicalKey: selected.canonicalKey,
+      storePath: selected.storePath,
+      storeKeys: [selected.canonicalKey],
+      store: selected.entry ? { [selected.canonicalKey]: selected.entry } : {},
+    });
+  },
 }));
 
 const cfg = {
@@ -50,7 +80,11 @@ const storePath = "/tmp/openclaw/sessions.sqlite";
 
 type Method = "session.discussion.info" | "session.discussion.open";
 
-async function invoke(method: Method, params: Record<string, unknown>) {
+async function invoke(
+  method: Method,
+  params: Record<string, unknown>,
+  runtimeConfig: OpenClawConfig = cfg,
+) {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   await sessionDiscussionHandlers[method]?.({
     req: { type: "req", id: method, method, params: {} },
@@ -58,7 +92,7 @@ async function invoke(method: Method, params: Record<string, unknown>) {
     client: null,
     isWebchatConnect: () => false,
     respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-    context: { getRuntimeConfig: () => cfg } as never,
+    context: { getRuntimeConfig: () => runtimeConfig } as never,
   });
   return calls[0];
 }
@@ -107,7 +141,7 @@ describe("session discussion gateway methods", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "returns none when %s has no provider",
     async (method) => {
       mocks.getProvider.mockReturnValue(undefined);
@@ -118,39 +152,42 @@ describe("session discussion gateway methods", () => {
     },
   );
 
-  it("passes the session key to info and returns its result", async () => {
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
-
-    const response = await invoke("session.discussion.info", {
-      sessionKey: "agent:main:thread",
-    });
-
-    expect(registered.info).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
-    expect(response).toMatchObject({
-      ok: true,
-      payload: {
-        state: "open",
-        embedUrl: "https://chat.example/embed/thread",
-        openUrl: "https://chat.example/thread",
+    mockSession({ sessionId: "session-ops-global", updatedAt: 1 });
+    const ownedConfig: OpenClawConfig = {
+      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
       },
+    };
+
+    expect(
+      await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
+    ).toMatchObject({ ok: true, payload: { state: "available" } });
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "ops",
     });
-  });
 
-  it("passes the session key to open and returns its result", async () => {
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    const response = await invoke("session.discussion.open", {
-      sessionKey: "agent:main:thread",
+    const ownerlessConfig: OpenClawConfig = {
+      ...ownedConfig,
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    expect(
+      await invoke("session.discussion.info", { sessionKey: "global" }, ownerlessConfig),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
     });
-
-    expect(registered.open).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
-    expect(response).toMatchObject({ ok: true, payload: { state: "available" } });
+    expect(registered.info).not.toHaveBeenCalled();
   });
 
   it("persists a generated title before opening an untitled session discussion", async () => {
-    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
     let persistedEntry: SessionEntry | undefined;
     mockSession(entry);
     mocks.readSessionTitleFields.mockReturnValue({
@@ -165,7 +202,16 @@ describe("session discussion gateway methods", () => {
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
-    await invoke("session.discussion.open", { sessionKey });
+    expect(
+      await invoke("session.discussion.open", { sessionKey: "agent:main:thread-alias" }),
+    ).toMatchObject({
+      ok: true,
+      payload: { state: "available" },
+    });
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread-alias",
+      agentId: "main",
+    });
 
     expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -174,42 +220,17 @@ describe("session discussion gateway methods", () => {
         sessionId: "session-1",
         sessionKey,
         storePath,
-        userMessage: "Plan the release",
+        userMessage: "",
       }),
     );
     expect(persistedEntry?.displayName).toBe("Release Planning");
+    expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     expect(
       mocks.updateSessionEntry.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     ).toBeLessThan(registered.open.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY);
     expect(mocks.emitSessionsChanged).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
-    );
-  });
-
-  it("titles via the canonical session key when opened through an alias key", async () => {
-    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-    mocks.loadSessionTarget.mockReturnValue({
-      canonicalKey: sessionKey,
-      entry,
-      storePath,
-      target: { agentId: "main" },
-    });
-    mocks.readSessionTitleFields.mockReturnValue({
-      firstUserMessage: "Plan the release",
-      lastMessagePreview: null,
-    });
-    mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
-      const patch = await update({ ...entry });
-      return patch ? { ...entry, ...patch } : undefined;
-    });
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    await invoke("session.discussion.open", { sessionKey: "agent:main:thread-alias" });
-
-    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey }),
     );
   });
 
@@ -259,39 +280,45 @@ describe("session discussion gateway methods", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  it("never generates a title for discussion info", async () => {
-    mockSession({ sessionId: "session-1", updatedAt: 1 });
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    await invoke("session.discussion.info", { sessionKey });
-
-    expect(mocks.loadSessionTarget).not.toHaveBeenCalled();
-    expect(mocks.maybeGenerateSessionTitle).not.toHaveBeenCalled();
-    expect(registered.info).toHaveBeenCalledOnce();
-  });
-
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "returns a retryable error when the provider throws from %s",
     async (method) => {
       const registered = provider();
-      const operation = method === "session.discussion.info" ? registered.info : registered.open;
-      operation.mockRejectedValueOnce(new Error("provider failed"));
+      registered.open.mockRejectedValueOnce(new Error("provider failed"));
       mocks.getProvider.mockReturnValue(registered.value);
-
-      expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE" },
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      const phases: DiagnosticEventPayload[] = [];
+      const stop = onTrustedInternalDiagnosticEvent((event) => phases.push(event), {
+        include: ["diagnostic.phase.completed"],
       });
+      setDiagnosticsEnabledForProcess(true);
+      try {
+        expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE" },
+        });
+        await waitForDiagnosticEventsDrained();
+        expect(phases).toEqual([
+          expect.objectContaining({
+            type: "diagnostic.phase.completed",
+            name: `${method}.provider`,
+            durationMs: expect.any(Number),
+          }),
+        ]);
+        expect(JSON.stringify(phases)).not.toContain(sessionKey);
+        expect(JSON.stringify(phases)).not.toContain("provider failed");
+      } finally {
+        stop();
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+      }
     },
   );
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "rejects a malformed provider result from %s",
     async (method) => {
       const registered = provider();
-      const operation = method === "session.discussion.info" ? registered.info : registered.open;
-      operation.mockResolvedValueOnce({ state: "invalid" } as never);
+      registered.open.mockResolvedValueOnce({ state: "invalid" } as never);
       mocks.getProvider.mockReturnValue(registered.value);
 
       expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
@@ -301,7 +328,7 @@ describe("session discussion gateway methods", () => {
     },
   );
 
-  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+  it.each(["session.discussion.open"] as const)(
     "rejects an empty session key for %s",
     async (method) => {
       expect(await invoke(method, { sessionKey: "" })).toMatchObject({

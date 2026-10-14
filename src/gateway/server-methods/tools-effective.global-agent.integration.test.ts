@@ -4,10 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
-import { toolsEffectiveGlobalAgentRuntimeMocks as inventoryMocks } from "./__mocks__/tools-effective.runtime.js";
-import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
+import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
 
-vi.mock("./tools-effective.runtime.js");
+const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
 
 installGatewayTestHooks();
 
@@ -26,7 +25,7 @@ describe("tools.effective global agent integration", () => {
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
     testState.agentConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     workStorePath = storeTemplate.replace("{agentId}", "work");
     const configModule = await getGatewayConfigModule();
@@ -180,7 +179,7 @@ describe("tools.effective global agent integration", () => {
       | [boolean, unknown?, { code: number; message: string }?]
       | undefined;
     expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe('agent id "work" does not match session agent "main"');
+    expect(call?.[2]?.message).toBe('agent "work" does not match session key agent "main"');
     expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 
@@ -193,7 +192,7 @@ describe("tools.effective global agent integration", () => {
     const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     const configModule = await getGatewayConfigModule();
     configModule.clearRuntimeConfigSnapshot();

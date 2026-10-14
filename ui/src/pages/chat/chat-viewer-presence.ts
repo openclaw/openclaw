@@ -1,6 +1,7 @@
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionViewerPresenceForGateway } from "../../lib/session-viewer-presence.ts";
-import { visiblePanesOf, type ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { visiblePanesOf } from "./split-layout.ts";
 
 /** Moves a mounted chat page's viewer declaration between gateway lifecycles. */
 export class ChatViewerPresenceController {
@@ -8,16 +9,22 @@ export class ChatViewerPresenceController {
 
   constructor(private readonly owner: object) {}
 
-  sync(gateway: ApplicationGateway | undefined, layout: ChatSplitLayout, narrow: boolean) {
-    const nextGateway = gateway && typeof gateway.subscribe === "function" ? gateway : null;
-    if (this.gateway && this.gateway !== nextGateway) {
+  sync(
+    gateway: ApplicationGateway | undefined,
+    layout: ChatSplitLayout,
+    narrow: boolean,
+    unboundPaneIds: ReadonlySet<string>,
+  ) {
+    if (this.gateway && this.gateway !== gateway) {
       sessionViewerPresenceForGateway(this.gateway).unwatch(this.owner);
     }
-    this.gateway = nextGateway;
-    if (nextGateway) {
-      sessionViewerPresenceForGateway(nextGateway).watch(
+    this.gateway = gateway ?? null;
+    if (gateway) {
+      sessionViewerPresenceForGateway(gateway).watch(
         this.owner,
-        visiblePanesOf(layout, narrow).map((pane) => pane.sessionKey),
+        visiblePanesOf(layout, narrow)
+          .filter((pane) => !unboundPaneIds.has(pane.id))
+          .map((pane) => pane.sessionKey),
       );
     }
   }

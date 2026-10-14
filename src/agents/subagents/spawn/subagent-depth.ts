@@ -1,97 +1,54 @@
-/**
- * Subagent spawn-depth lookup helpers.
- *
- * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
- */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { parseStrictNonNegativeInteger } from "../../../infra/parse-finite-number.js";
-import { getSubagentDepth, parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
-import { resolveDefaultAgentId } from "../../agent-scope.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
+import {
+  getSubagentDepthFromEntryLookup,
+  type SessionDepthEntry,
+} from "./subagent-depth-policy.js";
+import {
+  asSessionCapabilityLookup,
+  createSubagentSessionStore,
+  withPreparedSessionCapabilityRead,
+  type SessionCapabilityLookup,
+  type SessionCapabilityStore,
+} from "./subagent-session-store.js";
 
-type SessionDepthEntry = {
-  sessionId?: unknown;
-  spawnDepth?: unknown;
-  spawnedBy?: unknown;
-};
-
-function normalizeSpawnDepth(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 0 ? value : undefined;
-  }
-  if (typeof value === "string") {
-    return parseStrictNonNegativeInteger(value);
-  }
-  return undefined;
-}
-
-export function readSubagentSessionStore<T extends SessionDepthEntry = SessionDepthEntry>(
-  storePath: string,
-  agentId: string,
-): Record<string, T> {
-  try {
-    return Object.fromEntries(
-      listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
-        ({ sessionKey, entry }) => [sessionKey, entry as unknown as T],
-      ),
-    );
-  } catch {
-    // ignore missing/unavailable stores
-  }
-  return {};
-}
-
-function buildKeyCandidates(rawKey: string, cfg?: OpenClawConfig): string[] {
-  if (!cfg) {
+function buildKeyCandidates(
+  rawKey: string,
+  cfg?: OpenClawConfig,
+  explicitAgentId?: string,
+): string[] {
+  if (!cfg || rawKey === "unknown" || parseAgentSessionKey(rawKey)) {
     return [rawKey];
   }
-  if (rawKey === "global" || rawKey === "unknown") {
-    return [rawKey];
-  }
-  if (parseAgentSessionKey(rawKey)) {
-    return [rawKey];
-  }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  const prefixed = `agent:${defaultAgentId}:${rawKey}`;
-  return prefixed === rawKey ? [rawKey] : [rawKey, prefixed];
-}
-
-export function findSubagentSessionEntryById<T extends SessionDepthEntry>(
-  store: Record<string, T>,
-  sessionId: string,
-): T | undefined {
-  const normalizedSessionId = normalizeOptionalString(sessionId);
-  if (!normalizedSessionId) {
-    return undefined;
-  }
-  for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
-    if (candidateSessionId && candidateSessionId === normalizedSessionId) {
-      return entry;
-    }
-  }
-  return undefined;
+  const agentId = resolveSessionAgentId({
+    sessionKey: rawKey,
+    config: cfg,
+    agentId: explicitAgentId,
+  });
+  return [rawKey, `agent:${agentId}:${rawKey}`];
 }
 
 function resolveEntryForSessionKey(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
-  store?: Record<string, SessionDepthEntry>;
-  cache: Map<string, Record<string, SessionDepthEntry>>;
+  store?: SessionCapabilityLookup;
+  cache: Map<string, SessionCapabilityLookup>;
+  agentId?: string;
 }): SessionDepthEntry | undefined {
-  const candidates = buildKeyCandidates(params.sessionKey, params.cfg);
+  const candidates = buildKeyCandidates(params.sessionKey, params.cfg, params.agentId);
 
   if (params.store) {
     for (const key of candidates) {
-      const entry = params.store[key];
+      const entry = params.store.get(key);
       if (entry) {
         return entry;
       }
     }
-    const entry = findSubagentSessionEntryById(params.store, params.sessionKey);
-    if (entry || !params.cfg) {
+    const entry = params.store.getById(params.sessionKey);
+    if (entry || !params.cfg || params.store.authoritative) {
       return entry;
     }
   }
@@ -100,18 +57,25 @@ function resolveEntryForSessionKey(params: {
     return undefined;
   }
 
-  for (const key of candidates) {
-    const parsed = parseAgentSessionKey(key);
-    if (!parsed?.agentId) {
-      continue;
-    }
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
-    let store = params.cache.get(storePath);
+  const candidateAgentIds = new Set(
+    candidates.flatMap((key) => {
+      const agentId = parseAgentSessionKey(key)?.agentId;
+      return agentId ? [agentId] : [];
+    }),
+  );
+  for (const agentId of candidateAgentIds) {
+    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+    // A fixed path still exposes an agent-scoped logical view. Reusing another
+    // agent's snapshot can erase cross-agent lineage or adopt the wrong row.
+    const cacheKey = `${storePath}\0${normalizeAgentId(agentId)}`;
+    let store = params.cache.get(cacheKey);
     if (!store) {
-      store = readSubagentSessionStore(storePath, parsed.agentId);
-      params.cache.set(storePath, store);
+      store = createSubagentSessionStore(storePath, agentId);
+      params.cache.set(cacheKey, store);
     }
-    const entry = store[key] ?? findSubagentSessionEntryById(store, params.sessionKey);
+    const entry =
+      candidates.map((key) => store.get(key)).find((candidate) => candidate !== undefined) ??
+      store.getById(params.sessionKey);
     if (entry) {
       return entry;
     }
@@ -124,59 +88,28 @@ export function getSubagentDepthFromSessionStore(
   sessionKey: string | undefined | null,
   opts?: {
     cfg?: OpenClawConfig;
-    store?: Record<string, SessionDepthEntry>;
+    store?: SessionCapabilityStore;
+    agentId?: string;
   },
 ): number {
-  const raw = (sessionKey ?? "").trim();
-  const fallbackDepth = getSubagentDepth(raw);
-  if (!raw) {
-    return fallbackDepth;
+  const cache = new Map<string, SessionCapabilityLookup>();
+  const store = opts?.store ? asSessionCapabilityLookup(opts.store) : undefined;
+  if (store?.scope) {
+    cache.set(`${store.scope.storePath}\0${normalizeAgentId(store.scope.agentId)}`, store);
   }
-
-  const cache = new Map<string, Record<string, SessionDepthEntry>>();
-  const visited = new Set<string>();
-
-  const depthFromStore = (key: string): number | undefined => {
-    const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return undefined;
-    }
-    if (visited.has(normalizedKey)) {
-      return undefined;
-    }
-    visited.add(normalizedKey);
-
-    const entry = resolveEntryForSessionKey({
-      sessionKey: normalizedKey,
+  return getSubagentDepthFromEntryLookup(sessionKey, (key) =>
+    resolveEntryForSessionKey({
+      sessionKey: key,
       cfg: opts?.cfg,
-      store: opts?.store,
+      store,
       cache,
-    });
+      agentId: opts?.agentId,
+    }),
+  );
+}
 
-    const storedDepth = normalizeSpawnDepth(entry?.spawnDepth);
-    if (storedDepth !== undefined) {
-      return storedDepth;
-    }
-
-    // Only spawnedBy is spawn lineage. parentSessionKey is UI threading
-    // (dashboard auto-parenting, forks, checkpoints) and must never add depth;
-    // sessions.create persists explicit spawnDepth for every fresh entry.
-    // Accepted tradeoff: pre-upgrade visible children carried lineage only via
-    // parentSessionKey and now resolve as roots; that transient population may
-    // spawn one extra generation (still capped by maxChildrenPerAgent), which
-    // beats permanently misclassifying operator sessions as depth-1 leaves.
-    const parentKey = normalizeOptionalString(entry?.spawnedBy);
-    if (!parentKey) {
-      return undefined;
-    }
-
-    const parentDepth = depthFromStore(parentKey);
-    if (parentDepth !== undefined) {
-      return parentDepth + 1;
-    }
-
-    return getSubagentDepth(parentKey) + 1;
-  };
-
-  return depthFromStore(raw) ?? fallbackDepth;
+export function getSubagentDepthFromSessionStoreInWorker(
+  ...args: Parameters<typeof getSubagentDepthFromSessionStore>
+): Promise<number> {
+  return withPreparedSessionCapabilityRead(() => getSubagentDepthFromSessionStore(...args));
 }

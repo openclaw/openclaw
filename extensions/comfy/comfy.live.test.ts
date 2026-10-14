@@ -5,8 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { isLiveTestEnabled, readLiveTestConfig } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { getComfyConfigForTesting } from "./test-support.js";
-import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
+import { isComfyCapabilityConfiguredAsync } from "./workflow-runtime.js";
 
 const LIVE =
   isLiveTestEnabled(["COMFY_LIVE_TEST"]) && (process.env.COMFY_LIVE_TEST ?? "").trim() === "1";
@@ -15,7 +14,7 @@ const describeLive = LIVE ? describe : describe.skip;
 type RegisteredMusicProvider = {
   id: string;
   generateMusic: Function;
-  isConfigured?: Function;
+  isConfiguredAsync?: Function;
 };
 
 function withPluginsEnabled<T>(cfg: T): T {
@@ -43,11 +42,17 @@ function requireProvider<T extends { id: string }>(providers: T[], id: string): 
 describeLive("comfy live", () => {
   let cfg = {} as OpenClawConfig;
   let agentDir = "";
-  const imageProviders: Array<{ id: string; generateImage: Function; isConfigured?: Function }> =
-    [];
+  const imageProviders: Array<{
+    id: string;
+    generateImage: Function;
+    isConfiguredAsync?: Function;
+  }> = [];
   const musicProviders: RegisteredMusicProvider[] = [];
-  const videoProviders: Array<{ id: string; generateVideo: Function; isConfigured?: Function }> =
-    [];
+  const videoProviders: Array<{
+    id: string;
+    generateVideo: Function;
+    isConfiguredAsync?: Function;
+  }> = [];
 
   beforeAll(async () => {
     cfg = withPluginsEnabled(await readLiveTestConfig());
@@ -71,7 +76,13 @@ describeLive("comfy live", () => {
   // Capability gates must run after beforeAll loads the isolated live config;
   // declaration-time skipIf checks would only see the empty placeholders above.
   it("runs an image workflow", async ({ skip }) => {
-    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "image" })) {
+    if (
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "image",
+      }))
+    ) {
       skip("No Comfy image workflow is configured");
       return;
     }
@@ -89,7 +100,13 @@ describeLive("comfy live", () => {
   }, 120_000);
 
   it("runs a video workflow", async ({ skip }) => {
-    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "video" })) {
+    if (
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "video",
+      }))
+    ) {
       skip("No Comfy video workflow is configured");
       return;
     }
@@ -107,7 +124,13 @@ describeLive("comfy live", () => {
   }, 180_000);
 
   it("runs a music workflow", async ({ skip }) => {
-    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "music" })) {
+    if (
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "music",
+      }))
+    ) {
       skip("No Comfy music workflow is configured");
       return;
     }
@@ -123,9 +146,4 @@ describeLive("comfy live", () => {
     expect(result.tracks[0]?.mimeType.startsWith("audio/")).toBe(true);
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(512);
   }, 180_000);
-
-  it("documents the effective comfy config shape for live debugging", () => {
-    const comfyConfig = getComfyConfigForTesting(cfg as never);
-    expect(typeof comfyConfig).toBe("object");
-  });
 });

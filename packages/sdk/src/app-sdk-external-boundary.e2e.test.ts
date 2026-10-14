@@ -6,9 +6,114 @@ describe("external preview App SDK boundary", () => {
   it("packs an external consumer that uses only the exported entrypoint and a custom transport", async () => {
     const consumer = await createPackedSdkConsumer();
     try {
-      await consumer.run(`
-        import { OpenClaw, normalizeGatewayEvent } from "@openclaw/sdk";
+      await consumer.typecheck(`
+        import type {
+          AgentsCreateParams,
+          AgentsDeleteParams,
+          AgentsUpdateParams,
+          ArtifactSummary,
+          ArtifactsDownloadResult,
+          EnvironmentSummary,
+          EnvironmentsListResult,
+          GatewayArtifactSummary,
+          SessionCreateParams,
+          SessionSendParams,
+          ToolsEffectiveParams,
+          ToolInvokeParams,
+          ToolInvokeResult,
+          WorkerEnvironmentMetadata,
+          WorkerEnvironmentState,
+          WorkerTunnelStatus,
+        } from "@openclaw/sdk";
+        import type {
+          AgentsCreateParams as ProtocolAgentsCreateParams,
+          AgentsDeleteParams as ProtocolAgentsDeleteParams,
+          AgentsUpdateParams as ProtocolAgentsUpdateParams,
+          ArtifactSummary as ProtocolArtifactSummary,
+          ToolsEffectiveParams as ProtocolToolsEffectiveParams,
+          WorkerEnvironmentMetadata as ProtocolWorkerEnvironmentMetadata,
+          WorkerEnvironmentState as ProtocolWorkerEnvironmentState,
+          WorkerTunnelStatus as ProtocolWorkerTunnelStatus,
+        } from "@openclaw/gateway-protocol";
 
+        type Equal<Left, Right> =
+          (<Value>() => Value extends Left ? 1 : 2) extends
+          (<Value>() => Value extends Right ? 1 : 2) ? true : false;
+        type Assert<Condition extends true> = Condition;
+
+        type AgentCreateIsCanonical = Assert<Equal<AgentsCreateParams, ProtocolAgentsCreateParams>>;
+        type AgentDeleteIsCanonical = Assert<Equal<AgentsDeleteParams, ProtocolAgentsDeleteParams>>;
+        type AgentUpdateIsCanonical = Assert<Equal<AgentsUpdateParams, ProtocolAgentsUpdateParams>>;
+        type GatewayArtifactIsCanonical = Assert<Equal<GatewayArtifactSummary, ProtocolArtifactSummary>>;
+        type ToolsEffectiveIsCanonical = Assert<Equal<ToolsEffectiveParams, ProtocolToolsEffectiveParams>>;
+        type WorkerMetadataIsCanonical = Assert<Equal<WorkerEnvironmentMetadata, ProtocolWorkerEnvironmentMetadata>>;
+        type WorkerStateIsCanonical = Assert<Equal<WorkerEnvironmentState, ProtocolWorkerEnvironmentState>>;
+        type TunnelStatusIsCanonical = Assert<Equal<WorkerTunnelStatus, ProtocolWorkerTunnelStatus>>;
+
+        const legacyArtifact: ArtifactSummary = {
+          id: "artifact-old-consumer",
+          type: "file",
+          sessionId: "session-old-consumer",
+          createdAt: "2026-08-16T00:00:00Z",
+          expiresAt: "2026-08-17T00:00:00Z",
+          download: { mode: "future-delivery-mode" },
+        };
+        const artifactDownload: ArtifactsDownloadResult = {
+          artifact: legacyArtifact,
+          expiresAt: "2026-08-17T00:00:00Z",
+        };
+        const environment: EnvironmentSummary = {
+          id: "gateway",
+          type: "local",
+          status: "available",
+          trust: "persistent",
+          desktop: true,
+          issues: [{
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          }],
+          worker: {
+            providerId: "worker-provider",
+            state: "ready",
+            ageMs: 1,
+            attachedSessionIds: [],
+            tunnelStatus: "connected",
+            desktop: true,
+            desktopApps: ["browser"],
+          },
+        };
+        const environments: EnvironmentsListResult = { environments: [environment] };
+        const createSession: SessionCreateParams = { attachments: [{ kind: "custom" }] };
+        const sendSession: SessionSendParams = {
+          key: "agent:main:external",
+          message: "hello",
+          attachments: [{ kind: "custom" }],
+        };
+        const toolParams: ToolInvokeParams = {
+          sessionKey: "agent:main:external",
+          args: { query: "status" },
+        };
+        const toolResult: ToolInvokeResult = {
+          ok: false,
+          toolName: "status",
+          error: { message: "unavailable" },
+        };
+
+        void [
+          artifactDownload,
+          environments,
+          createSession,
+          sendSession,
+          toolParams,
+          toolResult,
+        ];
+      `);
+      await consumer.run(`
+        import { GatewayClientTransport, OpenClaw, normalizeGatewayEvent } from "@openclaw/sdk";
+
+        if (typeof GatewayClientTransport !== "function") throw new Error("missing transport export");
         const event = normalizeGatewayEvent({
           event: "agent",
           payload: { runId: "packed-run", stream: "lifecycle", data: { phase: "start" } }

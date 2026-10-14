@@ -1,13 +1,14 @@
-// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "./command-format.js";
+import { ExpectedCliError } from "./failure-output.js";
+import { formatVersionLabel } from "./version-format.js";
 
-/** Options accepted by `openclaw plugins search`. */
-type PluginsSearchOptions = {
+export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
@@ -18,13 +19,12 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.family,
     pkg.channel,
     pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
-    pkg.latestVersion ? `v${pkg.latestVersion}` : undefined,
+    pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
   ].filter(Boolean);
   const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: openclaw plugins install clawhub:${pkg.name}`)}`;
+  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install clawhub:${pkg.name}`)}`)}`;
 }
 
-/** Search ClawHub for installable plugins and write JSON or terminal output. */
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
   opts: PluginsSearchOptions = {},
@@ -34,8 +34,8 @@ export async function runPluginsSearchCommand(
     Array.isArray(queryParts) ? queryParts.join(" ") : queryParts,
   );
   if (!query) {
-    runtime.error("Usage: openclaw plugins search <query>");
-    return runtime.exit(1);
+    const message = "Usage: openclaw plugins search <query>";
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   try {
@@ -52,6 +52,9 @@ export async function runPluginsSearchCommand(
     runtime.log(`${theme.heading("ClawHub plugins")} ${theme.muted(`(${results.length})`)}`);
     runtime.log(results.map(formatPackageSearchLine).join("\n"));
   } catch (error) {
+    if (opts.json) {
+      throw error;
+    }
     runtime.error(formatErrorMessage(error));
     runtime.exit(1);
   }

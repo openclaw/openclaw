@@ -2,12 +2,18 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+// Materialized PR wrappers must use the verified source, not the caller's tsconfig aliases.
+import { isRecord, readStringField } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  booleanFlag,
+  classifyBoundedUnsignedDecimal,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
+import { execGhApiRead, execGhRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
 const SCHEDULED_HOSTED_WORKFLOW_PATHS = new Map([
   ["Blacksmith Testbox", ".github/workflows/ci-check-testbox.yml"],
@@ -28,7 +34,6 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 // the existing 1,000-result search window through pagination.
 const WORKFLOW_RUNS_PAGE_SIZE = 30;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
-const COMPARE_COMMITS_PAGE_SIZE = 100;
 export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
@@ -44,6 +49,7 @@ type ExecGit = (args: string[], options?: { input?: string }) => string;
 type PullRequestPathFilter = { paths?: string[]; "paths-ignore"?: string[] };
 type CollectHostedGateEvidenceParams = {
   sha: string;
+  mainSha: string;
   pr?: number;
   recentSha?: string;
   pullRequestCommitShas?: string[];
@@ -137,6 +143,7 @@ export function parseArgs(argv: readonly string[]) {
   const args = {
     repo: "",
     sha: "",
+    mainSha: "",
     pr: 0,
     recentSha: "",
     output: "",
@@ -150,6 +157,7 @@ export function parseArgs(argv: readonly string[]) {
         [
           ["--repo", "repo"],
           ["--sha", "sha"],
+          ["--main-sha", "mainSha"],
           ["--recent-sha", "recentSha"],
           ["--output", "output"],
         ] as const
@@ -165,11 +173,11 @@ export function parseArgs(argv: readonly string[]) {
         missingValueMessage: "Expected --pr <value>.",
         rejectShortOptions: true,
         transform(value: string) {
-          const parsed = Number(value);
-          if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+          const result = classifyBoundedUnsignedDecimal(value, 1, Number.MAX_SAFE_INTEGER);
+          if (result.kind !== "value") {
             throw new Error("Expected --pr <positive-integer>.");
           }
-          return parsed;
+          return result.value;
         },
       }),
       booleanFlag("--changelog-only", "changelogOnly"),
@@ -182,9 +190,15 @@ export function parseArgs(argv: readonly string[]) {
       },
     },
   );
-  if (!args.repo || !args.sha || !args.pr || !args.output) {
+  if (
+    !args.repo ||
+    !args.sha ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(args.mainSha) ||
+    !args.pr ||
+    !args.output
+  ) {
     throw new Error(
-      "Usage: node scripts/verify-pr-hosted-gates.mjs --repo <owner/repo> --sha <sha> --pr <number> [--recent-sha <sha>] --output <path>",
+      "Usage: node scripts/verify-pr-hosted-gates.mjs --repo <owner/repo> --sha <sha> --main-sha <sha> --pr <number> [--recent-sha <sha>] --output <path>",
     );
   }
   return args;
@@ -282,9 +296,14 @@ function matchingAuthoritativeRuns(
 function latestRun(runs: WorkflowRun[]) {
   // GitHub run_number is creation order; updated_at moves as jobs finish.
   return runs.toSorted(
-    (left, right) =>
-      Number(right.run_number ?? right.id ?? 0) - Number(left.run_number ?? left.id ?? 0),
+    (left, right) => (right.run_number ?? right.id ?? 0) - (left.run_number ?? left.id ?? 0),
   )[0];
+}
+
+function latestNonSkippedScheduledRun(runs: WorkflowRun[]) {
+  return latestRun(
+    runs.filter((run) => !(run.status === "completed" && run.conclusion === "skipped")),
+  );
 }
 
 function runUpdatedAtMs(run: Pick<WorkflowRun, "updated_at"> | undefined) {
@@ -384,13 +403,13 @@ function findPatchIdenticalCiReuse({
   sha,
   candidateRuns,
   nowMs,
-  mainRef = "origin/main",
+  mainSha,
   execGit = runGit,
 }: {
   sha: string;
   candidateRuns: WorkflowRun[];
   nowMs: number;
-  mainRef?: string;
+  mainSha: string;
   execGit?: ExecGit;
 }) {
   if (!Array.isArray(candidateRuns)) {
@@ -412,7 +431,7 @@ function findPatchIdenticalCiReuse({
 
   let currentPatchId;
   try {
-    currentPatchId = computePatchId(sha, mainRef, execGit);
+    currentPatchId = computePatchId(sha, mainSha, execGit);
   } catch {
     return undefined;
   }
@@ -421,7 +440,7 @@ function findPatchIdenticalCiReuse({
       continue;
     }
     try {
-      if (computePatchId(run.head_sha, mainRef, execGit) === currentPatchId) {
+      if (computePatchId(run.head_sha, mainSha, execGit) === currentPatchId) {
         return {
           run,
           reusedFromSha: run.head_sha,
@@ -530,7 +549,10 @@ function successfulRunOrThrow(
   }: { allowManual?: boolean; nowMs?: number; ciGateJobs?: CiGateJob[] } = {},
 ) {
   const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
-  const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
+  const run =
+    workflowName === "CI"
+      ? preferredCiRun(matchingRuns, nowMs)
+      : latestNonSkippedScheduledRun(matchingRuns);
   if (run && isSuccessfulRecentRun(run, nowMs)) {
     return run;
   }
@@ -574,7 +596,7 @@ function hasSuccessfulRecentReleaseGate(workflowRuns: WorkflowRun[], sha: string
   return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
-function runBelongsToPullRequest(
+export function runBelongsToPullRequest(
   run: WorkflowRun,
   pr: number,
   pullRequestCommitShas: Set<string>,
@@ -612,7 +634,7 @@ function canCoverQueuedBuildArtifacts(
     if (matchingRuns.length === 0 && notApplicableScheduledWorkflowNames?.has(workflowName)) {
       return true;
     }
-    const run = latestRun(matchingRuns);
+    const run = latestNonSkippedScheduledRun(matchingRuns);
     return isSuccessfulRecentRun(run, nowMs);
   });
   if (!supportingGatesPassed) {
@@ -664,6 +686,7 @@ export function workflowRunPageCount(totalCount: number) {
 
 export function collectHostedGateEvidence({
   sha,
+  mainSha,
   pr = 0,
   recentSha = "",
   pullRequestCommitShas = [],
@@ -771,6 +794,7 @@ export function collectHostedGateEvidence({
       }
       ciReuse = findPatchIdenticalCiReuse({
         sha,
+        mainSha,
         candidateRuns,
         nowMs,
         execGit,
@@ -820,9 +844,7 @@ export function collectHostedGateEvidence({
             ) &&
             isRecentRun(run, nowMs),
         )
-        .toSorted((left, right) =>
-          String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
-        )
+        .toSorted((left, right) => (right.updated_at ?? "").localeCompare(left.updated_at ?? ""))
         .map((run) => run.head_sha),
     ].filter((value): value is string => typeof value === "string" && value.length > 0);
     let fallbackError;
@@ -954,73 +976,33 @@ function loadCiReuseCandidateRuns(repo: string, headBranch: string) {
   }
   // The workflow selector above supplies the path identity that the REST
   // release-gate matcher normally reads from each full workflow-run object.
-  return runs.map(
-    (run): WorkflowRun => ({
-      id: optionalNumber(run, "databaseId"),
-      name: readStringField(run, "workflowName"),
-      event: readStringField(run, "event"),
-      status: readStringField(run, "status"),
-      conclusion: optionalNullableString(run, "conclusion"),
-      head_sha: readStringField(run, "headSha"),
-      head_branch: readStringField(run, "headBranch"),
-      path: CI_WORKFLOW_PATH,
-      created_at: readStringField(run, "createdAt"),
-      updated_at: readStringField(run, "updatedAt"),
-      html_url: readStringField(run, "url"),
-      display_title: readStringField(run, "displayTitle"),
-    }),
-  );
+  return runs.map((run): WorkflowRun => ({
+    id: optionalNumber(run, "databaseId"),
+    name: readStringField(run, "workflowName"),
+    event: readStringField(run, "event"),
+    status: readStringField(run, "status"),
+    conclusion: optionalNullableString(run, "conclusion"),
+    head_sha: readStringField(run, "headSha"),
+    head_branch: readStringField(run, "headBranch"),
+    path: CI_WORKFLOW_PATH,
+    created_at: readStringField(run, "createdAt"),
+    updated_at: readStringField(run, "updatedAt"),
+    html_url: readStringField(run, "url"),
+    display_title: readStringField(run, "displayTitle"),
+  }));
 }
 
-export function compareCommitPageCount(totalCommits: unknown) {
-  if (typeof totalCommits !== "number" || !Number.isSafeInteger(totalCommits) || totalCommits < 0) {
-    throw new Error("Expected comparison total_commits to be a non-negative integer.");
-  }
-  return Math.max(1, Math.ceil(totalCommits / COMPARE_COMMITS_PAGE_SIZE));
-}
-
-function loadPullRequestCommitShas(
-  repo: string,
+export function loadPullRequestCommitShas(
   { baseSha, headSha }: { baseSha: string; headSha: string },
+  execGit: ExecGit = runGit,
 ) {
-  const loadPage = (page: number) => {
-    const comparison = JSON.parse(
-      execGhApiRead(
-        `repos/${repo}/compare/${baseSha}...${headSha}?per_page=${COMPARE_COMMITS_PAGE_SIZE}&page=${page}`,
-        {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      ),
-    ) as unknown;
-    if (!isRecord(comparison)) {
-      throw new Error(`Expected comparison commit page ${page} to be an object.`);
-    }
-    return comparison;
-  };
-
-  // The PR commits endpoint stops at 250. GitHub's paginated comparison is
-  // equivalent to git log BASE..HEAD and keeps the membership proof complete.
-  const firstPage = loadPage(1);
-  const pages = [firstPage];
-  for (let page = 2; page <= compareCommitPageCount(firstPage?.total_commits); page += 1) {
-    pages.push(loadPage(page));
+  const output = execGit(["rev-list", "--reverse", `${baseSha}..${headSha}`]);
+  const shas = output.replace(/\r?\n$/u, "").split(/\r?\n/u);
+  if (shas.length === 0 || shas.some((sha) => !/^[0-9a-f]{40,64}$/u.test(sha))) {
+    throw new Error("Expected pull request commit object ids from git rev-list.");
   }
-  const shas = pages.flatMap((comparison, index) => {
-    if (!Array.isArray(comparison?.commits)) {
-      throw new Error(`Expected comparison commit page ${index + 1} to be an array.`);
-    }
-    if (!comparison.commits.every(isRecord)) {
-      throw new Error(`Expected comparison commit page ${index + 1} entries to be objects.`);
-    }
-    return comparison.commits
-      .map((commit) => commit.sha)
-      .filter((sha: unknown): sha is string => typeof sha === "string");
-  });
-  if (shas.length !== firstPage.total_commits) {
-    throw new Error(
-      `Expected ${firstPage.total_commits} comparison commits, received ${shas.length}.`,
-    );
+  if (!shas.includes(headSha)) {
+    throw new Error(`Expected pull request commit list to contain head ${headSha}.`);
   }
   return shas;
 }
@@ -1080,10 +1062,17 @@ function loadCiGateJobs(
     // fine — a run that finished successfully still proves this attempt, and
     // a non-success completion must not be blessed by its own earlier gate.
     const current = JSON.parse(
-      execGhApiRead(`repos/${repo}/actions/runs/${run.id}`, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
+      execGhRead(
+        [
+          "api",
+          `repos/${repo}/actions/runs/${run.id}`,
+          "--method",
+          "GET",
+          "-H",
+          "Cache-Control: max-age=0",
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
     ) as unknown;
     if (!isRecord(current)) {
       return [];
@@ -1098,34 +1087,60 @@ function loadCiGateJobs(
   });
 }
 
-function main(argv = process.argv.slice(2)) {
+export function main(argv = process.argv.slice(2), observation?: unknown) {
   const args = parseArgs(argv);
-  const pullRequest = JSON.parse(
-    execGhApiRead(`repos/${args.repo}/pulls/${args.pr}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  ) as unknown;
-  const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
-  const base = isRecord(pullRequest) && isRecord(pullRequest.base) ? pullRequest.base : undefined;
-  const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
-  const headBranch = head ? readStringField(head, "ref") : undefined;
-  const headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
-  const baseSha = base ? readStringField(base, "sha") : undefined;
-  const headSha = head ? readStringField(head, "sha") : undefined;
-  if (!headBranch || !headRepository || !baseSha || !headSha) {
-    throw new Error(`PR #${args.pr} is missing head or base metadata.`);
+  let headBranch: string | undefined;
+  let headRepository: string | undefined;
+  let headSha: string | undefined;
+  if (observation === undefined) {
+    const pullRequest = JSON.parse(
+      execGhRead(
+        [
+          "api",
+          `repos/${args.repo}/pulls/${args.pr}`,
+          "--method",
+          "GET",
+          "-H",
+          "Cache-Control: max-age=0",
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ) as unknown;
+    const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
+    const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
+    headBranch = head ? readStringField(head, "ref") : undefined;
+    headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
+    headSha = head ? readStringField(head, "sha") : undefined;
+  } else {
+    if (
+      !isRecord(observation) ||
+      observation.number !== args.pr ||
+      !isRecord(observation.baseRepository) ||
+      observation.baseRepository.nameWithOwner !== args.repo
+    ) {
+      throw new Error(`Carried observation does not identify ${args.repo}#${args.pr}.`);
+    }
+    headBranch = readStringField(observation, "headRefName");
+    headRepository = isRecord(observation.headRepository)
+      ? readStringField(observation.headRepository, "nameWithOwner")
+      : undefined;
+    headSha = readStringField(observation, "headRefOid");
+  }
+  if (!headBranch || !headRepository || !headSha) {
+    throw new Error(`PR #${args.pr} is missing head metadata.`);
   }
   if (headSha !== args.sha) {
     throw new Error(`PR #${args.pr} head changed from ${args.sha} to ${headSha}.`);
   }
-  const changedPaths = loadPullRequestChangedPaths(baseSha, headSha);
+  // Paths, membership and patch IDs share one snapshot; a newer API base may not exist locally.
+  const changedPaths = loadPullRequestChangedPaths(args.mainSha, headSha);
   const workflowRuns = loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch);
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
+    mainSha: args.mainSha,
     pr: args.pr,
     recentSha: args.recentSha,
-    pullRequestCommitShas: loadPullRequestCommitShas(args.repo, { baseSha, headSha }),
+    pullRequestCommitShas: loadPullRequestCommitShas({ baseSha: args.mainSha, headSha }),
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
     workflowRuns,

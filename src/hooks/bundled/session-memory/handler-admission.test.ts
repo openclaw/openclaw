@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
@@ -46,7 +46,11 @@ describe("session-memory gateway admission", () => {
         type: "message",
         id: "manual-reset-user",
         parentId: null,
-        message: { role: "user", content: "Keep a descriptive memory filename" },
+        message: {
+          role: "user",
+          content: "Keep a descriptive memory filename",
+          __openclaw: { senderIsOwner: true },
+        },
       },
       {
         type: "message",
@@ -56,6 +60,7 @@ describe("session-memory gateway admission", () => {
       },
     ]);
     const event = createInternalHookEvent("command", "reset", sessionKey, {
+      agentId: "main",
       cfg,
       previousSessionEntry: { sessionId },
       workspaceDir: tempDir,

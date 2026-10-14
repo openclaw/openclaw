@@ -1,4 +1,3 @@
-// Discord plugin module implements listeners.queue behavior.
 import { createSubsystemLogger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 
 export type DiscordListenerLogger = ReturnType<
@@ -82,11 +81,8 @@ export async function runDiscordListenerWithSlowLog(params: {
     throw err;
   } finally {
     logSlowDiscordListener({
-      logger: params.logger,
-      listener: params.listener,
-      event: params.event,
+      ...params,
       durationMs: Date.now() - startedAt,
-      context: params.context,
     });
   }
 }

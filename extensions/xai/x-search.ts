@@ -1,6 +1,7 @@
-// Xai plugin module implements x search behavior.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import {
   jsonResult,
+  normalizeToIsoDate,
   readCache,
   readStringArrayParam,
   readStringParam,
@@ -45,44 +46,7 @@ type XSearchCacheEntry = {
   value: Record<string, unknown>;
 };
 
-function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[X_SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, XSearchCacheEntry>;
-  }
-  const next = new Map<string, XSearchCacheEntry>();
-  root[X_SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-const X_SEARCH_CACHE = getSharedXSearchCache();
-
-function resolveXSearchConfig(cfg?: unknown): Record<string, unknown> | undefined {
-  return resolveEffectiveXSearchConfig(cfg as never);
-}
-
-function resolveXSearchEnabled(params: {
-  cfg?: unknown;
-  config?: Record<string, unknown>;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): boolean {
-  return isXaiToolEnabled({
-    enabled: params.config?.enabled as boolean | undefined,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.cfg as never,
-    auth: params.auth,
-  });
-}
-
-async function resolveXSearchApiKey(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): Promise<string | undefined> {
-  return await resolveXaiToolApiKeyWithAuth(params as never);
-}
+const X_SEARCH_CACHE = resolveGlobalMap<string, XSearchCacheEntry>(X_SEARCH_CACHE_KEY);
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
   if (!value) {
@@ -95,19 +59,7 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
   }
-  const [yearText, monthText, dayText] = trimmed.split("-");
-  if (yearText === undefined || monthText === undefined || dayText === undefined) {
-    throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
-  }
-  const year = Number.parseInt(yearText, 10);
-  const month = Number.parseInt(monthText, 10);
-  const day = Number.parseInt(dayText, 10);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
+  if (!normalizeToIsoDate(trimmed)) {
     throw new PluginToolInputError(`${label} must be a valid calendar date`);
   }
   return trimmed;
@@ -163,13 +115,13 @@ export function createXSearchTool(options?: {
   runtimeConfig?: Record<string, unknown> | null;
   auth?: XaiToolAuthContext;
 }) {
-  const xSearchConfig = resolveXSearchConfig(options?.config);
+  const xSearchConfig = resolveEffectiveXSearchConfig(options?.config as never);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   if (
-    !resolveXSearchEnabled({
-      cfg: options?.config,
-      config: xSearchConfig,
-      runtimeConfig: runtimeConfig ?? undefined,
+    !isXaiToolEnabled({
+      enabled: typeof xSearchConfig?.enabled === "boolean" ? xSearchConfig.enabled : undefined,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
+      sourceConfig: options?.config as never,
       auth: options?.auth,
     })
   ) {
@@ -178,9 +130,9 @@ export function createXSearchTool(options?: {
 
   return createXSearchToolDefinition(async (_toolCallId, args, signal) => {
     signal?.throwIfAborted();
-    const apiKey = await resolveXSearchApiKey({
-      sourceConfig: options?.config,
-      runtimeConfig: runtimeConfig ?? undefined,
+    const apiKey = await resolveXaiToolApiKeyWithAuth({
+      sourceConfig: options?.config as never,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
       auth: options?.auth,
     });
     if (!apiKey) {
@@ -206,27 +158,20 @@ export function createXSearchTool(options?: {
       enableImageUnderstanding: args.enable_image_understanding === true,
       enableVideoUnderstanding: args.enable_video_understanding === true,
     };
-    const xSearchConfigRecord = xSearchConfig;
-    const model = resolveXaiXSearchModel(xSearchConfigRecord);
-    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
-    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
-    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
+    const model = resolveXaiXSearchModel(xSearchConfig);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfig);
+    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
+    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
       endpoint,
       inlineCitations,
       maxTurns,
-      options: {
-        allowedXHandles,
-        excludedXHandles,
-        fromDate,
-        toDate,
-        enableImageUnderstanding: xSearchOptions.enableImageUnderstanding,
-        enableVideoUnderstanding: xSearchOptions.enableVideoUnderstanding,
-      },
+      options: xSearchOptions,
     });
-    const cached = readCache(X_SEARCH_CACHE, cacheKey);
+    const cacheTtlMs = resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15);
+    const cached = readCache(X_SEARCH_CACHE, cacheKey, cacheTtlMs);
     if (cached) {
       return jsonResult({ ...cached.value, cached: true });
     }
@@ -242,22 +187,15 @@ export function createXSearchTool(options?: {
       options: xSearchOptions,
       ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     const payload = buildXaiXSearchPayload({
       query,
       model,
       tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
+      ...result,
       options: xSearchOptions,
     });
-    writeCache(
-      X_SEARCH_CACHE,
-      cacheKey,
-      payload,
-      resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15),
-    );
+    writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
     return jsonResult(payload);
   });
 }

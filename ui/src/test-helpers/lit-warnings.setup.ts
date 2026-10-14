@@ -1,8 +1,17 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import { afterEach, vi } from "vitest";
+import { installPopoverPolyfill } from "./popover.ts";
+import { cleanupSolid } from "./solid-cleanup.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
 
-setSessionPathBuilder(buildControlUiSessionPath);
+// Setup files run for every test file; ordinary helpers stay cached with isolate:false.
+afterEach(cleanupSolid);
+
+installPopoverPolyfill();
+
+if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
+  // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
+  vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
+}
 
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.
@@ -43,9 +52,19 @@ if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   });
 }
 
+// JSDOM has no layout or scrolling; browser tests retain the native method.
+if (typeof Element !== "undefined" && !("scrollIntoView" in Element.prototype)) {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    writable: true,
+    value: () => {},
+  });
+}
+
 // JSDOM exposes partial ElementInternals. Web Awesome form controls require
 // the form-associated methods even when tests do not mount them in a form.
-if (typeof HTMLElement !== "undefined") {
+// Browser tests need native CustomStateSet so CSS :state() observes real state.
+if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis)) {
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {
     configurable: true,
     value() {

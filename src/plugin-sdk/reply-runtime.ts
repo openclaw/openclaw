@@ -10,12 +10,13 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
+export { settleReplyDispatcher } from "../auto-reply/dispatch.js";
 export {
-  dispatchInboundMessage,
-  dispatchInboundMessageWithBufferedDispatcher,
-  dispatchInboundMessageWithDispatcher,
-  settleReplyDispatcher,
-} from "../auto-reply/dispatch.js";
+  dispatchInboundMessageForSdk as dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcherForSdk as dispatchInboundMessageWithBufferedDispatcher,
+  dispatchInboundMessageWithDispatcherForSdk as dispatchInboundMessageWithDispatcher,
+  getReplyFromConfigForSdk as getReplyFromConfig,
+} from "./reply-runtime-adapters.js";
 export {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -23,13 +24,12 @@ export {
 export {
   HEARTBEAT_PROMPT,
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt,
+  resolveHeartbeatPromptCore,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
-export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-export { isAbortRequestText } from "../auto-reply/reply/abort.js";
+export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -40,7 +40,7 @@ export {
 export {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchReplyWithDispatcher,
-} from "../auto-reply/reply/provider-dispatcher.js";
+} from "./reply-dispatch-runtime.js";
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
@@ -48,6 +48,7 @@ export {
 export type {
   ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
+  ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
@@ -58,6 +59,7 @@ export type {
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
   GetReplyOptions,
+  PreparedAgentRunStart,
   BlockReplyContext,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";

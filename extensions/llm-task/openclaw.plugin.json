@@ -1,5 +1,6 @@
 {
   "id": "llm-task",
+  "categories": ["agent-orchestration"],
   "doctorContract": {
     "configRepair": true
   },
@@ -8,6 +9,20 @@
   },
   "name": "LLM Task",
   "description": "Generic JSON-only LLM tool for structured tasks callable from workflows.",
+  "configGroups": [
+    {
+      "id": "task-model",
+      "title": "Task model",
+      "order": 10,
+      "properties": ["defaultProvider", "defaultModel", "defaultAuthProfileId"]
+    },
+    {
+      "id": "execution-limits",
+      "title": "Execution limits",
+      "order": 20,
+      "properties": ["maxTokens", "timeoutMs"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "properties": {

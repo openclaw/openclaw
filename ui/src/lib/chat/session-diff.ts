@@ -1,8 +1,3 @@
-/**
- * Session diff panel parsing: turns the per-file unified patches returned by
- * the `sessions.diff` gateway method into renderable DiffLine rows, with
- * hunk-gap markers ("N unmodified lines") instead of bare separators.
- */
 import type { DiffLine } from "./tool-call-diff.ts";
 
 /** Per-file render bound; the panel shows a truncation notice past this. */
@@ -14,7 +9,6 @@ export type ParsedFilePatch = {
 };
 
 /**
- * Parses one file's unified patch (header lines + hunks) into DiffLine rows.
  * Gaps between hunks become "skip" rows whose text carries the formatted
  * unmodified-line count supplied by the caller (kept out of this lib so the
  * parser stays i18n-free).
@@ -22,15 +16,15 @@ export type ParsedFilePatch = {
 export function parseSessionDiffPatch(
   patch: string,
   formatGap: (count: number) => string,
-  maxLines = MAX_SESSION_DIFF_FILE_LINES,
 ): ParsedFilePatch {
   const lines: DiffLine[] = [];
   let truncated = false;
   let inHunk = false;
   let oldNo = 0;
   let newNo = 0;
-  // Next expected old-file line after the previous hunk; drives gap counts.
+  // Next expected lines after the previous hunk; drive inter-hunk gap coordinates.
   let oldNext: number | undefined;
+  let newNext: number | undefined;
   const rawLines = patch.replace(/\r\n/g, "\n").split("\n");
   if (rawLines.at(-1) === "") {
     rawLines.pop();
@@ -42,7 +36,15 @@ export function parseSessionDiffPatch(
       const newStart = Number.parseInt(hunk[2] ?? "", 10);
       const gap = oldNext === undefined ? oldStart - 1 : oldStart - oldNext;
       if (gap > 0) {
-        lines.push({ kind: "skip", text: formatGap(gap) });
+        lines.push({
+          kind: "skip",
+          text: formatGap(gap),
+          gap: {
+            oldStart: oldNext ?? oldStart - gap,
+            newStart: newNext ?? newStart - gap,
+            count: gap,
+          },
+        });
       }
       oldNo = oldStart;
       newNo = newStart;
@@ -53,22 +55,20 @@ export function parseSessionDiffPatch(
       // Header lines before the first hunk and "\ No newline at end of file".
       continue;
     }
-    if (lines.length >= maxLines) {
+    if (lines.length >= MAX_SESSION_DIFF_FILE_LINES) {
       truncated = true;
       break;
     }
-    if (raw.startsWith("+")) {
-      lines.push({ kind: "add", lineNo: newNo, text: raw.slice(1) });
-      newNo += 1;
-    } else if (raw.startsWith("-")) {
-      lines.push({ kind: "del", lineNo: oldNo, text: raw.slice(1) });
+    const kind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
+    lines.push({ kind, lineNo: kind === "del" ? oldNo : newNo, text: raw.slice(1) });
+    if (kind !== "add") {
       oldNo += 1;
-    } else {
-      lines.push({ kind: "ctx", lineNo: newNo, text: raw.slice(1) });
-      oldNo += 1;
+    }
+    if (kind !== "del") {
       newNo += 1;
     }
     oldNext = oldNo;
+    newNext = newNo;
   }
   return { lines, truncated };
 }

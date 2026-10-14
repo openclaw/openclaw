@@ -1,15 +1,56 @@
-// Vllm tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("vLLM provider thinking policy", () => {
-  it("exposes a binary profile for configured Qwen chat-template models", () => {
+  it.each(["qwen", "qwen-chat-template"])(
+    "uses the declared %s effort ladder",
+    (thinkingFormat) => {
+      expect(
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId: "qwen3:8b",
+          reasoning: true,
+          compat: {
+            thinkingFormat,
+            supportedReasoningEfforts: ["xhigh", " low ", "medium", "low"],
+          },
+        }),
+      ).toEqual({
+        levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "xhigh" }],
+        defaultLevel: "off",
+      });
+    },
+  );
+
+  it.each(["compat", "model"] as const)(
+    "exposes logical %s map keys with native wire labels",
+    (source) => {
+      const mapping = { low: "LOW", high: "HIGH", max: "UNSUPPORTED" };
+      expect(
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId: "qwen3:8b",
+          ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
+          compat: {
+            thinkingFormat: "qwen-chat-template",
+            supportedReasoningEfforts: [" LOW ", "HIGH"],
+            ...(source === "compat" ? { reasoningEffortMap: mapping } : {}),
+          },
+        }),
+      ).toEqual({ levels: [{ id: "off" }, { id: "low" }, { id: "high" }], defaultLevel: "off" });
+    },
+  );
+
+  it.each([
+    { supportedReasoningEfforts: [] },
+    { supportedReasoningEfforts: ["LOW", "HIGH"] },
+    { supportsReasoningEffort: false, supportedReasoningEfforts: ["low", "high"] },
+  ])("keeps binary thinking when no selectable effort is supported: %j", (compat) => {
     expect(
       resolveThinkingProfile({
         provider: "vllm",
-        modelId: "Qwen/Qwen3-8B",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
+        modelId: "qwen3:8b",
+        compat: { thinkingFormat: "qwen-chat-template", ...compat },
       }),
     ).toEqual({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
@@ -30,95 +71,28 @@ describe("vLLM provider thinking policy", () => {
     });
   });
 
-  it("exposes a binary profile for vLLM Nemotron 3 reasoning models", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "nemotron-3-super",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low", label: "on" }],
-      defaultLevel: "off",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-  });
-
-  it("exposes a binary profile for underscore-prefixed Nemotron served-model-name aliases", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "yk_nemotron-3-super",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low", label: "on" }],
-      defaultLevel: "off",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-  });
-
-  it("exposes a three-level profile for self-hosted DeepSeek V4 reasoning models", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "deepseek-ai/DeepSeek-V4-Pro",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "off",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "deepseek-v4-flash",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "off",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-  });
-
-  // Regression: served-model-name aliases joined with "_" (e.g. vLLM's
-  // `--served-model-name yk_deepseek_v4`) put a word character directly
-  // before "deepseek", so a leading `\b` in the id matcher would silently
-  // never match and reasoning would never activate for that alias.
-  it("exposes a three-level profile for underscore-prefixed served-model-name aliases", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "yk_deepseek_v4",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "off",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-  });
-
-  it("exposes known-model-family profiles for discovered aliases regardless of catalog reasoning hint", () => {
-    for (const reasoning of [false, undefined]) {
+  it.each(["nemotron-3-super", "yk_nemotron-3-super"])(
+    "exposes a binary profile for %s",
+    (modelId) => {
       expect(
-        resolveThinkingProfile({ provider: "vllm", modelId: "yk_deepseek_v4", reasoning }),
-      ).toEqual({
-        levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-        defaultLevel: "off",
-        preserveWhenCatalogReasoningFalse: true,
-      });
-      expect(
-        resolveThinkingProfile({ provider: "vllm", modelId: "yk_nemotron-3-super", reasoning }),
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId,
+          reasoning: true,
+        }),
       ).toEqual({
         levels: [{ id: "off" }, { id: "low", label: "on" }],
         defaultLevel: "off",
-        preserveWhenCatalogReasoningFalse: true,
       });
-    }
-  });
+    },
+  );
+
+  it.each(["yk_nemotron-3-super", "yk_deepseek_v4"])(
+    "respects explicitly disabled reasoning for %s",
+    (modelId) => {
+      expect(resolveThinkingProfile({ provider: "vllm", modelId, reasoning: false })).toBeNull();
+    },
+  );
 
   it("does not flatten unconfigured or non-reasoning vLLM models", () => {
     expect(

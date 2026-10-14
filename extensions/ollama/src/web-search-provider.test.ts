@@ -1,10 +1,12 @@
 // Ollama tests cover web search provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
+import { createLazyOllamaWebSearchProvider } from "./web-search-provider-registration.js";
 import { createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -40,8 +42,10 @@ function createOllamaConfig(provider: OllamaProviderConfigOverride = {}): OpenCl
   };
 }
 
-async function runOllamaWebSearchSetup(config: OpenClawConfig) {
-  const provider = createOllamaWebSearchProvider();
+async function runOllamaWebSearchSetup(
+  config: OpenClawConfig,
+  provider = createOllamaWebSearchProvider(),
+) {
   if (!provider.runSetup) {
     throw new Error("Expected Ollama web search setup");
   }
@@ -242,20 +246,34 @@ describe("ollama web search provider", () => {
     expect(fetchRequest().init.signal).toBeUndefined();
   });
 
-  it("does not start fallback attempts after caller cancellation", async () => {
-    mockSuccessfulSearchResponse();
-    const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-    const controller = new AbortController();
-    controller.abort(new Error("Ollama caller canceled"));
+  it.each(["before dispatch", "between attempts"] as const)(
+    "does not start requests after caller cancellation: %s",
+    async (phase) => {
+      const controller = new AbortController();
+      const reason = new Error("Ollama caller canceled");
+      const firstRelease = vi.fn(async () => controller.abort(reason));
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce(guardedResponse("not found", { status: 404 }, firstRelease))
+        .mockResolvedValueOnce(searchResponse());
+      const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+      if (phase === "before dispatch") {
+        controller.abort(reason);
+      }
 
-    await expect(
-      tool.execute({ query: "ollama pre-canceled" }, { signal: controller.signal }),
-    ).rejects.toThrow("Ollama caller canceled");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        tool.execute({ query: "ollama cancellation" }, { signal: controller.signal }),
+      ).rejects.toBe(reason);
+      const expectedCalls = phase === "before dispatch" ? 0 : 1;
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(expectedCalls);
+      expect(firstRelease).toHaveBeenCalledTimes(expectedCalls);
+      if (phase === "between attempts") {
+        expect(fetchRequest().url).toBe("http://ollama.local:11434/api/experimental/web_search");
+      }
+    },
+  );
 
   it.each<[string, () => OpenClawConfig, string]>([
     [
@@ -269,11 +287,6 @@ describe("ollama web search provider", () => {
         },
       }),
       "http://localhost:11434/api/experimental/web_search",
-    ],
-    [
-      "uses the configured Ollama Cloud host for web search",
-      () => createOllamaConfig({ baseUrl: "https://ollama.com" }),
-      "https://ollama.com/api/web_search",
     ],
     [
       "uses the model provider baseURL alias for web search",
@@ -371,31 +384,26 @@ describe("ollama web search provider", () => {
     });
   });
 
-  it.each<SecretInput>([
-    {
-      source: "env",
-      provider: "default",
-      id: "OLLAMA_WEB_SEARCH_REF",
+  it.each<SecretInput>(["${OLLAMA_WEB_SEARCH_REF}"])(
+    "resolves provider apiKey env SecretRef %# for web search requests",
+    async (apiKey) => {
+      const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
+      const resolvedKey = "resolved-ref-value";
+      await withEnvAsync({ [refEnvVar]: resolvedKey }, async () => {
+        fetchWithSsrFGuardMock.mockResolvedValueOnce(searchResponse());
+
+        const result = await runOllamaWebSearch(
+          createOllamaConfig({
+            baseUrl: "https://ollama.com",
+            apiKey,
+          }),
+        );
+
+        expect(result.count).toBe(1);
+        expectHostedRequest(resolvedKey);
+      });
     },
-    "$OLLAMA_WEB_SEARCH_REF",
-    "${OLLAMA_WEB_SEARCH_REF}",
-  ])("resolves provider apiKey env SecretRef %# for web search requests", async (apiKey) => {
-    const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
-    const resolvedKey = "resolved-ref-value";
-    await withEnvAsync({ [refEnvVar]: resolvedKey }, async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(searchResponse());
-
-      const result = await runOllamaWebSearch(
-        createOllamaConfig({
-          baseUrl: "https://ollama.com",
-          apiKey,
-        }),
-      );
-
-      expect(result.count).toBe(1);
-      expectHostedRequest(resolvedKey);
-    });
-  });
+  );
 
   it("keeps the ambient cloud fallback when a configured selected-host key is also set", async () => {
     // Regression guard (mixed credentials): a configured selected-host key must not suppress the
@@ -427,16 +435,6 @@ describe("ollama web search provider", () => {
       "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
     ],
     [
-      "does not use ambient env fallback when configured apiKey SecretRef shorthand $OLLAMA_WEB_SEARCH_REF is unavailable",
-      "$OLLAMA_WEB_SEARCH_REF",
-      "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
-    ],
-    [
-      "does not use ambient env fallback when configured apiKey SecretRef shorthand ${OLLAMA_WEB_SEARCH_REF} is unavailable",
-      "${OLLAMA_WEB_SEARCH_REF}",
-      "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
-    ],
-    [
       "does not use ambient env fallback for non-env apiKey SecretRefs",
       { source: "file", provider: "vault", id: "/providers/ollama/web-search" },
       "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search",
@@ -452,12 +450,31 @@ describe("ollama web search provider", () => {
     );
   });
 
-  it("surfaces Ollama signin guidance for 401 responses", async () => {
+  it.each([
+    { status: 401, message: "ollama signin" },
+    { status: 403, message: "unavailable" },
+    { status: 429, message: "Ollama web search failed (429)" },
+  ])("preserves status and guidance for HTTP $status", async ({ status, message }) => {
+    fetchWithSsrFGuardMock.mockResolvedValue(guardedResponse("", { status }));
+    await expect(runOllamaWebSearch({}, "latest openclaw release")).rejects.toMatchObject({
+      status,
+      statusCode: status,
+      message: expect.stringContaining(message),
+    });
+  });
+
+  it("surfaces API-key guidance for hosted Ollama 401 responses", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue(guardedResponse("", { status: 401 }));
 
-    await expect(runOllamaWebSearch({}, "latest openclaw release")).rejects.toThrow(
-      "ollama signin",
-    );
+    await expect(
+      runOllamaWebSearch(createOllamaConfig({ baseUrl: "https://ollama.com" })),
+    ).rejects.toMatchObject({
+      status: 401,
+      statusCode: 401,
+      message: expect.stringContaining(
+        "Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey",
+      ),
+    });
   });
 
   it("reports malformed Ollama web search JSON with a stable provider error", async () => {
@@ -501,6 +518,74 @@ describe("ollama web search provider", () => {
         "Start Ollama before using this provider.",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    {
+      name: "the plugin's higher-priority web search override",
+      config: {
+        ...createOllamaConfig({ apiKey: "hosted-test-key" }),
+        plugins: {
+          entries: {
+            ollama: { config: { webSearch: { baseUrl: "https://ollama.com/v1" } } },
+          },
+        },
+      },
+    },
+  ])("does not require a local daemon when $name selects hosted search", async ({ config }) => {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(guardedResponse({ models: [] }))
+      .mockResolvedValueOnce(guardedResponse({ error: "not signed in" }, { status: 401 }));
+
+    const { next, notes } = await runOllamaWebSearchSetup(
+      config,
+      createLazyOllamaWebSearchProvider(),
+    );
+
+    expect(next).toBe(config);
+    expect(notes).toEqual([]);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "the configured model provider",
+      config: createOllamaConfig({ baseUrl: "https://ollama.com" }),
+    },
+  ])("warns when $name selects hosted search without an API key", async ({ config }) => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const { next, notes } = await runOllamaWebSearchSetup(
+        config,
+        createLazyOllamaWebSearchProvider(),
+      );
+
+      expect(next).toBe(config);
+      expect(notes).toEqual([
+        {
+          title: "Ollama Web Search",
+          message:
+            "Hosted Ollama Web Search requires an API key. Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey.",
+        },
+      ]);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("accepts the ambient API key for hosted Ollama search setup", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "hosted-env-key" }, async () => {
+      const config = createOllamaConfig({
+        baseUrl: "https://ollama.com",
+        apiKey: "OLLAMA_API_KEY",
+      });
+      const { next, notes } = await runOllamaWebSearchSetup(
+        config,
+        createLazyOllamaWebSearchProvider(),
+      );
+
+      expect(next).toBe(config);
+      expect(notes).toEqual([]);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
   });
 
   it("resolves env var when config apiKey is a marker string", async () => {

@@ -1,21 +1,21 @@
-// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
-  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelGroupContext } from "../runtime-api.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
-type FeishuDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type FeishuGroupPolicy = "open" | "allowlist" | "disabled" | "allowall";
 type NormalizedFeishuGroupPolicy = Exclude<FeishuGroupPolicy, "allowall">;
 
@@ -29,9 +29,12 @@ const feishuIngressIdentity = defineStableChannelIngressIdentity({
   sensitivity: "pii",
   aliases: [
     {
+      // One configured entry is deliberately ambiguous between open_id and
+      // user_id, so it normalizes under both same-kind fields and matches
+      // whichever sender candidate carries the value under exact-field binding.
       key: "feishu-alt-id",
       kind: FEISHU_ID_KIND,
-      normalizeEntry: () => null,
+      normalizeEntry: normalizeFeishuAllowEntry,
       normalizeSubject: normalizeFeishuAllowEntry,
       sensitivity: "pii",
     },
@@ -78,15 +81,6 @@ export function normalizeFeishuAllowEntry(raw: string): string {
   return "";
 }
 
-function normalizeFeishuDmPolicy(policy: string | null | undefined): FeishuDmPolicy {
-  return policy === "open" ||
-    policy === "pairing" ||
-    policy === "allowlist" ||
-    policy === "disabled"
-    ? policy
-    : "pairing";
-}
-
 function normalizeFeishuGroupPolicy(policy: FeishuGroupPolicy): NormalizedFeishuGroupPolicy {
   return policy === "allowall" ? "open" : policy;
 }
@@ -111,7 +105,7 @@ function createFeishuIngressResolver(params: {
   accountId?: string | null;
   readAllowFromStore?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
 }) {
-  return createChannelIngressResolver({
+  return getFeishuRuntime().channel.inbound.ingress.createResolver({
     channelId: "feishu",
     accountId: normalizeAccountId(params.accountId) ?? "default",
     identity: feishuIngressIdentity,
@@ -131,12 +125,9 @@ export async function resolveFeishuDmIngressAccess(params: {
   conversationId: string;
   mayPair: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    readAllowFromStore: params.readAllowFromStore,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.senderOpenId,
       alternateIds: [params.senderUserId],
@@ -145,10 +136,11 @@ export async function resolveFeishuDmIngressAccess(params: {
       kind: "direct",
       id: params.conversationId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     event: {
       mayPair: params.mayPair,
     },
-    dmPolicy: normalizeFeishuDmPolicy(params.dmPolicy),
+    dmPolicy: normalizeChannelDmPolicy(params.dmPolicy ?? undefined) ?? "pairing",
     groupPolicy: "disabled",
     allowFrom: params.allowFrom ?? [],
     ...(params.command ? { command: params.command } : {}),
@@ -162,23 +154,24 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
   groupPolicy: FeishuGroupPolicy;
   groupAllowFrom?: Array<string | number> | null;
   groupExplicitlyConfigured?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
   const groupAllowFrom =
     groupPolicy === "allowlist" && params.groupExplicitlyConfigured
       ? [...(params.groupAllowFrom ?? []), params.chatId]
       : (params.groupAllowFrom ?? []);
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.chatId,
     }),
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy,
     groupAllowFrom,
@@ -195,12 +188,11 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   requireMention: boolean;
   mentionedBot: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupAllowFrom = params.allowFrom ?? [];
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.senderOpenId,
       alternateIds: [params.senderUserId],
@@ -208,7 +200,9 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy: groupAllowFrom.length > 0 ? "allowlist" : "open",
     groupAllowFrom,

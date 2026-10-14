@@ -4,7 +4,8 @@
 import http from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const webFetchProviderDiscovery = vi.hoisted(() => ({
 // This boundary proves that credential-free web fetch config reaches the HTTP
 // listener. Model publication, chat metadata, and orphan recovery have dedicated owners.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
+  cancelPreparedModelRuntimeRefresh: vi.fn(),
   publishPreparedModelRuntimeSnapshot: vi.fn(async () => ({})),
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
 }));
@@ -121,8 +123,9 @@ describe("gateway startup web fetch config", () => {
       },
     } as OpenClawConfig);
 
-    port = await getFreePort();
-    server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    port = portClaim.port;
+    server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
     });
   });

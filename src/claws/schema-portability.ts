@@ -1,4 +1,3 @@
-// Portable validation shared by Claw package metadata and grouped manifests.
 import {
   AVATAR_MAX_BYTES,
   AVATAR_MAX_DATA_URL_CHARS,

@@ -1,19 +1,6 @@
 import Foundation
 
-struct HostEnvOverrideDiagnostics: Equatable {
-    var blockedKeys: [String]
-    var invalidKeys: [String]
-}
-
 enum HostEnvSanitizer {
-    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mts.
-    /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
-    private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
-    private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes
-    private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys
-    private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes
-    private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys
-    private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes
     private static let shellWrapperAllowedOverrideKeys: Set<String> = [
         "TERM",
         "LANG",
@@ -36,25 +23,30 @@ enum HostEnvSanitizer {
         "ssh",
     ]
 
+    private static func isNoPagerOverride(_ key: String, _ value: String) -> Bool {
+        (key.uppercased() == "GIT_PAGER" || key.uppercased() == "PAGER") &&
+            (value.isEmpty || value == "cat")
+    }
+
     private static func isBlocked(_ upperKey: String) -> Bool {
-        if self.blockedKeys.contains(upperKey) { return true }
-        return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
+        if HostEnvSecurityPolicy.blockedKeys.contains(upperKey) { return true }
+        return HostEnvSecurityPolicy.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedInherited(_ upperKey: String) -> Bool {
-        if self.blockedInheritedKeys.contains(upperKey) { return true }
-        return self.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
+        if HostEnvSecurityPolicy.blockedInheritedKeys.contains(upperKey) { return true }
+        return HostEnvSecurityPolicy.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
-        if self.blockedOverrideKeys.contains(upperKey) { return true }
+        if HostEnvSecurityPolicy.blockedOverrideKeys.contains(upperKey) { return true }
         if upperKey.range(
             of: self.cargoTargetExecutableOverridePattern,
             options: .regularExpression) != nil
         {
             return true
         }
-        return self.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
+        return HostEnvSecurityPolicy.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func filterOverridesForShellWrapper(_ overrides: [String: String]?) -> [String: String]? {
@@ -63,7 +55,9 @@ enum HostEnvSanitizer {
         for (rawKey, value) in overrides {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
-            if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
+            if self.isNoPagerOverride(key, value) {
+                filtered[key] = ""
+            } else if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
                 filtered[key] = value
             }
         }
@@ -82,21 +76,10 @@ enum HostEnvSanitizer {
 
     private static func normalizeOverrideKey(_ rawKey: String) -> String? {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return nil }
-        guard let first = key.unicodeScalars.first, self.isPortableHead(first) else {
-            return nil
-        }
-        for scalar in key.unicodeScalars.dropFirst() {
-            if self.isPortableTail(scalar) || scalar == "(" || scalar == ")" {
-                continue
-            }
-            return nil
-        }
+        guard let first = key.unicodeScalars.first, self.isPortableHead(first),
+              key.unicodeScalars.dropFirst().allSatisfy({ self.isPortableTail($0) || $0 == "(" || $0 == ")" })
+        else { return nil }
         return key
-    }
-
-    private static func sortedUnique(_ values: [String]) -> [String] {
-        Array(Set(values)).sorted()
     }
 
     private static func isPermissiveGitProtocolFromUserValue(_ value: String) -> Bool {
@@ -116,38 +99,6 @@ enum HostEnvSanitizer {
             .split(separator: ":", omittingEmptySubsequences: false)
             .filter { self.gitDefaultAlwaysAllowedProtocols.contains(String($0)) }
         return safeProtocols.joined(separator: ":")
-    }
-
-    static func inspectOverrides(
-        overrides: [String: String]?,
-        blockPathOverrides: Bool = true) -> HostEnvOverrideDiagnostics
-    {
-        guard let overrides else {
-            return HostEnvOverrideDiagnostics(blockedKeys: [], invalidKeys: [])
-        }
-
-        var blocked: [String] = []
-        var invalid: [String] = []
-        for (rawKey, _) in overrides {
-            let candidate = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let normalized = self.normalizeOverrideKey(rawKey) else {
-                invalid.append(candidate.isEmpty ? rawKey : candidate)
-                continue
-            }
-            let upper = normalized.uppercased()
-            if blockPathOverrides, upper == "PATH" {
-                blocked.append(upper)
-                continue
-            }
-            if self.isBlockedOverride(upper) || self.isBlocked(upper) {
-                blocked.append(upper)
-                continue
-            }
-        }
-
-        return HostEnvOverrideDiagnostics(
-            blockedKeys: self.sortedUnique(blocked),
-            invalidKeys: self.sortedUnique(invalid))
     }
 
     static func sanitize(overrides: [String: String]?, shellWrapper: Bool = false) -> [String: String] {
@@ -187,6 +138,12 @@ enum HostEnvSanitizer {
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
             if upper == "PATH" { continue }
+            // Never pass an executable cat through generic PAGER consumers or PATH lookup.
+            // Exact cat/empty requests become empty; whitespace and commands stay blocked.
+            if self.isNoPagerOverride(key, value) {
+                merged[key] = ""
+                continue
+            }
             if self.isBlockedOverride(upper) { continue }
             if self.isBlocked(upper) { continue }
             merged[key] = value

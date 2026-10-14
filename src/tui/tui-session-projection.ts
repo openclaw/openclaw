@@ -50,17 +50,6 @@ export function isIdentityOnlyTuiSessionInvalidation(event: SessionChangedEvent)
   );
 }
 
-/** Provider-local imports require a complete source or persisted—not envelope—sequence. */
-export function isReplayableTuiSessionMessage(event: SessionMessageEvent): boolean {
-  const identity = readSessionMessageIdentity(event.message, event);
-  return Boolean(
-    identity &&
-    (!identity.isImported ||
-      identity.externalSource ||
-      readSessionMessageSequence(event.message) !== null),
-  );
-}
-
 /** Scope the shared transcript projection to the TUI's actual selected session. */
 export function readTuiSessionProjectionScope(
   state: Pick<TuiStateAccess, "currentSessionKey" | "currentAgentId" | "currentSessionId">,
@@ -110,6 +99,41 @@ export function reduceTuiSessionProjection(
   return projection;
 }
 
+/** Promote a durable assistant row into the matching live run projection. */
+export function projectTuiSessionMessage(
+  state: TuiStateAccess,
+  event: SessionMessageEvent,
+  unboundDisplayedRunIds: readonly string[],
+): string | undefined {
+  const identity = readSessionMessageIdentity(event.message, event);
+  // Provider-local imports require a complete source or persisted—not envelope—sequence.
+  if (
+    !identity ||
+    (identity.isImported &&
+      !identity.externalSource &&
+      readSessionMessageSequence(event.message) === null)
+  ) {
+    return undefined;
+  }
+  const assistantMessageId =
+    identity.role === "assistant" && !identity.isImported ? (identity.id ?? undefined) : undefined;
+  // Some transcript envelopes omit run identity. A single unbound displayed
+  // final is the only non-ambiguous live owner that can adopt its durable ID.
+  const authoritativeRunId = assistantMessageId
+    ? (identity.runId ??
+      event.clientRunId ??
+      state.activeChatRunId ??
+      (unboundDisplayedRunIds.length === 1 ? unboundDisplayedRunIds[0] : undefined))
+    : undefined;
+  reduceTuiSessionProjection(state, {
+    type: "messagePersisted",
+    message: event.message,
+    envelope: authoritativeRunId ? { ...event, runId: authoritativeRunId } : event,
+    scope: readTuiSessionProjectionScope(state),
+  });
+  return authoritativeRunId;
+}
+
 /** Retain the assistant reply actually rendered until authoritative history adopts it. */
 export function projectTuiSessionFinal(
   state: TuiStateAccess,
@@ -128,6 +152,8 @@ export function projectTuiSessionFinal(
     event.message && typeof event.message === "object" && !Array.isArray(event.message)
       ? (event.message as Record<string, unknown>)
       : {};
+  // Failure receipts are already in finalText; retain only successful blocks
+  // so a history rebuild cannot append the same failure a second time.
   const attachments = Array.isArray(source.content)
     ? source.content.filter(isTuiAssistantAttachmentBlock)
     : [];

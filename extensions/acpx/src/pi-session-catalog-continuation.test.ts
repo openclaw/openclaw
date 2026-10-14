@@ -23,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    withSessionTranscriptWriteLock: async (
+    withSessionTranscriptWrite: async (
       _params: unknown,
       run: (context: {
         appendMessage: (params: {
@@ -89,15 +89,40 @@ afterEach(async () => {
   );
 });
 
+function createResumableStore() {
+  return createPiStoreFixture(
+    temporaryDirectories,
+    "hi",
+    "Pi catalog session",
+    { command: "pwd" },
+    true,
+  );
+}
+
 describe("Pi session catalog continuation", () => {
+  it("projects only adopted Pi rows with their OpenClaw session key", async () => {
+    await createResumableStore();
+    await installFakePiFixture(temporaryDirectories, originalPath);
+    const { entries, provider } = capturePiContinuationCatalog();
+    const sessionEntries = { entriesForAgent: () => entries } as never;
+
+    const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
+    expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+
+    const adopted = await provider.continueSession!({
+      hostId: "gateway",
+      threadId: "pi-session",
+    });
+    const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
+
+    expect(after[0]?.sessions[0]).toMatchObject({
+      threadId: "pi-session",
+      sessionKey: adopted.sessionKey,
+    });
+  });
+
   it("adopts once with the native ACP binding and an exact file baseline", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    const sessionDirectory = await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     const { createSessionEntry, provider } = capturePiContinuationCatalog();
 
@@ -117,9 +142,10 @@ describe("Pi session catalog continuation", () => {
       marker: expect.objectContaining({ offset: sessionStats.size }),
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Pi catalog session",
+        displayName: "Pi catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",
@@ -152,13 +178,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("rolls adoption back when transcript import fails", async () => {
-    await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     transcriptMocks.failAfter = 2;
     const { entries, provider } = capturePiContinuationCatalog();
@@ -171,13 +191,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("rejects paired-node and unknown session continuation", async () => {
-    await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     const { createSessionEntry, provider } = capturePiContinuationCatalog();
 
@@ -191,13 +205,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("keeps legacy-session adoption successful when a safe baseline is unavailable", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    const sessionDirectory = await createResumableStore();
     const sessionFile = path.join(sessionDirectory, "session.jsonl");
     const content = await fs.readFile(sessionFile, "utf8");
     await fs.writeFile(sessionFile, content.replace('"version":3', '"version":2'));

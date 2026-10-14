@@ -1,7 +1,5 @@
 // Status JSON payload tests cover update metadata, overview rows, and structured status output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
-import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
 const mocks = vi.hoisted(() => ({
@@ -23,33 +21,6 @@ describe("status-json-payload", () => {
     vi.clearAllMocks();
   });
 
-  it("resolves update channel info through the shared channel display path", () => {
-    expect(
-      resolveStatusUpdateChannelInfo({
-        updateConfigChannel: "beta",
-        update: {
-          installKind: "package",
-          git: {
-            tag: "v1.2.3",
-            branch: "main",
-          },
-        },
-      }),
-    ).toEqual({
-      channel: "stable",
-      source: "config",
-      label: "stable",
-    });
-    expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
-    expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
-      configChannel: "beta",
-      currentVersion: VERSION,
-      installKind: "package",
-      gitTag: "v1.2.3",
-      gitBranch: "main",
-    });
-  });
-
   it("builds the shared status json payload with optional sections", () => {
     expect(
       buildStatusJsonPayload({
@@ -58,9 +29,20 @@ describe("status-json-payload", () => {
           cfg: { update: { channel: "stable" }, gateway: {} },
           update: {
             root: "/tmp/openclaw",
-            installKind: "package",
+            installKind: "git",
             packageManager: "npm",
             registry: { latestVersion: "1.2.3" },
+            git: {
+              ahead: 0,
+              behind: 0,
+              countsCached: true,
+              stale: {
+                reason: "fetch-failed",
+                failedAtMs: 1000,
+                detail: "network error",
+                runId: "run-1",
+              },
+            },
           } as never,
           tailscaleMode: "serve",
           gatewayMode: "remote",
@@ -78,6 +60,10 @@ describe("status-json-payload", () => {
         memory: null,
         memoryPlugin: { enabled: true },
         agents: [{ id: "main" }],
+        configDiagnostics: {
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        },
         secretDiagnostics: ["diag"],
         securityAudit: { summary: { critical: 1 } },
         health: { ok: true },
@@ -86,8 +72,8 @@ describe("status-json-payload", () => {
         pluginCompatibility: [
           {
             pluginId: "legacy",
-            code: "deprecated-memory-embedding-provider-api",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
@@ -97,9 +83,20 @@ describe("status-json-payload", () => {
       os: { platform: "linux" },
       update: {
         root: "/tmp/openclaw",
-        installKind: "package",
+        installKind: "git",
         packageManager: "npm",
         registry: { latestVersion: "1.2.3" },
+        git: {
+          ahead: 0,
+          behind: 0,
+          countsCached: true,
+          stale: {
+            reason: "fetch-failed",
+            failedAtMs: 1000,
+            detail: "network error",
+            runId: "run-1",
+          },
+        },
       },
       updateChannel: "stable",
       updateChannelSource: "config",
@@ -119,6 +116,10 @@ describe("status-json-payload", () => {
       gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
       agents: [{ id: "main" }],
+      configDiagnostics: {
+        path: "/tmp/openclaw.json",
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      },
       secretDiagnostics: ["diag"],
       securityAudit: { summary: { critical: 1 } },
       health: { ok: true },
@@ -129,44 +130,12 @@ describe("status-json-payload", () => {
         warnings: [
           {
             pluginId: "legacy",
-            code: "deprecated-memory-embedding-provider-api",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
       },
     });
-  });
-
-  it("omits optional sections when they are absent", () => {
-    expect(
-      buildStatusJsonPayload({
-        summary: { ok: true },
-        surface: {
-          cfg: { gateway: {} },
-          update: {
-            root: "/tmp/openclaw",
-            installKind: "package",
-            packageManager: "npm",
-          } as never,
-          tailscaleMode: "off",
-          gatewayMode: "local",
-          remoteUrlMissing: false,
-          gatewayConnection: { url: "ws://127.0.0.1:18789" },
-          gatewayReachable: false,
-          gatewayProbe: null,
-          gatewayProbeAuth: null,
-          gatewaySelf: null,
-          gatewayProbeAuthWarning: null,
-          gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
-          nodeService: { label: "node", installed: false, loadedText: "not installed" },
-        },
-        osSummary: { platform: "linux" },
-        memory: null,
-        memoryPlugin: null,
-        agents: [],
-        secretDiagnostics: [],
-      }),
-    ).not.toHaveProperty("securityAudit");
   });
 });

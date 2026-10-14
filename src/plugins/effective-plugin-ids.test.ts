@@ -1,7 +1,7 @@
 /** Verifies effective plugin id resolution across config, manifests, and activation sources. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable:
@@ -24,13 +24,18 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
+vi.mock("../channels/config-presence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/config-presence.js")>()),
   listExplicitlyDisabledChannelIdsForConfig: (
     ...args: Parameters<typeof mocks.listExplicitlyDisabledChannelIdsForConfig>
   ) => mocks.listExplicitlyDisabledChannelIdsForConfig(...args),
   listPotentialConfiguredChannelIds: (
     ...args: Parameters<typeof mocks.listPotentialConfiguredChannelIds>
   ) => mocks.listPotentialConfiguredChannelIds(...args),
+}));
+
+vi.mock("./channel-presence-policy.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: () => [],
 }));
 
 vi.mock("./channel-plugin-ids.js", () => ({
@@ -56,6 +61,7 @@ vi.mock("./manifest-owner-policy.js", () => ({
 }));
 
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
+import { collectConfiguredStartupChannelIds } from "./gateway-startup-plugin-config.js";
 
 function resolve(config: OpenClawConfig): string[] {
   return resolveEffectivePluginIds({
@@ -89,10 +95,20 @@ describe("resolveEffectivePluginIds", () => {
       pluginIds: [],
     });
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
-    mocks.loadManifestMetadataSnapshot.mockReturnValue({
-      plugins: [],
-    } as unknown as PluginMetadataSnapshot);
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
     mocks.passesManifestOwnerBasePolicy.mockReturnValue(true);
+  });
+
+  it("does not activate channels from persisted auth", () => {
+    mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
+      options?.includePersistedAuthState === false ? [] : ["credential-only"],
+    );
+    expect(
+      collectConfiguredStartupChannelIds({
+        configs: [{}, {}],
+        env: {},
+      }),
+    ).toEqual([]);
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {
@@ -103,6 +119,30 @@ describe("resolveEffectivePluginIds", () => {
         },
       }),
     ).toEqual(["lossless-claw"]);
+  });
+
+  it("keeps the selected slot but rechecks bundled owner policy after channel callbacks", async () => {
+    const { passesManifestOwnerBasePolicy } = await vi.importActual<
+      typeof import("./manifest-owner-policy.js")
+    >("./manifest-owner-policy.js");
+    mocks.passesManifestOwnerBasePolicy.mockImplementation(passesManifestOwnerBasePolicy);
+    mocks.listPotentialConfiguredChannelIds.mockReturnValue(["test-channel"]);
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "bundled-channel-owner", channels: ["test-channel"] }],
+      }),
+    );
+    mocks.resolveConfiguredChannelPluginIds.mockImplementation(({ config }) => {
+      config.plugins = {
+        deny: ["bundled-channel-owner"],
+        slots: { contextEngine: "later-context" },
+      };
+      return [];
+    });
+
+    expect(resolve({ plugins: { slots: { contextEngine: "early-context" } } })).toEqual([
+      "early-context",
+    ]);
   });
 
   it("keeps the built-in legacy context engine out of plugin preload ids", () => {

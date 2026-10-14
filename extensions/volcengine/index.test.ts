@@ -1,12 +1,13 @@
-// Volcengine tests cover index plugin behavior.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS } from "./api.js";
 import plugin from "./index.js";
-import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
-import { VOLCENGINE_PROVIDER_CATALOG } from "./models.js";
+import {
+  DOUBAO_CODING_MODEL_CATALOG,
+  DOUBAO_MODEL_CATALOG,
+  VOLCENGINE_PROVIDER_CATALOG,
+} from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("volcengine plugin", () => {
   it("preserves both provider-owned static catalogs and paired ordering", async () => {
@@ -29,24 +30,21 @@ describe("volcengine plugin", () => {
       entries: [],
     } as never);
 
-    expect(entries).toEqual([
-      ...DOUBAO_MODEL_CATALOG.map((entry) => ({
-        provider: "volcengine",
-        id: entry.id,
-        name: entry.name,
-        reasoning: entry.reasoning,
-        input: [...entry.input],
-        contextWindow: entry.contextWindow,
-      })),
-      ...DOUBAO_CODING_MODEL_CATALOG.map((entry) => ({
-        provider: "volcengine-plan",
-        id: entry.id,
-        name: entry.name,
-        reasoning: entry.reasoning,
-        input: [...entry.input],
-        contextWindow: entry.contextWindow,
-      })),
-    ]);
+    expect(entries).toEqual(
+      [
+        { provider: "volcengine", models: DOUBAO_MODEL_CATALOG },
+        { provider: "volcengine-plan", models: DOUBAO_CODING_MODEL_CATALOG },
+      ].flatMap(({ provider: providerId, models }) =>
+        models.map(({ id, name, reasoning, input, contextWindow }) => ({
+          provider: providerId,
+          id,
+          name,
+          reasoning,
+          input: [...input],
+          contextWindow,
+        })),
+      ),
+    );
     expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
       "ark-code-latest",
       "doubao-seed-2.1-turbo",
@@ -57,21 +55,13 @@ describe("volcengine plugin", () => {
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
-    const pluginJson = JSON.parse(
-      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
-    );
-
-    expect(pluginJson.providerAuthAliases).toEqual({
+    expect(manifest.providerAuthAliases).toEqual({
       "volcengine-plan": "volcengine",
     });
   });
 
   it("declares OpenAI-compatible streaming usage support in the manifest", () => {
-    const pluginJson = JSON.parse(
-      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
-    );
-
-    expect(pluginJson.providerRequest?.providers).toMatchObject({
+    expect(manifest.providerRequest.providers).toMatchObject({
       volcengine: {
         openAICompletions: { supportsStreamingUsage: true },
       },

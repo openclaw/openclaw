@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeEmptyClawUpdatePlan } from "../claws/update-plan-empty.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { logClawUpdatePlanSummary } from "./claws-cli-update-output.js";
+import { logClawUpdatePlanSummary } from "./claws-cli-output.js";
 
 describe("logClawUpdatePlanSummary", () => {
   it("prints plugin setup prerequisites", () => {
@@ -15,7 +15,6 @@ describe("logClawUpdatePlanSummary", () => {
       ...makeEmptyClawUpdatePlan({
         agentId: "worker",
         blockers: [],
-        digest: () => "sha256:plan",
       }),
       readiness: {
         ready: false,

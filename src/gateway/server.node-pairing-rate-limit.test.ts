@@ -1,22 +1,26 @@
 // Node pairing rate-limit tests protect repeated pairing attempts, pending
 // request cleanup, and protocol error details for node clients.
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_STARTUP_UNAVAILABLE_REASON } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   listNodePairing,
   requestNodePairing,
 } from "../infra/device-pairing-node.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as gatewayWsConnection from "./server/ws-connection.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -47,7 +51,7 @@ async function openWs(port: number) {
 async function attemptNodePairing(
   port: number,
   identityPath: string,
-  surface: { caps?: string[]; commands?: string[] } = {},
+  surface: { caps?: string[]; commands?: string[]; device?: null } = {},
 ) {
   const ws = await openWs(port);
   try {
@@ -57,7 +61,7 @@ async function attemptNodePairing(
       scopes: [],
       client: NODE_CLIENT,
       commands: surface.commands ?? ["system.run"],
-      deviceIdentityPath: identityPath,
+      ...(surface.device === null ? { device: null } : { deviceIdentityPath: identityPath }),
       ...(surface.caps ? { caps: surface.caps } : {}),
     });
   } finally {
@@ -99,6 +103,59 @@ async function approveNodeIdentity(params: { identityPath: string; caps: string[
 }
 
 describe("node pairing rate limit", () => {
+  test.each([
+    ["unpaired", false, false],
+    ["device-paired without an approved node surface", true, false],
+    ["without a device identity", false, true],
+  ] as const)(
+    "rejects a %s shared-token node during startup without creating pairing requests",
+    async (_pairingState, approveDevice, omitDevice) => {
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-unpaired-"));
+      const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
+      const startupAdmission = vi
+        .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
+        .mockImplementation((params) =>
+          attachGatewayWsConnectionHandler({ ...params, isStartupPending: () => true }),
+        );
+
+      try {
+        await withGatewayServer(async ({ port }) => {
+          const identityPath = path.join(identityDir, "identity.sqlite");
+          if (approveDevice) {
+            const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+            const pairing = await requestDevicePairing({
+              deviceId: identity.deviceId,
+              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+              role: "node",
+              roles: ["node"],
+              scopes: [],
+            });
+            await approveDevicePairing(pairing.request.requestId, { callerScopes: [] });
+          }
+          const response = await attemptNodePairing(
+            port,
+            identityPath,
+            omitDevice ? { device: null } : {},
+          );
+
+          expect(response).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
+            },
+          });
+          expect((await listDevicePairing()).pending).toHaveLength(0);
+          expect((await listNodePairing()).pending).toHaveLength(0);
+        });
+      } finally {
+        startupAdmission.mockRestore();
+        await rm(identityDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("limits concurrent first-time node pairing requests before the pairing lock", async () => {
     testState.gatewayAuth = {
       mode: "token",
@@ -130,7 +187,9 @@ describe("node pairing rate limit", () => {
 
       expect(connected).toHaveLength(3);
       expect(rateLimited).toHaveLength(5);
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pairing = await listNodePairing();
+      expect(pairing.pending).toHaveLength(0);
+      expect(pairing.paired).toHaveLength(3);
     });
   });
 
@@ -187,7 +246,7 @@ describe("node pairing rate limit", () => {
       }
 
       const pending = (await listNodePairing()).pending;
-      expect(pending).toHaveLength(4);
+      expect(pending).toHaveLength(1);
       expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
         "camera",
         "screen",

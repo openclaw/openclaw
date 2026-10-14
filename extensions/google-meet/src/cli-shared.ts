@@ -1,19 +1,19 @@
-import { writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  callGatewayFromCli,
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import prettyMilliseconds from "pretty-ms";
-import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetModeInput,
-  type GoogleMeetTransport,
-} from "./config.js";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
+import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -34,24 +34,20 @@ export type OAuthLoginOptions = {
   timeoutSec?: string;
 };
 
-export const testing = {
-  parsePositiveNumber,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  resolveGoogleMeetGatewayTimeoutMs,
-  resolveGoogleMeetOAuthCallbackTimeoutMs,
-};
-
-export type ResolveSpaceOptions = {
-  meeting?: string;
-  today?: boolean;
-  event?: string;
-  calendar?: string;
+type OAuthOptions = {
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
   json?: boolean;
+};
+
+export type ResolveSpaceOptions = OAuthOptions & {
+  meeting?: string;
+  today?: boolean;
+  event?: string;
+  calendar?: string;
 };
 
 export type MeetArtifactOptions = ResolveSpaceOptions & {
@@ -95,31 +91,6 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
-  generatedAt: string;
-  request?: GoogleMeetExportRequest;
-  tokenSource?: "cached-access-token" | "refresh-token";
-  calendarEvent?: GoogleMeetCalendarLookupResult;
-  inputs: {
-    artifacts?: string;
-    attendance?: string;
-  };
-  counts: {
-    conferenceRecords: number;
-    artifacts: number;
-    attendanceRows: number;
-    recordings: number;
-    transcripts: number;
-    transcriptEntries: number;
-    smartNotes: number;
-    warnings: number;
-  };
-  conferenceRecords: string[];
-  files: string[];
-  zipFile?: string;
-  warnings: GoogleMeetExportWarning[];
-};
-
 export type SetupOptions = {
   json?: boolean;
   mode?: string;
@@ -141,16 +112,10 @@ type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false;
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
-export type DoctorOptions = {
-  json?: boolean;
+export type DoctorOptions = OAuthOptions & {
   oauth?: boolean;
   meeting?: string;
   createSpace?: boolean;
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
 };
 
 export type JsonOptions = {
@@ -161,23 +126,12 @@ export type RecoverTabOptions = JsonOptions & {
   transport?: string;
 };
 
-export type CreateOptions = {
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
-  accessType?: string;
-  entryPointAccess?: string;
-  join?: boolean;
-  transport?: string;
-  mode?: string;
-  message?: string;
-  dialInNumber?: string;
-  pin?: string;
-  dtmfSequence?: string;
-  json?: boolean;
-};
+export type CreateOptions = OAuthOptions &
+  JoinOptions & {
+    accessType?: string;
+    entryPointAccess?: string;
+    join?: boolean;
+  };
 
 export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
   if (
@@ -201,6 +155,18 @@ export function parseGoogleMeetTransport(
   throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
 }
 
+export function resolveCliJoinRequest(url: string, options: JoinOptions) {
+  return {
+    url,
+    transport: parseGoogleMeetTransport(options.transport),
+    mode: parseGoogleMeetMode(options.mode),
+    message: options.message,
+    dialInNumber: options.dialInNumber,
+    pin: options.pin,
+    dtmfSequence: options.dtmfSequence,
+  };
+}
+
 export function parseGoogleMeetBrowserTransport(
   value: string | undefined,
 ): "chrome" | "chrome-node" | undefined {
@@ -219,15 +185,14 @@ function isGatewayUnavailableForLocalFallback(
   err: unknown,
   method: GoogleMeetGatewayMethod,
 ): boolean {
-  const message = formatErrorMessage(err);
-  return (
-    message.includes("ECONNREFUSED") ||
-    message.includes("ECONNRESET") ||
-    message.includes("EHOSTUNREACH") ||
-    message.includes("ENOTFOUND") ||
-    message.includes("gateway not connected") ||
-    message.includes(`unknown method: ${method}`)
-  );
+  if (isGatewayTransportError(err)) {
+    // Fall back only when nothing serves the gateway URL (connect-time socket
+    // failures: kind "closed" with no WS close code). A coded close (e.g. 1006
+    // during restart) means a live gateway may still own Meet sessions — surface it.
+    return err.kind === "closed" && err.code === undefined;
+  }
+  // Gateway alive but the Meet methods are not registered there: run locally.
+  return isGatewayClientRequestError(err) && err.message.includes(`unknown method: ${method}`);
 }
 
 export function writeStdoutLine(...values: unknown[]): void {
@@ -236,7 +201,18 @@ export function writeStdoutLine(...values: unknown[]): void {
 
 export async function writeCliOutput(options: { output?: string }, text: string): Promise<void> {
   if (options.output?.trim()) {
-    await writeFile(options.output, text.endsWith("\n") ? text : `${text}\n`, "utf8");
+    const dirMode = (await stat(path.dirname(options.output))).mode & 0o7777;
+    await replaceFileAtomic({
+      filePath: options.output,
+      content: text.endsWith("\n") ? text : `${text}\n`,
+      dirMode,
+      mode: 0o666 & ~process.umask(),
+      preserveExistingMode: true,
+      tempPrefix: ".google-meet-output",
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
     writeStdoutLine("wrote: %s", options.output);
     return;
   }
@@ -323,7 +299,6 @@ export function parsePositiveIntegerOption(
 }
 
 export async function callGoogleMeetGateway(params: {
-  callGateway: typeof callGatewayFromCli;
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
@@ -332,7 +307,7 @@ export async function callGoogleMeetGateway(params: {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
     return {
       ok: true,
-      payload: await params.callGateway(
+      payload: await callGatewayFromCli(
         params.method,
         { json: true, timeout: String(timeoutMs) },
         params.payload,
@@ -351,9 +326,8 @@ export function formatDuration(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  return prettyMilliseconds(Math.max(0, Math.round(value / 1000) * 1000), {
-    unitCount: 2,
-  });
+  const roundedMs = Math.max(0, Math.round(value / 1000) * 1000);
+  return formatDurationCompact(roundedMs, { showYears: true, spaced: true }) ?? "0ms";
 }
 
 export function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {

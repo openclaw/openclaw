@@ -1,9 +1,15 @@
 // Safe loader for the conventional package-local OpenClaw profile.
-import { isScalar, parseDocument, visit } from "yaml";
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
+import {
+  materializeClawToolProfile,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
 import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
 const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
@@ -19,75 +25,73 @@ function warning(code: string, message: string, path: string): ClawDiagnostic {
   return { level: "warning", code, phase: "parse", path, message };
 }
 
-function parseProfileYaml(
-  raw: string,
-  path: string,
-): { ok: true; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] } {
-  const document = parseDocument(raw.startsWith("\uFEFF") ? raw.slice(1) : raw, {
-    prettyErrors: false,
-    uniqueKeys: true,
-  });
-  if (document.errors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: document.errors.map((error) =>
-        diagnostic("invalid_openclaw_profile", `Could not parse ${path}: ${error.message}`),
-      ),
-    };
-  }
-  let unsupportedFeature: string | undefined;
-  visit(document, {
-    Alias() {
-      unsupportedFeature ??= "aliases";
-    },
-    Node(_key, node) {
-      if (node.anchor) {
-        unsupportedFeature ??= "anchors";
-      } else if (node.tag) {
-        unsupportedFeature ??= "explicit tags";
-      }
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<") {
-        unsupportedFeature ??= "merge keys";
-      }
-    },
-  });
-  if (unsupportedFeature) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "unsupported_openclaw_profile_yaml_feature",
-          `${path} uses ${unsupportedFeature}; OpenClaw profile YAML must map directly to JSON data.`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, value: document.toJSON() };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "invalid_openclaw_profile",
-          `Could not parse ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
+function isToolProfileId(value: string): value is ToolProfileId {
+  return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
 }
 
-async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
-  const packageFiles = await fsSafeRoot(packageRoot);
-  const read = await packageFiles.read(path, {
-    hardlinks: "reject",
-    maxBytes: MAX_PROFILE_BYTES,
-    nonBlockingRead: true,
-    symlinks: "reject",
+function migrateLegacyDynamicToolProfile(value: unknown): {
+  value: unknown;
+  legacyProfile?: ClawOpenClawProfile;
+} {
+  const profile = record(value);
+  const agent = record(profile?.agent);
+  const tools = record(agent?.tools);
+  const toolProfile = tools?.profile;
+  if (
+    !profile ||
+    !agent ||
+    !tools ||
+    typeof toolProfile !== "string" ||
+    !isToolProfileId(toolProfile) ||
+    tools.allow !== undefined
+  ) {
+    return { value };
+  }
+  if (toolProfile === "full") {
+    return { value };
+  }
+  const validationProbe = parseClawOpenClawProfile({
+    ...profile,
+    agent: {
+      ...agent,
+      tools: {
+        ...tools,
+        profile: "minimal",
+      },
+    },
   });
-  return read.buffer;
+  if (!validationProbe.ok) {
+    return { value };
+  }
+  const validatedTools = validationProbe.profile.agent.tools;
+  if (!validatedTools) {
+    return { value };
+  }
+  const selection = {
+    ...validatedTools,
+    profile: toolProfile,
+  };
+  const legacyProfile: ClawOpenClawProfile = {
+    ...validationProbe.profile,
+    agent: {
+      ...validationProbe.profile.agent,
+      tools: selection,
+    },
+  };
+  const migrated = materializeClawToolProfile(
+    { tools: selection },
+    { allowLegacyDynamicProfile: true },
+  );
+  return {
+    value: {
+      ...profile,
+      agent: {
+        ...agent,
+        tools: migrated.tools,
+      },
+    },
+    legacyProfile,
+  };
 }
 
 /**
@@ -102,10 +106,12 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
   metadata?: Record<string, string>;
+  allowLegacyDynamicToolProfile?: boolean;
 }): Promise<
   | {
       ok: true;
       profile?: ClawOpenClawProfile;
+      legacyProfile?: ClawOpenClawProfile;
       raw?: Buffer;
       path?: string;
       diagnostics?: ClawDiagnostic[];
@@ -163,7 +169,13 @@ export async function readClawOpenClawProfile(params: {
 
   let raw: Buffer;
   try {
-    raw = await readProfileFile(params.packageRoot, declaredPath);
+    const profileFiles = await fsSafeRoot(params.packageRoot);
+    const read = await profileFiles.read(declaredPath, {
+      hardlinks: "reject",
+      maxBytes: MAX_PROFILE_BYTES,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const unsafe =
       error instanceof FsSafeError &&
@@ -189,11 +201,19 @@ export async function readClawOpenClawProfile(params: {
     };
   }
 
-  const yaml = parseProfileYaml(raw.toString("utf8"), declaredPath);
+  const text = raw.toString("utf8");
+  const yaml = parseClawYaml(
+    text.startsWith("\uFEFF") ? text.slice(1) : text,
+    declaredPath,
+    "profile",
+  );
   if (!yaml.ok) {
     return yaml;
   }
-  const parsed = parseClawOpenClawProfile(yaml.value);
+  const migration = params.allowLegacyDynamicToolProfile
+    ? migrateLegacyDynamicToolProfile(yaml.value)
+    : { value: yaml.value };
+  const parsed = parseClawOpenClawProfile(migration.value);
   if (!parsed.ok) {
     return {
       ok: false,
@@ -206,6 +226,7 @@ export async function readClawOpenClawProfile(params: {
   return {
     ok: true,
     profile: parsed.profile,
+    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
     ...(diagnostics.length > 0 ? { diagnostics } : {}),

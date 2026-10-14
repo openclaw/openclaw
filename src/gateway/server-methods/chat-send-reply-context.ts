@@ -1,6 +1,3 @@
-// Hydrates Control UI (webchat) reply targets into the channel-agnostic
-// ReplyTo* envelope fields so downstream reply-context handling matches the
-// Discord path (reply_to_id + "Reply target of current user message" block).
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
@@ -19,9 +16,20 @@ import {
 // reply to a huge transcript entry cannot flood the prompt metadata.
 const REPLY_CONTEXT_BODY_MAX_CHARS = 2000;
 
-type ChatSendReplyContextFields = Partial<
+export type ChatSendReplyContextFields = Partial<
   Pick<MsgContext, "ReplyToId" | "ReplyToBody" | "ReplyToSender">
 >;
+
+type ChatSendReplyContextParams = {
+  replyToId: string | undefined;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey: string;
+  sessionEntry?: SessionTranscriptReadScope["sessionEntry"];
+  storePath: string | undefined;
+  userSenderLabel?: string;
+  warn?: (message: string) => void;
+};
 
 /** Adds hydrated reply metadata to the direct-injection user prompt. */
 export function buildChatSendReplyInjectionText(params: {
@@ -38,11 +46,7 @@ export function buildChatSendReplyInjectionText(params: {
   return prefix ? `${prefix}\n\n${params.body}` : params.body;
 }
 
-function extractReplyTargetText(message: unknown): string | undefined {
-  const entry = asOptionalRecord(message);
-  if (!entry) {
-    return undefined;
-  }
+function extractReplyTargetText(entry: Record<string, unknown>): string | undefined {
   if (typeof entry.text === "string" && entry.text.trim()) {
     return entry.text;
   }
@@ -61,33 +65,15 @@ function extractReplyTargetText(message: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-function resolveReplyTargetSenderLabel(params: {
-  message: unknown;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  userSenderLabel?: string;
-}): string {
-  const role = asOptionalRecord(params.message)?.role;
-  if (role === "assistant") {
-    return resolveAssistantIdentity({ cfg: params.cfg, agentId: params.agentId }).name;
-  }
-  const userLabel = params.userSenderLabel?.trim();
-  return userLabel || "User";
-}
-
 /** Copies hydrated reply fields onto the inbound context without clobbering unset keys. */
 export function applyChatSendReplyContextFields(
   ctx: MsgContext,
   fields: ChatSendReplyContextFields,
 ): void {
-  if (fields.ReplyToId !== undefined) {
-    ctx.ReplyToId = fields.ReplyToId;
-  }
-  if (fields.ReplyToBody !== undefined) {
-    ctx.ReplyToBody = fields.ReplyToBody;
-  }
-  if (fields.ReplyToSender !== undefined) {
-    ctx.ReplyToSender = fields.ReplyToSender;
+  for (const key of ["ReplyToId", "ReplyToBody", "ReplyToSender"] as const) {
+    if (fields[key] !== undefined) {
+      ctx[key] = fields[key];
+    }
   }
 }
 
@@ -96,16 +82,9 @@ export function applyChatSendReplyContextFields(
  * reply_to_id linkage; body/sender hydrate only when the transcript message
  * still resolves, mirroring Discord's missing-referenced-message tolerance.
  */
-export async function resolveChatSendReplyContext(params: {
-  replyToId: string | undefined;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey: string;
-  sessionEntry?: SessionTranscriptReadScope["sessionEntry"];
-  storePath: string | undefined;
-  userSenderLabel?: string;
-  warn?: (message: string) => void;
-}): Promise<ChatSendReplyContextFields> {
+export async function resolveChatSendReplyContext(
+  params: ChatSendReplyContextParams,
+): Promise<ChatSendReplyContextFields> {
   const replyToId = params.replyToId?.trim();
   if (!replyToId) {
     return {};
@@ -133,7 +112,10 @@ export async function resolveChatSendReplyContext(params: {
     // Hydrate only what webchat displays: project the stored message through the
     // same chat.history display normalization so envelope wrappers, runtime
     // context, tool payloads, and reasoning-only content stay out of the prompt.
-    const displayMessage = projectChatDisplayMessage(resolved.message);
+    const displayMessage = projectChatDisplayMessage(resolved.message, {
+      // Reply context uses the assistant identity below and discards forwarded sender labels.
+      resolveCronJobName: () => undefined,
+    });
     if (!displayMessage) {
       return fields;
     }
@@ -148,12 +130,10 @@ export async function resolveChatSendReplyContext(params: {
       return fields;
     }
     fields.ReplyToBody = truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS);
-    fields.ReplyToSender = resolveReplyTargetSenderLabel({
-      message: displayMessage,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      userSenderLabel: params.userSenderLabel,
-    });
+    fields.ReplyToSender =
+      displayMessage.role === "assistant"
+        ? (await resolveAssistantIdentity({ cfg: params.cfg, agentId: params.agentId })).name
+        : params.userSenderLabel?.trim() || "User";
     return fields;
   } catch (err) {
     params.warn?.(`chat.send reply context hydration failed for ${replyToId}: ${String(err)}`);

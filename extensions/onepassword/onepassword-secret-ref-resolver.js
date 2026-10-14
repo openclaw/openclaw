@@ -3,8 +3,14 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_SECRET_FILE_MAX_BYTES, tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
-import { execa } from "execa";
+import { text as consumeText } from "node:stream/consumers";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { coerceErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveTrustedOnePasswordCli } from "./onepassword-op-path.js";
 import { resolveOnePasswordSecretReference } from "./onepassword-secret-id.js";
 
@@ -12,18 +18,6 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
-
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      input += String(chunk);
-    });
-    process.stdin.on("error", reject);
-    process.stdin.on("end", () => resolve(input));
-  });
-}
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
@@ -38,10 +32,6 @@ function parseRequest(input) {
     protocolVersion: 1,
     ids: parsed.ids.filter((id) => typeof id === "string" && id.length > 0),
   };
-}
-
-function resolveSecretReference(id) {
-  return resolveOnePasswordSecretReference(id);
 }
 
 async function resolveOpCommand() {
@@ -63,10 +53,6 @@ async function resolveOpCommand() {
 
 function opMissingMessage(command) {
   return `1Password CLI "${command}" is not installed or cannot be executed. Install the official 1Password CLI v2, and set CLAW_1PASSWORD_OP to its absolute path.`;
-}
-
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveOsHome() {
@@ -92,7 +78,7 @@ function resolveOpenClawHome() {
     return resolveOsHome();
   }
   if (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\")) {
-    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, resolveOsHome()));
+    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, () => resolveOsHome()));
   }
   return path.resolve(explicit);
 }
@@ -101,7 +87,7 @@ function resolveStateDir() {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     if (override === "~" || override.startsWith("~/") || override.startsWith("~\\")) {
-      return path.resolve(override.replace(/^~(?=$|[\\/])/u, resolveOpenClawHome()));
+      return path.resolve(override.replace(/^~(?=$|[\\/])/u, () => resolveOpenClawHome()));
     }
     return path.resolve(override);
   }
@@ -183,66 +169,32 @@ function opEnvironment(token) {
 }
 
 async function runOpRead(opCommand, token, secretReference) {
-  // Keep execa's default utf8 encoding: secrets are decoded as utf8 anyway, and
-  // Bun's spawn rejects execa's "buffer" encoding option (oven-sh/bun#36049),
-  // surfacing as a masked "Attempted to assign to readonly property." TypeError.
-  const subprocess = execa(opCommand, ["read", "--cache=false", "--no-newline", secretReference], {
-    cleanup: true,
-    env: opEnvironment(token),
-    extendEnv: false,
-    killDescendants: true,
-    killSignal: "SIGKILL",
-    reject: false,
-    stripFinalNewline: false,
-  });
-  let outputBytes = 0;
-  let terminationReason;
-  const terminate = (reason) => {
-    if (terminationReason) {
-      return;
-    }
-    terminationReason = reason;
-    subprocess.kill("SIGKILL");
-  };
-  subprocess.stdout?.on("data", (chunk) => {
-    outputBytes += chunk.byteLength;
-    if (outputBytes > MAX_SECRET_VALUE_BYTES) {
-      terminate("output-limit");
-    }
-  });
-  const timeout = setTimeout(() => terminate("timeout"), OP_READ_TIMEOUT_MS);
-  timeout.unref?.();
-  const result = await subprocess.finally(() => clearTimeout(timeout));
-  if (result.code === "ENOENT") {
+  const result = await runCommandBuffered(
+    [opCommand, "read", "--cache=false", "--no-newline", secretReference],
+    {
+      baseEnv: {},
+      discardOutput: { stderr: true },
+      env: opEnvironment(token),
+      maxOutputBytes: { stdout: MAX_SECRET_VALUE_BYTES },
+      timeoutMs: OP_READ_TIMEOUT_MS,
+    },
+  );
+  if (result.termination === "error" && result.error?.code === "ENOENT") {
     throw new Error(opMissingMessage(opCommand));
   }
-  if (terminationReason === "timeout") {
+  if (result.termination === "timeout") {
     throw new Error(`op read timed out after ${OP_READ_TIMEOUT_MS}ms.`);
   }
-  if (terminationReason === "output-limit") {
+  if (result.termination === "output-limit") {
     throw new Error("op read output exceeded the secret value limit.");
   }
-  if (result.exitCode !== 0) {
-    throw new Error(`op read failed with exit code ${String(result.exitCode)}.`);
-  }
-  // A missing stdout string means the subprocess never produced output streams
-  // (spawn-level failure with reject:false), not an empty secret.
-  if (typeof result.stdout !== "string") {
+  if (result.termination === "error") {
     throw new Error("op read could not be started.");
   }
-  return result.stdout;
-}
-
-async function runWithConcurrency(values, limit, task) {
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(values.length, limit) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await task(values[index]);
-    }
-  });
-  await Promise.all(workers);
+  if (result.code !== 0) {
+    throw new Error(`op read failed with exit code ${String(result.code)}.`);
+  }
+  return result.stdout.toString("utf8");
 }
 
 async function resolveFromOnePassword(ids) {
@@ -256,20 +208,28 @@ async function resolveFromOnePassword(ids) {
   }
   const opCommand = await resolveOpCommand();
   const token = readServiceAccountToken();
-  await runWithConcurrency(ids, OP_READ_CONCURRENCY, async (id) => {
-    try {
-      response.values[id] = await runOpRead(opCommand, token, resolveSecretReference(id));
-    } catch (error) {
-      response.errors[id] = {
-        message: errorMessage(error),
-      };
-    }
+  await runTasksWithConcurrency({
+    limit: OP_READ_CONCURRENCY,
+    throwOnError: true,
+    tasks: ids.map((id) => async () => {
+      try {
+        response.values[id] = await runOpRead(
+          opCommand,
+          token,
+          resolveOnePasswordSecretReference(id),
+        );
+      } catch (error) {
+        response.errors[id] = {
+          message: errorMessage(error),
+        };
+      }
+    }),
   });
   return response;
 }
 
 async function main() {
-  const input = await readStdin();
+  const input = await consumeText(process.stdin.setEncoding("utf8"));
   const request = parseRequest(input);
   writeResponse(await resolveFromOnePassword(request.ids));
 }

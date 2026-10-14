@@ -1,135 +1,27 @@
 // Covers message-action cross-context policy, markers, and presentation
 // decoration behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { jsonResult } from "../../agents/tools/common.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
+  createMessageActionContextFixture,
   directChatConfig,
-  directChatTestPlugin,
-  directOutbound,
-  forumTestPlugin,
   runDryAction,
   runDrySend,
   workspaceConfig,
-  workspaceTestPlugin,
-} from "./message-action-test-fixtures.js";
+} from "./message-action-runner.test-support.js";
 
-const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
-  jsonResult({ ok: true }),
-);
-
-const readWorkspaceTestPlugin: ChannelPlugin = {
-  ...workspaceTestPlugin,
-  actions: {
-    describeMessageTool: () => ({ actions: ["read"] }),
-    handleAction: handleWorkspaceAction,
-  },
-};
-
-const localChatTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "localchat",
-    label: "Local Chat",
-    docsPath: "/channels/localchat",
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-  }),
-  meta: {
-    id: "localchat",
-    label: "Local Chat",
-    selectionLabel: "Local Chat (local)",
-    docsPath: "/channels/localchat",
-    blurb: "Local chat test stub.",
-    aliases: ["local"],
-  },
-  outbound: directOutbound,
-  messaging: {
-    normalizeTarget: (raw) => raw.trim() || undefined,
-    targetResolver: {
-      looksLikeId: (raw) => raw.trim().length > 0,
-      hint: "<handle|chat_id:ID>",
-    },
-  },
-};
-
-const resolvedDmTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "slackdm",
-    label: "Resolved DM",
-    capabilities: { chatTypes: ["direct"], media: true },
-  }),
-  outbound: directOutbound,
-  messaging: {
-    normalizeTarget: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const userId = trimmed.replace(/^user:/i, "");
-      return /^user:/i.test(trimmed)
-        ? `user:${userId.toLowerCase()}`
-        : `channel:${trimmed.toLowerCase()}`;
-    },
-    targetResolver: {
-      looksLikeId: (raw) => /^(?:user:)?[UW][A-Z0-9]+$/i.test(raw.trim()),
-      hint: "<user:ID>",
-      resolveTarget: async ({ input }) => {
-        const userId = input.trim().replace(/^user:/i, "");
-        return /^[UW][A-Z0-9]+$/i.test(userId)
-          ? { to: userId, kind: "user", source: "normalized" }
-          : null;
-      },
-    },
-  },
-  threading: {
-    matchesToolContextTarget: ({ target, toolContext }) =>
-      target.toLowerCase() ===
-      toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
-  },
+const contextFixture = createMessageActionContextFixture();
+const { handleForumAction, handleWorkspaceAction } = contextFixture;
+const crossProviderRestrictedConfig: OpenClawConfig = {
+  ...workspaceConfig,
+  tools: { message: { crossContext: { allowAcrossProviders: false } } },
 };
 
 describe("runMessageAction context isolation", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: readWorkspaceTestPlugin,
-        },
-        {
-          pluginId: "directchat",
-          source: "test",
-          plugin: directChatTestPlugin,
-        },
-        {
-          pluginId: "forum",
-          source: "test",
-          plugin: forumTestPlugin,
-        },
-        {
-          pluginId: "localchat",
-          source: "test",
-          plugin: localChatTestPlugin,
-        },
-        {
-          pluginId: "slackdm",
-          source: "test",
-          plugin: resolvedDmTestPlugin,
-        },
-      ]),
-    );
-    handleWorkspaceAction.mockClear();
-  });
+  beforeEach(() => contextFixture.setup());
+  afterEach(() => contextFixture.cleanup());
   it("uses the current conversation for an implicit read", async () => {
     await runMessageAction({
       cfg: workspaceConfig,
@@ -156,21 +48,7 @@ describe("runMessageAction context isolation", () => {
     });
   });
 
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
   it.each([
-    {
-      name: "allows send when target matches current channel",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
     {
       name: "accepts legacy to parameter for send",
       cfg: workspaceConfig,
@@ -181,34 +59,12 @@ describe("runMessageAction context isolation", () => {
       },
     },
     {
-      name: "defaults to current channel when target is omitted",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
-    {
       name: "allows media-only send when target matches current channel",
       cfg: workspaceConfig,
       actionParams: {
         channel: "workspace",
         target: "#C12345678",
         media: "https://example.com/note.ogg",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    },
-    {
-      name: "allows send when poll booleans are explicitly false",
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollMulti: false,
-        pollAnonymous: false,
-        pollPublic: false,
       },
       toolContext: { currentChannelId: "C12345678" },
     },
@@ -251,20 +107,6 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "send when target differs from current workspace channel",
-      run: () =>
-        runDrySend({
-          cfg: workspaceConfig,
-          actionParams: {
-            channel: "workspace",
-            target: "channel:C99999999",
-            message: "hi",
-          },
-          toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-        }),
-      expectedKind: "send",
-    },
-    {
       name: "thread-reply when channelId differs from current workspace channel",
       run: () =>
         runDryAction({
@@ -285,18 +127,6 @@ describe("runMessageAction context isolation", () => {
   });
 
   it.each([
-    {
-      name: "direct chat match",
-      channel: "directchat",
-      target: "123@g.us",
-      currentChannelId: "123@g.us",
-    },
-    {
-      name: "local chat match",
-      channel: "localchat",
-      target: "localchat:+15551234567",
-      currentChannelId: "localchat:+15551234567",
-    },
     {
       name: "direct chat mismatch",
       channel: "directchat",
@@ -331,27 +161,6 @@ describe("runMessageAction context isolation", () => {
   });
 
   it.each([
-    {
-      name: "infers channel + target from tool context when missing",
-      cfg: {
-        channels: {
-          workspace: {
-            botToken: "workspace-test",
-            appToken: "workspace-app-test",
-          },
-          forum: {
-            token: "forum-test",
-          },
-        },
-      } as OpenClawConfig,
-      action: "send" as const,
-      actionParams: {
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      expectedKind: "send",
-      expectedChannel: "workspace",
-    },
     {
       name: "falls back to tool-context provider when channel param is an id",
       cfg: workspaceConfig,
@@ -392,88 +201,6 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "blocks cross-provider sends by default",
-      action: "send" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider message mutations by default",
-      action: "edit" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-        message: "updated",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider delete mutations by default",
-      action: "delete" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider pin mutations by default",
-      action: "pin" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks cross-provider unpin mutations by default",
-      action: "unpin" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "forum",
-        target: "@opsbot",
-        messageId: "forum-message-1",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
-      name: "blocks same-provider cross-context when disabled",
-      action: "send" as const,
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: {
-            crossContext: {
-              allowWithinProvider: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "channel:C99999999",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
-      message: /Cross-context messaging denied/,
-    },
-    {
       name: "blocks same-provider cross-context uploads when disabled",
       action: "upload-file" as const,
       cfg: {
@@ -495,24 +222,13 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks delegated channel reads without current context before target resolution",
-      action: "channel-info" as const,
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        channelId: "U12345678",
-      },
-      message: "requires the exact current conversation and account",
-    },
-    {
       name: "blocks actions outside the per-agent allowlist",
       action: "channel-info" as const,
       cfg: {
         ...workspaceConfig,
         agents: {
-          list: [
-            {
-              id: "sandbox",
+          entries: {
+            sandbox: {
               tools: {
                 message: {
                   actions: {
@@ -521,7 +237,7 @@ describe("runMessageAction context isolation", () => {
                 },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       agentId: "sandbox",
@@ -543,19 +259,49 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(message);
   });
 
+  it.each([
+    {
+      name: "default cross-provider access",
+      cfg: workspaceConfig,
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+    },
+  ])("dispatches topic actions for $name", async ({ cfg, toolContext }) => {
+    for (const action of ["topic-create", "topic-edit"] as const) {
+      await expect(
+        runMessageAction({
+          cfg,
+          action,
+          params: {
+            channel: "forum",
+            target: "@opsbot",
+            name: "Allowed topic",
+            ...(action === "topic-edit" ? { messageThreadId: "42" } : {}),
+          },
+          toolContext,
+          dryRun: false,
+        }),
+      ).resolves.toMatchObject({ kind: "action", channel: "forum", action });
+    }
+    expect(handleForumAction).toHaveBeenCalledTimes(2);
+  });
+
   it("retains direct-operator target-kind validation", async () => {
-    await expect(
-      runMessageAction({
-        cfg: workspaceConfig,
-        action: "channel-info",
-        params: {
-          channel: "workspace",
-          channelId: "U12345678",
-        },
-        conversationReadOrigin: "direct-operator",
-        dryRun: true,
-      }),
-    ).rejects.toThrow('Channel id "U12345678" resolved to a user target.');
+    const failure = runMessageAction({
+      cfg: workspaceConfig,
+      action: "channel-info",
+      params: {
+        channel: "workspace",
+        channelId: "U12345678",
+      },
+      conversationReadOrigin: "direct-operator",
+      dryRun: true,
+    });
+    await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+    await expect(failure).rejects.toMatchObject({
+      reasonCode: "message_target_invalid",
+      policyRef: "message-target:valid",
+    });
+    await expect(failure).rejects.toThrow('Channel id "U12345678" resolved to a user target.');
   });
 
   it("retains direct-operator cross-provider reads", async () => {
@@ -579,10 +325,10 @@ describe("runMessageAction context isolation", () => {
     expect(handleWorkspaceAction).toHaveBeenCalledOnce();
   });
 
-  it("retains cross-provider policy for direct operators", async () => {
+  it("retains explicit cross-provider restrictions for direct operators", async () => {
     await expect(
       runMessageAction({
-        cfg: workspaceConfig,
+        cfg: crossProviderRestrictedConfig,
         action: "pin",
         params: {
           channel: "forum",

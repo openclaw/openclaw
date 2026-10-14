@@ -1,15 +1,28 @@
 // Process-local cancellation handles for live cron task runs.
 
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { CronActiveJobMarker } from "../active-jobs.js";
+
 const activeCronTaskRunsByRunId = new Map<
   string,
   { controller: AbortController; onCancel?: (reason: string) => void }
 >();
 const settlingCronTaskRuns = new Map<Promise<unknown>, { retirementTimer?: NodeJS.Timeout }>();
+const activeCronTaskRunDrainWaiters = new Set<() => void>();
 // Restart drain may retire an abort-ignoring core after a bounded grace, but a
 // host snapshot must keep refusing readiness until that core actually settles.
-const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
-const DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS = 25;
+const suspensionVisibleCronTaskRuns = new Map<Promise<unknown>, string | undefined>();
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
+
+function notifyActiveCronTaskRunDrainWaitersIfEmpty(): void {
+  if (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0) {
+    return;
+  }
+  for (const resolve of activeCronTaskRunDrainWaiters) {
+    resolve();
+  }
+  activeCronTaskRunDrainWaiters.clear();
+}
 
 function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void {
   const entry = settlingCronTaskRuns.get(promise);
@@ -18,6 +31,7 @@ function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void 
   }
   entry.retirementTimer = setTimeout(() => {
     settlingCronTaskRuns.delete(promise);
+    notifyActiveCronTaskRunDrainWaitersIfEmpty();
   }, CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS);
   entry.retirementTimer.unref?.();
 }
@@ -25,31 +39,52 @@ function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void 
 export function registerActiveCronTaskRun(params: {
   runId: string | undefined;
   controller: AbortController;
+  activeJobMarker?: CronActiveJobMarker;
   onCancel?: (reason: string) => void;
 }): (() => void) | undefined {
   const runId = params.runId?.trim();
   if (!runId) {
     return undefined;
   }
-  activeCronTaskRunsByRunId.set(runId, {
+  const handle = {
     controller: params.controller,
     onCancel: params.onCancel,
-  });
+  };
+  activeCronTaskRunsByRunId.set(runId, handle);
+  // A durable remove/disable can land after marker admission but before this
+  // controller exists; consume that exact marker's request before provider work.
+  const cancelJobRun = (reason: string) => {
+    cancelActiveCronTaskRun({ runId, reason });
+  };
+  if (params.activeJobMarker?.cancellation?.kind === "requested") {
+    cancelJobRun(params.activeJobMarker.cancellation.reason);
+  } else if (params.activeJobMarker) {
+    params.activeJobMarker.cancellation = { kind: "bound", cancel: cancelJobRun };
+  }
   return () => {
+    if (
+      params.activeJobMarker?.cancellation?.kind === "bound" &&
+      params.activeJobMarker.cancellation.cancel === cancelJobRun
+    ) {
+      delete params.activeJobMarker.cancellation;
+    }
     if (activeCronTaskRunsByRunId.get(runId)?.controller === params.controller) {
       activeCronTaskRunsByRunId.delete(runId);
+      notifyActiveCronTaskRunDrainWaitersIfEmpty();
     }
   };
 }
 
-export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number {
+export function abortActiveCronTaskRuns(
+  reason: string | Error = createAgentRunRestartAbortError(),
+): number {
   let aborted = 0;
   for (const handle of activeCronTaskRunsByRunId.values()) {
     if (handle.controller.signal.aborted) {
       continue;
     }
     handle.controller.abort(reason);
-    handle.onCancel?.(reason);
+    handle.onCancel?.(typeof reason === "string" ? reason : reason.message);
     aborted += 1;
   }
   // Shutdown also retires main-session runs without cancellation handles.
@@ -62,9 +97,10 @@ export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number 
 export function trackActiveCronTaskRunSettlement(
   promise: Promise<unknown>,
   abortSignal?: AbortSignal,
+  agentId?: string,
 ): void {
   settlingCronTaskRuns.set(promise, {});
-  suspensionVisibleCronTaskRuns.add(promise);
+  suspensionVisibleCronTaskRuns.set(promise, agentId);
   // Cancellation belongs to this core only; sibling jobs must remain drain-visible.
   const startSettlementGrace = () => startActiveCronTaskRunSettlementGrace(promise);
   abortSignal?.addEventListener("abort", startSettlementGrace, { once: true });
@@ -81,12 +117,23 @@ export function trackActiveCronTaskRunSettlement(
       }
       settlingCronTaskRuns.delete(promise);
       suspensionVisibleCronTaskRuns.delete(promise);
+      notifyActiveCronTaskRunDrainWaitersIfEmpty();
     });
 }
 
 /** Cron cores that can still mutate state even after timeout/cancel returned. */
-export function getSuspensionVisibleCronTaskRunCount(): number {
-  return suspensionVisibleCronTaskRuns.size;
+export function getSuspensionVisibleCronTaskRunCount(scope?: { agentId: string }): number {
+  if (!scope) {
+    return suspensionVisibleCronTaskRuns.size;
+  }
+  let count = 0;
+  for (const agentId of suspensionVisibleCronTaskRuns.values()) {
+    // An unclassified core cannot establish that an agent's filesystem is safe.
+    if (!agentId || agentId === scope.agentId) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** Retires restart-drain bookkeeping without hiding still-running cores from suspension. */
@@ -98,19 +145,26 @@ export function retireActiveCronTaskRunTracking(): void {
     }
   }
   settlingCronTaskRuns.clear();
+  notifyActiveCronTaskRunDrainWaitersIfEmpty();
 }
 
 export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
   drained: boolean;
   active: number;
 }> {
-  const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
-  while (
-    (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0) &&
-    Date.now() < deadline
-  ) {
+  const waitMs = Math.max(0, Math.floor(timeoutMs));
+  if (waitMs > 0 && (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0)) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
+      const waiter = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      // A native timer bounds shutdown independently of wall-clock jumps.
+      const timeout = setTimeout(() => {
+        activeCronTaskRunDrainWaiters.delete(waiter);
+        resolve();
+      }, waitMs);
+      activeCronTaskRunDrainWaiters.add(waiter);
     });
   }
   return {
@@ -119,10 +173,7 @@ export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
   };
 }
 
-export function cancelActiveCronTaskRun(params: {
-  runId: string | undefined;
-  reason?: string;
-}): boolean {
+function cancelActiveCronTaskRun(params: { runId: string | undefined; reason?: string }): boolean {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;

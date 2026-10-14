@@ -1,4 +1,3 @@
-// Android Sync Versioning script supports OpenClaw repository automation.
 import path from "node:path";
 import { syncAndroidVersioning } from "./lib/android-version.ts";
 import { parseVersionSyncArgs } from "./lib/version-script-args.ts";
@@ -18,6 +17,11 @@ function main(argv = process.argv.slice(2)): number {
     return 0;
   }
 
+  if (options.releaseVersion) {
+    throw new Error(
+      "Android version sync uses the pinned version; store notes come from the release artifact.",
+    );
+  }
   const result = syncAndroidVersioning({ mode: options.mode, rootDir: options.rootDir });
 
   if (options.mode === "check") {

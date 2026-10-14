@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runMemorySearchWithDeadline } from "./search-deadline.js";
+import { isMemorySearchDeadlineError, runMemorySearchWithDeadline } from "./search-deadline.js";
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {
@@ -23,23 +23,39 @@ describe("runMemorySearchWithDeadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("aborts the task with the stable deadline error and clears its timer", async () => {
+  it("cannot be branded by copying the marker off the abort reason", async () => {
+    // The supervised task is handed the deadline error as `signal.reason`, so a
+    // property-based brand is readable by exactly the provider code the brand
+    // exists to exclude.
     vi.useFakeTimers();
-    let taskSignal: AbortSignal | undefined;
+    let forged: Error | undefined;
+    let sawBrandedDeadlineReason = false;
     const result = runMemorySearchWithDeadline({
       timeoutMs: 15_000,
-      run: async (signal) => {
-        taskSignal = signal;
-        return await new Promise(() => {});
-      },
+      run: async (signal) =>
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              sawBrandedDeadlineReason = isMemorySearchDeadlineError(signal.reason);
+              const stolen = new Error("openai-compatible embeddings query failed");
+              for (const key of Object.getOwnPropertySymbols(signal.reason as object)) {
+                Object.defineProperty(stolen, key, { value: true });
+              }
+              forged = stolen;
+              reject(stolen);
+            },
+            { once: true },
+          );
+        }),
     });
-    const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 15s");
+    const resultAssertion = expect(result).rejects.toSatisfy(isMemorySearchDeadlineError);
     await vi.advanceTimersByTimeAsync(15_000);
-
     await resultAssertion;
-    expect(taskSignal?.aborted).toBe(true);
-    expect(taskSignal?.reason).toEqual(new Error("memory_search timed out after 15s"));
-    expect(vi.getTimerCount()).toBe(0);
+
+    expect(forged).toBeDefined();
+    expect(sawBrandedDeadlineReason).toBe(true);
+    expect(isMemorySearchDeadlineError(forged)).toBe(false);
   });
 
   it("preserves caller cancellation and removes its listener", async () => {

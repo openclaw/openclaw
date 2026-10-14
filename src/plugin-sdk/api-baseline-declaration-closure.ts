@@ -1,17 +1,19 @@
 // Declaration closure rendering keeps compiler-owned dependencies in API baselines.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import type { Printer, Program, Project } from "typescript/unstable/sync";
+import { formatNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import {
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
 } from "./api-baseline-normalization.js";
 
-type DeclarationClosure = { hash: string };
+export type PluginSdkApiDeclarationSection = { name: string; text: string };
+type DeclarationClosure = { hash: string; sections: PluginSdkApiDeclarationSection[] };
 
-type DeclarationReference = { mode: ts.ResolutionMode; specifier: string };
 type EmittedDeclaration = { declarationFile: ts.SourceFile; text: string };
-type DeclarationSection = { name: string; text: string };
+type DeclarationSection = PluginSdkApiDeclarationSection;
 type Dependency =
   | { kind: "external" }
   | { kind: "failure" }
@@ -52,56 +54,39 @@ function appendWalk(target: Sections, walk: Walk): boolean {
   return walk.tainted;
 }
 
-export function formatPluginSdkDiagnostics(
-  diagnostics: readonly ts.Diagnostic[],
-  currentDirectory: string,
-): string {
-  return ts.formatDiagnostics(diagnostics, {
-    getCanonicalFileName: (fileName) => fileName,
-    getCurrentDirectory: () => currentDirectory,
-    getNewLine: () => "\n",
-  });
-}
-
-function collectDeclarationReferences(
-  sourceFile: ts.SourceFile,
-  options: ts.CompilerOptions,
-): DeclarationReference[] {
-  const references = new Map<string, DeclarationReference>();
-  const add = (literal: ts.StringLiteralLike) => {
-    const mode = ts.getModeForUsageLocation(sourceFile, literal, options);
-    references.set(`${mode ?? "default"}\0${literal.text}`, { mode, specifier: literal.text });
+function collectDeclarationReferences(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
+  const references = new Map<string, ts.StringLiteralLikeNode>();
+  const add = (literal: ts.StringLiteralLikeNode) => {
+    references.set(`${literal.pos}\0${literal.text}`, literal);
   };
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLikeNode(node.moduleSpecifier)) {
       add(node.moduleSpecifier);
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       add(node.moduleSpecifier);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference) &&
       node.moduleReference.expression &&
-      ts.isStringLiteralLike(node.moduleReference.expression)
+      ts.isStringLiteralLikeNode(node.moduleReference.expression)
     ) {
       add(node.moduleReference.expression);
     } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
-      ts.isStringLiteralLike(node.argument.literal)
+      ts.isStringLiteralLikeNode(node.argument.literal)
     ) {
       add(node.argument.literal);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return [...references.values()].toSorted(
-    (left, right) =>
-      compareText(left.specifier, right.specifier) ||
-      compareText(String(left.mode), String(right.mode)),
+    (left, right) => compareText(left.text, right.text) || left.pos - right.pos,
   );
 }
 
@@ -111,7 +96,7 @@ function collectBindingNames(name: ts.BindingName, names: string[]): void {
     return;
   }
   for (const element of name.elements) {
-    if (!ts.isOmittedExpression(element)) {
+    if (!ts.isOmittedExpression(element) && element.name) {
       collectBindingNames(element.name, names);
     }
   }
@@ -147,7 +132,7 @@ function referencedNames(statement: ts.Statement, ownNames: readonly string[]): 
     if (ts.isIdentifier(node) && !own.has(node.text)) {
       names.add(node.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(statement);
   return [...names].toSorted(compareText);
@@ -162,38 +147,46 @@ function importTypeTarget(node: ts.ImportTypeNode): string | null {
 }
 
 export function createDeclarationClosureRenderer(params: {
-  printer: ts.Printer;
-  program: ts.Program;
+  project: Project;
+  printer: Printer;
+  sourceProgram: Program;
+  emittedSources: ReadonlySet<string>;
   repoRoot: string;
 }): (sourceFile: ts.SourceFile, exportName: string) => DeclarationClosure | null {
-  const { printer, program, repoRoot } = params;
-  const options = program.getCompilerOptions();
-  const canonical = (fileName: string) => {
-    const resolved = path.resolve(fileName);
-    return ts.sys.useCaseSensitiveFileNames ? resolved : resolved.toLowerCase();
+  const { project, printer, sourceProgram: program, emittedSources, repoRoot } = params;
+  const isGlobalAugmentation = (node: ts.Node): node is ts.ModuleDeclaration =>
+    ts.isModuleDeclaration(node) &&
+    ts.isIdentifier(node.name) &&
+    node.name.text === "global" &&
+    project.checker.getSymbolAtLocation(node.name)?.escapedName === ts.InternalSymbolName.Global;
+  const printStatement = (statement: ts.Statement) => {
+    const text = printer.printNode(statement).trim();
+    // The native AST wire format drops the augmentation marker; its printer adds a module
+    // keyword. The checker still identifies the augmentation, so preserve that syntax.
+    return isGlobalAugmentation(statement)
+      ? text.replace(/^declare module global\b/u, "declare global")
+      : text;
   };
-  const sourceFiles = new Map<string, ts.SourceFile>();
-  for (const sourceFile of program.getSourceFiles()) {
-    sourceFiles.set(canonical(sourceFile.fileName), sourceFile);
-    const realPath = ts.sys.realpath?.(sourceFile.fileName);
-    if (realPath) {
-      sourceFiles.set(canonical(realPath), sourceFile);
-    }
-  }
-  const resolutionCache = ts.createModuleResolutionCache(repoRoot, canonical, options);
-  const moduleHost = ts.createCompilerHost(options, true);
+  const canonical = (fileName: string) => path.resolve(fileName);
   const emitted = new Map<string, EmittedDeclaration>();
   const indexes = new Map<string, DeclarationIndex>();
   const renderedClosures = new Map<string, DeclarationClosure>();
   const reachability = new Map<string, WalkResult>();
   const active = new Set<string>();
+  const rootReachability = new Map<string, WalkResult>();
   const ambientReachability = new Map<string, Walk>();
   const activeAmbient = new Set<string>();
+  const rootAmbientReachability = new Map<string, Walk>();
+  const unresolvedDependencies = new Set<string>();
 
-  const baseDiagnostics = [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics()];
+  const baseDiagnostics = [
+    ...program.getConfigFileParsingDiagnostics(),
+    ...program.getProgramDiagnostics(),
+    ...program.getGlobalDiagnostics(),
+  ];
   if (baseDiagnostics.length > 0) {
     throw new Error(
-      `Unable to emit Plugin SDK declarations:\n${formatPluginSdkDiagnostics(baseDiagnostics, program.getCurrentDirectory())}`,
+      `Unable to emit Plugin SDK declarations:\n${formatNativeTypeScriptDiagnostics(baseDiagnostics)}`,
     );
   }
 
@@ -220,69 +213,34 @@ export function createDeclarationClosureRenderer(params: {
     if (cached) {
       return cached;
     }
-    const diagnostics = [
-      ...program.getSyntacticDiagnostics(sourceFile),
-      ...(sourceFile.isDeclarationFile ? [] : program.getDeclarationDiagnostics(sourceFile)),
-    ];
-    if (diagnostics.length > 0) {
+    if (!sourceFile.isDeclarationFile && !emittedSources.has(sourceFile.fileName)) {
       throw new Error(
-        `Unable to emit ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}:\n${formatPluginSdkDiagnostics(diagnostics, program.getCurrentDirectory())}`,
+        `Missing emitted declaration for ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}`,
       );
     }
-
-    let declarationFile = sourceFile;
-    if (!sourceFile.isDeclarationFile) {
-      let output: { content: string; fileName: string } | undefined;
-      const result = program.emit(
-        sourceFile,
-        (fileName, content, _writeByteOrderMark, _onError, outputSources) => {
-          if (!/\.d\.[cm]?ts$/u.test(fileName)) {
-            return;
-          }
-          const outputSource = outputSources?.[0];
-          if (
-            outputSources?.length !== 1 ||
-            !outputSource ||
-            canonical(outputSource.fileName) !== canonical(sourceFile.fileName)
-          ) {
-            throw new Error(`Declaration output ${fileName} has no unique source owner`);
-          }
-          if (output) {
-            throw new Error(`Duplicate declaration output for ${sourceFile.fileName}`);
-          }
-          output = { content, fileName };
-        },
-        undefined,
-        true,
+    const declarationFile = project.program.getSourceFile(sourceFile.fileName);
+    if (!declarationFile) {
+      throw new Error(`Missing Plugin SDK declaration module ${sourceFile.fileName}`);
+    }
+    const diagnostics = project.program.getSyntacticDiagnostics(sourceFile.fileName);
+    if (diagnostics.length > 0) {
+      throw new Error(
+        `Unable to read Plugin SDK declarations:\n${formatNativeTypeScriptDiagnostics(diagnostics)}`,
       );
-      if (result.emitSkipped || result.diagnostics.length > 0) {
-        const detail = result.diagnostics.length
-          ? `\n${formatPluginSdkDiagnostics(result.diagnostics, program.getCurrentDirectory())}`
-          : "";
-        throw new Error(
-          `Unable to emit ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}${detail}`,
-        );
-      }
-      if (!output) {
-        throw new Error(
-          `Missing emitted declaration for ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}`,
-        );
-      }
-      declarationFile = ts.createSourceFile(
-        output.fileName,
-        output.content,
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TS,
-      );
-      declarationFile.impliedNodeFormat = sourceFile.impliedNodeFormat;
     }
 
     const declaration = {
       declarationFile,
       text: normalizePluginSdkApiDeclarationText(
         repoRoot,
-        printer.printFile(declarationFile).trim(),
+        [
+          ...(ts.getLeadingCommentRanges(declarationFile.text, 0) ?? [])
+            .map((comment) => declarationFile.text.slice(comment.pos, comment.end))
+            .filter((comment) => /^\/\/\/\s*<reference\b/u.test(comment)),
+          ...declarationFile.statements.map(printStatement),
+        ]
+          .join("\n")
+          .trim(),
       ),
     };
     emitted.set(key, declaration);
@@ -291,44 +249,45 @@ export function createDeclarationClosureRenderer(params: {
 
   const resolveDependency = (
     sourceFile: ts.SourceFile,
-    reference: DeclarationReference,
+    reference: ts.StringLiteralLikeNode,
     exportedName: string,
   ): Dependency => {
-    const resolved = ts.resolveModuleName(
-      reference.specifier,
-      sourceFile.fileName,
-      options,
-      moduleHost,
-      resolutionCache,
-      undefined,
-      reference.mode,
-    ).resolvedModule;
-    if (!resolved) {
+    // Resolve the actual emitted literal, including its enclosing import attributes and
+    // import-equals syntax. The native checker owns package conditions and resolution modes.
+    const symbol = project.checker.getSymbolAtLocation(reference);
+    const target = symbol?.declarations
+      .map((handle) => handle.resolve()?.getSourceFile())
+      .find((file) => file !== undefined);
+    if (!target) {
+      if (!reference.text.startsWith("node:")) {
+        unresolvedDependencies.add(
+          `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.text}`,
+        );
+      }
       return {
-        kind: ts.isExternalModuleNameRelative(reference.specifier) ? "failure" : "external",
+        kind:
+          reference.text.startsWith(".") || path.isAbsolute(reference.text)
+            ? "failure"
+            : "external",
       };
     }
-    if (resolved.isExternalLibraryImport) {
-      return { kind: "external" };
-    }
-    const dependency = sourceFiles.get(canonical(resolved.resolvedFileName));
+    const dependency = program.getSourceFile(target.fileName);
     if (!dependency) {
-      const relative = path.relative(repoRoot, path.resolve(resolved.resolvedFileName));
+      const relative = path.relative(repoRoot, path.resolve(target.fileName));
       return relative !== ".." &&
         !relative.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relative)
-        ? { kind: "failure" }
+        !path.isAbsolute(relative) &&
+        !relative.split(path.sep).includes("node_modules")
+        ? (unresolvedDependencies.add(
+            `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.text}`,
+          ),
+          { kind: "failure" })
         : { kind: "external" };
     }
     return isRepoOwned(dependency)
       ? { exportedName, kind: "repo", sourceFile: dependency }
       : { kind: "external" };
   };
-
-  const referenceFor = (file: ts.SourceFile, literal: ts.StringLiteralLike) => ({
-    mode: ts.getModeForUsageLocation(file, literal, options),
-    specifier: literal.text,
-  });
 
   const getIndex = (sourceFile: ts.SourceFile): DeclarationIndex => {
     const key = canonical(sourceFile.fileName);
@@ -347,26 +306,26 @@ export function createDeclarationClosureRenderer(params: {
       declarations.set(name, [...(declarations.get(name) ?? []), statement]);
     };
     for (const statement of declaration.declarationFile.statements) {
-      if (
-        ts.isModuleDeclaration(statement) &&
-        (statement.flags & ts.NodeFlags.GlobalAugmentation) !== 0
-      ) {
+      if (isGlobalAugmentation(statement)) {
         globals.push(statement);
         continue;
       }
       for (const name of declaredNames(statement)) {
         addDeclaration(name, statement);
         if (
-          ts.canHaveModifiers(statement) &&
-          ts
-            .getModifiers(statement)
-            ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)
+          (ts.isClassDeclaration(statement) ||
+            ts.isFunctionDeclaration(statement) ||
+            ts.isInterfaceDeclaration(statement)) &&
+          statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)
         ) {
           addDeclaration("default", statement);
         }
       }
-      if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
-        const reference = referenceFor(declaration.declarationFile, statement.moduleSpecifier);
+      if (
+        ts.isImportDeclaration(statement) &&
+        ts.isStringLiteralLikeNode(statement.moduleSpecifier)
+      ) {
+        const reference = statement.moduleSpecifier;
         if (!statement.importClause) {
           sideEffects.push(resolveDependency(sourceFile, reference, "*"));
           continue;
@@ -396,19 +355,15 @@ export function createDeclarationClosureRenderer(params: {
         ts.isImportEqualsDeclaration(statement) &&
         ts.isExternalModuleReference(statement.moduleReference) &&
         statement.moduleReference.expression &&
-        ts.isStringLiteralLike(statement.moduleReference.expression)
+        ts.isStringLiteralLikeNode(statement.moduleReference.expression)
       ) {
         imports.set(
           statement.name.text,
-          resolveDependency(
-            sourceFile,
-            referenceFor(declaration.declarationFile, statement.moduleReference.expression),
-            "*",
-          ),
+          resolveDependency(sourceFile, statement.moduleReference.expression, "*"),
         );
       } else if (
         ts.isExportDeclaration(statement) &&
-        (!statement.moduleSpecifier || ts.isStringLiteralLike(statement.moduleSpecifier))
+        (!statement.moduleSpecifier || ts.isStringLiteralLikeNode(statement.moduleSpecifier))
       ) {
         if (!statement.moduleSpecifier) {
           if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
@@ -421,7 +376,7 @@ export function createDeclarationClosureRenderer(params: {
           }
           continue;
         }
-        const reference = referenceFor(declaration.declarationFile, statement.moduleSpecifier);
+        const reference = statement.moduleSpecifier;
         if (!statement.exportClause) {
           exportStars.push(resolveDependency(sourceFile, reference, "*"));
         } else if (ts.isNamespaceExport(statement.exportClause)) {
@@ -457,10 +412,7 @@ export function createDeclarationClosureRenderer(params: {
   };
 
   const statementText = (statement: ts.Statement) =>
-    normalizePluginSdkApiDeclarationText(
-      repoRoot,
-      printer.printNode(ts.EmitHint.Unspecified, statement, statement.getSourceFile()).trim(),
-    );
+    normalizePluginSdkApiDeclarationText(repoRoot, printStatement(statement));
   const globalSections = (index: DeclarationIndex): Sections => {
     const sections = new Map<string, DeclarationSection>();
     for (const statement of index.globals) {
@@ -478,14 +430,11 @@ export function createDeclarationClosureRenderer(params: {
     const index = getIndex(sourceFile);
     let text = index.declaration.text;
     const sections = new Map<string, DeclarationSection>();
-    for (const reference of collectDeclarationReferences(
-      index.declaration.declarationFile,
-      options,
-    )) {
+    for (const reference of collectDeclarationReferences(index.declaration.declarationFile)) {
       const dependency = resolveDependency(sourceFile, reference, "*");
       if (dependency.kind !== "external") {
-        text = text.replaceAll(`"${reference.specifier}"`, '"<repo>"');
-        text = text.replaceAll(`'${reference.specifier}'`, "'<repo>'");
+        text = text.replaceAll(`"${reference.text}"`, '"<repo>"');
+        text = text.replaceAll(`'${reference.text}'`, "'<repo>'");
       }
       if (dependency.kind === "repo") {
         appendSections(sections, fallbackFile(dependency.sourceFile, visited));
@@ -504,7 +453,7 @@ export function createDeclarationClosureRenderer(params: {
 
   const ambientContribution = (sourceFile: ts.SourceFile): Walk => {
     const key = canonical(sourceFile.fileName);
-    const cached = ambientReachability.get(key);
+    const cached = ambientReachability.get(key) ?? rootAmbientReachability.get(key);
     if (cached) {
       return cached;
     }
@@ -528,6 +477,8 @@ export function createDeclarationClosureRenderer(params: {
     const result = { sections, tainted };
     if (!tainted) {
       ambientReachability.set(key, result);
+    } else {
+      rootAmbientReachability.set(key, result);
     }
     return result;
   };
@@ -553,16 +504,16 @@ export function createDeclarationClosureRenderer(params: {
       if (
         ts.isImportTypeNode(node) &&
         ts.isLiteralTypeNode(node.argument) &&
-        ts.isStringLiteralLike(node.argument.literal)
+        ts.isStringLiteralLikeNode(node.argument.literal)
       ) {
         const dependency = resolveDependency(
           sourceFile,
-          referenceFor(statement.getSourceFile(), node.argument.literal),
+          node.argument.literal,
           importTypeTarget(node) ?? "*",
         );
         tainted = appendWalk(sections, resolveWalkDependency(dependency, sourceFile)) || tainted;
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(statement);
     return { sections, tainted };
@@ -574,8 +525,8 @@ export function createDeclarationClosureRenderer(params: {
     exported: boolean,
   ): WalkResult => {
     const key = `${canonical(sourceFile.fileName)}\0${exported ? "export" : "local"}\0${name}`;
-    const cached = reachability.get(key);
-    if (cached !== undefined || reachability.has(key)) {
+    const cached = reachability.get(key) ?? rootReachability.get(key);
+    if (cached !== undefined || reachability.has(key) || rootReachability.has(key)) {
       return cached ?? null;
     }
     if (active.has(key)) {
@@ -639,6 +590,8 @@ export function createDeclarationClosureRenderer(params: {
     if (result?.tainted) {
       // Back-edge results are complete only inside the current root union. Caching them can let
       // reachable cycle changes escape the hash and make later exports entry-order sensitive.
+      // Reuse them only within this root: its union already includes the omitted back edge.
+      rootReachability.set(key, result);
     } else {
       reachability.set(key, result);
     }
@@ -654,13 +607,21 @@ export function createDeclarationClosureRenderer(params: {
     if (cached) {
       return cached;
     }
+    rootReachability.clear();
+    rootAmbientReachability.clear();
     const walk = walkDeclaration(owner, exportName, true) ?? recallFallback(owner);
     const uniqueSections = [...walk.sections.values()].toSorted(
       (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
     );
     const closure = {
       hash: createHash("sha256").update(JSON.stringify(uniqueSections), "utf8").digest("hex"),
+      sections: uniqueSections,
     };
+    if (unresolvedDependencies.size > 0) {
+      throw new Error(
+        `Unable to resolve Plugin SDK declaration dependencies:\n${[...unresolvedDependencies].toSorted(compareText).join("\n")}`,
+      );
+    }
     renderedClosures.set(cacheKey, closure);
     return closure;
   };

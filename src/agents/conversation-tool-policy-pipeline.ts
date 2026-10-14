@@ -1,3 +1,4 @@
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyToolPolicyPipeline,
@@ -6,25 +7,13 @@ import {
 } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, type ToolPolicyLike } from "./tool-policy.js";
 
-type ResolvedConversationToolPolicies = {
-  profilePolicy?: ToolPolicyLike;
-  providerProfilePolicy?: ToolPolicyLike;
-  globalPolicy?: ToolPolicyLike;
-  globalProviderPolicy?: ToolPolicyLike;
-  agentPolicy?: ToolPolicyLike;
-  agentProviderPolicy?: ToolPolicyLike;
-  groupPolicy?: ToolPolicyLike;
-  senderPolicy?: ToolPolicyLike;
-  sandboxPolicy?: ToolPolicyLike;
-  subagentPolicy?: ToolPolicyLike;
-  runtimeToolPolicy?: ToolPolicyLike;
-  inheritedToolPolicy?: ToolPolicyLike;
-};
-
 function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
 ): TPolicy | undefined {
+  if (isFrozenClawToolAllowPolicy(policy)) {
+    return policy;
+  }
   return mergeAlsoAllowPolicy(policy, alsoAllow ? [...alsoAllow] : undefined);
 }
 
@@ -37,7 +26,7 @@ export function resolveConversationToolPolicies(params: {
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];
-}): ResolvedConversationToolPolicies {
+}) {
   const policy = params.capabilityProfile.policy;
   const profileAllow = [
     ...(policy.profileAlsoAllow ?? []),
@@ -75,12 +64,22 @@ export function resolveConversationToolPolicies(params: {
 /** Builds the canonical ordered policy pipeline for a resolved conversation. */
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
-  policies: ResolvedConversationToolPolicies;
+  policies: ReturnType<typeof resolveConversationToolPolicies>;
   additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
   const profile = params.capabilityProfile.policy;
+  const step = (
+    policy: ToolPolicyLike | undefined,
+    label: string,
+    kind: "session" | "runtime" = "session",
+  ): ToolPolicyPipelineStep => ({
+    policy,
+    source: { kind },
+    label,
+    unavailableCoreToolReason: params.unavailableCoreToolReason,
+  });
   return [
     ...buildDefaultToolPolicyPipelineSteps({
       profilePolicy: params.policies.profilePolicy,
@@ -96,33 +95,16 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       groupPolicy: params.policies.groupPolicy,
       senderPolicy: params.policies.senderPolicy,
       agentId: profile.agentId,
+      sources: profile.sources,
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
-    {
-      policy: params.policies.sandboxPolicy,
-      label: "sandbox tools.allow",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.sandboxPolicy, "sandbox tools.allow"),
     ...(params.additionalStepsAfterSandbox ?? []),
-    {
-      policy: params.policies.subagentPolicy,
-      label: "subagent tools.allow",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.subagentPolicy, "subagent tools.allow"),
     ...(params.includeRuntimeToolPolicy
-      ? [
-          {
-            policy: params.policies.runtimeToolPolicy,
-            label: "runtime tools.allow",
-            unavailableCoreToolReason: params.unavailableCoreToolReason,
-          },
-        ]
+      ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]
       : []),
-    {
-      policy: params.policies.inheritedToolPolicy,
-      label: "inherited tools",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.inheritedToolPolicy, "inherited tools"),
   ];
 }
 
@@ -146,4 +128,17 @@ export function projectConversationToolNames<TName extends string>(params: {
       includeRuntimeToolPolicy: true,
     }),
   }).map((tool) => tool.name);
+}
+
+export function isConversationToolAllowed(
+  capabilityProfile: ResolvedConversationCapabilityProfile,
+  toolName: string,
+): boolean {
+  return (
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: [toolName],
+      warn: () => undefined,
+    }).length === 1
+  );
 }

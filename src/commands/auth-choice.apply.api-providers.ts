@@ -1,30 +1,9 @@
 // Token-provider normalization hooks for provider-backed auth choices.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
 import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
-import type { ProviderAuthKind } from "../plugins/types.js";
-import { normalizeTokenProviderInput } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
-
-function resolveProviderAuthChoiceByKind(params: {
-  providerId: string;
-  kind: ProviderAuthKind;
-  config?: ApplyAuthChoiceParams["config"];
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoice | undefined {
-  const provider = resolveProviderMatch(
-    resolvePluginProviders({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      mode: "setup",
-    }),
-    params.providerId,
-  );
-  const choiceId = provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId;
-  return choiceId as AuthChoice | undefined;
-}
 
 /** Translate generic api-key/token choices to provider-specific auth choices when possible. */
 export function normalizeApiKeyTokenProviderAuthChoice(params: {
@@ -34,34 +13,29 @@ export function normalizeApiKeyTokenProviderAuthChoice(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoice {
-  if (!params.tokenProvider) {
-    return params.authChoice;
-  }
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  const normalizedTokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
   if (!normalizedTokenProvider) {
     return params.authChoice;
   }
-  if (params.authChoice === "token" || params.authChoice === "setup-token") {
-    return (
-      resolveProviderAuthChoiceByKind({
-        providerId: normalizedTokenProvider,
-        kind: "token",
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ?? params.authChoice
-    );
-  }
-  if (params.authChoice !== "apiKey") {
+  const kind =
+    params.authChoice === "apiKey"
+      ? "api_key"
+      : params.authChoice === "token" || params.authChoice === "setup-token"
+        ? "token"
+        : undefined;
+  if (!kind) {
     return params.authChoice;
   }
-  return (
-    resolveProviderAuthChoiceByKind({
-      providerId: normalizedTokenProvider,
-      kind: "api_key",
+  const provider = resolveProviderMatch(
+    resolvePluginProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-    }) ?? params.authChoice
+      mode: "setup",
+    }),
+    normalizedTokenProvider,
+  );
+  return (
+    provider?.auth.find((method) => method.kind === kind)?.wizard?.choiceId ?? params.authChoice
   );
 }

@@ -1,34 +1,32 @@
-import {
-  css,
-  html,
-  nothing,
-  type ReactiveController,
-  type ReactiveControllerHost,
-  type TemplateResult,
-} from "lit";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
-type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
+type DockLayoutHost = Pick<SolidControllerHost, "addController" | "requestUpdate"> & {
+  readonly isConnected: boolean;
+  readonly embedded?: boolean;
+  hasAttribute?(name: string): boolean;
+};
 
 type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
+  maxWidth?: () => number;
   onResize?: () => void;
 };
 
-export class DockLayoutController<TDock extends DockPanelPlacement> implements ReactiveController {
+export class DockLayoutController<TDock extends DockPanelPlacement> implements SolidController {
   open = false;
   dock: TDock;
   height: number;
   width: number;
 
   private suppressed = false;
-  private resizeCleanup: (() => void) | null = null;
+  private persistedOpen = false;
   private readonly onViewportResize = () => {
     const height = Math.min(this.height, this.options.layout.maxHeight());
-    const width = Math.min(this.width, this.options.layout.maxWidth());
+    const width = Math.min(this.width, this.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -55,16 +53,16 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       return;
     }
     const layout = this.options.layout.load();
+    this.persistedOpen = layout.open;
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
     this.height = layout.height;
-    this.width = layout.width;
+    this.width = Math.min(layout.width, this.maxWidth());
     window.addEventListener("resize", this.onViewportResize);
   }
 
   hostDisconnected(): void {
     window.removeEventListener("resize", this.onViewportResize);
-    this.clearResizeListeners();
     this.clearReservation();
   }
 
@@ -81,17 +79,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.setOpen(false, false);
   }
 
-  /**
-   * Full-page route takeovers (settings) own the viewport, so docks hide while
-   * one renders. Hiding never persists — the user's open preference must survive
-   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
-   * mid-takeover cannot pop the panel back over settings. Returns true when the
-   * caller must resume its surface after the takeover ends.
-   *
-   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
-   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
-   * requested terminal would be a worse papercut than the one this fixes.
-   */
+  /** Hide during route takeovers without losing the persisted open preference.
+   * Suppression blocks automatic restores, but explicit opens still win.
+   * Returns true when the caller must resume its surface after the takeover. */
   setSuppressed(suppressed: boolean): boolean {
     if (this.suppressed === suppressed) {
       return false;
@@ -109,13 +99,11 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       this.suppressed ||
       !this.options.isAvailable() ||
       this.open ||
-      (!this.isFullscreen() && !this.options.layout.load().open)
+      (!this.isFullscreen() && !this.persistedOpen)
     ) {
       return false;
     }
-    this.open = true;
-    this.syncReservation();
-    this.host.requestUpdate();
+    this.setOpen(true, false);
     return true;
   }
 
@@ -129,6 +117,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   persist(): void {
+    this.persistedOpen = this.open;
     this.options.layout.save({
       open: this.open,
       dock: this.dock,
@@ -138,7 +127,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
     const visible = this.options.isAvailable() && this.open;
@@ -153,147 +142,72 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 
-  startResize(event: PointerEvent): void {
-    event.preventDefault();
-    this.clearResizeListeners();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startHeight = this.height;
-    const startWidth = this.width;
-    const onMove = (move: PointerEvent) => {
-      if (this.dock === "bottom") {
-        const next = Math.max(this.options.layout.minHeight, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, this.options.layout.maxHeight());
-      } else {
-        const next = Math.max(this.options.layout.minWidth, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, this.options.layout.maxWidth());
-      }
-      this.syncReservation();
-      this.options.onResize?.();
-      this.host.requestUpdate();
-    };
-    const cleanup = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("blur", onUp);
-      if (this.resizeCleanup === cleanup) {
-        this.resizeCleanup = null;
-      }
-    };
-    const onUp = () => {
-      cleanup();
-      if (this.host.isConnected) {
-        this.persist();
-      }
-    };
-    this.resizeCleanup = cleanup;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    window.addEventListener("blur", onUp);
-  }
-
-  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    if (this.isFullscreen() || this.dock === "main") {
-      return nothing;
+  resize(event: CustomEvent<{ splitRatio: number }>): void {
+    const horizontal = this.dock === "bottom";
+    const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
+    const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
+    const size = Math.min(maximum, Math.max(minimum, (1 - event.detail.splitRatio) * this.size()));
+    if (horizontal) {
+      this.height = size;
+    } else {
+      this.width = size;
     }
-    return html`<div
-      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      @pointerdown=${(event: PointerEvent) => this.startResize(event)}
-      role="separator"
-      aria-label=${label}
-    ></div>`;
+    this.syncReservation();
+    this.options.onResize?.();
+    this.host.requestUpdate();
   }
 
-  clearResizeListeners(): void {
-    this.resizeCleanup?.();
-    this.resizeCleanup = null;
+  private size(): number {
+    return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
+  }
+
+  get resizer() {
+    if (this.isFullscreen() || this.dock === "main") {
+      return null;
+    }
+    const horizontal = this.dock === "bottom";
+    const size = this.size();
+    const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
+    const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
+    const current = horizontal ? this.height : this.width;
+    return {
+      orientation: horizontal ? ("horizontal" as const) : ("vertical" as const),
+      splitRatio: 1 - current / size,
+      minRatio: 1 - maximum / size,
+      maxRatio: 1 - minimum / size,
+      measureRatio: () => 1 - (horizontal ? this.height : this.width) / this.size(),
+      measureSize: () => this.size(),
+    };
   }
 
   private clearReservation(): void {
+    if (!this.reservesViewport()) {
+      return;
+    }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
   }
 
+  // Only a standalone dock owns its panel's viewport reservation. Embedded, fullscreen,
+  // and inline hosts are laid out by their parent, and the standalone dock of the same
+  // panel can be open at the same time, so they neither reserve nor clear its properties.
+  private reservesViewport(): boolean {
+    const embedded = this.host.embedded ?? this.host.hasAttribute?.("embedded") ?? false;
+    return !this.isFullscreen() && !embedded;
+  }
+
   private isFullscreen(): boolean {
     return this.options.isFullscreen?.() === true;
   }
-}
 
-export const dockPanelStyles = css`
-  :host {
-    position: fixed;
-    z-index: 60;
-    color: var(--text, #d7dae0);
-    font-family: var(--font-body);
+  private maxWidth(): number {
+    return Math.max(
+      this.options.layout.minWidth,
+      Math.min(
+        this.options.layout.maxWidth(),
+        this.options.maxWidth?.() ?? Number.POSITIVE_INFINITY,
+      ),
+    );
   }
-  :is(.bp, .tp) {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg, #0e1015);
-    overflow: hidden;
-  }
-  :is(.bp--bottom, .tp--bottom) {
-    border-top: 1px solid var(--border, #262b34);
-  }
-  :is(.bp--right, .tp--right) {
-    border-left: 1px solid var(--border, #262b34);
-  }
-  :is(.bp-resizer, .tp-resizer) {
-    position: absolute;
-    z-index: 2;
-    background: transparent;
-  }
-  :is(.bp-resizer, .tp-resizer):hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
-  }
-  :is(.bp-resizer--bottom, .tp-resizer--bottom) {
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 5px;
-    cursor: ns-resize;
-  }
-  :is(.bp-resizer--right, .tp-resizer--right) {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 5px;
-    cursor: ew-resize;
-  }
-  :is(.bp-header, .tp-header) {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 6px 0 4px;
-    border-bottom: 1px solid var(--border, #262b34);
-    min-height: 36px;
-  }
-  :is(.bp-icon, .tp-icon) {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  :is(.bp-icon, .tp-icon):hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
-  }
-  :is(.bp-actions, .tp-actions) {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding-left: 6px;
-  }
-`;
+}

@@ -30,21 +30,6 @@ describe("resolveCommandTurnContext", () => {
     });
   });
 
-  it("derives text slash command turns from legacy context fields", () => {
-    expect(
-      resolveCommandTurnContext({
-        CommandSource: "text",
-        CommandAuthorized: true,
-        CommandBody: "/model gpt-5.5",
-      }),
-    ).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "model",
-    });
-  });
-
   it("keeps normal message turns non-explicit even when command auth is true elsewhere", () => {
     const commandTurn = resolveCommandTurnContext({
       CommandAuthorized: true,
@@ -221,6 +206,32 @@ describe("resolveCommandTurnContext", () => {
         CommandTargetSessionKey: " legacy-target ",
       }),
     ).toBe("legacy-target");
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: createCommandTurnContext("text", {
+          authorized: true,
+          body: "/steer finish with a table",
+          commandName: "steer",
+        }),
+        CommandTargetSessionKey: " active-direct-session ",
+      }),
+    ).toBe("active-direct-session");
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: textTurn,
+        CommandTargetSessionKey: "must-not-retarget-status",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: createCommandTurnContext("text", {
+          authorized: false,
+          body: "/steer denied",
+          commandName: "steer",
+        }),
+        CommandTargetSessionKey: "must-not-retarget-unauthorized",
+      }),
+    ).toBeUndefined();
     expect(isExplicitCommandTurn(undefined)).toBe(false);
   });
 });

@@ -93,6 +93,28 @@ afterEach(() => {
 });
 
 describe("Gateway-client question outcome ownership", () => {
+  it("shares connection hydration across sidebar, favicon, and later chat mounts", async () => {
+    vi.useFakeTimers();
+    const client: QuestionClient = { request: vi.fn(async () => ({ questions: [] })) };
+    const mount = () => {
+      const state = createQuestionPromptState(vi.fn());
+      states.push(state);
+      setQuestionPromptClient(state, client);
+      refreshPendingQuestionsWithRetry(state, client);
+      return state;
+    };
+    const sidebar = mount();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    mount();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(client.request).toHaveBeenCalledTimes(1);
+    requestQuestion(sidebar);
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
   it.each(resolutionCases)(
     "publishes an authoritative $action to every same-client pane and sidebar owner",
     async ({ resolve, status }) => {
@@ -223,20 +245,17 @@ describe("Gateway-client question outcome ownership", () => {
     },
   );
 
-  it.each(resolutionCases)(
-    "does not leak a same-id $action into another Gateway client",
-    async ({ resolve }) => {
-      const submitter = connectQuestionState(createQuestionClient());
-      const otherGateway = connectQuestionState(createQuestionClient());
+  it("does not leak a same-id answer into another Gateway client", async () => {
+    const submitter = connectQuestionState(createQuestionClient());
+    const otherGateway = connectQuestionState(createQuestionClient());
 
-      await resolve(submitter);
+    await submitQuestionPrompt(submitter, "question-1", { format: ["Compact"] });
 
-      expect(otherGateway.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        localResolutionConfirmed: false,
-      });
-    },
-  );
+    expect(otherGateway.prompts.get("question-1")).toMatchObject({
+      status: "pending",
+      localResolutionConfirmed: false,
+    });
+  });
 
   it("does not settle an unrelated same-client session question", async () => {
     const client = createQuestionClient();
@@ -330,33 +349,28 @@ describe("Gateway-client question outcome ownership", () => {
     expect(migrated.prompts.get("question-1")?.status).toBe("pending");
   });
 
-  it.each(["pending", "answered"] as const)(
-    "purges a disposed $status question and unmatched private outcome before attaching another Gateway",
-    (status) => {
-      const firstClient = createQuestionClient();
-      const reused = connectQuestionState(firstClient);
-      if (status === "answered") {
-        handleQuestionPromptEvent(reused, {
-          event: "question.resolved",
-          payload: {
-            id: "question-1",
-            status,
-            answers: { answers: { format: ["Private account answer"] } },
-          },
-        });
-      }
-      handleQuestionPromptEvent(reused, {
-        event: "question.resolved",
-        payload: { id: "private-unmatched-question", status: "cancelled" },
-      });
-      disposeQuestionPromptState(reused);
+  it("purges a disposed answer and unmatched private outcome before attaching another Gateway", () => {
+    const firstClient = createQuestionClient();
+    const reused = connectQuestionState(firstClient);
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: {
+        id: "question-1",
+        status: "answered",
+        answers: { answers: { format: ["Private account answer"] } },
+      },
+    });
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: { id: "private-unmatched-question", status: "cancelled" },
+    });
+    disposeQuestionPromptState(reused);
 
-      setQuestionPromptClient(reused, createQuestionClient());
+    setQuestionPromptClient(reused, createQuestionClient());
 
-      expect(reused.prompts.size).toBe(0);
-      expect(reused.unmatchedResolutions.size).toBe(0);
-    },
-  );
+    expect(reused.prompts.size).toBe(0);
+    expect(reused.unmatchedResolutions.size).toBe(0);
+  });
 
   it("keeps and reconnects a disposed question projection on its original Gateway", async () => {
     const client = createQuestionClient();
@@ -373,6 +387,34 @@ describe("Gateway-client question outcome ownership", () => {
     expect(remounted.unmatchedResolutions.has("same-gateway-unmatched-question")).toBe(true);
     await cancelQuestionPrompt(submitter, "question-1");
     expect(remounted.prompts.get("question-1")?.status).toBe("cancelled");
+  });
+
+  it("notifies only at question deadlines and honors an earlier incoming expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+    const onChange = vi.fn();
+    const expiresAtMs = Date.now() + 10_000;
+    const state = connectQuestionState(createQuestionClient(), onChange, expiresAtMs);
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(4_000);
+    expect(onChange).not.toHaveBeenCalled();
+    requestQuestion(state, "question-2", Date.now() + 1_250);
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(1_249);
+    expect(onChange).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(state.prompts.get("question-2")?.status).toBe("expired");
+    expect(state.prompts.get("question-1")?.status).toBe("pending");
+    expect(onChange).toHaveBeenCalledOnce();
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(expiresAtMs - Date.now() - 1);
+    expect(onChange).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(state.prompts.get("question-1")?.status).toBe("expired");
+    expect(onChange).toHaveBeenCalledOnce();
   });
 
   it("publishes and expires a pending question recovered only from question.list", async () => {
@@ -393,7 +435,7 @@ describe("Gateway-client question outcome ownership", () => {
 
     expect(onChange).toHaveBeenCalledOnce();
     expect(hydrated.prompts.get("question-1")?.status).toBe("pending");
-    expect(hydrated.tickTimer).not.toBeNull();
+    expect(hydrated.expiryTimer).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(hydrated.prompts.get("question-1")).toMatchObject({
       status: "expired",
@@ -414,7 +456,7 @@ describe("Gateway-client question outcome ownership", () => {
       setQuestionPromptClient(projection, client);
       refreshPendingQuestionsWithRetry(projection, client);
     }
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
 

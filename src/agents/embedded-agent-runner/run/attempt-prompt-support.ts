@@ -1,46 +1,29 @@
-/**
- * Supports prompt construction and observation between session setup and submission.
- * It may assume resolved tools, hook context, and diagnostic inputs are ready.
- */
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
 import {
   type createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
 import type { createCacheTrace } from "../../cache-trace.js";
-import {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-} from "../../code-mode-control-tools.js";
+import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { normalizeToolName } from "../../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
-import {
-  restrictToolSearchCatalog,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-} from "../../tool-search.js";
-import type { AnyAgentTool } from "../../tools/common.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
+import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
-  applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
-} from "./attempt-tool-construction-plan.js";
+  measureDecisionToolSurface,
+  type DecisionModelTool,
+} from "./attempt-decision-diagnostics.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -51,6 +34,86 @@ type PromptBuildToolPolicyBaseline = {
   activeToolNames: readonly string[];
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
+
+/** Retains the prompt hook's cap while replacing the host-owned tool generation. */
+export function createPromptBuildToolPolicy<
+  TEffectiveTool extends NamedTool,
+  TUncompactedTool extends NamedTool,
+  TTool extends NamedTool,
+>(
+  params: Omit<
+    Parameters<typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>>[0],
+    "baseline" | "toolsAllow"
+  > & {
+    readModelTools?: () => readonly DecisionModelTool[];
+    onApplied?: (
+      surface: ReturnType<
+        typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>
+      >,
+    ) => void;
+  },
+) {
+  const captureBaseline = (): PromptBuildToolPolicyBaseline => ({
+    activeToolNames: params.session.getActiveToolNames(),
+    catalogEntries: [...(params.catalogRef?.current?.entries ?? [])],
+  });
+  let baseline = captureBaseline();
+  let decisionBaseline = params.readModelTools
+    ? measureDecisionToolSurface(params.readModelTools, params.forceToolNames)
+    : undefined;
+  let toolsAllow: string[] | undefined;
+  let decisionIsCurrent: (() => boolean) | undefined;
+  const current = {
+    activeToolNames: [...baseline.activeToolNames],
+    callableToolNames: [...baseline.activeToolNames],
+    effectiveTools: params.effectiveTools,
+    uncompactedEffectiveTools: params.uncompactedEffectiveTools,
+    tools: params.tools,
+  };
+  const applyCurrent = () => {
+    Object.assign(
+      current,
+      applyPromptBuildToolsAllow({
+        ...params,
+        baseline,
+        toolsAllow: decisionIsCurrent ? [] : toolsAllow,
+      }),
+    );
+    params.onApplied?.(current);
+    return current;
+  };
+  const apply = (nextToolsAllow: string[] | undefined, nextDecisionIsCurrent?: () => boolean) => {
+    toolsAllow = nextToolsAllow;
+    decisionIsCurrent = nextDecisionIsCurrent;
+    return applyCurrent();
+  };
+  return {
+    current,
+    apply,
+    prepareForDispatch: <T>(prepareRestoredPrompt: () => Promise<T>): Promise<T> | undefined => {
+      if (!decisionIsCurrent || decisionIsCurrent()) {
+        return undefined;
+      }
+      // Drop only the optional Decision cap. The current host generation and
+      // independent prompt-hook cap still own what is permitted.
+      decisionIsCurrent = undefined;
+      applyCurrent();
+      return prepareRestoredPrompt();
+    },
+    readDecisionBaseline: () => decisionBaseline,
+    decisionRequiredNames: params.forceToolNames,
+    refresh: () => {
+      // A late hook must filter this generation, never restore retained callable
+      // entries from the catalog that the permission owner has just revoked.
+      baseline = captureBaseline();
+      // Capture scalars before catalog restriction mutates retained Code Mode descriptions.
+      decisionBaseline = params.readModelTools
+        ? measureDecisionToolSurface(params.readModelTools, params.forceToolNames)
+        : undefined;
+      return applyCurrent();
+    },
+  };
+}
 
 export function applyResolvedToolPromptFinalizer(params: {
   prompt: string;
@@ -63,28 +126,9 @@ export function applyResolvedToolPromptFinalizer(params: {
   return params.finalize({
     prompt: params.prompt,
     messageToolAvailable: params.activeToolNames.some(
-      (toolName) => normalizeToolName(toolName) === "message",
+      (toolName) => normalizeToolPolicyName(toolName) === "message",
     ),
   });
-}
-
-function filterTools<T extends NamedTool>(
-  tools: readonly T[],
-  toolsAllow: string[],
-  toolMeta: (tool: T) => { pluginId: string } | undefined = (tool) =>
-    getPluginToolMeta(tool as unknown as AnyAgentTool),
-): T[] {
-  return applyEmbeddedAttemptToolsAllow([...tools], toolsAllow, {
-    toolMeta,
-  });
-}
-
-function applyToolsAllow<T extends NamedTool>(
-  tools: readonly T[],
-  toolsAllow: string[] | undefined,
-  toolMeta?: (tool: T) => { pluginId: string } | undefined,
-): T[] {
-  return toolsAllow === undefined ? [...tools] : filterTools(tools, toolsAllow, toolMeta);
 }
 
 function sameToolNames(left: readonly string[], right: readonly string[]): boolean {
@@ -110,51 +154,33 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
-}): {
-  activeToolNames: string[];
-  effectiveTools: TEffectiveTool[];
-  uncompactedEffectiveTools: TUncompactedTool[];
-  tools: TTool[];
-} {
-  const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+}) {
+  const policyInput = {
+    toolsAllow: params.toolsAllow,
     forceToolNames: params.forceToolNames,
-  });
-  const allowedCatalogEntries = applyToolsAllow<ToolSearchCatalogEntry>(
-    params.baseline.catalogEntries,
-    toolsAllow,
-    (entry) => getPluginToolMeta(entry.tool as AnyAgentTool),
-  );
-  const catalogToolCount = restrictToolSearchCatalog({
+  };
+  const promptPolicy = createAgentHarnessPromptToolPolicy({
+    tools: params.effectiveTools,
     catalogRef: params.catalogRef,
-    allowedToolNames: new Set(allowedCatalogEntries.map((entry) => entry.name)),
-    baselineEntries: params.baseline.catalogEntries,
-  });
-  const allowedEffectiveTools = applyToolsAllow(params.effectiveTools, toolsAllow);
-  const allowedUncompactedTools = applyToolsAllow(params.uncompactedEffectiveTools, toolsAllow);
-  const allowedTools = applyToolsAllow(params.tools, toolsAllow);
+    catalogEntries: params.baseline.catalogEntries,
+    codeModeControlsEnabled: params.codeModeControlsEnabled,
+  }).apply(policyInput);
+  const filterTools = <T extends NamedTool>(tools: T[]) =>
+    createAgentHarnessPromptToolPolicy({ tools, codeModeControlsEnabled: false }).apply(policyInput)
+      .tools;
+  const allowedUncompactedTools = filterTools(params.uncompactedEffectiveTools);
+  const allowedTools = filterTools(params.tools);
   const allowedActiveNames = new Set(
-    applyToolsAllow(
-      params.baseline.activeToolNames.map((name) => ({ name })),
-      toolsAllow,
-    ).map((tool) => normalizeToolName(tool.name)),
+    filterTools(params.baseline.activeToolNames.map((name) => ({ name }))).map((tool) =>
+      normalizeToolPolicyName(tool.name),
+    ),
   );
-  for (const tool of [...allowedEffectiveTools, ...allowedUncompactedTools, ...allowedTools]) {
-    allowedActiveNames.add(normalizeToolName(tool.name));
+  for (const tool of [...promptPolicy.tools, ...allowedUncompactedTools, ...allowedTools]) {
+    allowedActiveNames.add(normalizeToolPolicyName(tool.name));
   }
 
-  const catalogControlNames = params.codeModeControlsEnabled
-    ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
-    : TOOL_SEARCH_CONTROL_TOOL_NAMES;
-  const keepVisibleTool = (tool: NamedTool) => {
-    const normalized = normalizeToolName(tool.name);
-    return (
-      allowedActiveNames.has(normalized) ||
-      (catalogToolCount > 0 && catalogControlNames.has(normalized))
-    );
-  };
-  const effectiveTools = params.effectiveTools.filter(keepVisibleTool);
   const activeToolNames = params.baseline.activeToolNames.filter((name) =>
-    keepVisibleTool({ name }),
+    allowedActiveNames.has(normalizeToolPolicyName(name)),
   );
   if (!sameToolNames(params.session.getActiveToolNames(), activeToolNames)) {
     params.session.setActiveToolsByName(activeToolNames);
@@ -162,7 +188,8 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
-    effectiveTools,
+    callableToolNames: promptPolicy.callableToolNames,
+    effectiveTools: promptPolicy.tools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
   };
@@ -192,7 +219,7 @@ type AttemptPromptObservabilityParams = Pick<
 type CacheTrace = Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
 type PromptHookRunner = Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
 type TrajectoryRecorder = Pick<
-  NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>,
+  NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
   "recordEvent"
 > | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];
@@ -211,7 +238,6 @@ export function observeEmbeddedAttemptPrompt(input: {
   isRawModelRun: boolean;
   llmBoundaryPromptForPrecheck: string;
   promptForModel: string;
-  promptSubmissionRuntimeOnly?: boolean;
   reserveTokens: number;
   runTrace: DiagnosticTraceContext;
   sessionMessages: AgentMessage[];
@@ -239,21 +265,24 @@ export function observeEmbeddedAttemptPrompt(input: {
       messages: input.sessionMessages,
       note: `images: prompt=${input.imageCount}`,
     });
-    const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
-    const trajectoryTools = input.toolSearchCompacted
-      ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
-      : providerVisibleTools;
-    input.trajectoryRecorder?.recordEvent("context.compiled", {
-      systemPrompt: input.systemPromptForHook,
-      prompt: input.promptForModel,
-      messages: input.sessionMessages,
-      tools: trajectoryTools,
-      ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
-      imagesCount: input.imageCount,
-      streamStrategy: input.streamStrategy,
-      transport: input.transport,
-      transcriptLeafId: input.transcriptLeafId,
-    });
+    const trajectoryRecorder = input.trajectoryRecorder;
+    if (trajectoryRecorder) {
+      const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
+      const trajectoryTools = input.toolSearchCompacted
+        ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
+        : providerVisibleTools;
+      trajectoryRecorder.recordEvent("context.compiled", {
+        systemPrompt: input.systemPromptForHook,
+        prompt: input.promptForModel,
+        messages: input.sessionMessages,
+        tools: trajectoryTools,
+        ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
+        imagesCount: input.imageCount,
+        streamStrategy: input.streamStrategy,
+        transport: input.transport,
+        transcriptLeafId: input.transcriptLeafId,
+      });
+    }
   }
 
   const promptSkipReason = skipPromptSubmission
@@ -261,7 +290,6 @@ export function observeEmbeddedAttemptPrompt(input: {
     : resolvePromptSubmissionSkipReason({
         prompt: input.promptForModel,
         messages: input.sessionMessages,
-        runtimeOnly: input.promptSubmissionRuntimeOnly,
         imageCount: input.imageCount,
       });
   if (promptSkipReason) {
@@ -347,22 +375,11 @@ export function observeEmbeddedAttemptPrompt(input: {
           imagesCount: input.imageCount,
           tools: input.tools,
         },
-        {
-          runId: attempt.runId,
-          trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-          agentId: input.hookAgentId,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          workspaceDir: attempt.workspaceDir,
-          trigger: attempt.trigger,
-          ...buildAgentHookContextChannelFields(attempt),
-          ...buildAgentHookContextIdentityFields({
-            trigger: attempt.trigger,
-            senderId: attempt.senderId,
-            chatId: attempt.chatId,
-            channelContext: attempt.channelContext,
-          }),
-        },
+        buildEmbeddedAgentHookContext(
+          attempt,
+          input.hookAgentId,
+          freezeDiagnosticTraceContext(input.diagnosticTrace),
+        ),
       )
       .catch((err: unknown) => {
         log.warn(`llm_input hook failed: ${String(err)}`);

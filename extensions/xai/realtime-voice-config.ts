@@ -1,15 +1,13 @@
-import {
-  isProviderAuthProfileConfigured,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-auth";
 import type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  asFiniteNumber,
-  asOptionalObjectRecord,
+  asFiniteNumberInRange,
+  asOptionalObjectRecord as readXaiObjectRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,31 +16,15 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
 
-type XaiRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  voice?: string;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  reasoningEffort?: XaiRealtimeReasoningEffort;
-  sessionResumption?: boolean;
-};
+type XaiRealtimeVoiceProviderConfig = Partial<
+  ReturnType<typeof normalizeXaiRealtimeProviderConfig>
+>;
 
-export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
-  apiKey?: string;
-  baseUrl: string;
-  model?: string;
-  voice?: string;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  reasoningEffort?: XaiRealtimeReasoningEffort;
-  sessionResumption?: boolean;
-  resolveApiKey?: () => Promise<string>;
-};
+export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
+  Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio"> & {
+    baseUrl: string;
+    resolveApiKey?: () => Promise<string>;
+  };
 
 type XaiRealtimeResponseItem = {
   id?: string;
@@ -77,10 +59,6 @@ export type XaiRealtimeEvent = {
   error?: unknown;
 };
 
-export type XaiRealtimeAudioFormatConfig =
-  | { type: "audio/pcm"; rate: 24000 }
-  | { type: "audio/pcmu" };
-
 export type XaiRealtimeSessionUpdate = {
   type: "session.update";
   session: {
@@ -95,10 +73,10 @@ export type XaiRealtimeSessionUpdate = {
     };
     audio: {
       input: {
-        format: XaiRealtimeAudioFormatConfig;
+        format: OpenAICompatibleRealtimeAudioFormat;
         transcription: { model: string };
       };
-      output: { format: XaiRealtimeAudioFormatConfig };
+      output: { format: OpenAICompatibleRealtimeAudioFormat };
     };
     reasoning?: { effort: XaiRealtimeReasoningEffort };
     resumption?: { enabled: boolean };
@@ -146,9 +124,9 @@ export function serializeXaiRealtimeToolResult(result: unknown): string {
 }
 
 function readNestedXaiConfig(rawConfig: RealtimeVoiceProviderConfig) {
-  const raw = asOptionalObjectRecord(rawConfig);
-  const providers = asOptionalObjectRecord(raw?.providers);
-  return asOptionalObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
+  const raw = readXaiObjectRecord(rawConfig);
+  const providers = readXaiObjectRecord(raw?.providers);
+  return readXaiObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
 }
 
 export function normalizeXaiRealtimeBaseUrl(value?: string): string {
@@ -166,16 +144,8 @@ function normalizeXaiRealtimeVoice(value: unknown): string | undefined {
     : normalized;
 }
 
-function asXaiVadThreshold(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= 0.1 && number <= 0.9 ? number : undefined;
-}
-
 function asXaiDurationMs(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 && number <= 10_000
-    ? number
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 10_000 });
 }
 
 function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | undefined {
@@ -189,9 +159,7 @@ function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | unde
   throw new Error('xAI realtime voice reasoningEffort must be "high" or "none"');
 }
 
-export function normalizeXaiRealtimeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-): XaiRealtimeVoiceProviderConfig {
+export function normalizeXaiRealtimeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = readNestedXaiConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
@@ -201,7 +169,7 @@ export function normalizeXaiRealtimeProviderConfig(
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model),
     voice: normalizeXaiRealtimeVoice(raw.speakerVoice ?? raw.voice),
-    vadThreshold: asXaiVadThreshold(raw.vadThreshold),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0.1, max: 0.9 }),
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
     interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),
@@ -214,7 +182,7 @@ export function readXaiRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const record = asOptionalObjectRecord(error);
+  const record = readXaiObjectRecord(error);
   return (
     normalizeOptionalString(record?.message) ??
     normalizeOptionalString(record?.code) ??
@@ -235,14 +203,4 @@ export function toXaiRealtimeWsUrl(
     url.searchParams.set("conversation_id", conversationId);
   }
   return url.toString();
-}
-
-export function hasXaiRealtimeApiKeyInput(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-): boolean {
-  if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
-    return true;
-  }
-  return isProviderAuthProfileConfigured({ provider: "xai", cfg });
 }

@@ -1,4 +1,3 @@
-// Slack plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
   collectStandardAllowlistLists,
@@ -14,6 +13,7 @@ import {
 } from "./doctor-contract.js";
 import { probeSlack } from "./probe.js";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
+import { parseSlackTarget } from "./target-parsing.js";
 
 const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
@@ -29,10 +29,8 @@ const collectSlackMutableAllowlistWarnings =
       }),
   });
 
-const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
-const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cg][0-9][a-z0-9]{7,}$/;
-const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CG][A-Z0-9]{8,}$/;
-const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cg][0-9][a-z0-9]{7,}$/;
+const SLACK_CANONICAL_CHANNEL_ID_RE = /^(?:channel:)?[CG][A-Z0-9]{8,}$/;
+const SLACK_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cg][0-9][a-z0-9]{7,}$/;
 const SLACK_CANONICAL_DM_ID_RE = /^(?:channel:)?D[A-Z0-9]{8,}$/;
 const SLACK_PREFIXED_LOWERCASE_DM_ID_RE = /^channel:d[a-z0-9]{8,}$/;
 const SLACK_AMBIGUOUS_LOWERCASE_DM_ID_RE = /^d[a-z0-9]{8,}$/;
@@ -45,18 +43,33 @@ const SLACK_CHANNEL_NAME_RE = /^[\p{L}\p{M}\p{N}_-]{1,80}$/u;
 const SLACK_CHANNEL_NAME_ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
 
 function looksLikeSlackChannelId(channelKey: string): boolean {
+  const workspaceChannelId = parseWorkspaceQualifiedChannelId(channelKey);
   return (
+    (workspaceChannelId !== undefined && /^[CG]/i.test(workspaceChannelId)) ||
     SLACK_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
+    SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
   );
 }
 
 function looksLikeSlackDmId(channelKey: string): boolean {
+  const workspaceChannelId = parseWorkspaceQualifiedChannelId(channelKey);
   return (
-    SLACK_CANONICAL_DM_ID_RE.test(channelKey) || SLACK_PREFIXED_LOWERCASE_DM_ID_RE.test(channelKey)
+    (workspaceChannelId !== undefined && /^D/i.test(workspaceChannelId)) ||
+    SLACK_CANONICAL_DM_ID_RE.test(channelKey) ||
+    SLACK_PREFIXED_LOWERCASE_DM_ID_RE.test(channelKey)
   );
+}
+
+function parseWorkspaceQualifiedChannelId(channelKey: string): string | undefined {
+  if (!/^team:/i.test(channelKey)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(channelKey);
+    return target?.kind === "channel" && target.teamId ? target.id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function looksLikeSlackChannelNameKey(channelKey: string): boolean {
@@ -148,17 +161,13 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
         continue;
       }
       warnings.add(
-        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
+        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or unsupported ID form, not a routable Slack channel ID; ` +
           `under groupPolicy: "${effectiveGroupPolicy}" inbound routing does not match this entry, so ${fallbackDescription}. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );
     }
   }
   return [...warnings];
-}
-
-function slackAccountConfigPath(accountId: string): string {
-  return accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
 }
 
 async function collectSlackUserIdentityWarnings(params: {
@@ -177,7 +186,8 @@ async function collectSlackUserIdentityWarnings(params: {
     if (!account.enabled || account.identity !== "user") {
       continue;
     }
-    const path = slackAccountConfigPath(accountId);
+    const path =
+      accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
     const mode = account.mode ?? "socket";
     if (mode === "socket" && account.appTokenStatus === "missing") {
       warnings.push(
@@ -225,8 +235,7 @@ export const slackDoctor: ChannelDoctorAdapter = {
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeSlackCompatibilityConfig,
-  collectPreviewWarnings: async ({ cfg, env }) =>
-    await collectSlackUserIdentityWarnings({ cfg, env }),
+  collectPreviewWarnings: collectSlackUserIdentityWarnings,
   collectMutableAllowlistWarnings: ({ cfg }) => [
     ...collectSlackMutableAllowlistWarnings({ cfg }),
     ...collectSlackNameKeyedChannelWarnings({ cfg }),

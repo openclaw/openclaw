@@ -1,15 +1,14 @@
-// Legacy TTS runtime config migrations for provider aliases, enabled toggles, and voices.
 import {
-  defineLegacyConfigMigration,
+  ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import { moveLegacyConfigKey, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
-const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
 const CHANNEL_ROOT_TTS_UNSUPPORTED_IDS = new Set(["discord"]);
 
 function isLegacyEdgeProviderId(value: unknown): boolean {
@@ -35,129 +34,41 @@ function hasLegacyTtsEnabled(value: unknown): boolean {
   return typeof getRecord(value)?.enabled === "boolean";
 }
 
-function hasLegacySpeakerSelectionKeys(value: unknown): boolean {
-  const config = getRecord(value);
-  if (!config) {
-    return false;
-  }
-  return (
-    Object.hasOwn(config, "voice") ||
-    Object.hasOwn(config, "voiceName") ||
-    Object.hasOwn(config, "voiceId")
-  );
-}
-
 function hasLegacyTtsSpeakerSelection(value: unknown): boolean {
-  const tts = getRecord(value);
-  if (!tts) {
-    return false;
-  }
-  if (hasLegacyTtsSpeakerSelectionInProviderMap(tts.providers)) {
-    return true;
-  }
-  if (
-    LEGACY_TTS_PROVIDER_KEYS.some((providerId) => hasLegacySpeakerSelectionKeys(tts[providerId]))
-  ) {
-    return true;
-  }
-  return hasLegacyTtsSpeakerSelectionInPersonas(tts.personas);
-}
-
-function hasLegacyTtsSpeakerSelectionInProviderMap(value: unknown): boolean {
-  const providers = getRecord(value);
-  return Boolean(
-    providers &&
-    Object.entries(providers).some(
-      ([providerId, providerConfig]) =>
-        !isBlockedObjectKey(providerId) && hasLegacySpeakerSelectionKeys(providerConfig),
-    ),
-  );
-}
-
-function hasLegacyTtsSpeakerSelectionInPersonas(value: unknown): boolean {
-  const personas = getRecord(value);
-  if (!personas) {
-    return false;
-  }
-  return Object.entries(personas).some(([personaId, personaValue]) => {
-    if (isBlockedObjectKey(personaId)) {
-      return false;
-    }
-    const persona = getRecord(personaValue);
-    if (!persona) {
-      return false;
-    }
-    if (hasLegacyTtsSpeakerSelectionInProviderMap(persona.providers)) {
+  for (const [config] of visitLegacyTtsSpeakerConfigs(value, "")) {
+    if (["voice", "voiceName", "voiceId"].some((key) => Object.hasOwn(config, key))) {
       return true;
-    }
-    return LEGACY_TTS_PROVIDER_KEYS.some((providerId) =>
-      hasLegacySpeakerSelectionKeys(persona[providerId]),
-    );
-  });
-}
-
-type LegacyTtsMatcher = (value: unknown) => boolean;
-
-function hasLegacyTtsInAgentLocations(value: unknown, matcher: LegacyTtsMatcher): boolean {
-  const agents = getRecord(value);
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  return agentList.some((entry) => matcher(getRecord(getRecord(entry)?.tts)));
-}
-
-function supportsChannelRootTtsMigration(channelId: string): boolean {
-  return !CHANNEL_ROOT_TTS_UNSUPPORTED_IDS.has(channelId.trim().toLowerCase());
-}
-
-function hasLegacyTtsInChannelLocations(value: unknown, matcher: LegacyTtsMatcher): boolean {
-  const channels = getRecord(value);
-  for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
-    if (isBlockedObjectKey(channelId)) {
-      continue;
-    }
-    const channel = getRecord(channelValue);
-    const migrateRootTts = supportsChannelRootTtsMigration(channelId);
-    if (migrateRootTts && matcher(getRecord(channel?.tts))) {
-      return true;
-    }
-    if (matcher(getRecord(getRecord(channel?.voice)?.tts))) {
-      return true;
-    }
-    const accounts = getRecord(channel?.accounts);
-    for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
-      if (isBlockedObjectKey(accountId)) {
-        continue;
-      }
-      const account = getRecord(accountValue);
-      if (
-        (migrateRootTts && matcher(getRecord(account?.tts))) ||
-        matcher(getRecord(getRecord(account?.voice)?.tts))
-      ) {
-        return true;
-      }
     }
   }
   return false;
 }
 
-function hasLegacyTtsInPluginLocations(value: unknown, matcher: LegacyTtsMatcher): boolean {
-  const entries = getRecord(value);
-  if (!entries) {
-    return false;
-  }
-  return Object.entries(entries).some(([pluginId, entryValue]) => {
-    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-      return false;
+type LegacyTtsMatcher = (value: unknown) => boolean;
+
+function hasLegacyTtsInLocations(raw: Record<string, unknown>, matcher: LegacyTtsMatcher): boolean {
+  for (const [tts] of visitKnownTtsConfigLocations(raw)) {
+    if (matcher(tts)) {
+      return true;
     }
-    const entry = getRecord(entryValue);
-    const config = getRecord(entry?.config);
-    return matcher(getRecord(config?.tts));
-  });
+  }
+  return false;
 }
 
-function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
-  const providers = getRecord(tts.providers) ?? {};
-  tts.providers = providers;
-  return providers;
+function ttsLocationRules(
+  matcher: LegacyTtsMatcher,
+  messages: Partial<Record<"tts" | "agents" | "channels" | "plugins", string>>,
+): LegacyConfigRule[] {
+  return Object.entries(messages).map(([scope, message]) => ({
+    path: scope === "plugins" ? ["plugins", "entries"] : [scope],
+    message,
+    match: (value) =>
+      scope === "tts"
+        ? matcher(value)
+        : hasLegacyTtsInLocations(
+            { [scope]: scope === "plugins" ? { entries: value } : value },
+            matcher,
+          ),
+  }));
 }
 
 function mergeLegacyTtsProviderConfig(
@@ -171,7 +82,7 @@ function mergeLegacyTtsProviderConfig(
   if (!legacyOwner || !legacyValue) {
     return false;
   }
-  const providers = source === "providers" ? legacyOwner : getOrCreateTtsProviders(tts);
+  const providers = source === "providers" ? legacyOwner : ensureRecord(tts, "providers");
   const existing = getRecord(providers[providerId]) ?? {};
   const merged = structuredClone(existing);
   mergeMissing(merged, legacyValue);
@@ -226,108 +137,50 @@ function migrateLegacyTtsEnabled(
   changes.push(`Moved ${pathLabel}.enabled → ${pathLabel}.auto "${nextAuto}".`);
 }
 
-function migrateLegacySpeakerSelectionConfig(
-  providerConfig: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  for (const [legacyKey, canonicalKey] of [
-    ["voice", "speakerVoice"],
-    ["voiceName", "speakerVoice"],
-    ["voiceId", "speakerVoiceId"],
-  ] as const) {
-    if (!Object.hasOwn(providerConfig, legacyKey)) {
-      continue;
-    }
-    if (providerConfig[canonicalKey] === undefined) {
-      providerConfig[canonicalKey] = providerConfig[legacyKey];
-      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${canonicalKey}.`);
-    } else {
-      changes.push(
-        `Removed ${pathLabel}.${legacyKey} because ${pathLabel}.${canonicalKey} is already set.`,
-      );
-    }
-    delete providerConfig[legacyKey];
-  }
-}
-
-function migrateLegacyTtsSpeakerSelection(
-  tts: Record<string, unknown> | null | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!tts) {
-    return;
-  }
-  migrateLegacySpeakerSelectionProviderMap(tts.providers, `${pathLabel}.providers`, changes);
-  for (const providerId of LEGACY_TTS_PROVIDER_KEYS) {
-    const providerConfig = getRecord(tts[providerId]);
-    if (!providerConfig) {
-      continue;
-    }
-    migrateLegacySpeakerSelectionConfig(providerConfig, `${pathLabel}.${providerId}`, changes);
-  }
-  const personas = getRecord(tts.personas);
-  for (const [personaId, personaValue] of Object.entries(personas ?? {})) {
-    if (isBlockedObjectKey(personaId)) {
-      continue;
-    }
-    const persona = getRecord(personaValue);
-    if (!persona) {
-      continue;
-    }
-    migrateLegacySpeakerSelectionProviderMap(
-      persona.providers,
-      `${pathLabel}.personas.${personaId}.providers`,
-      changes,
-    );
-    for (const providerId of LEGACY_TTS_PROVIDER_KEYS) {
-      const providerConfig = getRecord(persona[providerId]);
-      if (!providerConfig) {
-        continue;
-      }
-      migrateLegacySpeakerSelectionConfig(
-        providerConfig,
-        `${pathLabel}.personas.${personaId}.${providerId}`,
-        changes,
-      );
-    }
-  }
-}
-
-function migrateLegacySpeakerSelectionProviderMap(
+function* visitLegacySpeakerSelectionScope(
   value: unknown,
   pathLabel: string,
-  changes: string[],
-): void {
-  const providers = getRecord(value);
-  if (!providers) {
+): Generator<[Record<string, unknown>, string]> {
+  const scope = getRecord(value);
+  if (!scope) {
     return;
   }
-  for (const [providerId, providerValue] of Object.entries(providers)) {
-    if (isBlockedObjectKey(providerId)) {
-      continue;
+  for (const [providerId, providerValue] of Object.entries(getRecord(scope.providers) ?? {})) {
+    const config = getRecord(providerValue);
+    if (!isBlockedObjectKey(providerId) && config) {
+      yield [config, `${pathLabel}.providers.${providerId}`];
     }
-    const providerConfig = getRecord(providerValue);
-    if (!providerConfig) {
-      continue;
+  }
+  for (const providerId of LEGACY_TTS_PROVIDER_KEYS) {
+    const config = getRecord(scope[providerId]);
+    if (config) {
+      yield [config, `${pathLabel}.${providerId}`];
     }
-    migrateLegacySpeakerSelectionConfig(providerConfig, `${pathLabel}.${providerId}`, changes);
   }
 }
 
-function visitKnownTtsConfigLocations(
-  raw: Record<string, unknown>,
-  visit: (tts: Record<string, unknown> | null | undefined, pathLabel: string) => void,
-): void {
-  visit(getRecord(raw.tts), "tts");
+function* visitLegacyTtsSpeakerConfigs(
+  value: unknown,
+  pathLabel: string,
+): Generator<[Record<string, unknown>, string]> {
+  const tts = getRecord(value);
+  yield* visitLegacySpeakerSelectionScope(tts, pathLabel);
+  for (const [personaId, persona] of Object.entries(getRecord(tts?.personas) ?? {})) {
+    if (!isBlockedObjectKey(personaId)) {
+      yield* visitLegacySpeakerSelectionScope(persona, `${pathLabel}.personas.${personaId}`);
+    }
+  }
+}
 
-  const agents = getRecord(raw.agents);
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  agentList.forEach((entry, index) => {
-    const agent = getRecord(entry);
-    visit(getRecord(agent?.tts), `agents.list[${index}].tts`);
-  });
+// Keep previews lazy while sharing the repair walk and its supported-path exclusions.
+function* visitKnownTtsConfigLocations(
+  raw: Record<string, unknown>,
+): Generator<[Record<string, unknown> | null, string]> {
+  yield [getRecord(raw.tts), "tts"];
+
+  const agentTts: Array<[Record<string, unknown> | null, string]> = [];
+  visitAgentEntries(raw, (entry, path) => agentTts.push([getRecord(entry.tts), `${path}.tts`]));
+  yield* agentTts;
 
   const channels = getRecord(raw.channels);
   for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
@@ -335,112 +188,36 @@ function visitKnownTtsConfigLocations(
       continue;
     }
     const channel = getRecord(channelValue);
-    const migrateRootTts = supportsChannelRootTtsMigration(channelId);
+    const migrateRootTts = !CHANNEL_ROOT_TTS_UNSUPPORTED_IDS.has(channelId.trim().toLowerCase());
     if (migrateRootTts) {
-      visit(getRecord(channel?.tts), `channels.${channelId}.tts`);
+      yield [getRecord(channel?.tts), `channels.${channelId}.tts`];
     }
-    visit(getRecord(getRecord(channel?.voice)?.tts), `channels.${channelId}.voice.tts`);
-    const accounts = getRecord(channel?.accounts);
-    for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
+    yield [getRecord(getRecord(channel?.voice)?.tts), `channels.${channelId}.voice.tts`];
+    for (const [accountId, accountValue] of Object.entries(getRecord(channel?.accounts) ?? {})) {
       if (isBlockedObjectKey(accountId)) {
         continue;
       }
       const account = getRecord(accountValue);
       if (migrateRootTts) {
-        visit(getRecord(account?.tts), `channels.${channelId}.accounts.${accountId}.tts`);
+        yield [getRecord(account?.tts), `channels.${channelId}.accounts.${accountId}.tts`];
       }
-      visit(
+      yield [
         getRecord(getRecord(account?.voice)?.tts),
         `channels.${channelId}.accounts.${accountId}.voice.tts`,
-      );
+      ];
     }
   }
 
-  const plugins = getRecord(raw.plugins);
-  const pluginEntries = getRecord(plugins?.entries);
-  for (const [pluginId, entryValue] of Object.entries(pluginEntries ?? {})) {
-    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-      continue;
-    }
-    const entry = getRecord(entryValue);
-    const config = getRecord(entry?.config);
-    visit(getRecord(config?.tts), `plugins.entries.${pluginId}.config.tts`);
+  const pluginEntries = getRecord(getRecord(raw.plugins)?.entries);
+  if (pluginEntries && Object.prototype.propertyIsEnumerable.call(pluginEntries, "voice-call")) {
+    const voiceCall = getRecord(pluginEntries["voice-call"]);
+    yield [getRecord(getRecord(voiceCall?.config)?.tts), "plugins.entries.voice-call.config.tts"];
   }
 }
 
-const LEGACY_TTS_PROVIDER_RULES: LegacyConfigRule[] = [
-  {
-    path: ["tts"],
-    message:
-      'tts legacy provider aliases/keys are legacy; use provider: "microsoft" and tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsProviderKeys(value),
-  },
-  {
-    path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInPluginLocations(value, hasLegacyTtsProviderKeys),
-  },
-];
-
-const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
-  {
-    path: ["tts"],
-    message: 'tts.enabled is legacy; use tts.auto. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsEnabled(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.list[].tts.enabled is legacy; use agents.list[].tts.auto. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInAgentLocations(value, hasLegacyTtsEnabled),
-  },
-  {
-    path: ["channels"],
-    message:
-      'supported channel TTS enabled fields are legacy; use the same TTS block auto field. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInChannelLocations(value, hasLegacyTtsEnabled),
-  },
-  {
-    path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInPluginLocations(value, hasLegacyTtsEnabled),
-  },
-];
-
-const LEGACY_TTS_SPEAKER_SELECTION_RULES: LegacyConfigRule[] = [
-  {
-    path: ["tts"],
-    message:
-      'tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsSpeakerSelection(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.list[].tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInAgentLocations(value, hasLegacyTtsSpeakerSelection),
-  },
-  {
-    path: ["channels"],
-    message:
-      'supported channel TTS speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInChannelLocations(value, hasLegacyTtsSpeakerSelection),
-  },
-  {
-    path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsInPluginLocations(value, hasLegacyTtsSpeakerSelection),
-  },
-];
-
-/** Legacy config migration specs for TTS runtime compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "tts.top-level-owner",
-    describe: "Move messages.tts to top-level tts",
     legacyRules: [
       {
         path: ["messages", "tts"],
@@ -481,51 +258,64 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
       delete messages.tts;
       changes.push("Moved messages.tts to top-level tts.");
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "tts.providers-generic-shape",
-    describe: "Move legacy bundled TTS config keys into tts.providers",
-    legacyRules: LEGACY_TTS_PROVIDER_RULES,
+    legacyRules: ttsLocationRules(hasLegacyTtsProviderKeys, {
+      tts: 'tts legacy provider aliases/keys are legacy; use provider: "microsoft" and tts.providers.<provider>. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
-      migrateLegacyTtsConfig(getRecord(raw.tts), "tts", changes);
-
-      const plugins = getRecord(raw.plugins);
-      const pluginEntries = getRecord(plugins?.entries);
-      if (!pluginEntries) {
-        return;
-      }
-      for (const [pluginId, entryValue] of Object.entries(pluginEntries)) {
-        if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-          continue;
-        }
-        const entry = getRecord(entryValue);
-        const config = getRecord(entry?.config);
-        migrateLegacyTtsConfig(
-          getRecord(config?.tts),
-          `plugins.entries.${pluginId}.config.tts`,
-          changes,
-        );
+      // Provider aliases have a narrower migration scope than speaker keys and enabled.
+      for (const [tts, pathLabel] of visitKnownTtsConfigLocations({
+        tts: raw.tts,
+        plugins: raw.plugins,
+      })) {
+        migrateLegacyTtsConfig(tts, pathLabel, changes);
       }
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "tts.speaker-selection-keys",
-    describe: "Move TTS speaker selection keys to speakerVoice/speakerVoiceId",
-    legacyRules: LEGACY_TTS_SPEAKER_SELECTION_RULES,
+    legacyRules: ttsLocationRules(hasLegacyTtsSpeakerSelection, {
+      tts: 'tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      agents:
+        'agents.entries.*.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      channels:
+        'supported channel TTS speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
-      visitKnownTtsConfigLocations(raw, (tts, pathLabel) =>
-        migrateLegacyTtsSpeakerSelection(tts, pathLabel, changes),
-      );
+      for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
+        for (const [config, path] of visitLegacyTtsSpeakerConfigs(tts, pathLabel)) {
+          for (const [legacyKey, canonicalKey] of [
+            ["voice", "speakerVoice"],
+            ["voiceName", "speakerVoice"],
+            ["voiceId", "speakerVoiceId"],
+          ] as const) {
+            moveLegacyConfigKey(config, legacyKey, canonicalKey, path, changes);
+          }
+        }
+      }
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "tts.enabled-auto-mode",
-    describe: "Move legacy TTS enabled toggles to auto mode",
-    legacyRules: LEGACY_TTS_ENABLED_RULES,
+    legacyRules: ttsLocationRules(hasLegacyTtsEnabled, {
+      tts: 'tts.enabled is legacy; use tts.auto. Run "openclaw doctor --fix".',
+      agents:
+        'agents.entries.*.tts.enabled is legacy; use agents.entries.*.tts.auto. Run "openclaw doctor --fix".',
+      channels:
+        'supported channel TTS enabled fields are legacy; use the same TTS block auto field. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
-      visitKnownTtsConfigLocations(raw, (tts, pathLabel) =>
-        migrateLegacyTtsEnabled(tts, pathLabel, changes),
-      );
+      for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
+        migrateLegacyTtsEnabled(tts, pathLabel, changes);
+      }
     },
-  }),
+  },
 ];

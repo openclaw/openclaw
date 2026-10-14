@@ -6,6 +6,12 @@ import path from "node:path";
 import { handleSystemAgentCommand } from "../../dist/auto-reply/reply/commands-system-agent.js";
 import { clearConfigCache } from "../../dist/config/config.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
+import { createSqliteAuditRecordStore } from "../../dist/infra/sqlite-audit-record-store.js";
+import {
+  SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  SYSTEM_AGENT_AUDIT_SCOPE,
+  type SystemAgentAuditEntry,
+} from "../../dist/system-agent/audit.js";
 import { runSystemAgentRescueMessage } from "../../dist/system-agent/rescue-message.js";
 import { createE2eStateDir } from "./lib/temp-state-dir.ts";
 
@@ -80,7 +86,7 @@ async function main() {
     configPath,
     JSON.stringify(
       {
-        meta: { lastTouchedVersion: "docker-e2e", lastTouchedAt: new Date(0).toISOString() },
+        meta: { lastTouchedVersion: "docker-e2e" },
         agents: { defaults: {} },
       },
       null,
@@ -144,14 +150,7 @@ async function main() {
   const refApplied = await invoke("/openclaw yes", cfg);
   assert(refApplied.includes("[openclaw] done: config.setRef"), "SecretRef set failed");
 
-  const agentPlan = await invoke("/openclaw create agent work workspace /tmp/openclaw-work", cfg);
-  assert(
-    agentPlan.includes("Reply /openclaw yes to apply"),
-    "agent creation did not require approval",
-  );
-  const agentApplied = await invoke("/openclaw yes", cfg);
-  assert(agentApplied.includes("[openclaw] done: agents.create"), "agent creation did not apply");
-
+  // Fresh setup chooses the workspace before an authored fleet owns it.
   const setupPlan = await invokeWithDeps(
     "/openclaw setup workspace /tmp/openclaw-setup model openai/gpt-5.2",
     cfg,
@@ -161,71 +160,50 @@ async function main() {
   const setupApplied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
   assert(setupApplied.includes("[openclaw] done: openclaw.setup"), "setup did not apply");
 
+  const agentPlan = await invoke("/openclaw create agent work workspace /tmp/openclaw-work", cfg);
+  assert(
+    agentPlan.includes("Reply /openclaw yes to apply"),
+    "agent creation did not require approval",
+  );
+  const agentApplied = await invoke("/openclaw yes", cfg);
+  assert(agentApplied.includes("[openclaw] done: agents.create"), "agent creation did not apply");
+
   const gatewayRestarts: string[] = [];
   const gatewayCommand = makeParams("/openclaw restart gateway", cfg).command;
-  const gatewayPlan = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
+  const restartDeps = {
+    runGatewayRestart: async () => {
+      gatewayRestarts.push("restart");
     },
-  });
+  };
+  const runGatewayCommand = (
+    commandBody: string,
+    deps?: Parameters<typeof runSystemAgentRescueMessage>[0]["deps"],
+  ) =>
+    runSystemAgentRescueMessage({
+      cfg,
+      command: gatewayCommand,
+      commandBody,
+      agentId: "default",
+      isGroup: false,
+      deps,
+    });
+  const gatewayPlan = await runGatewayCommand("/openclaw restart gateway", restartDeps);
   assert(
     gatewayPlan?.includes("Reply /openclaw yes to apply"),
     "gateway restart did not require approval",
   );
-  const pluginList = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw plugins list",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runPluginsList: async (runtime) => runtime.log("plugin rows"),
-    },
+  const pluginList = await runGatewayCommand("/openclaw plugins list", {
+    runPluginsList: async (runtime) => runtime.log("plugin rows"),
   });
   assert(pluginList === "plugin rows", "read-only rescue command did not run");
-  const revokedApproval = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  const revokedApproval = await runGatewayCommand("/openclaw yes", restartDeps);
   assert(
     revokedApproval === "No pending OpenClaw rescue change is waiting for approval.",
     "fresh rescue command did not revoke the older pending change",
   );
   assert(gatewayRestarts.length === 0, "revoked gateway restart was invoked");
-  await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-  });
-  const gatewayApplied = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  await runGatewayCommand("/openclaw restart gateway");
+  const gatewayApplied = await runGatewayCommand("/openclaw yes", restartDeps);
   assert(
     gatewayApplied?.includes("[openclaw] done: gateway.restart"),
     "gateway restart did not apply",
@@ -275,26 +253,23 @@ async function main() {
     "agent config was not updated",
   );
 
-  const auditPath = path.join(stateDir, "audit", "system-agent.jsonl");
-  const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-  assert(auditLines.length >= 2, "audit log did not record both operations");
-  const audits = auditLines.map((line) => JSON.parse(line));
-  assert(
-    audits.some((audit) => audit.operation === "config.setDefaultModel"),
-    "model audit operation missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.set"),
-    "config set audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.setRef"),
-    "SecretRef config audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "openclaw.setup"),
-    "setup audit missing",
-  );
+  const audits = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  })
+    .entries()
+    .map((entry) => entry.value);
+  for (const [operation, message] of [
+    ["config.setDefaultModel", "model audit operation missing"],
+    ["config.set", "config set audit missing"],
+    ["config.setRef", "SecretRef config audit missing"],
+    ["openclaw.setup", "setup audit missing"],
+  ] as const) {
+    assert(
+      audits.some((audit) => audit.operation === operation),
+      message,
+    );
+  }
   const agentAudit = audits.find((audit) => audit.operation === "agents.create");
   assert(agentAudit, "agent audit operation missing");
   assert(agentAudit.details?.rescue === true, "audit rescue marker missing");

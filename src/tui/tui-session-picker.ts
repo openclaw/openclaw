@@ -42,11 +42,10 @@ export async function loadRecentSessions(
   return result.sessions;
 }
 
-/** Build labels and matching text for recent-session pickers. */
 export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): SessionPickerChoice[] {
   return sessions.map((session) => {
     const title = session.derivedTitle ?? session.displayName;
-    const formattedKey = formatSessionKey(session.key);
+    const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
     const timePart = session.updatedAt
       ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
@@ -87,25 +86,16 @@ export function resolveResumeSession(
   const substringMatches = choices.filter((choice) =>
     normalizeLowercaseStringOrEmpty(choice.matchText).includes(normalizedQuery),
   );
-  const substringMatch = substringMatches[0];
-  if (substringMatches.length === 1 && substringMatch) {
-    return { kind: "match", session: substringMatch };
+  const matches =
+    substringMatches.length > 0
+      ? substringMatches
+      : fuzzyFilter(choices, trimmedQuery, (choice) => choice.matchText);
+  const match = matches[0];
+  if (matches.length === 1 && match) {
+    return { kind: "match", session: match };
   }
-  if (substringMatches.length > 1) {
-    return { kind: "ambiguous", candidates: substringMatches };
-  }
-
-  const fuzzyMatches = fuzzyFilter(choices, trimmedQuery, (choice) => choice.matchText);
-  const fuzzyMatch = fuzzyMatches[0];
-  if (fuzzyMatches.length === 1 && fuzzyMatch) {
-    return { kind: "match", session: fuzzyMatch };
-  }
-  if (fuzzyMatches.length > 1) {
-    return { kind: "ambiguous", candidates: fuzzyMatches };
+  if (matches.length > 1) {
+    return { kind: "ambiguous", candidates: matches };
   }
   return { kind: "none" };
-}
-
-function formatSessionKey(key: string): string {
-  return parseAgentSessionKey(key)?.rest ?? key;
 }

@@ -1,28 +1,24 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-// Nextcloud Talk plugin module implements setup core behavior.
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
+  createPromptParsedAllowFromForAccount,
   patchScopedAccountConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
   createSetupInputPresenceValidator,
   mergeAllowFromEntries,
-  promptParsedAllowFromForAccount,
-  resolveSetupAccountId,
   createSetupTranslator,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   normalizeLowercaseStringOrEmpty,
-  readStringValue,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyUntrimmedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
@@ -38,11 +34,6 @@ type NextcloudSetupInput = ChannelSetupInput & {
   url?: string;
   password?: string;
 };
-
-function readNonEmptyUntrimmedString(value: unknown): string | undefined {
-  const text = readStringValue(value);
-  return text ? text : undefined;
-}
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -73,16 +64,11 @@ export function setNextcloudTalkAccountConfig(
   }) as CoreConfig;
 }
 
-async function promptNextcloudTalkAllowFrom(params: {
-  cfg: CoreConfig;
-  prompter: WizardPrompter;
-  accountId: string;
-}): Promise<CoreConfig> {
-  return await promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: params.accountId,
-    prompter: params.prompter,
+const promptNextcloudTalkAllowFrom: ReturnType<
+  typeof createPromptParsedAllowFromForAccount
+> = async (params) =>
+  await createPromptParsedAllowFromForAccount<CoreConfig>({
+    defaultAccountId: resolveDefaultNextcloudTalkAccountId,
     noteTitle: t("wizard.nextcloudTalk.userIdTitle"),
     noteLines: [
       t("wizard.nextcloudTalk.userIdHelpAdmin"),
@@ -112,24 +98,7 @@ async function promptNextcloudTalkAllowFrom(params: {
         dmPolicy: "allowlist",
         allowFrom,
       }),
-  });
-}
-
-async function promptNextcloudTalkAllowFromForAccount(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  const accountId = resolveSetupAccountId({
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultNextcloudTalkAccountId(params.cfg as CoreConfig),
-  });
-  return await promptNextcloudTalkAllowFrom({
-    cfg: params.cfg as CoreConfig,
-    prompter: params.prompter,
-    accountId,
-  });
-}
+  })(params);
 
 export const nextcloudTalkDmPolicy = createChannelDmPolicy({
   label: "Nextcloud Talk",
@@ -141,7 +110,7 @@ export const nextcloudTalkDmPolicy = createChannelDmPolicy({
     }),
   applyPatch: ({ cfg, account, patch }) =>
     setNextcloudTalkAccountConfig(cfg as CoreConfig, account.accountId, patch),
-  promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
+  promptAllowFrom: promptNextcloudTalkAllowFrom,
 });
 
 const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
@@ -250,6 +219,7 @@ export const nextcloudTalkSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },
+      envVars: ["NEXTCLOUD_TALK_BOT_SECRET"],
     },
   },
   legacyAdapter: nextcloudTalkSetupAdapter,

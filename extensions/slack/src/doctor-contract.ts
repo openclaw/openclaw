@@ -1,4 +1,3 @@
-// Slack plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -17,8 +16,6 @@ import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./stream
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "slack",
   streaming: {
-    // Slack maps its legacy draft stream modes (replace/status_final/append)
-    // through its own resolver instead of the generic mode parser.
     defaultMode: "partial",
     resolveMode: resolveSlackStreamingMode,
     resolveNativeTransport: resolveSlackNativeStreaming,
@@ -40,12 +37,6 @@ const threadMentionPolicyMigration = defineKeyMoveMigration({
   pruneEmptySource: true,
   movedMessage: ({ sourcePath, targetPath, mappedValue }) =>
     `Moved ${sourcePath} → ${targetPath} (${String(mappedValue)}).`,
-});
-
-const channelAllowMigration = defineKeyMoveMigration({
-  scope: ["channels", "*"],
-  from: ["allow"],
-  to: ["enabled"],
 });
 
 function hasInteractiveRepliesCapability(value: unknown): boolean {
@@ -164,18 +155,6 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     match: (value) =>
       hasLegacyAccountStreamingAliases(value, threadMentionPolicyMigration.hasLegacy),
   },
-  {
-    path: ["channels", "slack"],
-    message:
-      'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: channelAllowMigration.hasLegacy,
-  },
-  {
-    path: ["channels", "slack", "accounts"],
-    message:
-      'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, channelAllowMigration.hasLegacy),
-  },
 ];
 
 function normalizeSlackEntry(params: {
@@ -189,10 +168,9 @@ function normalizeSlackEntry(params: {
     entry: retiredInteractiveReplies.entry,
   });
   const thread = threadMentionPolicyMigration.normalize({ ...params, entry: dm.entry });
-  const channels = channelAllowMigration.normalize({ ...params, entry: thread.entry });
   return {
-    entry: channels.entry,
-    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed || channels.changed,
+    entry: thread.entry,
+    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed,
   };
 }
 

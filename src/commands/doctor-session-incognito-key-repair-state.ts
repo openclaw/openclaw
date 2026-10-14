@@ -1,14 +1,13 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type ReservedKeyRename = { from: string; to: string };
 
@@ -26,6 +25,18 @@ type SharedStateSchemaDatabase = {
 };
 
 type DynamicSharedStateDatabase = Record<string, Record<string, unknown>>;
+
+function listTuiLastSessionStateRows(database: DatabaseSync) {
+  const db =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(database);
+  return executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json"])
+      .where("state_key", "like", "tui.lastSession.%"),
+  ).rows;
+}
 
 function sqliteSchemaIdentifier(value: string) {
   return sql.id(value); // kysely-allow-raw -- value comes only from SQLite schema metadata.
@@ -82,6 +93,12 @@ export function collectSharedStateSessionKeys(database: DatabaseSync): Set<strin
       }
     }
   }
+  for (const row of listTuiLastSessionStateRows(database)) {
+    const sessionKey: unknown = JSON.parse(row.value_json);
+    if (typeof sessionKey === "string") {
+      keys.add(sessionKey);
+    }
+  }
   return keys;
 }
 
@@ -134,6 +151,21 @@ export function rewriteSharedStateSessionKeys(
       }
     }
   }
+  const stateDb =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(database);
+  for (const row of listTuiLastSessionStateRows(database)) {
+    const sessionKey: unknown = JSON.parse(row.value_json);
+    const renamedKey = typeof sessionKey === "string" ? renames.get(sessionKey) : undefined;
+    if (renamedKey) {
+      executeSqliteQuerySync(
+        database,
+        stateDb
+          .updateTable("config_machine_state")
+          .set({ value_json: JSON.stringify(renamedKey) })
+          .where("state_key", "=", row.state_key),
+      );
+    }
+  }
 }
 
 function collectJsonStringValues(value: unknown, values: Set<string>): void {
@@ -141,16 +173,10 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
     values.add(value);
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectJsonStringValues(item, values);
-    }
-    return;
-  }
   if (!value || typeof value !== "object") {
     return;
   }
-  for (const item of Object.values(value)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     collectJsonStringValues(item, values);
   }
 }
@@ -173,28 +199,19 @@ export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
     throw new Error("Invalid reserved incognito session key repair journal");
   }
   return parsed.renames.map((item) => {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      Array.isArray(item) ||
-      typeof (item as { from?: unknown }).from !== "string" ||
-      typeof (item as { to?: unknown }).to !== "string"
-    ) {
+    if (!isRecord(item) || typeof item.from !== "string" || typeof item.to !== "string") {
       throw new Error("Invalid reserved incognito session key repair journal entry");
     }
-    return { from: (item as { from: string }).from, to: (item as { to: string }).to };
+    return { from: item.from, to: item.to };
   });
 }
 
 export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRename[] {
-  const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
-    return [];
-  }
-  return withOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
-    env,
-    path: statePath,
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
+      env,
+    }) ?? []
+  );
 }
 
 export function writeRepairJournal(

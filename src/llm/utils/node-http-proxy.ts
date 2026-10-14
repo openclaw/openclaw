@@ -1,4 +1,3 @@
-// Node HTTP proxy helpers build HTTP(S) agents from proxy settings.
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
 import {
@@ -12,16 +11,11 @@ interface NodeHttpProxyAgents {
   httpsAgent: HttpsAgent;
 }
 
-/** Resolves the environment proxy URL that applies to a target URL. */
-function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
-  return resolveEnvNodeProxyUrlForTarget(targetUrl);
-}
-
 /** Builds fixed HTTP and HTTPS proxy agents for a target URL, when env proxy config applies. */
 export function createHttpProxyAgentsForTarget(
   targetUrl: string | URL,
 ): NodeHttpProxyAgents | undefined {
-  const proxyUrl = resolveHttpProxyUrlForTarget(targetUrl);
+  const proxyUrl = resolveEnvNodeProxyUrlForTarget(targetUrl);
   if (!proxyUrl) {
     return undefined;
   }

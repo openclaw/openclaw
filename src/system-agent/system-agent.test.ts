@@ -65,7 +65,12 @@ const systemAgentOverviewDeps = {
 };
 
 const verifiedConfig = {
-  agents: { defaults: { model: "openai/gpt-5.5" } },
+  agents: {
+    defaults: {
+      model: "openai/gpt-5.5",
+      models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+    },
+  },
   models: {
     providers: {
       openai: {
@@ -134,16 +139,16 @@ describe("runSystemAgent", () => {
 
     await expect(
       runSystemAgent(withoutBinding({ ...common, json: true }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
     await expect(
       runSystemAgent(withoutBinding({ ...common, message: "please make things nicer" }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
     await expect(
       runSystemAgent(withoutBinding({ ...common, message: "restart gateway", yes: true }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    await expect(runSystemAgent(withoutBinding(common), runtime)).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
+    await expect(runSystemAgent(withoutBinding(common), runtime)).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(planWithAssistant).not.toHaveBeenCalled();
@@ -188,38 +193,33 @@ describe("runSystemAgent", () => {
     );
   });
 
-  it("does not apply a one-shot plan after the verified route changes", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    } satisfies OpenClawConfig;
-    const readConfigFileSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
-      .mockResolvedValue(configSnapshot(changedConfig));
-    const runGatewayRestart = vi.fn(async () => {});
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runGatewayRestart,
-      },
-      { revalidate: true },
-    );
+  it.each([
+    "config set gateway.auth.token=very-secret",
+    "config set gateway.auth.token=very-secret please",
+    String.raw`config set gateway.auth.token\ very-secret please`,
+    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
+  ])(
+    "keeps malformed config write %s away from the one-shot assistant planner",
+    async (message) => {
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
 
-    await expect(
-      runSystemAgent(
+      await runSystemAgent(
         {
-          ...verified,
-          message: "the bridge looks sleepy, restart it",
-          yes: true,
-          planWithAssistant: async () => ({ command: "restart gateway" }),
+          ...createVerifiedRunOptions(),
+          message,
+          planWithAssistant,
           ...systemAgentOverviewDeps,
         },
         runtime,
-      ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    expect(runGatewayRestart).not.toHaveBeenCalled();
-  });
+      );
+
+      expect(planWithAssistant).not.toHaveBeenCalled();
+      expect(lines.join("\n")).toContain("Invalid config path");
+      expect(lines.join("\n")).not.toContain("very-secret");
+      expect(lines.join("\n")).not.toContain("abcDEF123");
+    },
+  );
 
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
     const { runtime } = createSystemAgentTestRuntime();
@@ -252,7 +252,9 @@ describe("runSystemAgent", () => {
         },
         runtime,
       ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
 
     expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
     expect(runGatewayRestart).not.toHaveBeenCalled();
@@ -423,12 +425,6 @@ describe("runSystemAgent", () => {
   });
 
   it.each([
-    {
-      name: "stdin is not a TTY",
-      input: { isTTY: false } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: true } as unknown as NodeJS.WritableStream,
-      interactive: true,
-    },
     {
       name: "stdout is not a TTY",
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,

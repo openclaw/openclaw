@@ -12,9 +12,9 @@ import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
-import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
+import { spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -194,11 +194,10 @@ async function waitForAcpBackendReady(timeoutMs = CONNECT_TIMEOUT_MS): Promise<v
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
-    await runtime?.probeAvailability?.().catch(() => {});
+    await backend?.runtime.doctor?.().catch(() => {});
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
@@ -213,7 +212,7 @@ async function waitForSessionEntry(params: {
   timeoutMs?: number;
 }): Promise<SessionEntry> {
   const timeoutMs = params.timeoutMs ?? 20_000;
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: "codex" });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId: "codex" });
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const entry = loadSessionEntry({
@@ -388,17 +387,16 @@ function createConfig(params: {
 
   return {
     agents: {
-      list: params.includePrimaryOnlyAcpAgent
-        ? [
-            {
-              id: "codex-acp-primary-only",
+      entries: params.includePrimaryOnlyAcpAgent
+        ? {
+            "codex-acp-primary-only": {
               runtime: {
                 type: "acp",
                 acp: { agent: params.acpAgentId },
               },
               model: "anthropic/claude-sonnet-4-6",
             },
-          ]
+          }
         : undefined,
       defaults: {
         model: {
@@ -519,12 +517,12 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           },
           { agentSessionKey: "agent:main:main" },
         );
-        if (!isSpawnAcpAcceptedResult(configuredDefaultResult)) {
+        if (configuredDefaultResult.status !== "accepted") {
           throw new Error(
             `configured default ACP spawn failed (${configuredDefaultResult.errorCode}): ${configuredDefaultResult.error}`,
           );
         }
-        expect(isSpawnAcpAcceptedResult(configuredDefaultResult)).toBe(true);
+        expect(configuredDefaultResult.status).toBe("accepted");
         sessionKeys.push(configuredDefaultResult.childSessionKey);
         const configuredDefaultEntry = await waitForSessionEntry({
           cfg: runtimeCfg,
@@ -542,12 +540,12 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           },
           { agentSessionKey: "agent:main:main" },
         );
-        if (!isSpawnAcpAcceptedResult(primaryOnlyResult)) {
+        if (primaryOnlyResult.status !== "accepted") {
           throw new Error(
             `primary-only ACP spawn failed (${primaryOnlyResult.errorCode}): ${primaryOnlyResult.error}`,
           );
         }
-        expect(isSpawnAcpAcceptedResult(primaryOnlyResult)).toBe(true);
+        expect(primaryOnlyResult.status).toBe("accepted");
         sessionKeys.push(primaryOnlyResult.childSessionKey);
         const primaryOnlyEntry = await waitForSessionEntry({
           cfg: runtimeCfg,

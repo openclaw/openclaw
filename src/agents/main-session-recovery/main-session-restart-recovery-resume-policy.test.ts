@@ -15,78 +15,92 @@ vi.mock("../run-termination.js", () => ({
   AGENT_RUN_RESTART_ABORT_ERROR_CODE: "OPENCLAW_RESTART_ABORT",
 }));
 
-function progressMessage(text: string, itemId: string): Record<string, unknown> {
+function asyncDeliveryMessage(text: string, itemId: string): Record<string, unknown> {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     stopReason: "stop",
-    openclawStreamFallback: {
-      replacementText: text,
-      source: "segment",
-      itemId,
-    },
+    phase: "final_answer",
+    openclawAsyncDelivery: { itemId },
   };
 }
 
+function resolvePolicy(params: {
+  messages?: unknown[];
+  fullAccess?: boolean;
+  beforeAgentReplyState?:
+    | "admitted"
+    | "pending"
+    | "continue"
+    | "handled-silent"
+    | "handled-reply"
+    | "handled-unrecoverable";
+  deliveryReceiptState?: "terminal-pending" | "delivered-terminal";
+  deliveryToolCallId?: string;
+}) {
+  return resolveMainSessionResumePolicy(
+    params.messages ?? [{ role: "user", content: "finish the interrupted work" }],
+    false,
+    "source-turn",
+    params.beforeAgentReplyState,
+    params.deliveryReceiptState,
+    params.deliveryToolCallId,
+    params.fullAccess,
+  );
+}
+
+function codeModeCheckpoint(params: {
+  replaySafe: boolean;
+  runId?: string;
+  status?: "completed" | "failed" | "waiting";
+}) {
+  return {
+    role: "toolResult",
+    toolName: "exec",
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: params.status ?? "waiting",
+          replaySafe: params.replaySafe,
+          ...(params.runId ? { runId: params.runId } : {}),
+        }),
+      },
+    ],
+  };
+}
+
+function codeModeWait(runId = "code-run") {
+  return {
+    role: "assistant",
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "wait-call", name: "wait", arguments: { runId } }],
+  };
+}
+
+describe("resolveMainSessionResumePolicy former terminal states", () => {
+  it.each([
+    { deliveryReceiptState: "terminal-pending" as const },
+    { beforeAgentReplyState: "pending" as const },
+    { beforeAgentReplyState: "handled-reply" as const },
+    { beforeAgentReplyState: "handled-unrecoverable" as const },
+    { messages: [codeModeCheckpoint({ replaySafe: true, runId: "code-run" }), codeModeWait()] },
+  ])("retains reconciliation restrictions under full access: %j", (params) => {
+    expect(resolvePolicy({ ...params, fullAccess: true })).toMatchObject({
+      action: "resume",
+      forceRestartSafeTools: true,
+    });
+  });
+  it("keeps an uncorrelated delivered receipt restricted", () => {
+    expect(resolvePolicy({ deliveryReceiptState: "delivered-terminal" })).toEqual({
+      action: "resume",
+      forceRestartSafeTools: true,
+    });
+  });
+});
+
 describe("resolveMainSessionResumePolicy progress tails", () => {
-  it("resumes explicit commentary without making completed answers resumable", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        {
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "text", text: "Checking the workspace." }],
-          stopReason: "stop",
-        },
-      ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: false });
-
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        { role: "assistant", content: [{ type: "text", text: "The work is complete." }] },
-        progressMessage("A later progress item.", "progress-late"),
-      ]),
-    ).toEqual({ action: "fail", reason: "transcript tail is not resumable" });
-  });
-
-  it("recognizes the existing provider text-signature commentary contract", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Checking the workspace.",
-              textSignature: JSON.stringify({ v: 1, id: "progress-signed", phase: "commentary" }),
-            },
-          ],
-          stopReason: "stop",
-        },
-      ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: false });
-  });
-
-  it("keeps restart abort artifacts effective when progress arrives on either side", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        progressMessage("One last update before cancellation.", "progress-before-abort"),
-        {
-          role: "assistant",
-          content: [],
-          stopReason: "aborted",
-          errorMessage: "agent run aborted for restart",
-        },
-        progressMessage("One delayed update after cancellation.", "progress-after-abort"),
-      ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: false });
-  });
-
-  it("retains replay restrictions when progress follows a side-effecting tool call", () => {
+  it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
     expect(
       resolveMainSessionResumePolicy([
         { role: "user", content: "finish the interrupted work" },
@@ -97,34 +111,8 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
             { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "true" } },
           ],
         },
-        progressMessage("Waiting for the command.", "progress-exec"),
+        asyncDeliveryMessage("The background check finished.", "async-after-exec"),
       ]),
     ).toEqual({ action: "resume", forceRestartSafeTools: true });
-  });
-
-  it("never treats unkeyed stream fallbacks as authoritative progress", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Possibly final output." }],
-          stopReason: "stop",
-          openclawStreamFallback: { replacementText: "Possibly final output.", source: "current" },
-        },
-      ]),
-    ).toEqual({ action: "fail", reason: "transcript tail is not resumable" });
-  });
-
-  it("keeps explicit final-answer phase authoritative over keyed fallback metadata", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        {
-          ...progressMessage("The work is complete.", "final-item"),
-          phase: "final_answer",
-        },
-      ]),
-    ).toEqual({ action: "fail", reason: "transcript tail is not resumable" });
   });
 });

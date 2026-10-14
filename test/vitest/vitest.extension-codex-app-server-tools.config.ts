@@ -1,7 +1,8 @@
 // Vitest extension codex app server tools config wires the extension codex app server tools test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-function createExtensionCodexAppServerToolsVitestConfig(
+export function createExtensionCodexAppServerToolsVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(
@@ -22,7 +23,8 @@ function createExtensionCodexAppServerToolsVitestConfig(
     {
       dir: "extensions",
       env,
-      fileParallelism: false,
+      exclude: databaseWorkerExtensionTestFiles,
+      isolate: true,
       name: "extension-codex-app-server-tools",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

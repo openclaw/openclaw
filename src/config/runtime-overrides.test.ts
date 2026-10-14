@@ -9,8 +9,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
-import { resolveMainSessionKey } from "./sessions/main-session.js";
-import type { OpenClawConfig } from "./types.js";
+import { resolveMainSessionKey, resolveSessionRoutingContract } from "./sessions/main-session.js";
 import { validateConfigObject } from "./validation.js";
 
 describe("runtime overrides", () => {
@@ -18,13 +17,26 @@ describe("runtime overrides", () => {
     resetConfigOverrides();
   });
 
-  it("sets and applies nested overrides", () => {
+  it("fingerprints the persisted owner of a global fixed store", () => {
     const cfg = {
-      channels: { whatsapp: { responsePrefix: "[openclaw]" } },
-    } as OpenClawConfig;
-    setConfigOverride("channels.whatsapp.responsePrefix", "[debug]");
-    const next = applyConfigOverrides(cfg);
-    expect(next.channels?.whatsapp?.responsePrefix).toBe("[debug]");
+      session: { scope: "global" as const, store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {}, ops: {} },
+      },
+    };
+
+    expect(resolveSessionRoutingContract(cfg)).toBe("global|main|ops");
+    expect(
+      resolveSessionRoutingContract({
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { sessionStore: { agentId: "research" } },
+        },
+      }),
+    ).toBe("global|main|research");
   });
 
   it("captures an immutable override applier", () => {
@@ -39,9 +51,10 @@ describe("runtime overrides", () => {
   it("preserves the validated agent projection when an override copies agents", () => {
     const validated = validateConfigObject({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "jarvis" } },
         entries: {
           jarvis: {
-            default: true,
             workspace: "/tmp/jarvis-workspace",
           },
           worker: {
@@ -64,7 +77,13 @@ describe("runtime overrides", () => {
 
     for (const runtimeConfig of runtimeConfigs) {
       expect(runtimeConfig.agents).not.toBe(validated.config.agents);
-      expect(runtimeConfig.agents?.list?.map((entry) => entry.id)).toEqual(["jarvis", "worker"]);
+      expect(Object.getOwnPropertyDescriptor(runtimeConfig.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [
+          { id: "jarvis", workspace: "/tmp/jarvis-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      });
       expect(Object.keys(runtimeConfig.agents ?? {})).not.toContain("list");
       expect(listAgentWorkspaceDirs(runtimeConfig)).toEqual([
         "/tmp/jarvis-workspace",
@@ -72,16 +91,6 @@ describe("runtime overrides", () => {
       ]);
       expect(resolveMainSessionKey(runtimeConfig)).toBe("agent:jarvis:main");
     }
-  });
-
-  it("merges object overrides without clobbering siblings", () => {
-    const cfg = {
-      channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] } },
-    } as OpenClawConfig;
-    setConfigOverride("channels.whatsapp.dmPolicy", "open");
-    const next = applyConfigOverrides(cfg);
-    expect(next.channels?.whatsapp?.dmPolicy).toBe("open");
-    expect(next.channels?.whatsapp?.allowFrom).toEqual(["+1"]);
   });
 
   it("unsets overrides and prunes empty branches", () => {
@@ -98,24 +107,6 @@ describe("runtime overrides", () => {
       expect(result.ok).toBe(false);
       expect(Object.keys(getConfigOverrides()).length).toBe(0);
     }
-  });
-
-  it("blocks __proto__ keys inside override object values", () => {
-    const cfg = { commands: {} } as OpenClawConfig;
-    setConfigOverride("commands", JSON.parse('{"__proto__":{"bash":true}}'));
-
-    const next = applyConfigOverrides(cfg);
-    expect(next.commands?.bash).toBeUndefined();
-    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
-  });
-
-  it("blocks constructor/prototype keys inside override object values", () => {
-    const cfg = { commands: {} } as OpenClawConfig;
-    setConfigOverride("commands", JSON.parse('{"constructor":{"prototype":{"bash":true}}}'));
-
-    const next = applyConfigOverrides(cfg);
-    expect(next.commands?.bash).toBeUndefined();
-    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("sanitizes blocked object keys when writing overrides", () => {

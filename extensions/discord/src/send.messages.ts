@@ -1,24 +1,29 @@
-// Discord plugin module implements send.messages behavior.
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   createThread,
   deleteChannelMessage,
   editChannelMessage,
   getChannel,
   getChannelMessage,
-  listChannelArchivedThreads,
-  listGuildActiveThreads,
-  listChannelMessages,
-  listChannelPins,
+  isUnknownDiscordMessageError,
   pinChannelMessage,
-  searchGuildMessages,
   unpinChannelMessage,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
-import { resolveDiscordRest } from "./send.shared.js";
+import {
+  classifyDiscordDeliveryFailure,
+  recordDiscordMessageCreateAmbiguity,
+  type DiscordRetryRunner,
+} from "./retry.js";
+import {
+  buildDiscordTextChunks,
+  createDiscordClient,
+  resolveDiscordRest,
+  sendDiscordText,
+} from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -28,6 +33,36 @@ import type {
   DiscordThreadList,
 } from "./send.types.js";
 
+const DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES = Number.MAX_SAFE_INTEGER;
+
+type DiscordThreadInitialMessageDelivery = Readonly<{
+  starterMessageDelivered: boolean;
+  deliveredChunkCount: number;
+  deliveredMessageIds: readonly string[];
+  failedChunkDelivery: "not_delivered" | "unknown";
+  failedChunkIndex: number;
+  totalChunkCount: number;
+}>;
+
+type DiscordThreadCreateResult = APIChannel & {
+  initialMessageDelivery?: Omit<
+    DiscordThreadInitialMessageDelivery,
+    "failedChunkDelivery" | "failedChunkIndex"
+  > & { status: "delivered" };
+};
+
+function resolveDiscordThreadStarterMessageId(thread: APIChannel): string {
+  const starterMessage = "message" in thread ? thread.message : undefined;
+  if (
+    starterMessage &&
+    typeof starterMessage === "object" &&
+    "id" in starterMessage &&
+    typeof starterMessage.id === "string"
+  ) {
+    return starterMessage.id;
+  }
+  return thread.id;
+}
 function assertDiscordResponseArray<T>(value: unknown, label: string): T[] {
   if (!Array.isArray(value)) {
     throw new Error(`Unexpected Discord response for ${label}: expected array.`);
@@ -42,24 +77,43 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
-  if (!channel || !("default_auto_archive_duration" in channel)) {
-    return undefined;
+function describeDiscordThreadInitialMessageFailure(
+  delivery?: DiscordThreadInitialMessageDelivery,
+): string {
+  if (delivery?.failedChunkDelivery === "unknown") {
+    return delivery.deliveredChunkCount > 0
+      ? "Discord thread was created, but delivery of the remaining initial content could not be confirmed"
+      : "Discord thread was created, but initial message delivery could not be confirmed";
   }
-  return channel.default_auto_archive_duration;
+  return delivery && delivery.deliveredChunkCount > 0
+    ? "Discord thread was created, but its initial content was only partially delivered"
+    : "Discord thread was created, but sending the initial message failed";
 }
 
 export class DiscordThreadInitialMessageError extends Error {
+  readonly initialMessageDelivery?: DiscordThreadInitialMessageDelivery;
   readonly initialMessageError: string;
+  readonly initialMessageWarning: string;
   readonly thread: APIChannel;
 
-  constructor(thread: APIChannel, error: unknown) {
+  constructor(
+    thread: APIChannel,
+    error: unknown,
+    initialMessageDelivery?: DiscordThreadInitialMessageDelivery,
+  ) {
     const initialMessageError = formatErrorMessage(error);
-    super(
-      `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
-    );
+    const initialMessageWarning =
+      describeDiscordThreadInitialMessageFailure(initialMessageDelivery);
+    super(`${initialMessageWarning}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
+    this.initialMessageDelivery = initialMessageDelivery
+      ? {
+          ...initialMessageDelivery,
+          deliveredMessageIds: [...initialMessageDelivery.deliveredMessageIds],
+        }
+      : undefined;
     this.initialMessageError = initialMessageError;
+    this.initialMessageWarning = initialMessageWarning;
     this.thread = thread;
   }
 }
@@ -79,17 +133,14 @@ export async function readMessagesDiscord(
   if (limit) {
     params.limit = limit;
   }
-  if (messageQuery.before) {
-    params.before = messageQuery.before;
-  }
-  if (messageQuery.after) {
-    params.after = messageQuery.after;
-  }
-  if (messageQuery.around) {
-    params.around = messageQuery.around;
+  for (const key of ["before", "after", "around"] as const) {
+    const value = messageQuery[key];
+    if (value) {
+      params[key] = value;
+    }
   }
   return assertDiscordResponseArray<APIMessage>(
-    await listChannelMessages(rest, channelId, params),
+    await rest.get(Routes.channelMessages(channelId), params),
     "message read",
   );
 }
@@ -109,42 +160,50 @@ export async function editMessageDiscord(
   payload: DiscordMessageEdit,
   opts: DiscordReactOpts,
 ): Promise<APIMessage> {
-  const rest = resolveDiscordRest(opts);
-  return await editChannelMessage(rest, channelId, messageId, {
-    body: {
-      content: payload.content,
-      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
-    },
-  });
+  const { rest, request } = createDiscordClient(opts);
+  return await request(
+    () =>
+      editChannelMessage(rest, channelId, messageId, {
+        body: {
+          content: payload.content,
+          ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+          ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
+        },
+      }),
+    "message-edit",
+  );
 }
+
+function messageMutation(operation: typeof deleteChannelMessage, label: string) {
+  return async (channelId: string, messageId: string, opts: DiscordReactOpts) => {
+    const { rest, request } = createDiscordClient(opts);
+    await request(() => operation(rest, channelId, messageId), label);
+    return { ok: true };
+  };
+}
+
+export const pinMessageDiscord = messageMutation(pinChannelMessage, "message-pin");
+export const unpinMessageDiscord = messageMutation(unpinChannelMessage, "message-unpin");
 
 export async function deleteMessageDiscord(
   channelId: string,
   messageId: string,
   opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await deleteChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
-
-export async function pinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await pinChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
-
-export async function unpinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await unpinChannelMessage(rest, channelId, messageId);
+): Promise<{ ok: boolean }> {
+  const { rest, request } = createDiscordClient(opts);
+  let mayHaveApplied = false;
+  await request(async () => {
+    try {
+      await deleteChannelMessage(rest, channelId, messageId);
+    } catch (err) {
+      // A lost response can hide an applied delete; the replay then reports Unknown Message.
+      if (mayHaveApplied && isUnknownDiscordMessageError(err)) {
+        return;
+      }
+      mayHaveApplied ||= classifyDiscordDeliveryFailure(err) === "ambiguous";
+      throw err;
+    }
+  }, "message-delete");
   return { ok: true };
 }
 
@@ -153,38 +212,48 @@ export async function listPinsDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
-  return await listChannelPins(rest, channelId);
+  // SAFETY: Discord's pinned-message route returns an array of API messages.
+  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
 }
 
 export async function createThreadDiscord(
   channelId: string,
   payload: DiscordThreadCreate,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
+  opts: DiscordReactOpts & { assertCreateAllowed?: () => void },
+): Promise<DiscordThreadCreateResult> {
+  const assertCreateAllowed = opts.assertCreateAllowed;
+  const { rest, request } = createDiscordClient(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
   }
   let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    try {
-      channel = await getChannel(rest, channelId);
-    } catch {
-      // Channel metadata only enriches standalone creation; Discord still validates it.
-    }
+    // Channel metadata only enriches standalone creation; Discord still validates it.
+    channel = await getChannel(rest, channelId).catch(() => undefined);
   }
   // Discord clients preselect the parent default, but REST thread creation needs
   // it explicitly. Keep a caller override authoritative when one was supplied.
   const archiveDuration =
-    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
+    payload.autoArchiveMinutes ??
+    (channel && "default_auto_archive_duration" in channel
+      ? channel.default_auto_archive_duration
+      : undefined);
   if (archiveDuration !== undefined) {
     body.auto_archive_duration = archiveDuration;
   }
   const isForumLike =
     channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
+  const initialMessageContent = payload.content?.trim()
+    ? payload.content
+    : isForumLike
+      ? payload.name
+      : "";
+  const initialMessageChunks = buildDiscordTextChunks(initialMessageContent, {
+    maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
+  });
   if (isForumLike) {
-    const starterContent = payload.content?.trim() ? payload.content : payload.name;
+    const starterContent = initialMessageChunks[0] ?? payload.name;
     body.message = { content: starterContent };
     if (payload.appliedTags?.length) {
       body.applied_tags = payload.appliedTags;
@@ -196,21 +265,78 @@ export async function createThreadDiscord(
   if (!payload.messageId && !isForumLike && body.type === undefined) {
     body.type = ChannelType.PublicThread;
   }
-  const thread = await createThread(rest, channelId, { body }, payload.messageId);
+  const thread = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+    assertCreateAllowed?.();
+    return createThread(rest, channelId, { body }, payload.messageId);
+  });
 
-  // For non-forum channels, send the initial message separately after thread creation.
-  // Forum channels handle this via the `message` field in the request body.
-  if (!isForumLike && payload.content?.trim() && "id" in thread) {
-    try {
-      await createChannelMessage(rest, thread.id, {
-        body: { content: payload.content },
-      });
-    } catch (error) {
-      throw new DiscordThreadInitialMessageError(thread, error);
+  // Forum creation accepts exactly one starter message, so keep the first chunk in the
+  // create request and deliver any remainder after Discord returns the new thread.
+  const followupChunks = isForumLike ? initialMessageChunks.slice(1) : initialMessageChunks;
+  const deliveredMessageIds = isForumLike ? [resolveDiscordThreadStarterMessageId(thread)] : [];
+  let deliveredChunkCount = isForumLike ? 1 : 0;
+  if (followupChunks.length && "id" in thread) {
+    const firstFollowupChunkIndex = isForumLike ? 1 : 0;
+    for (const [followupIndex, content] of followupChunks.entries()) {
+      let chunkMayHaveDelivered = false;
+      const trackedRequest: DiscordRetryRunner = (fn, label, options) =>
+        request(
+          async () => {
+            try {
+              return await fn();
+            } catch (error) {
+              chunkMayHaveDelivered ||= classifyDiscordDeliveryFailure(error) === "ambiguous";
+              throw error;
+            }
+          },
+          label,
+          options,
+        );
+      try {
+        const result = await sendDiscordText({
+          rest,
+          request: trackedRequest,
+          channelId: thread.id,
+          text: content,
+          maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
+        });
+        deliveredMessageIds.push(...result.platformMessageIds);
+        deliveredChunkCount += 1;
+      } catch (error) {
+        const finalFailure = classifyDiscordDeliveryFailure(error);
+        const failedChunkDelivery =
+          chunkMayHaveDelivered || finalFailure === "ambiguous" || finalFailure === "unknown"
+            ? "unknown"
+            : "not_delivered";
+        if (failedChunkDelivery === "unknown") {
+          recordDiscordMessageCreateAmbiguity(error);
+        }
+        throw new DiscordThreadInitialMessageError(thread, error, {
+          starterMessageDelivered: isForumLike,
+          deliveredChunkCount,
+          deliveredMessageIds,
+          failedChunkDelivery,
+          failedChunkIndex: firstFollowupChunkIndex + followupIndex,
+          totalChunkCount: initialMessageChunks.length,
+        });
+      }
     }
   }
 
-  return thread;
+  // Creation counters predate follow-up sends. Keep them unchanged and return
+  // confirmed delivery separately so callers do not retry accepted content.
+  return deliveredChunkCount > 0
+    ? {
+        ...thread,
+        initialMessageDelivery: {
+          status: "delivered",
+          starterMessageDelivered: isForumLike,
+          deliveredChunkCount,
+          deliveredMessageIds,
+          totalChunkCount: initialMessageChunks.length,
+        },
+      }
+    : thread;
 }
 
 export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts) {
@@ -226,31 +352,27 @@ export async function listThreadsDiscord(payload: DiscordThreadList, opts: Disco
     if (payload.limit) {
       params.limit = payload.limit;
     }
-    return await listChannelArchivedThreads(rest, payload.channelId, params);
+    return await rest.get(Routes.channelThreads(payload.channelId, "public"), params);
   }
-  return await listGuildActiveThreads(rest, payload.guildId);
+  return await rest.get(Routes.guildActiveThreads(payload.guildId));
 }
 
 export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const params = new URLSearchParams();
   params.set("content", query.content);
-  if (query.channelIds?.length) {
-    for (const channelId of query.channelIds) {
-      params.append("channel_id", channelId);
-    }
+  for (const channelId of query.channelIds ?? []) {
+    params.append("channel_id", channelId);
   }
-  if (query.authorIds?.length) {
-    for (const authorId of query.authorIds) {
-      params.append("author_id", authorId);
-    }
+  for (const authorId of query.authorIds ?? []) {
+    params.append("author_id", authorId);
   }
   if (query.limit) {
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
   const result = assertDiscordResponseObject(
-    await searchGuildMessages(rest, query.guildId, params),
+    await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`),
     "message search",
   );
   // Discord returns HTTP 202 with code 110000 while the guild search index is warming.

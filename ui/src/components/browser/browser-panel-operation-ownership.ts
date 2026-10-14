@@ -1,15 +1,26 @@
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import {
-  isBrowserEvaluateDisabledError,
-  readBrowserPageMetrics,
+  bindBrowserRequestClient,
+  type BrowserRequestClient,
   type BrowserPageMetrics,
+  type BrowserPanelTab,
+  type BrowserDashboardTarget,
 } from "./browser-client.ts";
+import type { BrowserRoute, BrowserTabTarget } from "./browser-target.ts";
 
-export interface BrowserPanelControllerHost extends ReactiveControllerHost {
+export interface BrowserPanelControllerHost {
+  addController(controller: PanelLifecycleController): void;
+  removeController(controller: PanelLifecycleController): void;
+  requestUpdate(): void;
   readonly client: GatewayBrowserClient | null;
+  readonly sessionKey: string;
+  readonly sessionTabs?: readonly BrowserTabTarget[];
   readonly available: boolean;
-  readonly basePath: string;
+  readonly remoteAvailable?: boolean;
+  readonly fixedTab?: BrowserTabTarget;
+  readonly dashboardTarget?: BrowserDashboardTarget;
+  readonly resourceBasePath: string;
   readonly authToken: string | null;
   readonly isConnected: boolean;
   readonly renderRoot: HTMLElement | DocumentFragment;
@@ -18,16 +29,11 @@ export interface BrowserPanelControllerHost extends ReactiveControllerHost {
 }
 
 type BrowserPanelInvocation = {
-  readonly client: GatewayBrowserClient;
+  readonly client: BrowserRequestClient;
   epoch: number;
   readonly id: number;
   readonly mutationId: number;
   isCurrent(): boolean;
-};
-
-type BrowserNavigationCommit = {
-  committed: number;
-  reconciled: number;
 };
 
 export type BrowserPanelSnapshotOutcome = "accepted" | "rejected" | "failed";
@@ -35,20 +41,22 @@ export type BrowserPanelSnapshotOutcome = "accepted" | "rejected" | "failed";
 /** Owns the panel lifecycle, tab snapshots, captures, and pointer operations. */
 export class BrowserPanelOperationOwnership {
   private lifecycleEpoch = 0;
+  route?: BrowserRoute;
+  private scope?: {
+    gateway: GatewayBrowserClient;
+    client: BrowserRequestClient;
+    dashboardKey: string | undefined;
+    sessionKey: string;
+  };
   private requestedMutation = 0;
-  private requestedSnapshot = 0;
-  private acceptedSnapshot = 0;
   private requestedCapture = 0;
   private requestedInspection = 0;
   private capturePending = false;
   private readonly navigationQueues = new WeakMap<
-    GatewayBrowserClient,
+    BrowserRequestClient,
     Map<string, Promise<unknown>>
   >();
-  private readonly navigationCommits = new WeakMap<
-    GatewayBrowserClient,
-    Map<string, BrowserNavigationCommit>
-  >();
+  private readonly navigationCommits = new WeakMap<BrowserRequestClient, Set<string>>();
 
   constructor(private readonly host: BrowserPanelControllerHost) {}
 
@@ -60,16 +68,65 @@ export class BrowserPanelOperationOwnership {
     return this.capturePending;
   }
 
-  captureClient(): GatewayBrowserClient | null {
-    return this.host.available && this.host.client ? this.host.client : null;
+  captureClient(): BrowserRequestClient | null {
+    const gateway = this.host.client;
+    const dashboardKey = JSON.stringify(this.host.dashboardTarget);
+    const sessionKey = this.host.dashboardTarget ? "" : this.host.sessionKey.trim();
+    if (
+      !(this.host.remoteAvailable ?? this.host.available) ||
+      !gateway ||
+      !this.host.isConnected ||
+      !this.host.browserPanelIsOpen()
+    ) {
+      return null;
+    }
+    if (
+      this.scope?.gateway !== gateway ||
+      this.scope.dashboardKey !== dashboardKey ||
+      this.scope.sessionKey !== sessionKey
+    ) {
+      const client = bindBrowserRequestClient(
+        gateway,
+        this.route,
+        () =>
+          this.scope?.client === client &&
+          this.scope.gateway === this.host.client &&
+          JSON.stringify(this.host.dashboardTarget) === dashboardKey &&
+          (this.host.dashboardTarget ? "" : this.host.sessionKey.trim()) === sessionKey &&
+          (this.host.remoteAvailable ?? this.host.available) &&
+          this.host.isConnected &&
+          this.host.browserPanelIsOpen(),
+        this.host.dashboardTarget,
+        // References change the list scope, not ownership of captures or streams.
+        sessionKey
+          ? () => ({
+              sessionKey,
+              referencedTabs: this.host.sessionTabs ?? [],
+            })
+          : undefined,
+      );
+      this.scope = { gateway, client, dashboardKey, sessionKey };
+    }
+    return this.scope.client;
   }
 
-  isLive(epoch: number, client?: GatewayBrowserClient): boolean {
+  resetRoute(route?: BrowserRoute): void {
+    this.invalidate();
+    this.route = route;
+    this.scope = undefined;
+  }
+
+  isLive(epoch: number, client?: BrowserRequestClient): boolean {
     return (
       this.host.isConnected &&
+      this.host.available &&
       this.host.browserPanelIsOpen() &&
       this.lifecycleEpoch === epoch &&
-      (client === undefined || this.host.client === client)
+      this.scope?.dashboardKey === JSON.stringify(this.host.dashboardTarget) &&
+      (this.scope?.sessionKey ?? "") ===
+        (this.host.dashboardTarget ? "" : this.host.sessionKey.trim()) &&
+      (client === undefined ||
+        (this.scope?.gateway === this.host.client && this.scope.client === client))
     );
   }
 
@@ -83,7 +140,7 @@ export class BrowserPanelOperationOwnership {
     this.requestedInspection += 1;
   }
 
-  beginMutation(client: GatewayBrowserClient): BrowserPanelInvocation {
+  beginMutation(client: BrowserRequestClient): BrowserPanelInvocation {
     // A mutation owns loading before its remote tab or new document exists.
     // Invalidate the previous capture without discarding its visible screenshot.
     this.requestedCapture += 1;
@@ -100,37 +157,83 @@ export class BrowserPanelOperationOwnership {
   }
 
   /** A queued predecessor can commit even if the newest navigation later fails. */
-  hasQueuedNavigation(client: GatewayBrowserClient, targetId: string): boolean {
+  hasQueuedNavigation(client: BrowserRequestClient, targetId: string): boolean {
     return this.navigationQueues.get(client)?.has(targetId) ?? false;
   }
 
   /** A committed document still needs its first owner-authoritative screenshot. */
-  hasUnreconciledNavigation(client: GatewayBrowserClient, targetId: string): boolean {
-    const state = this.navigationCommits.get(client)?.get(targetId);
-    return state !== undefined && state.committed !== state.reconciled;
+  hasUnreconciledNavigation(client: BrowserRequestClient | null, targetId: string | null): boolean {
+    if (!client || !targetId) {
+      return false;
+    }
+    return this.navigationCommits.get(client)?.has(targetId) ?? false;
   }
 
-  markNavigationCommitted(client: GatewayBrowserClient, targetId: string): void {
+  hasPendingNavigation(client: BrowserRequestClient | null, targetId: string | null): boolean {
+    return Boolean(
+      client &&
+      targetId &&
+      (this.hasQueuedNavigation(client, targetId) ||
+        this.hasUnreconciledNavigation(client, targetId)),
+    );
+  }
+
+  markNavigationCommitted(client: BrowserRequestClient, targetId: string): void {
     let commits = this.navigationCommits.get(client);
     if (!commits) {
-      commits = new Map();
+      commits = new Set();
       this.navigationCommits.set(client, commits);
     }
-    const state = commits.get(targetId) ?? { committed: 0, reconciled: 0 };
-    state.committed += 1;
-    commits.set(targetId, state);
+    commits.add(targetId);
   }
 
-  markNavigationReconciled(client: GatewayBrowserClient, targetId: string): void {
-    const state = this.navigationCommits.get(client)?.get(targetId);
-    if (state) {
-      state.reconciled = state.committed;
+  forgetNavigation(client: BrowserRequestClient, targetId: string): void {
+    const commits = this.navigationCommits.get(client);
+    commits?.delete(targetId);
+    if (commits?.size === 0) {
+      this.navigationCommits.delete(client);
     }
+  }
+
+  retainTabSnapshot(client: BrowserRequestClient, tabs: BrowserPanelTab[]): BrowserPanelTab[] {
+    const commits = this.navigationCommits.get(client);
+    if (!commits) {
+      return tabs;
+    }
+    const liveTargetIds = new Set(tabs.map((tab) => tab.id));
+    for (const targetId of commits.keys()) {
+      if (!liveTargetIds.has(targetId)) {
+        commits.delete(targetId);
+      }
+    }
+    if (commits.size === 0) {
+      this.navigationCommits.delete(client);
+    }
+    return tabs;
+  }
+
+  capturedTabs(
+    tabs: BrowserPanelTab[],
+    targetId: string,
+    metrics: BrowserPageMetrics | null,
+    screenshotUrl: string,
+  ): BrowserPanelTab[] {
+    const tab = tabs.find((entry) => entry.id === targetId);
+    if (!tab) {
+      return tabs;
+    }
+    const title = metrics?.title ?? tab.title;
+    const url = metrics?.url || screenshotUrl || tab.url;
+    return title === tab.title && url === tab.url && !tab.urlUnavailableReason
+      ? tabs
+      : tabs.map((entry) =>
+          entry.id === targetId ? { ...entry, title, url, urlUnavailableReason: undefined } : entry,
+        );
   }
 
   /** Remote navigations for one gateway tab must commit in user-intent order. */
   async queueNavigation<T>(
-    client: GatewayBrowserClient,
+    client: BrowserRequestClient,
     targetId: string,
     navigate: () => Promise<T>,
   ): Promise<T> {
@@ -155,17 +258,15 @@ export class BrowserPanelOperationOwnership {
   }
 
   /** Passive refreshes never revoke ownership of an in-flight navigation. */
-  beginSnapshot(client: GatewayBrowserClient): BrowserPanelInvocation {
+  beginSnapshot(client: BrowserRequestClient): BrowserPanelInvocation {
     const mutationId = this.requestedMutation;
     const invocation: BrowserPanelInvocation = {
       client,
       epoch: this.lifecycleEpoch,
-      id: ++this.requestedSnapshot,
+      id: mutationId,
       mutationId,
       isCurrent: () =>
-        this.isLive(invocation.epoch, client) &&
-        invocation.id === this.requestedSnapshot &&
-        mutationId === this.requestedMutation,
+        this.isLive(invocation.epoch, client) && mutationId === this.requestedMutation,
     };
     return invocation;
   }
@@ -177,12 +278,11 @@ export class BrowserPanelOperationOwnership {
   ): boolean {
     if (
       !this.isLive(invocation.epoch, invocation.client) ||
-      invocation.id < this.acceptedSnapshot ||
       (!invocation.isCurrent() && snapshotTargetId !== currentTargetId)
     ) {
       return false;
     }
-    this.acceptedSnapshot = invocation.id;
+    // Same-tab refreshes are best effort; input still checks the live document at dispatch.
     return true;
   }
 
@@ -197,7 +297,7 @@ export class BrowserPanelOperationOwnership {
   /** A superseded open may reconcile its created tab, but never own the selected view. */
   survivingInvocation(
     superseded: BrowserPanelInvocation,
-    client: GatewayBrowserClient,
+    client: BrowserRequestClient,
   ): () => boolean {
     const epoch = this.lifecycleEpoch;
     const invocationId = this.requestedMutation;
@@ -208,7 +308,7 @@ export class BrowserPanelOperationOwnership {
   }
 
   beginCapture(
-    client: GatewayBrowserClient,
+    client: BrowserRequestClient,
     targetId: string,
     getActiveTargetId: () => string | null,
     epoch = this.lifecycleEpoch,
@@ -228,31 +328,10 @@ export class BrowserPanelOperationOwnership {
     this.capturePending = false;
   }
 
-  beginInspection(client: GatewayBrowserClient, isTargetCurrent: () => boolean): () => boolean {
+  beginInspection(client: BrowserRequestClient, isTargetCurrent: () => boolean): () => boolean {
     const epoch = this.lifecycleEpoch;
     const inspectionId = ++this.requestedInspection;
     return () =>
       this.isLive(epoch, client) && inspectionId === this.requestedInspection && isTargetCurrent();
-  }
-}
-
-/** A stale gateway must not disable evaluation on the replacement browser. */
-export async function readBrowserPanelOwnedMetrics(
-  client: GatewayBrowserClient,
-  targetId: string,
-  evaluateUnavailable: boolean,
-  current: () => boolean,
-  markEvaluateUnavailable: () => void,
-): Promise<BrowserPageMetrics | null> {
-  if (evaluateUnavailable) {
-    return null;
-  }
-  try {
-    return await readBrowserPageMetrics(client, targetId);
-  } catch (error) {
-    if (current() && isBrowserEvaluateDisabledError(error)) {
-      markEvaluateUnavailable();
-    }
-    return null;
   }
 }

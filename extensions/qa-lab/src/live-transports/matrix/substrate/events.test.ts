@@ -47,71 +47,31 @@ describe("matrix observed event normalization", () => {
     });
   });
 
-  it("classifies Matrix notices separately from regular messages", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$notice",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "notice",
-          msgtype: "m.notice",
-        },
-      }),
-    ).toEqual({
-      kind: "notice",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$notice",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
+  it.each([
+    {
+      name: "preview edit",
+      content: {
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": { body: "preview", "org.matrix.msc4357.live": {} },
+      },
+      live: true,
+    },
+    {
+      name: "final edit",
+      content: {
+        "org.matrix.msc4357.live": {},
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": { body: "final" },
+      },
+      live: undefined,
+    },
+  ])("preserves the live marker only on $name", ({ content, live }) => {
+    const event = normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+      event_id: "$event",
       type: "m.room.message",
-      originServerTs: undefined,
-      body: "notice",
-      formattedBody: undefined,
-      msgtype: "m.notice",
-      membership: undefined,
+      content: { body: "preview", msgtype: "m.text", ...content },
     });
-  });
-
-  it("prefers m.new_content text for Matrix replacement events", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$replace",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "* finalized",
-          msgtype: "m.text",
-          "m.new_content": {
-            body: "finalized",
-            msgtype: "m.text",
-            // Matrix ignores relations inside replacement content. The
-            // observer inherits the original event's relation separately.
-            "m.relates_to": {
-              rel_type: "m.thread",
-              event_id: "$wrong-root",
-            },
-          },
-          "m.relates_to": {
-            rel_type: "m.replace",
-            event_id: "$draft",
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$replace",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
-      body: "finalized",
-      formattedBody: undefined,
-      msgtype: "m.text",
-      membership: undefined,
-      replacesEventId: "$draft",
-    });
+    expect(event?.live).toBe(live);
   });
 
   it("normalizes Matrix reaction events with target metadata", () => {

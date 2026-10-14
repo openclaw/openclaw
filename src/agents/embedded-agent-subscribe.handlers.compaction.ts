@@ -1,52 +1,33 @@
-/**
- * Handles embedded-agent compaction lifecycle events. The handlers pause
- * liveness, emit agent events, run hooks, reconcile persisted counts, and
- * clear stale usage after compaction rewrites history.
- */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import {
+  classifyCompactionReason,
+  formatUnknownCompactionReasonDetail,
+} from "./embedded-agent-runner/compact-reasons.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
-type CompactionReason = SessionCompactionStartEvent["reason"];
 
-type CompactionStartEvent =
-  | SessionCompactionStartEvent
-  | {
-      type: "compaction_start";
-      reason?: unknown;
-    };
-
-type CompactionEndEvent =
-  | SessionCompactionEndEvent
-  | {
-      type: "compaction_end";
-      reason?: unknown;
-      willRetry?: unknown;
-      result?: unknown;
-      aborted?: unknown;
-    };
-
-// Unknown reasons come from external runtimes or older sessions. Treat them as
-// threshold compaction so logs and event payloads stay on the closed reason set.
-function normalizeCompactionReason(reason: unknown): CompactionReason {
-  return reason === "manual" || reason === "threshold" || reason === "overflow"
-    ? reason
-    : "threshold";
-}
-
-function compactionLogKind(reason: CompactionReason): string {
-  return reason === "manual" ? "manual compaction" : "auto-compaction";
-}
+type CompactionStartEvent = Omit<SessionCompactionStartEvent, "reason"> & { reason?: unknown };
 
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
-  data: { phase: "start" } | { phase: "end"; willRetry: boolean; completed: boolean },
+  data:
+    | { phase: "start"; itemId?: string }
+    | {
+        phase: "end";
+        itemId?: string;
+        completed: boolean;
+        willRetry: boolean;
+        outcome: SessionCompactionEndEvent["outcome"]["status"];
+        reason?: string;
+        qualityDegraded?: true;
+      },
 ): void {
   const event = { stream: "compaction" as const, data };
   emitAgentEvent({ runId: ctx.params.runId, ...event });
@@ -61,6 +42,10 @@ function runBestEffortCompactionHook(
   ctx: EmbeddedAgentSubscribeContext,
   phase: "before" | "after",
 ): void {
+  // Queued events still settle committed facts and waiters after close, not new plugin work.
+  if (ctx.state.unsubscribed || ctx.params.isTerminalAborted?.()) {
+    return;
+  }
   const hookRunner = getGlobalHookRunner();
   const hookName = phase === "before" ? "before_compaction" : "after_compaction";
   if (!hookRunner?.hasHooks(hookName)) {
@@ -86,13 +71,18 @@ function runBestEffortCompactionHook(
   });
 }
 
-/** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
 ) {
-  const reason = normalizeCompactionReason(evt.reason);
-  const kind = compactionLogKind(reason);
+  // Unknown reasons come from external runtimes or older sessions. Treat them as
+  // threshold compaction so logs and event payloads stay on the closed reason set.
+  const rawReason = evt.reason;
+  const reason =
+    rawReason === "manual" || rawReason === "threshold" || rawReason === "overflow"
+      ? rawReason
+      : "threshold";
+  const kind = reason === "manual" ? "manual compaction" : "auto-compaction";
   ctx.state.compactionInFlight = true;
   ctx.state.livenessState = "paused";
   ctx.ensureCompactionPromise();
@@ -102,39 +92,38 @@ export function handleCompactionStart(
     reason,
     consoleMessage: `embedded run ${kind} start: runId=${ctx.params.runId} reason=${reason}`,
   });
-  emitCompactionAgentEvent(ctx, { phase: "start" });
+  emitCompactionAgentEvent(ctx, { phase: "start", ...(evt.itemId ? { itemId: evt.itemId } : {}) });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  runBestEffortCompactionHook(ctx, "before");
+  if (!evt.hooksHandled) {
+    runBestEffortCompactionHook(ctx, "before");
+  }
 }
 
-/** Handles compaction completion, retry, and incomplete events. */
-export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: CompactionEndEvent) {
-  const reason = normalizeCompactionReason(evt.reason);
-  const kind = compactionLogKind(reason);
+export function handleCompactionEnd(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt: SessionCompactionEndEvent,
+) {
+  const reason = evt.reason;
+  const kind = reason === "manual" ? "manual compaction" : "auto-compaction";
+  const outcome = evt.outcome;
   ctx.state.compactionInFlight = false;
-  const willRetry = Boolean(evt.willRetry);
-  // Increment counter whenever compaction actually produced a result, regardless
-  // of willRetry. Overflow-triggered compaction retries the LLM request after
-  // trimming context, and the persisted count must reflect that successful trim.
-  const hasResult = evt.result != null;
-  const wasAborted = Boolean(evt.aborted);
-  const completed = hasResult && !wasAborted;
+  const completed = outcome.status === "completed";
+  const willRetry = completed && outcome.willRetry;
+  let recording: Promise<void> | undefined;
   if (completed) {
     ctx.incrementCompactionCount();
-    const tokensAfter =
-      typeof evt.result === "object" && evt.result
-        ? (evt.result as { tokensAfter?: unknown }).tokensAfter
-        : undefined;
-    ctx.noteCompactionTokensAfter(tokensAfter);
+    ctx.noteCompactionTokensAfter(outcome.tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
-    recordSessionCompacted({
-      sessionKey: ctx.params.sessionKey,
-      operationId: `${ctx.params.runId}:${observedCompactionCount}`,
-      agentId: ctx.params.agentId,
-      runId: ctx.params.runId,
-    });
+    if (ctx.params.sessionPersistence !== "detached") {
+      recording = recordSessionCompacted({
+        sessionKey: ctx.params.sessionKey,
+        operationId: `${ctx.params.runId}:${observedCompactionCount}`,
+        agentId: ctx.params.agentId,
+        runId: ctx.params.runId,
+      });
+    }
     ctx.log.info(`embedded run ${kind} complete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -144,25 +133,32 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       compactionCount: observedCompactionCount,
       consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${observedCompactionCount} willRetry=${willRetry}`,
     });
-    void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
-      .then(({ default: reconcile }) =>
-        reconcile({
-          sessionKey: ctx.params.sessionKey,
-          agentId: ctx.params.agentId,
-          configStore: ctx.params.config?.session?.store,
-          observedCompactionCount,
-        }),
-      )
-      .catch((err: unknown) => {
-        ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
-      });
+    // Caller-owned turns persist once after settlement; detached runs never write metadata.
+    // Keep the legacy floor for direct durable subscriptions without that handoff.
+    if (
+      ctx.params.compactionCountOwner !== "caller" &&
+      ctx.params.sessionPersistence !== "detached"
+    ) {
+      void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
+        .then(({ default: reconcile }) =>
+          reconcile({
+            sessionKey: ctx.params.sessionKey,
+            agentId: ctx.params.agentId,
+            configStore: ctx.params.config?.session?.store,
+            observedCompactionCount,
+          }),
+        )
+        .catch((err: unknown) => {
+          ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
+        });
+    }
   }
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
-    if (!wasAborted) {
+    if (outcome.status !== "aborted") {
       ctx.state.livenessState = "working";
     }
     ctx.maybeResolveCompactionWait();
@@ -180,22 +176,46 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       });
     }
   }
+  const outcomeReason =
+    outcome.status === "skipped" || outcome.status === "failed" ? outcome.reason : undefined;
   if (!completed) {
-    ctx.log.info(`embedded run ${kind} incomplete`, {
+    const reasonClass = outcomeReason ? classifyCompactionReason(outcomeReason) : "aborted";
+    const reasonDetail =
+      reasonClass === "unknown" ? formatUnknownCompactionReasonDetail(outcomeReason) : undefined;
+    const metadata = {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
       reason,
+      outcome: outcome.status,
       completed: false,
-      willRetry,
-      aborted: wasAborted,
-      consoleMessage: `embedded run ${kind} incomplete: runId=${ctx.params.runId} reason=${reason} aborted=${wasAborted} willRetry=${willRetry}`,
-    });
+      willRetry: false,
+      reasonClass,
+      ...(outcomeReason ? { outcomeReason } : {}),
+      ...(reasonDetail ? { reasonDetail } : {}),
+      consoleMessage: `embedded run ${kind} ${outcome.status}: runId=${ctx.params.runId} reason=${reasonClass}${reasonDetail ? ` detail=${reasonDetail}` : ""}`,
+    };
+    const benign =
+      outcome.status === "aborted" ||
+      (outcome.status === "skipped" &&
+        (reasonClass === "no_compactable_entries" ||
+          reasonClass === "below_threshold" ||
+          reasonClass === "already_compacted"));
+    ctx.log[benign ? "info" : "warn"](`embedded run ${kind} ${outcome.status}`, metadata);
   }
-  emitCompactionAgentEvent(ctx, { phase: "end", willRetry, completed });
+  emitCompactionAgentEvent(ctx, {
+    phase: "end",
+    ...(evt.itemId ? { itemId: evt.itemId } : {}),
+    completed,
+    willRetry,
+    outcome: outcome.status,
+    ...(completed && outcome.qualityDegraded ? { qualityDegraded: true } : {}),
+    ...(outcomeReason ? { reason: outcomeReason } : {}),
+  });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (!willRetry) {
+  if (completed && !willRetry && !evt.hooksHandled) {
     runBestEffortCompactionHook(ctx, "after");
   }
+  return recording;
 }

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # scripts/run-opengrep.sh
 #
 # Run the OpenClaw precise OpenGrep rulepack against the local working tree
@@ -24,7 +28,7 @@ BUCKET="precise"
 if [[ "${1:-}" == "precise" ]]; then
   shift
 elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,22p' "$0"
+  sed -n '/^# scripts\/run-opengrep\.sh$/,/^# Exit code:/p' "$0"
   exit 0
 elif [[ "${1:-}" == "broad" ]]; then
   echo "error: broad OpenGrep rulepacks are not supported in this repo workflow" >&2
@@ -45,17 +49,14 @@ if ! command -v opengrep >/dev/null 2>&1; then
   cat >&2 <<'EOF'
 error: 'opengrep' not found on PATH.
 
-Install with one of:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.25.0/install.sh | bash -s -- -v v1.25.0
-  brew install opengrep/tap/opengrep
-  pipx install opengrep
+Install with:
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
 
 (See https://opengrep.dev for other options.)
 EOF
   exit 127
 fi
 
-# Pull off our own flags from the remaining args; pass everything else through to opengrep.
 EXTRA_ARGS=()
 PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
@@ -89,16 +90,9 @@ while (( $# > 0 )); do
       ;;
     *)
       if (( SAW_DOUBLE_DASH )); then
-        # Treat anything after `--` as a path-positional override
-        if (( PATHS_PASSED == 0 )); then
-          PATHS_PASSED=1
-          EXTRA_ARGS+=( "$1" )
-        else
-          EXTRA_ARGS+=( "$1" )
-        fi
-      else
-        EXTRA_ARGS+=( "$1" )
+        PATHS_PASSED=1
       fi
+      EXTRA_ARGS+=( "$1" )
       shift
       ;;
   esac
@@ -118,7 +112,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.25.0",
+          "semanticVersion": "1.30.0",
           "rules": []
         }
       },
@@ -173,35 +167,35 @@ resolve_changed_diff_ref() {
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
     CHANGED_DIFF_REF="$(resolve_changed_diff_ref)"
+    CHANGED_PATHS_DIR="$(mktemp -d)"
+    trap 'rm -rf -- "$CHANGED_PATHS_DIR"' EXIT
+    {
+      git diff --name-only -z --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF"
+      git diff --cached --name-only -z --diff-filter=ACMRTUXB --
+      git diff --name-only -z --diff-filter=ACMRTUXB --
+      git ls-files -z --others --exclude-standard
+    } > "$CHANGED_PATHS_DIR/all"
+    LC_ALL=C sort -zu "$CHANGED_PATHS_DIR/all" > "$CHANGED_PATHS_DIR/sorted"
     SCAN_PATHS=()
-    while IFS= read -r path; do
-      # OpenGrep errors when an explicit changed path is a symlink; scan the
-      # real target content, not duplicate guide aliases such as CLAUDE.md.
-      if [[ -L "$path" ]]; then
-        continue
-      fi
-      if [[ ! -f "$path" && ! -d "$path" ]]; then
-        continue
-      fi
-      SCAN_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
-    )
-    RULEPACK_CHANGED_PATHS=()
-    while IFS= read -r path; do
-      RULEPACK_CHANGED_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
-    )
-    if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
+    RULEPACK_CHANGED=0
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        src/*|extensions/*|apps/*|packages/*|scripts/*)
+          # OpenGrep errors when an explicit changed path is a symlink; scan the
+          # real target content, not duplicate guide aliases such as CLAUDE.md.
+          if [[ ! -L "$path" && ( -f "$path" || -d "$path" ) ]]; then
+            SCAN_PATHS+=( "$path" )
+          fi
+          ;;
+      esac
+      case "$path" in
+        security/opengrep/*|scripts/run-opengrep.sh|.semgrepignore|.github/workflows/opengrep-*)
+          RULEPACK_CHANGED=1
+          ;;
+      esac
+    done < "$CHANGED_PATHS_DIR/sorted"
+    rm -rf -- "$CHANGED_PATHS_DIR"
+    if (( ${#SCAN_PATHS[@]} == 0 && RULEPACK_CHANGED )); then
       # Exercise rulepack loading without scanning the compiled YAML, which contains
       # rule pattern literals that can match themselves.
       SCAN_PATHS=( "scripts/run-opengrep.sh" )

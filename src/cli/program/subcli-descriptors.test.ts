@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,14 +16,10 @@ function descriptorNames(descriptors: ReadonlyArray<{ name: string }>): string[]
 }
 
 describe("sub-cli descriptors", () => {
-  const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalEnv = captureEnv(["OPENCLAW_ENABLE_PRIVATE_QA_CLI"]);
 
   afterEach(() => {
-    if (originalPrivateQaCli === undefined) {
-      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    } else {
-      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
-    }
+    originalEnv.restore();
     vi.resetModules();
   });
 
@@ -45,10 +42,10 @@ describe("sub-cli descriptors", () => {
   it("keeps the exported descriptor list aligned with private QA visibility when disabled (#83927)", async () => {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
-    const { SUB_CLI_DESCRIPTORS, getSubCliEntries } = await importSubCliDescriptors();
+    const { SUB_CLI_DESCRIPTORS, getSubCliEntriesCore } = await importSubCliDescriptors();
     const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntriesCore()));
     expect(exportedNames).not.toContain("qa");
   });
 
@@ -73,12 +70,12 @@ describe("sub-cli descriptors", () => {
     const {
       SUB_CLI_DESCRIPTORS,
       getSubCliCommandsWithSubcommands,
-      getSubCliEntries,
+      getSubCliEntriesCore,
       getSubCliParentDefaultHelpCommands,
     } = await importSubCliDescriptors();
     const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntriesCore()));
     expect(exportedNames).toContain("qa");
     expect(getSubCliCommandsWithSubcommands()).toContain("qa");
     expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");

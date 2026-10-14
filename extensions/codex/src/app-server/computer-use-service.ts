@@ -3,136 +3,237 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  assertDirectoryIdentityStable,
+  assertNotSymlink,
+  assertOwnedServicePath,
+  directoryIdentityIsStable,
+  ensureOwnedCodexHome,
+  prepareOwnedServiceParent,
+  readRealDirectoryIdentity,
+} from "./computer-use-service-path.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
 
 const SERVICE_APP_NAME = "Codex Computer Use.app";
+const SERVICE_BUNDLE_ID = "com.openai.sky.CUAService";
+const CLIENT_BUNDLE_ID = "com.openai.sky.CUAService.cli";
+const OPENAI_TEAM_ID = "2DC432GLL2";
+const CLIENT_APP_RELATIVE_PATH = path.join("Contents", "SharedSupport", "SkyComputerUseClient.app");
 const CLIENT_RELATIVE_PATH = path.join(
-  "Contents",
-  "SharedSupport",
-  "SkyComputerUseClient.app",
+  CLIENT_APP_RELATIVE_PATH,
   "Contents",
   "MacOS",
   "SkyComputerUseClient",
 );
+const SERVICE_PARENT_LABEL = "Computer Use service parent";
 const COPY_TIMEOUT_MS = 120_000;
+const INSPECT_TIMEOUT_MS = 30_000;
 const activeInstalls = new Map<string, Promise<CodexComputerUseServiceStatus>>();
 
 type CodexComputerUseServiceStatus = {
-  status: "installed" | "already_installed" | "source_missing" | "unsupported";
+  status: "installed" | "refreshed" | "already_current" | "source_missing" | "unsupported";
   changed: boolean;
   targetPath?: string;
   sourcePath?: string;
+  sourceBuild?: string;
+  previousBuild?: string;
 };
 
 type CopyServiceApp = (sourcePath: string, targetPath: string) => Promise<void>;
+type InspectServiceApp = (appPath: string) => Promise<CodexComputerUseServiceIdentity | undefined>;
 
-/** Ensures the official native client exists beneath the CODEX_HOME used by its launcher. */
+type CodexComputerUseServiceIdentity = {
+  bundleId: string;
+  version: string;
+  build: string;
+  cdHash: string;
+  teamId: string;
+  clientBundleId: string;
+  clientCdHash: string;
+  clientTeamId: string;
+};
+
+/** Finds the first signed native service from one ordered desktop owner set. */
+export async function resolveCodexComputerUseServiceAppSourcePath(params: {
+  platform?: NodeJS.Platform;
+  appServerCommand?: string;
+  sourceAppCandidates?: readonly string[];
+  inspectServiceApp?: InspectServiceApp;
+}): Promise<string | undefined> {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return undefined;
+  }
+  const candidates =
+    params.sourceAppCandidates ??
+    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
+  return (
+    await findUsableServiceApp(candidates, params.inspectServiceApp ?? inspectTrustedServiceApp)
+  )?.path;
+}
+
+/** Synchronizes the CODEX_HOME native client with the selected signed desktop distribution. */
 export async function ensureCodexComputerUseServiceApp(params: {
   codexHome: string;
+  ownershipRoot?: string;
   platform?: NodeJS.Platform;
   appServerCommand?: string;
   sourceAppCandidates?: readonly string[];
   copyServiceApp?: CopyServiceApp;
+  inspectServiceApp?: InspectServiceApp;
+  assertCurrent?: () => void;
 }): Promise<CodexComputerUseServiceStatus> {
   const platform = params.platform ?? process.platform;
   if (platform !== "darwin") {
     return { status: "unsupported", changed: false };
   }
-  const targetPath = path.join(path.resolve(params.codexHome), "computer-use", SERVICE_APP_NAME);
+  const codexHome = path.resolve(params.codexHome);
+  const ownershipRoot = path.resolve(params.ownershipRoot ?? path.dirname(codexHome));
+  const targetParent = path.join(codexHome, "computer-use");
+  const targetPath = path.join(targetParent, SERVICE_APP_NAME);
+  await ensureOwnedCodexHome(codexHome, ownershipRoot);
+  await assertOwnedServicePath({ ownershipRoot, codexHome, targetParent, targetPath });
+  const candidates =
+    params.sourceAppCandidates ??
+    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
   const active = activeInstalls.get(targetPath);
   if (active) {
+    // A source change during an install is picked up by the next acquisition.
     return await active;
   }
-  const install = ensureCodexComputerUseServiceAppOnce({ ...params, targetPath, platform });
+  const install = ensureCodexComputerUseServiceAppOnce({
+    ...params,
+    codexHome,
+    ownershipRoot,
+    targetParent,
+    targetPath,
+    sourceAppCandidates: candidates,
+  });
   activeInstalls.set(targetPath, install);
   try {
     return await install;
   } finally {
-    if (activeInstalls.get(targetPath) === install) {
-      activeInstalls.delete(targetPath);
-    }
+    activeInstalls.delete(targetPath);
   }
 }
 
 async function ensureCodexComputerUseServiceAppOnce(params: {
   codexHome: string;
+  ownershipRoot: string;
+  targetParent: string;
   targetPath: string;
-  platform: NodeJS.Platform;
-  appServerCommand?: string;
-  sourceAppCandidates?: readonly string[];
+  sourceAppCandidates: readonly string[];
   copyServiceApp?: CopyServiceApp;
+  inspectServiceApp?: InspectServiceApp;
+  assertCurrent?: () => void;
 }): Promise<CodexComputerUseServiceStatus> {
-  if (await hasExecutableClient(params.targetPath)) {
-    return { status: "already_installed", changed: false, targetPath: params.targetPath };
-  }
-  const candidates =
-    params.sourceAppCandidates ??
-    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
-      params.platform,
-      params.appServerCommand,
-    );
-  const sourcePath = await findUsableServiceApp(candidates);
-  if (!sourcePath) {
+  const inspectServiceApp = params.inspectServiceApp ?? inspectTrustedServiceApp;
+  const source = await findUsableServiceApp(params.sourceAppCandidates, inspectServiceApp);
+  if (!source) {
     return { status: "source_missing", changed: false, targetPath: params.targetPath };
   }
+  const { path: sourcePath, identity: sourceIdentity } = source;
+  const alreadyCurrent: CodexComputerUseServiceStatus = {
+    status: "already_current",
+    changed: false,
+    targetPath: params.targetPath,
+    sourcePath,
+    sourceBuild: sourceIdentity.build,
+  };
+  const ownedParent = await prepareOwnedServiceParent({
+    ownershipRoot: params.ownershipRoot,
+    codexHome: params.codexHome,
+    targetParent: params.targetParent,
+  });
+  const operationTargetPath = path.join(ownedParent.realPath, SERVICE_APP_NAME);
+  await assertNotSymlink(operationTargetPath, "Computer Use service target");
+  const targetExisted = await pathExists(operationTargetPath);
+  const initialIdentity = await inspectServiceApp(operationTargetPath);
+  if (initialIdentity && identitiesMatch(initialIdentity, sourceIdentity)) {
+    return alreadyCurrent;
+  }
 
-  const targetParent = path.dirname(params.targetPath);
-  await fs.mkdir(targetParent, { recursive: true });
-  const stagingRoot = await fs.mkdtemp(path.join(targetParent, ".service-app.staging-"));
+  await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+  const stagingRoot = await fs.mkdtemp(path.join(ownedParent.realPath, ".service-app.staging-"));
+  const stagingRootIdentity = await readRealDirectoryIdentity(
+    stagingRoot,
+    "Computer Use service staging directory",
+  );
   const stagedPath = path.join(stagingRoot, SERVICE_APP_NAME);
-  const backupPath = path.join(targetParent, `.service-app.backup-${process.pid}-${Date.now()}`);
+  const backupPath = path.join(
+    ownedParent.realPath,
+    `.service-app.backup-${process.pid}-${Date.now()}`,
+  );
   let backupCreated = false;
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
-    if (!(await hasExecutableClient(stagedPath))) {
-      throw new Error(`Copied Computer Use service app is incomplete at ${stagedPath}.`);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    await assertDirectoryIdentityStable(
+      stagingRootIdentity,
+      "Computer Use service staging directory",
+    );
+    await assertNotSymlink(stagedPath, "Copied Computer Use service app");
+    const stagedIdentity = await inspectServiceApp(stagedPath);
+    if (!stagedIdentity || !identitiesMatch(stagedIdentity, sourceIdentity)) {
+      throw new Error(
+        `Copied Computer Use service app at ${stagedPath} does not match its selected signed source.`,
+      );
     }
-    if (await pathExists(params.targetPath)) {
-      await fs.rename(params.targetPath, backupPath);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    await assertDirectoryIdentityStable(
+      stagingRootIdentity,
+      "Computer Use service staging directory",
+    );
+    await assertNotSymlink(operationTargetPath, "Computer Use service target");
+    if (await pathExists(operationTargetPath)) {
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      params.assertCurrent?.();
+      await fs.rename(operationTargetPath, backupPath);
       backupCreated = true;
-      if (await hasExecutableClient(backupPath)) {
-        // A separate runtime can win after the initial target check. Restore
-        // its complete signed app rather than replacing it from our staging copy.
-        await fs.rename(backupPath, params.targetPath);
-        backupCreated = false;
-        return {
-          status: "already_installed",
-          changed: false,
-          targetPath: params.targetPath,
-          sourcePath,
-        };
-      }
     }
-    try {
-      await fs.rename(stagedPath, params.targetPath);
-    } catch (error) {
-      // Another runtime can finish the same isolated-home install first.
-      // Preserve that complete winner instead of replacing a live signed app.
-      if (!(await hasExecutableClient(params.targetPath))) {
-        if (backupCreated) {
-          await fs.rename(backupPath, params.targetPath);
-          backupCreated = false;
-        }
-        throw error;
-      }
-      if (backupCreated) {
-        await fs.rm(backupPath, { recursive: true, force: true });
-        backupCreated = false;
-      }
-      return {
-        status: "already_installed",
-        changed: false,
-        targetPath: params.targetPath,
-        sourcePath,
-      };
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    params.assertCurrent?.();
+    await fs.rename(stagedPath, operationTargetPath);
+    await assertNotSymlink(operationTargetPath, "Installed Computer Use service app");
+    const installedIdentity = await inspectServiceApp(operationTargetPath);
+    if (!installedIdentity || !identitiesMatch(installedIdentity, sourceIdentity)) {
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      await fs.rm(operationTargetPath, { recursive: true, force: true });
+      throw new Error(
+        "Installed Computer Use service app failed post-install identity verification.",
+      );
     }
     if (backupCreated) {
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      await assertNotSymlink(backupPath, "Computer Use service backup");
       await fs.rm(backupPath, { recursive: true, force: true });
       backupCreated = false;
     }
-    return { status: "installed", changed: true, targetPath: params.targetPath, sourcePath };
+    return {
+      ...alreadyCurrent,
+      status: targetExisted ? "refreshed" : "installed",
+      changed: true,
+      ...(initialIdentity ? { previousBuild: initialIdentity.build } : {}),
+    };
+  } catch (error) {
+    if (
+      backupCreated &&
+      (await directoryIdentityIsStable(ownedParent)) &&
+      !(await pathExists(operationTargetPath))
+    ) {
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      await fs.rename(backupPath, operationTargetPath);
+      backupCreated = false;
+    }
+    throw error;
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    if (
+      (await directoryIdentityIsStable(ownedParent)) &&
+      (await directoryIdentityIsStable(stagingRootIdentity))
+    ) {
+      await fs.rm(stagingRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -143,22 +244,127 @@ async function pathExists(filePath: string): Promise<boolean> {
   );
 }
 
-async function findUsableServiceApp(candidates: readonly string[]): Promise<string | undefined> {
+async function findUsableServiceApp(
+  candidates: readonly string[],
+  inspectServiceApp: InspectServiceApp,
+): Promise<{ path: string; identity: CodexComputerUseServiceIdentity } | undefined> {
   for (const candidate of candidates) {
-    if (await hasExecutableClient(candidate)) {
-      return candidate;
+    const identity = await inspectServiceApp(candidate);
+    if (identity) {
+      return { path: candidate, identity };
     }
   }
   return undefined;
 }
 
-async function hasExecutableClient(appPath: string): Promise<boolean> {
+function identitiesMatch(
+  left: CodexComputerUseServiceIdentity,
+  right: CodexComputerUseServiceIdentity,
+): boolean {
+  return (
+    left.bundleId === right.bundleId &&
+    left.version === right.version &&
+    left.build === right.build &&
+    left.cdHash === right.cdHash &&
+    left.teamId === right.teamId &&
+    left.clientBundleId === right.clientBundleId &&
+    left.clientCdHash === right.clientCdHash &&
+    left.clientTeamId === right.clientTeamId
+  );
+}
+
+async function inspectTrustedServiceApp(
+  appPath: string,
+): Promise<CodexComputerUseServiceIdentity | undefined> {
+  const clientAppPath = path.join(appPath, CLIENT_APP_RELATIVE_PATH);
   try {
     await fs.access(path.join(appPath, CLIENT_RELATIVE_PATH), fsConstants.X_OK);
-    return true;
+    await verifyTrustedBundle(appPath, SERVICE_BUNDLE_ID, true);
+    await verifyTrustedBundle(clientAppPath, CLIENT_BUNDLE_ID, false);
+    const [info, serviceSignature, clientSignature] = await Promise.all([
+      readBundleInfo(appPath),
+      readCodeSignature(appPath),
+      readCodeSignature(clientAppPath),
+    ]);
+    if (
+      !info ||
+      serviceSignature.identifier !== SERVICE_BUNDLE_ID ||
+      serviceSignature.teamId !== OPENAI_TEAM_ID ||
+      clientSignature.identifier !== CLIENT_BUNDLE_ID ||
+      clientSignature.teamId !== OPENAI_TEAM_ID
+    ) {
+      return undefined;
+    }
+    return {
+      bundleId: serviceSignature.identifier,
+      version: info.version,
+      build: info.build,
+      cdHash: serviceSignature.cdHash,
+      teamId: serviceSignature.teamId,
+      clientBundleId: clientSignature.identifier,
+      clientCdHash: clientSignature.cdHash,
+      clientTeamId: clientSignature.teamId,
+    };
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+async function verifyTrustedBundle(
+  appPath: string,
+  bundleId: string,
+  deep: boolean,
+): Promise<void> {
+  const requirement =
+    `anchor apple generic and certificate leaf[subject.OU] = "${OPENAI_TEAM_ID}" ` +
+    `and identifier "${bundleId}"`;
+  await runExec(
+    "/usr/bin/codesign",
+    ["--verify", "--strict", ...(deep ? ["--deep"] : []), `-R=${requirement}`, appPath],
+    { logOutput: false, timeoutMs: INSPECT_TIMEOUT_MS },
+  );
+}
+
+async function readBundleInfo(
+  appPath: string,
+): Promise<{ version: string; build: string } | undefined> {
+  const result = await runExec(
+    "/usr/bin/plutil",
+    ["-convert", "json", "-o", "-", "--", path.join(appPath, "Contents", "Info.plist")],
+    { logOutput: false, timeoutMs: INSPECT_TIMEOUT_MS },
+  );
+  const parsed: unknown = JSON.parse(result.stdout);
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  const version = parsed.CFBundleShortVersionString;
+  const build = parsed.CFBundleVersion;
+  return typeof version === "string" && version && typeof build === "string" && build
+    ? { version, build }
+    : undefined;
+}
+
+async function readCodeSignature(
+  appPath: string,
+): Promise<{ identifier: string; teamId: string; cdHash: string }> {
+  const result = await runExec("/usr/bin/codesign", ["-d", "--verbose=4", appPath], {
+    logOutput: false,
+    timeoutMs: INSPECT_TIMEOUT_MS,
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+  const identifier = readCodeSignField(output, "Identifier");
+  const teamId = readCodeSignField(output, "TeamIdentifier");
+  const cdHash = readCodeSignField(output, "CDHash").toLowerCase();
+  if (!identifier || !teamId || !/^[a-f0-9]+$/.test(cdHash)) {
+    throw new Error(`Could not inspect the signed identity at ${appPath}.`);
+  }
+  return { identifier, teamId, cdHash };
+}
+
+function readCodeSignField(output: string, field: string): string {
+  const prefix = `${field}=`;
+  const line = output.split(/\r?\n/u).find((candidate) => candidate.startsWith(prefix));
+  return line?.slice(prefix.length).trim() ?? "";
 }
 
 async function copyServiceAppWithDitto(sourcePath: string, targetPath: string): Promise<void> {

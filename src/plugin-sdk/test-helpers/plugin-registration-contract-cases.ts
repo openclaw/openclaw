@@ -1,9 +1,7 @@
 /**
  * Installs bundled plugin registration contract cases used across provider tests.
  */
-import { describePluginRegistrationContract } from "./plugin-registration-contract.js";
-
-type PluginRegistrationContractParams = Parameters<typeof describePluginRegistrationContract>[0];
+import type { PluginRegistrationContractParams } from "./plugin-registration-contract.js";
 
 export const pluginRegistrationContractCases = {
   alibaba: {
@@ -79,13 +77,17 @@ export const pluginRegistrationContractCases = {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },
+  kie: {
+    pluginId: "kie",
+    videoGenerationProviderIds: ["kie"],
+  },
   lmstudio: {
     pluginId: "lmstudio",
     providerIds: ["lmstudio"],
   },
   microsoft: {
     pluginId: "microsoft",
-    speechProviderIds: ["microsoft"],
+    speechProviderIds: ["microsoft", "edge"],
   },
   minimax: {
     pluginId: "minimax",
@@ -115,6 +117,10 @@ export const pluginRegistrationContractCases = {
       groupHint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
     },
   },
+  novita: {
+    pluginId: "novita",
+    videoGenerationProviderIds: ["novita"],
+  },
   nvidia: {
     pluginId: "nvidia",
     providerIds: ["nvidia"],
@@ -140,7 +146,6 @@ export const pluginRegistrationContractCases = {
     realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai"],
     imageGenerationProviderIds: ["openai"],
-    videoGenerationProviderIds: ["openai"],
   },
   "opencode-go": {
     pluginId: "opencode-go",
@@ -234,5 +239,6 @@ export const pluginRegistrationContractCases = {
   zai: {
     pluginId: "zai",
     mediaUnderstandingProviderIds: ["zai"],
+    videoGenerationProviderIds: ["zai"],
   },
 } satisfies Record<string, PluginRegistrationContractParams>;

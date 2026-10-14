@@ -1,3 +1,9 @@
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "@openclaw/ai/internal/google-model-family";
+import { googleFlashSupportsMinimalThinking } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
@@ -25,23 +31,6 @@ export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
   return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
-
 /**
  * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
  * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
@@ -54,41 +43,20 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   if (typeof params.modelId !== "string") {
     return undefined;
   }
-  if (isGoogleGemini3ProModel(params.modelId)) {
-    switch (params.thinkingLevel) {
-      case "off":
-      case "minimal":
-      case "low":
-        return "LOW";
-      case "medium":
-      case "high":
-      case "max":
-      case "xhigh":
-        return "HIGH";
-      case "adaptive":
-        return undefined;
-      case undefined:
-        break;
-    }
-    if (typeof params.thinkingBudget === "number") {
-      if (params.thinkingBudget < 0) {
-        return undefined;
-      }
-      return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
-    }
+  const isPro = isGoogleGemini3ProModel(params.modelId);
+  if (!isPro && !isGoogleGemini3FlashModel(params.modelId)) {
     return undefined;
   }
-  if (!isGoogleGemini3FlashModel(params.modelId)) {
-    return undefined;
-  }
+  const minimalLevel =
+    !isPro && googleFlashSupportsMinimalThinking(params.modelId) ? "MINIMAL" : "LOW";
   switch (params.thinkingLevel) {
     case "off":
     case "minimal":
-      return "MINIMAL";
+      return minimalLevel;
     case "low":
       return "LOW";
     case "medium":
-      return "MEDIUM";
+      return isPro ? "HIGH" : "MEDIUM";
     case "high":
     case "max":
     case "xhigh":
@@ -98,14 +66,14 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case undefined:
       break;
   }
-  if (typeof params.thinkingBudget !== "number") {
+  if (typeof params.thinkingBudget !== "number" || params.thinkingBudget < 0) {
     return undefined;
   }
-  if (params.thinkingBudget < 0) {
-    return undefined;
+  if (isPro) {
+    return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
   }
   if (params.thinkingBudget <= 0) {
-    return "MINIMAL";
+    return minimalLevel;
   }
   if (params.thinkingBudget <= 2048) {
     return "LOW";
@@ -188,16 +156,13 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.config,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.generationConfig,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
+  for (const field of ["config", "generationConfig"]) {
+    sanitizeGoogleThinkingConfigContainer({
+      container: payloadObj[field],
+      modelId: params.modelId,
+      thinkingLevel: params.thinkingLevel,
+    });
+  }
 }
 
 function sanitizeGoogleThinkingConfigContainer(params: {
@@ -257,53 +222,33 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  if (
-    params.thinkingLevel === "adaptive" &&
-    typeof params.modelId === "string" &&
-    isGoogleGemini3ThinkingLevelModel(params.modelId)
-  ) {
-    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
-    delete thinkingConfigObj.thinkingBudget;
-    delete thinkingConfigObj.thinkingLevel;
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
   if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
-    const mappedLevel = resolveGoogleGemini3ThinkingLevel({
-      modelId: params.modelId,
-      thinkingLevel: params.thinkingLevel,
-      thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
-    });
     delete thinkingConfigObj.thinkingBudget;
-    if (mappedLevel) {
-      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
-      thinkingConfigObj.thinkingLevel = mappedLevel;
+    if (params.thinkingLevel === "adaptive") {
+      // Gemini 3 adaptive mode means omit both controls so the provider chooses.
+      delete thinkingConfigObj.thinkingLevel;
+    } else {
+      const mappedLevel = resolveGoogleGemini3ThinkingLevel({
+        modelId: params.modelId,
+        thinkingLevel: params.thinkingLevel,
+        thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
+      });
+      if (mappedLevel) {
+        thinkingConfigObj.thinkingLevel = mappedLevel;
+      }
     }
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (
-    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
+  } else if (
+    !stripInvalidGoogleThinkingBudget({
+      thinkingConfig: thinkingConfigObj,
+      modelId: params.modelId,
+    })
   ) {
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
+    if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+      return;
     }
-    return;
+    // Negative budgets from the shared runtime are invalid on Google-compatible backends.
+    delete thinkingConfigObj.thinkingBudget;
   }
-
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-    return;
-  }
-
-  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
-  delete thinkingConfigObj.thinkingBudget;
   if (Object.keys(thinkingConfigObj).length === 0) {
     delete configObj.thinkingConfig;
   }

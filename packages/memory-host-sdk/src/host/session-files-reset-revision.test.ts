@@ -1,0 +1,563 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  patchSessionEntryCore,
+  persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
+  readTranscriptStatsSync,
+  resetSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../../../../src/config/sessions/session-actor-memory-owner.js";
+import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
+import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../../src/state/openclaw-state-db.js";
+import {
+  buildSessionEntry,
+  buildSessionEntries,
+  matchesSessionEntryPrefixHash,
+  type SessionFileEntry,
+} from "./session-files.js";
+import {
+  readSessionResetRecallCutoff,
+  readSessionResetRecallCutoffInProcess,
+} from "./session-reset-recall-read.js";
+
+function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
+  if (!entry) {
+    throw new Error("expected session entry");
+  }
+  return entry;
+}
+
+let tmpDir: string;
+let previousStateDir: string | undefined;
+let previousConfigPath: string | undefined;
+
+beforeEach(() => {
+  tmpDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-reset-revision-test-"));
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+afterEach(async () => {
+  memorySessionActorOwners.closeDatabase({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    }),
+  });
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  if (previousStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", previousStateDir);
+  }
+  if (previousConfigPath === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", previousConfigPath);
+  }
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  fsSync.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("SQLite session snapshots and reset content revision", () => {
+  it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "incremental-export",
+      sessionKey: "agent:main:chat:incremental-export",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sibling = {
+      ...scope,
+      sessionId: "batch-sibling",
+      sessionKey: "agent:main:chat:batch-sibling",
+    };
+    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-question",
+      message: { role: "user", content: "A separate session preference." },
+    });
+    const first = {
+      type: "message",
+      id: "heartbeat",
+      message: {
+        role: "user",
+        content: "Internal poll.",
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      },
+    };
+    expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
+    const fullExport = () =>
+      buildSessionEntry(scope.sessionKey, { ...scope, onTranscriptMessage() {} });
+    let expectedSibling = "User: A separate session preference.";
+    const workerExport = async () => {
+      const [entry, siblingEntry] = await buildSessionEntries([
+        { absPath: scope.sessionKey, options: scope },
+        { absPath: sibling.sessionKey, options: sibling },
+      ]);
+      expect(siblingEntry?.content).toBe(expectedSibling);
+      expect(siblingEntry).toEqual(
+        await buildSessionEntry(sibling.sessionKey, { ...sibling, onTranscriptMessage() {} }),
+      );
+      return entry ?? null;
+    };
+    expect(await workerExport()).toEqual(await fullExport());
+
+    await appendTranscriptMessage(scope, {
+      eventId: "heartbeat-answer",
+      message: { role: "assistant", content: "Excluded heartbeat continuation." },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "question",
+      message: {
+        role: "user",
+        content: "A searchable new preference.",
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+    const appended = requireSessionEntry(await workerExport());
+    expect(appended).toEqual(await fullExport());
+    expect(appended.content).toBe("User: A searchable new preference.");
+    expect(appended.lineMap).toEqual([3]);
+    expect(appended.lineProvenance[0]?.originClass).toBe("owner");
+    expect(await workerExport()).toEqual(appended);
+
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-answer",
+      message: { role: "assistant", content: "The sibling's committed update." },
+    });
+    expectedSibling += "\nAssistant: The sibling's committed update.";
+
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        { ...first, message: { role: "user", content: "Rewritten searchable preference." } },
+      ]),
+    ).toBe(true);
+    const rewritten = requireSessionEntry(await workerExport());
+    expect(rewritten).toEqual(await fullExport());
+    expect(rewritten.content).toBe("User: Rewritten searchable preference.");
+    expect(rewritten.lineMap).toEqual([1]);
+  });
+
+  it.each(["interactive", "dreaming", "cron"])(
+    "preserves SQLite/archive output and callback observations for %s transcripts",
+    async (kind) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "parity",
+        sessionKey: "agent:main:chat:parity",
+        storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+      };
+      const observedAt = Date.parse("2026-07-01T10:00:00.000Z");
+      const messages = [
+        { role: "user", content: "Owner preference.", __openclaw: { senderIsOwner: true } },
+        { role: "assistant", content: "Derived answer.", __openclaw: { turnTainted: true } },
+        {
+          role: "user",
+          content: "Internal poll.",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+        { role: "toolResult", content: "Background result.", details: "x".repeat(64_000) },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "write",
+              arguments: { path: "MEMORY.md", content: "Internal note." },
+            },
+          ],
+        },
+        { role: "assistant", content: "Excluded heartbeat output." },
+        {
+          role: "user",
+          content: "Recalled text.",
+          provenance: { kind: "internal_system", sourceTool: "memory_get" },
+        },
+        { role: "assistant", content: "Excluded recalled output." },
+        {
+          role: "user",
+          content: [{ type: "image", source: "photo.jpg" }],
+          __openclaw: { senderIsOwner: true },
+        },
+        { role: "assistant", content: [{ type: "text", text: "Photo answer." }] },
+        {
+          role: "assistant",
+          timestamp: 1000,
+          content: [
+            { type: "thinking", thinking: "x".repeat(64_000) },
+            { type: "text", text: "" },
+          ],
+          providerReplay: { payload: "x".repeat(64_000) },
+        },
+      ];
+      const records = [
+        { type: "custom", customType: "metadata", data: {} },
+        ...messages.map((message, index) => ({
+          type: "message",
+          id: `message-${index}`,
+          timestamp: "2026-07-01T10:00:00.000Z",
+          message,
+        })),
+      ];
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: observedAt });
+      expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
+      const archivePath = path.join(tmpDir, "parity.jsonl.deleted.2026-07-01T10-00-00.000Z");
+      fsSync.writeFileSync(archivePath, records.map((record) => JSON.stringify(record)).join("\n"));
+      fsSync.utimesSync(archivePath, observedAt / 1000, observedAt / 1000);
+      const options = {
+        generatedByCronRun: kind === "cron",
+        generatedByDreamingNarrative: kind === "dreaming",
+        sessionKind: "interactive" as const,
+      };
+      const sqliteObserver = vi.fn();
+      const archiveObserver = vi.fn();
+      const sqlite = requireSessionEntry(
+        await buildSessionEntry(scope.sessionKey, {
+          ...scope,
+          ...options,
+          updatedAtMs: observedAt,
+          onTranscriptMessage: sqliteObserver,
+        }),
+      );
+      const archive = requireSessionEntry(
+        await buildSessionEntry(archivePath, {
+          ...options,
+          onTranscriptMessage: archiveObserver,
+        }),
+      );
+      const worker = requireSessionEntry(
+        await buildSessionEntry(scope.sessionKey, {
+          ...scope,
+          ...options,
+          updatedAtMs: observedAt,
+        }),
+      );
+
+      expect(sqlite).toEqual({
+        ...archive,
+        absPath: scope.sessionKey,
+        path: "sessions/main/parity.jsonl",
+        revisionMs: readTranscriptStatsSync(scope).lastMutationAtMs,
+      });
+      expect(sqlite.content).toBe(
+        kind === "interactive"
+          ? "User: Owner preference.\nAssistant: Derived answer.\nAssistant: Photo answer."
+          : "",
+      );
+      expect(sqlite.lineMap).toEqual(kind === "interactive" ? [2, 3, 11] : []);
+      expect(sqlite.messageTimestampsMs).toEqual(
+        kind === "interactive" ? [observedAt, observedAt, observedAt] : [],
+      );
+      expect(sqlite.lineProvenance.map((line) => line.originClass)).toEqual(
+        kind === "interactive" ? ["owner", "untrusted", "agent"] : [],
+      );
+      const observations = messages
+        .filter((message) => message.role !== "toolResult")
+        .map((message) => [message, "timestamp" in message ? 1_000_000 : observedAt]);
+      expect(sqliteObserver.mock.calls).toEqual(observations);
+      expect(archiveObserver.mock.calls).toEqual(observations);
+      const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+      expect(worker).toEqual(sqlite);
+      expect(Object.getOwnPropertyDescriptor(worker, cutoff)).toEqual(
+        Object.getOwnPropertyDescriptor(sqlite, cutoff),
+      );
+      expect(Object.getOwnPropertyDescriptor(sqlite, cutoff)).toEqual(
+        Object.getOwnPropertyDescriptor(archive, cutoff),
+      );
+    },
+  );
+
+  it("preserves registered secret text in worker and inline transcript exports", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "registered-secret-export",
+      sessionKey: "agent:main:chat:registered-secret-export",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    const content = "API_TOKEN = computeToken() sk-abc123456789012345678";
+    registerSecretValueForRedaction(content);
+    const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
+    await patchSessionEntryCore(scope, () => sessionEntry, {
+      fallbackEntry: sessionEntry,
+      skipMaintenance: true,
+    });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "source-text",
+          message: { role: "user", content },
+        },
+      ]),
+    ).toBe(true);
+    const worker = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    const inline = requireSessionEntry(
+      await buildSessionEntry(scope.sessionKey, {
+        ...scope,
+        parseYieldEveryLines: 1,
+      }),
+    );
+    expect(worker.content).toBe(`User: ${content}`);
+    expect(inline.content).toBe(worker.content);
+    expect(inline.hash).toBe(worker.hash);
+  });
+
+  it.each([false, true])(
+    "keeps missing and incognito exports non-persisting (incognito=%s)",
+    async (incognito) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "nonpersisting-export",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-export"
+          : "agent:main:chat:nonpersisting-export",
+        storePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      expect(await buildSessionEntry(scope.sessionKey, scope)).toBeNull();
+      expect(await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }])).toEqual([
+        null,
+      ]);
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
+      expect(fsSync.existsSync(scope.storePath)).toBe(false);
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        ...(incognito ? { incognito: true } : {}),
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "visible",
+        message: { role: "user", content: "Visible transcript" },
+      });
+      expect((await buildSessionEntry(scope.sessionKey, scope))?.content).toBe(
+        "User: Visible transcript",
+      );
+      const [batched] = await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }]);
+      expect(batched?.content).toBe("User: Visible transcript");
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "absent" });
+      expect(fsSync.existsSync(scope.storePath)).toBe(!incognito);
+      if (incognito) {
+        const namespace = {
+          agentId: scope.agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId }),
+        };
+        memorySessionActorOwners.closeDatabase(namespace);
+        expect(
+          await buildSessionEntries([
+            { absPath: scope.sessionKey, options: scope },
+            {
+              absPath: scope.sessionKey,
+              options: { ...scope, sessionKey: undefined, storePath: namespace.path },
+            },
+          ]),
+        ).toEqual([null, null]);
+        expect(memorySessionActorOwners.read(namespace)).toBeUndefined();
+        expect(fsSync.existsSync(namespace.path)).toBe(false);
+        expect(fsSync.existsSync(scope.storePath)).toBe(false);
+      }
+    },
+  );
+
+  it("finishes the transcript snapshot before callbacks can replace its rows", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "callback-snapshot",
+      sessionKey: "agent:main:callback-snapshot",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const first = {
+      type: "message",
+      id: "first",
+      parentId: null,
+      message: { role: "user", content: "first" },
+    };
+    const kept = {
+      type: "message",
+      id: "kept",
+      parentId: "first",
+      message: { role: "assistant", content: "kept" },
+    };
+    const records = [
+      first,
+      {
+        type: "message",
+        id: "tool-result",
+        message: { role: "toolResult", content: "payload-only-probe".repeat(4096) },
+      },
+      kept,
+      { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept" },
+    ];
+    expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
+    const before = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
+    const parse = JSON.parse;
+    const payloadGuard = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      if (args[0].includes("payload-only-probe")) {
+        throw new Error("Reset metadata must not hydrate message payloads");
+      }
+      return Reflect.apply(parse, JSON, args);
+    });
+    try {
+      expect(readSessionResetRecallCutoffInProcess(scope)).toEqual({
+        state: "valid",
+        cutoffLine: 3,
+      });
+    } finally {
+      payloadGuard.mockRestore();
+    }
+    const observed: unknown[] = [];
+    const during = requireSessionEntry(
+      await buildSessionEntry(scope.sessionKey, {
+        ...scope,
+        parseYieldEveryLines: 1,
+        onTranscriptMessage: (message) => {
+          observed.push(message);
+          if (observed.length === 1) {
+            expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
+          }
+        },
+      }),
+    );
+
+    expect(during).toEqual(before);
+    expect(observed).toEqual([first.message, kept.message]);
+    const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+    expect(Object.getOwnPropertyDescriptor(during, cutoff)).toMatchObject({
+      configurable: false,
+      enumerable: false,
+      writable: false,
+      value: { state: "valid", cutoffLine: 3 },
+    });
+    const after = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    expect(after.content).toBe("User: first");
+    expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
+  });
+
+  it("carries the admitted input fence through the reset metadata worker", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "metadata-fence",
+      sessionKey: "agent:main:chat:metadata-fence",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "admitted",
+          parentId: null,
+          message: { role: "user", content: "input" },
+        },
+      ]),
+    ).toBe(true);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("expected persisted input anchor");
+    }
+    await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
+    expect(
+      await runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "metadata-read", role: "user" },
+        () => readSessionResetRecallCutoff(scope),
+      ),
+    ).toEqual({ state: "absent" });
+  });
+
+  it("accepts a transcript append but invalidates its prefix hash after reset", async () => {
+    await captureRuntimeConfigAsyncReader()();
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:chat:reset-revision";
+    const sessionId = "reset-revision";
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "user", content: "unchanged exported text" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const buildOptions = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+      updatedAtMs: 1,
+    };
+    const before = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    const beforeLineCount = before.content.split("\n").length;
+
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "ordinary appended text" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const afterAppend = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
+
+    await resetSessionEntryLifecycle({
+      agentId: "main",
+      buildNextEntry: ({ currentEntry }) => ({
+        ...currentEntry,
+        sessionId,
+        updatedAt: 2,
+      }),
+      resetBoundary: { context: "preserve-tail", reason: "reset", cwd: tmpDir },
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    const after = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    expect(after.content).toBe(afterAppend.content);
+    expect(after.lineMap).toEqual(afterAppend.lineMap);
+    const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+    expect(Object.getOwnPropertyDescriptor(after, cutoffSymbol)).toMatchObject({
+      enumerable: false,
+      value: { state: "valid", cutoffLine: expect.any(Number) },
+    });
+    expect(Object.keys(after)).not.toContain(cutoffSymbol.description);
+    expect(after.hash).not.toBe(before.hash);
+    expect(matchesSessionEntryPrefixHash(after, beforeLineCount, before.hash)).toBe(false);
+  });
+});

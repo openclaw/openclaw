@@ -1,6 +1,6 @@
 /** Detects and logs long private finals when message-tool-only delivery was expected. */
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText } from "../tokens.js";
 
@@ -51,7 +51,8 @@ export function classifyPrivateMessageToolFinal(
   const substantive =
     estimatedChars >= LONG_PRIVATE_FINAL_MIN_CHARS ||
     (estimatedChars >= MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS &&
-      countSentenceLikeTerminators(trimmed) >= MULTI_SENTENCE_TERMINATOR_MIN_COUNT);
+      Array.from(trimmed.matchAll(SENTENCE_TERMINATOR_REGEX)).length >=
+        MULTI_SENTENCE_TERMINATOR_MIN_COUNT);
   return substantive ? "substantive" : "short";
 }
 
@@ -72,8 +73,4 @@ export function warnPrivateMessageToolFinal(params: {
       chars: params.finalTextLength,
     },
   );
-}
-
-function countSentenceLikeTerminators(text: string): number {
-  return Array.from(text.matchAll(SENTENCE_TERMINATOR_REGEX)).length;
 }

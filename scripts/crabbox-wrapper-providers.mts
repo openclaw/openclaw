@@ -21,16 +21,13 @@ const providerAliases = new Map([
   ["tl", "tensorlake"],
 ]);
 
-// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
-const providerHelpOmissions = new Set(["tensorlake"]);
-
 export function canonicalProviderName(provider: string) {
   return providerAliases.get(provider) ?? provider;
 }
 
 function addProviderNames(names: Set<string>, text: string) {
   for (const name of text
-    .replace(/\s+\(default\b.*$/u, "")
+    .replace(/\s+\(defaults?\b.*$/u, "")
     .split(/\s*(?:,|\||\bor\b)\s*/u)
     .map((s) => s.trim())
     .filter(Boolean)) {
@@ -42,12 +39,12 @@ function addProviderNames(names: Set<string>, text: string) {
 
 function providerListContinuation(line: string, previousText: string) {
   const match = line.match(
-    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(default\b.*)?\s*$/u,
+    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(defaults?\b.*)?\s*$/u,
   );
   if (!match) {
     return "";
   }
-  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(default\b/u.test(line)) {
+  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(defaults?\b/u.test(line)) {
     return match[1] ?? "";
   }
   return "";
@@ -58,10 +55,10 @@ export function parseProvidersFromHelp(text: string) {
   const lines = text.split(/\r?\n/u);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
+    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(defaults?\b|$)/u);
     if (providerMatch) {
       let providerText = providerMatch[1] ?? "";
-      while (!/\(default\b/u.test(lines[index] ?? "") && index + 1 < lines.length) {
+      while (!/\(defaults?\b/u.test(lines[index] ?? "") && index + 1 < lines.length) {
         const continuation = providerListContinuation(lines[index + 1] ?? "", providerText);
         if (!continuation) {
           break;
@@ -86,9 +83,5 @@ export function parseProvidersFromHelp(text: string) {
 
 export function isProviderAdvertised(provider: string, advertisedProviders: readonly string[]) {
   const canonicalProvider = canonicalProviderName(provider);
-  return (
-    advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(canonicalProvider) ||
-    providerHelpOmissions.has(canonicalProvider)
-  );
+  return advertisedProviders.includes(provider) || advertisedProviders.includes(canonicalProvider);
 }

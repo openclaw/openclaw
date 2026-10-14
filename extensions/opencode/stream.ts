@@ -1,9 +1,9 @@
-// OpenCode Zen stream adapter handles provider-specific Responses wire compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type AssistantMessage,
   type AssistantMessageEvent,
+  type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -140,7 +140,7 @@ function transformArguments(
 }
 
 function transformCall(
-  call: Record<string, unknown>,
+  call: Pick<ToolCall, "name" | "arguments"> | Record<string, unknown>,
   state: TransformState,
   toWire: boolean,
 ): void {
@@ -189,7 +189,7 @@ function restoreMessage(message: AssistantMessage, state: TransformState): Assis
   const restored = { ...message, content: message.content.map((block) => ({ ...block })) };
   for (const block of restored.content) {
     if (block.type === "toolCall") {
-      transformCall(block as unknown as Record<string, unknown>, state, false);
+      transformCall(block, state, false);
     }
   }
   return restored;
@@ -206,10 +206,11 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
       // Dynamic-record wire JSON is not prefix-compatible with restored object JSON.
       // Defer argument bytes so consumers emit one canonical payload at toolcall_end.
       restored.delta = "";
+      delete call.partialJson;
     }
   } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };
-    transformCall(restored.toolCall as unknown as Record<string, unknown>, state, false);
+    transformCall(restored.toolCall, state, false);
   } else if (restored.type === "done") {
     restored.message = restoreMessage(restored.message, state);
   } else if (restored.type === "error") {

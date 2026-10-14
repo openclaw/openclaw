@@ -23,7 +23,7 @@ vi.mock("./bundled-plugin-metadata.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadBundledManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadBundledManifestRegistry,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -40,8 +40,6 @@ import {
   resolvePluginConfigContractsById,
 } from "./config-contracts.js";
 
-type PluginManifestRecord = PluginManifestRegistry["plugins"][number];
-
 function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManifestRegistry {
   return {
     plugins,
@@ -50,38 +48,18 @@ function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManif
 }
 
 function createPluginRecord(
-  overrides: Pick<PluginManifestRecord, "id" | "origin"> & Partial<PluginManifestRecord>,
-): PluginManifestRecord {
+  overrides: Pick<PluginManifestRegistry["plugins"][number], "id" | "origin"> &
+    Partial<PluginManifestRegistry["plugins"][number]>,
+): PluginManifestRegistry["plugins"][number] {
   return {
     rootDir: `/tmp/${overrides.id}`,
     manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    channelConfigs: undefined,
-    configUiHints: undefined,
-    configSchema: undefined,
-    configContracts: undefined,
-    contracts: undefined,
-    name: undefined,
-    description: undefined,
-    version: undefined,
-    enabledByDefault: undefined,
-    autoEnableWhenConfiguredProviders: undefined,
-    legacyPluginIds: undefined,
-    format: undefined,
-    bundleFormat: undefined,
-    bundleCapabilities: undefined,
-    kind: undefined,
+    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
     channels: [],
     providers: [],
-    modelSupport: undefined,
     cliBackends: [],
-    providerAuthAliases: undefined,
-    providerAuthChoices: undefined,
     skills: [],
-    settingsFiles: undefined,
     hooks: [],
-    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    setupSource: undefined,
-    channelCatalogMeta: undefined,
     ...overrides,
   };
 }
@@ -159,26 +137,15 @@ describe("resolvePluginConfigContractsById", () => {
     expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("can hydrate missing contracts from bundled registry for resolved bundled plugins", () => {
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-          },
-        }),
-      ]),
-    );
+  it("hydrates supplied bundled registry records from explicit bundled discovery", () => {
     mocks.loadBundledManifestRegistry.mockReturnValue(
       createRegistry([
         createPluginRecord({
-          id: "voice-call",
+          id: "prepared-plugin",
           origin: "bundled",
           configContracts: {
             secretInputs: {
-              paths: [{ path: "twilio.authToken", expected: "string" }],
+              paths: [{ path: "credentials.token", expected: "string" }],
             },
           },
         }),
@@ -187,27 +154,29 @@ describe("resolvePluginConfigContractsById", () => {
 
     expect(
       resolvePluginConfigContractsById({
-        pluginIds: ["voice-call"],
+        pluginIds: ["prepared-plugin"],
+        manifestRegistry: createRegistry([
+          createPluginRecord({ id: "prepared-plugin", origin: "bundled" }),
+        ]),
+        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackBundledPluginIds: ["prepared-plugin"],
       }),
     ).toEqual(
       new Map([
         [
-          "voice-call",
+          "prepared-plugin",
           {
             origin: "bundled",
             configContracts: {
-              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
               secretInputs: {
-                paths: [{ path: "twilio.authToken", expected: "string" }],
+                paths: [{ path: "credentials.token", expected: "string" }],
               },
             },
           },
         ],
       ]),
     );
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
-    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
@@ -266,6 +235,8 @@ describe("resolvePluginConfigContractsById", () => {
         ],
       ]),
     );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
@@ -333,7 +304,7 @@ describe("collectPluginConfigContractMatches", () => {
         root,
         pathPattern: "items.1",
       }),
-    ).toEqual([{ path: "items[1]", value: "second" }]);
+    ).toEqual([{ path: "items[1]", value: "second", parent: root.items, key: "1" }]);
     expect(
       collectPluginConfigContractMatches({
         root,
@@ -346,6 +317,31 @@ describe("collectPluginConfigContractMatches", () => {
         pathPattern: "items.01",
       }),
     ).toEqual([]);
+  });
+
+  it("preserves exact dotted wildcard keys and array-index parents", () => {
+    const headers = { "X.Trace": "trace-value" };
+    const entries = [{ headers }];
+
+    expect(
+      collectPluginConfigContractMatches({
+        root: { "sales.eu": { entries } },
+        pathPattern: "*.entries.*.headers.*",
+      }),
+    ).toEqual([
+      {
+        path: '["sales.eu"].entries[0].headers["X.Trace"]',
+        value: "trace-value",
+        parent: headers,
+        key: "X.Trace",
+      },
+    ]);
+    expect(
+      collectPluginConfigContractMatches({
+        root: { entries },
+        pathPattern: "entries.*",
+      }),
+    ).toEqual([{ path: "entries[0]", value: entries[0], parent: entries, key: "0" }]);
   });
 
   it("rejects array indexes outside canonical config path bounds", () => {

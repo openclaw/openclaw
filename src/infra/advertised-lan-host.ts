@@ -1,5 +1,5 @@
-// Resolves the LAN host OpenClaw should advertise to nearby devices.
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,24 +11,12 @@ import {
 const DEFAULT_ROUTE_HINT_TIMEOUT_MS = 3_000;
 const DEFAULT_ROUTE_HINT_OUTPUT_BYTES = 16 * 1024;
 const WINDOWS_DEFAULT_ROUTE_COMMAND =
-  "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
-  "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
-  "ConvertTo-Json -Compress";
-
-type AdvertisedLanHostCandidate = {
-  interfaceName: string;
-  address: string;
-  order: number;
-};
-
-type AdvertisedLanRouteHint = {
-  interfaceName: string;
-};
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
+  "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
 type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
 };
 
 type AdvertisedLanHostCommandRunner = (
@@ -68,55 +56,13 @@ function normalizeMetric(value: unknown): number {
   return 0;
 }
 
-function listAdvertisedLanHostCandidates(
-  snapshot: NetworkInterfacesSnapshot | undefined,
-): AdvertisedLanHostCandidate[] {
-  return listExternalInterfaceAddresses(snapshot, "IPv4")
-    .filter((entry) => isRfc1918Ipv4Address(entry.address))
-    .map((entry, order) => ({
-      interfaceName: entry.name,
-      address: entry.address,
-      order,
-    }));
-}
-
-function selectAdvertisedLanHost(
-  candidates: AdvertisedLanHostCandidate[],
-  routeHints: AdvertisedLanRouteHint[] = [],
-): string | null {
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  for (const hint of routeHints) {
-    const hintedName = normalizeInterfaceName(hint.interfaceName);
-    if (!hintedName) {
-      continue;
-    }
-    const routed = candidates.find(
-      (candidate) => normalizeInterfaceName(candidate.interfaceName) === hintedName,
-    );
-    if (routed) {
-      return routed.address;
-    }
-  }
-
-  return candidates[0]?.address ?? null;
-}
-
-function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseWindowsDefaultRouteHints(stdout: string): string[] {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return [];
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return [];
-  }
-
+  const parsed = safeParseJson(trimmed);
   const rankedRows: RankedWindowsRouteRow[] = [];
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   for (const [order, row] of rows.entries()) {
@@ -144,94 +90,81 @@ function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[]
       a.interfaceMetric - b.interfaceMetric ||
       a.order - b.order,
   );
-  return rankedRows.map((row) => ({ interfaceName: row.interfaceName }));
+  return rankedRows.map((row) => row.interfaceName);
 }
 
-function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseMacOsDefaultRouteHints(stdout: string): string[] {
   const match = /^\s*interface:\s*(\S+)/m.exec(stdout);
-  return match?.[1] ? [{ interfaceName: match[1] }] : [];
+  return match?.[1] ? [match[1]] : [];
 }
 
-function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
-  const hints: AdvertisedLanRouteHint[] = [];
+function parseLinuxDefaultRouteHints(stdout: string): string[] {
+  const hints: string[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.startsWith("default ")) {
       continue;
     }
     const match = /\bdev\s+(\S+)/.exec(line);
     if (match?.[1]) {
-      hints.push({ interfaceName: match[1] });
+      hints.push(match[1]);
     }
   }
   return hints;
-}
-
-async function runRouteHintCommand(
-  runCommandWithTimeout: AdvertisedLanHostCommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<string | null> {
-  try {
-    const result = await runCommandWithTimeout(argv, {
-      timeoutMs,
-      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
-    });
-    return result.code === 0 ? result.stdout : null;
-  } catch {
-    return null;
-  }
 }
 
 async function resolveDefaultRouteHints(params: {
   platform: NodeJS.Platform;
   runCommandWithTimeout: AdvertisedLanHostCommandRunner;
   timeoutMs: number;
-}): Promise<AdvertisedLanRouteHint[]> {
+}): Promise<string[]> {
+  let argv: string[];
+  let parse: typeof parseWindowsDefaultRouteHints;
   if (params.platform === "win32") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        WINDOWS_DEFAULT_ROUTE_COMMAND,
-      ],
-      params.timeoutMs,
-    );
-    return stdout ? parseWindowsDefaultRouteHints(stdout) : [];
+    argv = [
+      "powershell.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      WINDOWS_DEFAULT_ROUTE_COMMAND,
+    ];
+    parse = parseWindowsDefaultRouteHints;
+  } else if (params.platform === "darwin") {
+    argv = ["route", "-n", "get", "default"];
+    parse = parseMacOsDefaultRouteHints;
+  } else if (params.platform === "linux") {
+    argv = ["ip", "-4", "route", "show", "default"];
+    parse = parseLinuxDefaultRouteHints;
+  } else {
+    return [];
   }
 
-  if (params.platform === "darwin") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["route", "-n", "get", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseMacOsDefaultRouteHints(stdout) : [];
+  let stdout: string;
+  try {
+    const runCommandWithTimeout = params.runCommandWithTimeout;
+    const result = await runCommandWithTimeout(argv, {
+      timeoutMs: params.timeoutMs,
+      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
+    });
+    if (result.code !== 0) {
+      return [];
+    }
+    stdout = result.stdout;
+  } catch {
+    return [];
   }
-
-  if (params.platform === "linux") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["ip", "-4", "route", "show", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseLinuxDefaultRouteHints(stdout) : [];
-  }
-
-  return [];
+  return stdout ? parse(stdout) : [];
 }
 
-export async function resolveAdvertisedLanHost(
+export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
-  const candidates = listAdvertisedLanHostCandidates(
+  const candidates = listExternalInterfaceAddresses(
     safeNetworkInterfaces(options.networkInterfaces),
-  );
-  if (candidates.length === 0) {
-    return null;
+    "IPv4",
+  ).filter((entry) => isRfc1918Ipv4Address(entry.address));
+  if (candidates.length <= 1) {
+    return candidates[0]?.address ?? null;
   }
 
   const routeHints = await resolveDefaultRouteHints({
@@ -239,5 +172,18 @@ export async function resolveAdvertisedLanHost(
     runCommandWithTimeout: options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
     timeoutMs: options.timeoutMs ?? DEFAULT_ROUTE_HINT_TIMEOUT_MS,
   });
-  return selectAdvertisedLanHost(candidates, routeHints);
+  for (const hint of routeHints) {
+    const hintedName = normalizeInterfaceName(hint);
+    if (!hintedName) {
+      continue;
+    }
+    const routed = candidates.find(
+      (candidate) => normalizeInterfaceName(candidate.name) === hintedName,
+    );
+    if (routed) {
+      return routed.address;
+    }
+  }
+
+  return candidates[0]?.address ?? null;
 }

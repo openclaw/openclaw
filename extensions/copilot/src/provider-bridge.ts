@@ -1,8 +1,10 @@
-// Copilot plugin module implements BYOK provider mapping.
 import type { ProviderConfig } from "@github/copilot-sdk";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  filterStringRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 
 const COPILOT_BYOK_PROVIDER_ERROR =
@@ -46,7 +48,7 @@ const QUERY_PARAM_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
 type CopilotProviderMode = "github-copilot" | "byok";
 
-type CopilotModelProviderInput = {
+export type CopilotModelProviderInput = {
   api?: string;
   id: string;
   provider: string;
@@ -88,7 +90,7 @@ export function resolveCopilotProvider(params: {
   if (!baseUrl) {
     throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
   }
-  assertByokEndpointAllowed(baseUrl);
+  assertByokEndpointHostAllowed(baseUrl);
   if (hasUnsupportedTransportPolicy(params.model)) {
     throw new Error(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
   }
@@ -96,7 +98,7 @@ export function resolveCopilotProvider(params: {
   const api = normalizeOptionalString(params.model.api)?.toLowerCase() ?? "openai-responses";
   const provider = resolveProviderType(api, baseUrl, params.model.azureApiVersion);
   const resolvedApiKey = resolveProviderCredential(params.resolvedApiKey);
-  const headers = resolveProviderHeaders(params.model.headers);
+  const headers = filterStringRecord(params.model.headers);
   const requestAuthMode = normalizeOptionalString(params.model.requestAuthMode)?.toLowerCase();
   const usePreparedRequestAuth =
     requestAuthMode !== undefined && requestAuthMode !== "provider-default";
@@ -157,16 +159,17 @@ export function supportsCopilotByokProviderShape(
     "api" | "baseUrl" | "requestProxy" | "requestTls" | "requestAllowPrivateNetwork"
   >,
 ): boolean {
-  if (!normalizeOptionalString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
+  const baseUrl = normalizeOptionalString(model.baseUrl);
+  if (!baseUrl || hasUnsupportedTransportPolicy(model)) {
     return false;
   }
   try {
     resolveProviderType(
       normalizeOptionalString(model.api)?.toLowerCase() ?? "openai-responses",
-      normalizeOptionalString(model.baseUrl)!,
+      baseUrl,
       undefined,
     );
-    assertByokEndpointHostAllowed(normalizeOptionalString(model.baseUrl)!);
+    assertByokEndpointHostAllowed(baseUrl);
     return true;
   } catch {
     return false;
@@ -220,10 +223,6 @@ function normalizeCredentialQueryParamName(name: string): string {
   } catch {
     return stripped.toLowerCase().replace(/[-_]/g, "");
   }
-}
-
-function assertByokEndpointAllowed(baseUrl: string): void {
-  assertByokEndpointHostAllowed(baseUrl);
 }
 
 function resolveProviderType(
@@ -321,16 +320,4 @@ function stableSerialize(value: unknown): string {
 function resolveProviderCredential(value: string | undefined): string | undefined {
   const credential = normalizeOptionalString(value);
   return credential && !isNonSecretApiKeyMarker(credential) ? credential : undefined;
-}
-
-function resolveProviderHeaders(
-  headers: Record<string, string | null | undefined> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const resolved = Object.fromEntries(
-    Object.entries(headers).filter(([, value]) => typeof value === "string"),
-  ) as Record<string, string>;
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }

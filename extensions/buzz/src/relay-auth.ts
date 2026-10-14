@@ -1,4 +1,5 @@
 import { type EventTemplate, finalizeEvent, Relay, type VerifiedEvent } from "nostr-tools";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -51,20 +52,6 @@ async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Prom
   });
 }
 
-function createBuzzAuthSigner(params: {
-  secretKey: Uint8Array;
-  authTag?: string[];
-}): (template: EventTemplate) => Promise<VerifiedEvent> {
-  return async (template) =>
-    finalizeEvent(
-      {
-        ...template,
-        tags: params.authTag ? [...template.tags, params.authTag] : template.tags,
-      },
-      params.secretKey,
-    );
-}
-
 function isLoopbackRelayUrl(relayUrl: string): boolean {
   const hostname = new URL(relayUrl).hostname.toLowerCase();
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
@@ -91,10 +78,7 @@ async function resolveBuzzRelayPublicKey(params: {
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`Buzz relay information request failed with HTTP ${response.status}`);
     }
-    const document = (await response.json()) as {
-      self?: unknown;
-      software?: unknown;
-    };
+    const document = await readProviderJsonObjectResponse(response, "Buzz relay information");
     const relayPublicKey =
       typeof document.self === "string" ? document.self.trim().toLowerCase() : "";
     if (HEX_PUBLIC_KEY_PATTERN.test(relayPublicKey)) {
@@ -115,10 +99,15 @@ async function connectAndAuthenticateBuzzRelay(params: {
   authTag?: string[];
   signal?: AbortSignal;
 }): Promise<void> {
-  const signAuth = createBuzzAuthSigner({
-    secretKey: params.secretKey,
-    authTag: params.authTag,
-  });
+  const { secretKey, authTag } = params;
+  const signAuth = async (template: EventTemplate): Promise<VerifiedEvent> =>
+    finalizeEvent(
+      {
+        ...template,
+        tags: authTag ? [...template.tags, authTag] : template.tags,
+      },
+      secretKey,
+    );
   await params.relay.connect({ abort: params.signal });
   await authenticateBuzzRelay({ relay: params.relay, signAuth, signal: params.signal });
   params.relay.onauth = signAuth;

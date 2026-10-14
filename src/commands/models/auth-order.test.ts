@@ -1,4 +1,4 @@
-// Covers `models auth order set/clear`: store writes and running-gateway refresh.
+// Covers `models auth order get/set/clear`: read targeting, store writes, and gateway refresh.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   setAuthProfileOrder: vi.fn(),
   loadModelsConfig: vi.fn(),
+  resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => ({
+    agentId: rawAgentId ?? "main",
+    agentDir: `/tmp/agent-${rawAgentId ?? "main"}`,
+  })),
   refreshRunningGatewayAuthState: vi.fn(async () => undefined),
 }));
 
@@ -26,10 +30,7 @@ vi.mock("./shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./shared.js")>();
   return {
     ...actual,
-    resolveModelsTargetAgent: (_cfg: OpenClawConfig, rawAgentId?: string) => ({
-      agentId: rawAgentId ?? "main",
-      agentDir: `/tmp/agent-${rawAgentId ?? "main"}`,
-    }),
+    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
   };
 });
 
@@ -37,7 +38,7 @@ vi.mock("./auth-refresh.js", () => ({
   refreshRunningGatewayAuthState: mocks.refreshRunningGatewayAuthState,
 }));
 
-const { modelsAuthOrderClearCommand, modelsAuthOrderSetCommand } = await import("./auth-order.js");
+const { modelsAuthOrderGetCommand, modelsAuthOrderUpdateCommand } = await import("./auth-order.js");
 
 function createRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
@@ -75,19 +76,32 @@ describe("models auth order", () => {
     );
   });
 
+  it("get resolves an omitted agent through the read target", async () => {
+    const runtime = createRuntime();
+    await modelsAuthOrderGetCommand({ provider: "anthropic" }, runtime);
+
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), undefined, {
+      kind: "read",
+    });
+    expect(runtime.logs).toContain("Agent: main");
+  });
+
   it("set writes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
-    await modelsAuthOrderSetCommand(
-      { provider: "anthropic", order: ["anthropic:b", "anthropic:a"] },
+    await modelsAuthOrderUpdateCommand(
+      { provider: "anthropic", agent: "ops", order: ["anthropic:b", "anthropic:a"] },
       runtime,
     );
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent-main",
+      agentDir: "/tmp/agent-ops",
       provider: "anthropic",
       order: ["anthropic:b", "anthropic:a"],
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), "ops", {
+      kind: "mutation",
+    });
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops", "update", runtime);
     expect(runtime.logs).toContain("Auth profile order override: anthropic:b, anthropic:a");
   });
 
@@ -105,7 +119,7 @@ describe("models auth order", () => {
     });
     const runtime = createRuntime();
 
-    await modelsAuthOrderSetCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
+    await modelsAuthOrderUpdateCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/agent-main",
@@ -117,14 +131,17 @@ describe("models auth order", () => {
 
   it("clear removes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
-    await modelsAuthOrderClearCommand({ provider: "anthropic" }, runtime);
+    await modelsAuthOrderUpdateCommand({ provider: "anthropic", order: null }, runtime);
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/agent-main",
       provider: "anthropic",
       order: null,
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), undefined, {
+      kind: "mutation",
+    });
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main", "update", runtime);
     expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
       true,
     );
@@ -134,7 +151,10 @@ describe("models auth order", () => {
     mocks.setAuthProfileOrder.mockResolvedValue(null);
 
     await expect(
-      modelsAuthOrderSetCommand({ provider: "anthropic", order: ["anthropic:a"] }, createRuntime()),
+      modelsAuthOrderUpdateCommand(
+        { provider: "anthropic", order: ["anthropic:a"] },
+        createRuntime(),
+      ),
     ).rejects.toThrow("Failed to update auth state");
     expect(mocks.refreshRunningGatewayAuthState).not.toHaveBeenCalled();
   });

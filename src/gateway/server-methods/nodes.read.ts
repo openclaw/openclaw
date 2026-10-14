@@ -8,14 +8,20 @@ import {
   validateNodeSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { projectNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  formatNodeRunnerInventoryIssue,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  parseNodeRunnerInventoryDeclaration,
+} from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
-import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
+import { readKnownNodeCatalog } from "../node-catalog-read.js";
+import { updateNodeRunnerInventory } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -23,9 +29,10 @@ import {
   refreshClientPluginNodeCapability,
 } from "../plugin-node-capability.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -48,53 +55,40 @@ function safeNodeReadProjection(
     : safeNode;
 }
 
-function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
-  return normalizeOptionalString(client?.connect?.device?.id);
+function respondRunnerInventoryRetry(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
 }
 
-function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
-  return node !== null;
-}
-
-function listNodesForClient(params: {
+async function listNodesForClient(params: {
   client: GatewayClient | null;
-  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
-  pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
-  pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
-  connectedNodes: readonly NodeSession[];
-  localNodeId: string | null;
-}): NodeListNode[] {
-  const catalog = createKnownNodeCatalog({
-    pairedDevices: params.pairedDevices,
-    pairedNodes: params.pairedNodes,
-    pendingNodes: params.pendingNodes,
-    connectedNodes: params.connectedNodes,
+  context: GatewayRequestContext;
+  nodeId?: string;
+}): Promise<{ nodes: NodeListNode[]; connectedNodes: readonly NodeSession[] }> {
+  const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
+    params.context.logGateway.warn(
+      `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
+    );
+    return null;
   });
-  const nodes = listKnownNodes(catalog).map((node) =>
-    node.nodeId === params.localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
+  const { nodes: preparedNodes, connectedNodes } = await readKnownNodeCatalog(
+    params.context.nodeRegistry,
+  );
+  const catalogNodes = params.nodeId
+    ? preparedNodes.filter((node) => node.nodeId === params.nodeId)
+    : preparedNodes;
+  const nodes = catalogNodes.map((node) =>
+    node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
-    return nodes;
+    return { nodes, connectedNodes };
   }
-  const ownDeviceId = nodeReadCallerDeviceId(params.client);
-  return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
-}
-
-function listCurrentConnectedNodes(
-  context: GatewayRequestContext,
-  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"],
-): NodeSession[] {
-  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of pairedDevices) {
-    const state = resolveNodePairingState(device);
-    if (state) {
-      currentPairingStates.set(state.identity.nodeId, {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      });
-    }
-  }
-  return context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
+  const ownDeviceId = normalizeOptionalString(params.client?.connect?.device?.id);
+  return {
+    nodes: nodes
+      .map((node) => safeNodeReadProjection(node, ownDeviceId))
+      .filter((node) => node !== null),
+    connectedNodes,
+  };
 }
 
 function normalizePluginSurfaceRefreshParams(
@@ -111,54 +105,55 @@ function normalizePluginSurfaceRefreshParams(
   return { surface, ...(observedUrl ? { observedUrl } : {}) };
 }
 
-function respondRefreshedPluginSurface(params: {
-  surface: string;
-  observedUrl?: string;
-  client: GatewayClient | null;
-  respond: RespondFn;
-}) {
-  const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
-  const capabilitySurface = params.client?.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
-    surface: params.surface,
+const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
+  const parsed = normalizePluginSurfaceRefreshParams(params);
+  if (!parsed) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
+    return;
+  }
+  const { surface, observedUrl } = parsed;
+  const currentUrl = client?.pluginSurfaceUrls?.[surface];
+  const capabilitySurface = client?.pluginNodeCapabilitySurfaces?.[surface] ?? {
+    surface,
   };
   if (
-    params.client &&
+    client &&
     currentUrl &&
-    params.observedUrl &&
-    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl) &&
+    observedUrl &&
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, observedUrl) &&
     hasAuthorizedClientPluginNodeCapabilityUrl({
-      client: params.client,
+      client,
       surface: capabilitySurface,
       url: currentUrl,
     })
   ) {
     // A prior in-flight request already rotated this capability. Return its
     // result instead of invalidating it with a second rotation.
-    params.respond(
+    respond(
       true,
       {
-        surface: params.surface,
-        pluginSurfaceUrls: { [params.surface]: currentUrl },
+        surface,
+        pluginSurfaceUrls: { [surface]: currentUrl },
       },
       undefined,
     );
     return;
   }
-  const refreshed = params.client
+  const refreshed = client
     ? refreshClientPluginNodeCapability({
-        client: params.client,
+        client,
         surface: capabilitySurface,
       })
     : undefined;
   if (!refreshed) {
-    params.respond(
+    respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${params.surface} plugin surface unavailable`),
+      errorShape(ErrorCodes.UNAVAILABLE, `${surface} plugin surface unavailable`),
     );
     return;
   }
-  params.respond(
+  respond(
     true,
     {
       surface: refreshed.surface,
@@ -167,20 +162,6 @@ function respondRefreshedPluginSurface(params: {
     },
     undefined,
   );
-}
-
-const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
-  const parsed = normalizePluginSurfaceRefreshParams(params);
-  if (!parsed) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
-    return;
-  }
-  respondRefreshedPluginSurface({
-    surface: parsed.surface,
-    observedUrl: parsed.observedUrl,
-    client,
-    respond,
-  });
 };
 
 export function refreshConnectedNodeSurfaceCaches(params: {
@@ -208,38 +189,20 @@ export function refreshConnectedNodeSurfaceCaches(params: {
     cfg,
   }).catch((err: unknown) =>
     params.context.logGateway.warn(
-      `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
+      `remote bin check failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),
   );
 }
 
 export const nodeReadHandlers: GatewayRequestHandlers = {
   "node.list": async ({ params, respond, client, context }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.list",
-        validator: validateNodeListParams,
-      });
+    if (!assertValidParams(params, validateNodeListParams, "node.list", respond)) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
-      const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
-        context.logGateway.warn(
-          `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
-        );
-        return null;
-      });
-      const nodes = listNodesForClient({
+      const { nodes, connectedNodes } = await listNodesForClient({
         client,
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
-        localNodeId,
+        context,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
@@ -249,37 +212,22 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     });
   },
   "node.describe": async ({ params, respond, client, context }) => {
-    if (!validateNodeDescribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.describe",
-        validator: validateNodeDescribeParams,
-      });
+    if (!assertValidParams(params, validateNodeDescribeParams, "node.describe", respond)) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
+    const { nodeId } = params;
     const id = normalizeOptionalString(nodeId) ?? "";
     if (!id) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
-      const catalog = createKnownNodeCatalog({
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
+      const { nodes, connectedNodes } = await listNodesForClient({
+        client,
+        context,
+        nodeId: id,
       });
-      const catalogNode = getKnownNode(catalog, id);
-      const node =
-        catalogNode && nodeInvokePolicy.canReadPendingNodePairing(client)
-          ? catalogNode
-          : catalogNode
-            ? safeNodeReadProjection(catalogNode, nodeReadCallerDeviceId(client))
-            : null;
+      const node = nodes[0];
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -300,12 +248,14 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
   "plugin.surface.refresh": handlePluginSurfaceRefresh,
   "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
   "node.pluginTools.update": async ({ params, respond, client, context }) => {
-    if (!validateNodePluginToolsUpdateParams(params)) {
-      respondInvalidParams({
+    if (
+      !assertValidParams(
+        params,
+        validateNodePluginToolsUpdateParams,
+        "node.pluginTools.update",
         respond,
-        method: "node.pluginTools.update",
-        validator: validateNodePluginToolsUpdateParams,
-      });
+      )
+    ) {
       return;
     }
     const nodeId = normalizeOptionalString(
@@ -327,12 +277,7 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
   },
   "node.skills.update": async ({ params, respond, client, context }) => {
-    if (!validateNodeSkillsUpdateParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.skills.update",
-        validator: validateNodeSkillsUpdateParams,
-      });
+    if (!assertValidParams(params, validateNodeSkillsUpdateParams, "node.skills.update", respond)) {
       return;
     }
     const nodeId = normalizeOptionalString(
@@ -347,11 +292,95 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
       return;
     }
-    replaceRemoteNodeSkills({
-      nodeId,
-      displayName: updated.displayName,
-      skills: updated.nodeSkills,
-    });
     respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
+  },
+  "node.runnerInventory.update": async ({ params, respond, client, context }) => {
+    const declaration = parseNodeRunnerInventoryDeclaration(params);
+    if (!declaration) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid node runner inventory"),
+      );
+      return;
+    }
+    const nodeId = normalizeOptionalString(client?.connect?.device?.id);
+    const updated = nodeId
+      ? updateNodeRunnerInventory({
+          registry: context.nodeRegistry,
+          nodeId,
+          connId: client?.connId,
+          declaration,
+        })
+      : null;
+    if (!nodeId || !updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    if (
+      declaration.protocolFeatures.length === 1 &&
+      declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        ),
+      );
+      return;
+    }
+    const connId = client?.connId;
+    const currentSession = context.nodeRegistry.get(nodeId);
+    const pairingGeneration =
+      currentSession && currentSession.connId === connId
+        ? currentSession.pairingGeneration
+        : undefined;
+    if (!connId || !pairingGeneration) {
+      // A registered session without a pairing generation usually means the
+      // node's capability surface is still awaiting operator approval; name
+      // that state and the exact approve command instead of a generic retry.
+      const pendingSurface = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === nodeId,
+      );
+      respondRunnerInventoryRetry(
+        respond,
+        pendingSurface
+          ? `node capability surface is awaiting operator approval; run \`openclaw nodes approve ${pendingSurface.requestId}\` (see \`openclaw nodes pending\`), then this node retries automatically`
+          : "node runner inventory publication is not current; retry after pairing completes",
+      );
+      return;
+    }
+    const sessionHost = "workerHost" in declaration && declaration.workerHost.enabled;
+    try {
+      const persisted = await updatePairedNodeSessionHost({
+        nodeId,
+        sessionHost,
+        expectedPairingGeneration: { nodeId, key: pairingGeneration },
+        isConnectionCurrent: () => {
+          const current = context.nodeRegistry.get(nodeId);
+          return (
+            current?.connId === connId &&
+            current.pairingGeneration === pairingGeneration &&
+            current.client.invalidated !== true
+          );
+        },
+      });
+      if (!persisted) {
+        respondRunnerInventoryRetry(
+          respond,
+          "node runner inventory publication lost its pairing ownership; retry",
+        );
+        return;
+      }
+    } catch (error) {
+      context.logGateway.warn(
+        `failed to persist runner host consent for ${nodeId}: ${formatErrorMessage(error)}`,
+      );
+      respondRunnerInventoryRetry(respond, "node runner inventory persistence failed; retry");
+      return;
+    }
+    respond(true, { nodeId }, undefined);
   },
 };

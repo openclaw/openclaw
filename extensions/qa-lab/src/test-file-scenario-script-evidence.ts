@@ -1,17 +1,22 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { resolveQaArtifactPath, toRepoArtifactPath, toRepoRelativePath } from "./cli-paths.js";
 import {
+  collectQaEvidenceArtifacts,
   QA_EVIDENCE_FILENAME,
+  type projectQaEvidenceScenarioOutcomes,
+  type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 
-export async function readJsonFileIfExists(filePath: string): Promise<unknown> {
-  let text: string;
+async function readJsonBytesIfExists(filePath: string) {
+  let bytes: Buffer;
   try {
-    text = await fs.readFile(filePath, "utf8");
+    bytes = await fs.readFile(filePath);
   } catch (error) {
     if (
       error &&
@@ -24,24 +29,14 @@ export async function readJsonFileIfExists(filePath: string): Promise<unknown> {
     throw error;
   }
   try {
-    return JSON.parse(text) as unknown;
+    return { value: JSON.parse(bytes.toString("utf8")) as unknown, bytes };
   } catch (error) {
     throw new Error(`invalid JSON in ${filePath}: ${formatErrorMessage(error)}`, { cause: error });
   }
 }
 
-// Producer artifact paths resolve against their evidence bundle. External
-// artifacts remain absolute so consumers never receive traversal segments.
-function resolveScriptProducerArtifactPath(params: {
-  evidenceDir: string;
-  repoRoot: string;
-  artifactPath: string;
-}) {
-  const absolutePath = path.isAbsolute(params.artifactPath)
-    ? params.artifactPath
-    : path.join(params.evidenceDir, params.artifactPath);
-  const repoRelativePath = toRepoRelativePath(params.repoRoot, absolutePath);
-  return isRepoRootRelativeRef(repoRelativePath) ? repoRelativePath : path.normalize(absolutePath);
+export async function readJsonFileIfExists(filePath: string): Promise<unknown> {
+  return (await readJsonBytesIfExists(filePath))?.value;
 }
 
 function normalizeScriptProducerEvidence(params: {
@@ -50,25 +45,20 @@ function normalizeScriptProducerEvidence(params: {
   repoRoot: string;
 }): QaEvidenceSummaryJson {
   const evidenceDir = path.dirname(params.evidencePath);
-  return {
-    ...params.evidence,
-    entries: params.evidence.entries.map((entry) => ({
-      ...entry,
-      execution: entry.execution
-        ? {
-            ...entry.execution,
-            artifacts: entry.execution.artifacts.map((artifact) => ({
-              ...artifact,
-              path: resolveScriptProducerArtifactPath({
-                artifactPath: artifact.path,
-                evidenceDir,
-                repoRoot: params.repoRoot,
-              }),
-            })),
-          }
-        : undefined,
-    })),
-  };
+  const evidence = structuredClone(params.evidence);
+  for (const artifact of collectQaEvidenceArtifacts(evidence)) {
+    const absolutePath = resolveQaArtifactPath(params.repoRoot, evidenceDir, artifact.path);
+    if (evidence.schemaVersion === 3) {
+      artifact.path = toRepoArtifactPath(params.repoRoot, absolutePath);
+    } else {
+      // External v2 artifacts stay absolute rather than exposing traversal segments.
+      const relativePath = toRepoRelativePath(params.repoRoot, absolutePath);
+      artifact.path = isRepoRootRelativeRef(relativePath)
+        ? relativePath
+        : path.normalize(absolutePath);
+    }
+  }
+  return validateQaEvidenceSummaryJson(evidence);
 }
 
 function assertScenarioOwnsEvidencePath(scenarioOutputDir: string, evidencePath: string): void {
@@ -82,25 +72,68 @@ function assertScenarioOwnsEvidencePath(scenarioOutputDir: string, evidencePath:
   }
 }
 
+export function statusFromProducerEntries(params: {
+  allowBlockedEvidence: boolean;
+  entries: readonly QaEvidenceSummaryJson["entries"][number][];
+  scenarioOutcomes?: ReturnType<typeof projectQaEvidenceScenarioOutcomes>;
+}): { failureMessage?: string; status: QaEvidenceStatus } {
+  const { allowBlockedEvidence, entries, scenarioOutcomes } = params;
+  const failedEntry = entries.find((entry) => entry.result.status === "fail");
+  const failedScenario = scenarioOutcomes?.find((outcome) => outcome.status === "fail");
+  const blockedEntry = entries.find((entry) => entry.result.status === "blocked");
+  const blockedScenario = scenarioOutcomes?.find((outcome) => outcome.status === "blocked");
+  if (failedEntry || failedScenario) {
+    return {
+      failureMessage:
+        failedEntry?.result.failure?.reason ??
+        `${failedEntry?.test.id ?? failedScenario?.scenarioId} reported failed`,
+      status: "fail",
+    };
+  }
+  // Check the child's schedule before containment projects only the outer
+  // attempt. Allowing terminal blocked checks never authorizes unfinished work.
+  const unresolved = scenarioOutcomes?.find((outcome) => outcome.status === null);
+  if (unresolved) {
+    return {
+      failureMessage: `Script producer has an unresolved scheduled scenario: ${unresolved.scenarioId}`,
+      status: "blocked",
+    };
+  }
+  if (entries.length === 0) {
+    return {
+      failureMessage: "Script exited successfully without reporting an executed producer check.",
+      status: "fail",
+    };
+  }
+  const hasPassed = entries.some((entry) => entry.result.status === "pass");
+  if ((blockedEntry || blockedScenario) && (!allowBlockedEvidence || !hasPassed)) {
+    return {
+      failureMessage:
+        blockedEntry?.result.failure?.reason ??
+        `${blockedEntry?.test.id ?? blockedScenario?.scenarioId} reported blocked`,
+      status: "blocked",
+    };
+  }
+  if (
+    entries.some((entry) => entry.result.status === "skipped") ||
+    scenarioOutcomes?.some((outcome) => outcome.status === "skipped")
+  ) {
+    return { status: "skipped" };
+  }
+  return { status: "pass" };
+}
+
 export async function readScriptProducerEvidence(params: {
   outputDir: string;
   requireCurrentRunEvidence?: boolean;
   repoRoot: string;
   scenario: { id: string };
-}): Promise<{ producerEvidence?: QaEvidenceSummaryJson }> {
+}): Promise<{
+  producerEvidence?: QaEvidenceSummaryJson;
+  producerArtifact?: { kind: string; path: string; source: string; sha256: string };
+}> {
   const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
   const latestRun = await readJsonFileIfExists(path.join(scenarioOutputDir, "latest-run.json"));
-  if (
-    params.requireCurrentRunEvidence === true &&
-    latestRun !== undefined &&
-    (latestRun === null ||
-      typeof latestRun !== "object" ||
-      !("qaEvidence" in latestRun) ||
-      typeof latestRun.qaEvidence !== "string" ||
-      latestRun.qaEvidence.trim().length === 0)
-  ) {
-    throw new Error("latest-run.json does not identify a producer evidence bundle");
-  }
   const latestEvidencePath =
     latestRun !== null &&
     typeof latestRun === "object" &&
@@ -108,6 +141,13 @@ export async function readScriptProducerEvidence(params: {
     typeof latestRun.qaEvidence === "string"
       ? latestRun.qaEvidence
       : undefined;
+  if (
+    params.requireCurrentRunEvidence === true &&
+    latestRun !== undefined &&
+    !latestEvidencePath?.trim()
+  ) {
+    throw new Error("latest-run.json does not identify a producer evidence bundle");
+  }
   const candidates = [
     latestEvidencePath,
     path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),
@@ -133,12 +173,18 @@ export async function readScriptProducerEvidence(params: {
         await fs.realpath(evidencePath),
       );
     }
-    const rawEvidence = await readJsonFileIfExists(evidencePath);
-    if (!rawEvidence) {
+    const captured = await readJsonBytesIfExists(evidencePath);
+    if (captured === undefined) {
       continue;
     }
-    const evidence = validateQaEvidenceSummaryJson(rawEvidence);
+    const evidence = validateQaEvidenceSummaryJson(captured.value);
     return {
+      producerArtifact: {
+        kind: "producer-evidence",
+        path: toRepoArtifactPath(params.repoRoot, evidencePath),
+        source: "script",
+        sha256: createHash("sha256").update(captured.bytes).digest("hex"),
+      },
       producerEvidence: normalizeScriptProducerEvidence({
         evidence,
         evidencePath,

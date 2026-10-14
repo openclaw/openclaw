@@ -19,6 +19,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   settleInboundWork,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxMonitorOptions,
   type InboxOnMessage,
@@ -390,23 +391,6 @@ describe("web monitor inbox socket lifecycle", () => {
     }
   });
 
-  it("socket session times out stalled sends at the Baileys query timeout", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    vi.useFakeTimers();
-    try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
-
-      const sendPromise = listener.sendMessage("+1555", "hello");
-      await expectSocketOperationTimeout("sendMessage", sendPromise);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await listener.close();
-    }
-  });
-
   it("socket session preserves the socket after a local send timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -416,17 +400,33 @@ describe("web monitor inbox socket lifecycle", () => {
       upsertId: "local-timeout-terminal",
       retryPolicy: fastReconnectPolicy(2),
     });
+    // Keep durable inbound settlement and its read receipt outside the socket clock.
+    await waitForInboundWorkDrained();
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let sendTimeoutIndex = -1;
     try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
+      sock.sendMessage.mockImplementationOnce(() => {
+        // The adapter schedules this send's timeout immediately after the socket call.
+        sendTimeoutIndex = setTimeoutSpy.mock.calls.length;
+        return new Promise(() => {});
+      });
 
       const replyPromise = inbound.platform.reply("pong");
       await expectSocketOperationTimeout("sendMessage", replyPromise);
       expect(sock.sendMessage).toHaveBeenCalledTimes(1);
       expect(socketRef.current).toBe(sock);
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy.mock.calls[sendTimeoutIndex]?.[1]).toBe(
+        DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      );
+      const sendTimeout = setTimeoutSpy.mock.results[sendTimeoutIndex];
+      expect(sendTimeout?.type).toBe("return");
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(sendTimeout?.value);
     } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await listener.close();
     }
@@ -588,7 +588,7 @@ describe("web monitor inbox socket lifecycle", () => {
         );
         expect(loggedTimeoutFailure).toBe(true);
       });
-      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       await listener.close();
@@ -625,8 +625,8 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await inbound.reply("pong");
-      await inbound.sendMedia({ text: "media after restart" });
+      await inbound.platform.reply("pong");
+      await inbound.platform.sendMedia({ text: "media after restart" });
 
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(2);
       expect(successorSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
@@ -650,7 +650,7 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await inbound.reply("pong");
+      await inbound.platform.reply("pong");
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(1);
       expect(successorSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
         text: "pong",
@@ -670,7 +670,7 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await expect(inbound.reply("pong")).rejects.toThrow(
+      await expect(inbound.platform.reply("pong")).rejects.toThrow(
         "no active socket - reconnection in progress",
       );
       expect(successorSock.sendMessage).not.toHaveBeenCalled();

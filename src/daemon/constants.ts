@@ -8,6 +8,24 @@ const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
 export const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
+export const GATEWAY_SERVICE_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const;
+
+export function isGatewayServiceEnv(env: Record<string, string | undefined>): boolean {
+  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
+    return false;
+  }
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
@@ -38,17 +56,43 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   return `ai.openclaw.${normalized}`;
 }
 
-export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
-  void profile;
-  return [];
+export function resolveGatewaySystemdServiceName(profile?: string): string {
+  return `${GATEWAY_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
 }
 
-export function resolveGatewaySystemdServiceName(profile?: string): string {
+function isAmbiguousLegacyGatewayCandidate(legacyName: string): boolean {
+  // openclaw-node is the Node service. openclaw-gateway and
+  // openclaw-gateway-<profile> are canonical gateway names for default or
+  // another profile (node -> openclaw-node, gateway -> openclaw-gateway,
+  // gateway-lisa -> openclaw-gateway-lisa).
+  return (
+    legacyName === NODE_SYSTEMD_SERVICE_NAME ||
+    legacyName === GATEWAY_SYSTEMD_SERVICE_NAME ||
+    legacyName.startsWith(`${GATEWAY_SYSTEMD_SERVICE_NAME}-`)
+  );
+}
+
+/**
+ * Service-name candidates for a profile, preferred order.
+ *
+ * Current installs use `openclaw-gateway[-profile]`. Older multi-agent hosts
+ * used `openclaw-<profile>` (no "gateway" segment). Doctor/runtime resolution
+ * must try both for the same profile before scanning unrelated units.
+ */
+export function resolveGatewaySystemdServiceNameCandidates(profile?: string): string[] {
+  const canonical = resolveGatewaySystemdServiceName(profile);
   const suffix = resolveGatewayProfileSuffix(profile);
   if (!suffix) {
-    return GATEWAY_SYSTEMD_SERVICE_NAME;
+    // Default profile: openclaw-gateway is current; bare openclaw is a known
+    // legacy system-unit name (parallel to openclaw-<profile> for named agents).
+    // Custom names are matched separately against their effective installation identity.
+    return [canonical, "openclaw"];
   }
-  return `openclaw-gateway${suffix}`;
+  const legacy = `openclaw${suffix}`;
+  if (isAmbiguousLegacyGatewayCandidate(legacy)) {
+    return [canonical];
+  }
+  return [canonical, legacy];
 }
 
 export function resolveGatewayWindowsTaskName(profile?: string): string {
@@ -57,6 +101,11 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
     return GATEWAY_WINDOWS_TASK_NAME;
   }
   return `OpenClaw Gateway (${normalized})`;
+}
+
+export function normalizeWindowsTaskIdentity(value: string): string {
+  // Root prefixes and casing do not change task identity; nested folders do.
+  return value.replace(/^\\+/, "").toLowerCase();
 }
 
 type GatewayNativeServiceIdentityConflict = {
@@ -90,7 +139,9 @@ export function resolveGatewayNativeServiceIdentityConflict(
     const envKey = "OPENCLAW_WINDOWS_TASK_NAME";
     const actual = env[envKey]?.trim();
     const expected = resolveGatewayWindowsTaskName(profile);
-    return actual && actual !== expected ? { envKey, expected } : null;
+    return actual && normalizeWindowsTaskIdentity(actual) !== normalizeWindowsTaskIdentity(expected)
+      ? { envKey, expected }
+      : null;
   }
   return null;
 }

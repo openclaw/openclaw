@@ -2,17 +2,27 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect } from "vitest";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { expect, vi } from "vitest";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
+  | "sessions.files.assets"
   | "sessions.files.set"
   | "sessions.files.reveal";
 
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
+
+export const IMAGE_PREVIEW_FIXTURES = [
+  { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
+] as const;
+
+export const TEXT_PREVIEW_FIXTURES = [
+  { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
+  { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
+] as const;
 
 function createResponder() {
   const calls: ResponderCall[] = [];
@@ -27,6 +37,12 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
     method: SessionFilesMethod,
     params: Record<string, unknown>,
     context: Record<string, unknown> = {},
+    options: Partial<
+      Pick<
+        GatewayRequestHandlerOptions,
+        "client" | "withSessionTurnAuthority" | "sessionMutationAuthorization"
+      >
+    > = {},
   ) => {
     const responder = createResponder();
     await handlers[method]?.({
@@ -35,7 +51,11 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
       client: null,
       isWebchatConnect: () => false,
       respond: responder.respond,
-      context: context as never,
+      context: {
+        getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+        ...context,
+      } as never,
+      ...options,
     });
     return responder.calls;
   };
@@ -103,16 +123,48 @@ export function createWorkspaceFixture(prefix: string): string {
   return workspaceRoot;
 }
 
+export function removeWorkspaceFixture(workspaceRoot: string): void {
+  fs.rmSync(workspaceRoot, { recursive: true, force: true });
+}
+
+export function prepareSessionFilesTest(
+  mocks: {
+    execOpenPath: ReturnValueMock & { mockResolvedValue: (value: unknown) => unknown };
+    loadSessionEntry: ReturnValueMock;
+    readDelta: ReturnValueMock & { mockReset: () => unknown };
+    resolveAgentWorkspaceDir: ReturnValueMock;
+    resolveDefaultAgentId: ReturnValueMock;
+  },
+  mockVisibleMessages: (messages: unknown[]) => void,
+): string {
+  vi.clearAllMocks();
+  mocks.readDelta.mockReset();
+  const workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
+  mocks.resolveDefaultAgentId.mockReturnValue("main");
+  mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
+  mocks.execOpenPath.mockResolvedValue(undefined);
+  mocks.loadSessionEntry.mockReturnValue(createSessionEntryFixture(workspaceRoot, "sess-main"));
+  mockVisibleMessages([
+    assistantToolCall("edit", { path: "ui/chat.ts" }),
+    assistantToolCall("read", { path: "src/readme.md" }),
+    assistantToolCall("apply_patch", {
+      input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
+    }),
+  ]);
+  return workspaceRoot;
+}
+
 export function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-export function createSessionEntryFixture(
+function createSessionEntryFixture(
   workspaceRoot: string,
   sessionId: string,
   storePath = path.join(workspaceRoot, ".sessions.json"),
 ) {
   return {
+    agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,
@@ -131,6 +183,7 @@ export function useSqliteSession(
   storePath = path.join(workspaceRoot, `${sessionId}.sqlite`),
 ): string {
   loadSessionEntry.mockReturnValue({
+    agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,

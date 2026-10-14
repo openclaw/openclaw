@@ -1,9 +1,7 @@
-/** Adapts the generic gateway service manager for OpenClaw node-host services. */
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
 import { resolveGatewayService } from "./service.js";
 
-// Wraps the generic gateway service with node-specific service identifiers and env.
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
@@ -23,9 +21,9 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
   };
 }
 
-/** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
-  const base = resolveGatewayService();
+  const base = resolveGatewayService("node");
+  const { hasInstalledDefinition, isAbsent, readDefinitionMutationCapability } = base;
   return {
     ...base,
     stage: (args) => base.stage(withNodeInstallEnv(args)),
@@ -39,7 +37,21 @@ export function resolveNodeService(): GatewayService {
       // wedged service manager instead of hanging the whole status command.
       return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}), timeoutMs: args.timeoutMs });
     },
-    readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
+    hasInstalledDefinition: hasInstalledDefinition
+      ? (args) => hasInstalledDefinition({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
+      : undefined,
+    isAbsent: isAbsent
+      ? (args) => isAbsent({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
+      : undefined,
+    readDefinitionMutationCapability: readDefinitionMutationCapability
+      ? (args) =>
+          readDefinitionMutationCapability({
+            ...args,
+            env: withNodeServiceEnv(args.env ?? {}),
+            environment: args.environment ? withNodeServiceEnv(args.environment) : undefined,
+          })
+      : undefined,
+    readCommand: (env, opts) => base.readCommand(withNodeServiceEnv(env), opts),
     readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };
 }

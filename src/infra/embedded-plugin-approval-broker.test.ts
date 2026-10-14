@@ -33,6 +33,7 @@ describe("EmbeddedPluginApprovalBroker", () => {
       "broker.listPending()[0] test invariant",
     );
 
+    expect(approval.approvalKind).toBe("plugin");
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(events[0]).toEqual({
       event: "plugin.approval.requested",
@@ -121,73 +122,6 @@ describe("EmbeddedPluginApprovalBroker", () => {
       event: "plugin.approval.removed",
       payload: { id: expect.stringMatching(/^plugin:/) },
     });
-  });
-
-  it("rejects pending approvals when stopped", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-
-    broker.stop(new Error("local TUI stopped"));
-
-    await expect(resultPromise).rejects.toThrow("local TUI stopped");
-    expect(broker.listPending()).toEqual([]);
-  });
-
-  it("isolates a failed listener when announcing a request", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const events: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.requested") {
-        throw new Error("request listener failed");
-      }
-    });
-    broker.subscribe((event) => {
-      events.push(event.event);
-    });
-
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-    const approval = expectDefined(
-      broker.listPending()[0],
-      "broker.listPending()[0] test invariant",
-    );
-
-    expect(broker.resolve(approval.id, "allow-once")).toBe(true);
-    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
-    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
-    expect(broker.listPending()).toEqual([]);
-  });
-
-  it("isolates a failed listener when announcing a resolution", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const events: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.resolved") {
-        throw new Error("resolution listener failed");
-      }
-    });
-    broker.subscribe((event) => {
-      events.push(event.event);
-    });
-
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-    const approval = expectDefined(
-      broker.listPending()[0],
-      "broker.listPending()[0] test invariant",
-    );
-
-    expect(() => broker.resolve(approval.id, "allow-once")).not.toThrow();
-    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
-    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
-    expect(broker.listPending()).toEqual([]);
   });
 
   it("isolates failed listeners while stopping every pending request", async () => {

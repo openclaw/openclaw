@@ -2,13 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
+import { createIMessageDurableIngress } from "./ingress.js";
 
 type IMessageIngressQueue = NonNullable<
   Parameters<typeof createIMessageDurableIngress>[0]["queue"]
@@ -53,16 +52,6 @@ async function withQueue<T>(
 
 function runtime() {
   return { error: vi.fn(), log: vi.fn() };
-}
-
-function lifecycle() {
-  return {
-    abortSignal: new AbortController().signal,
-    onAdopted: vi.fn(async () => {}),
-    onDeferred: vi.fn(),
-    onAdoptionFinalizing: vi.fn(),
-    onAbandoned: vi.fn(async () => {}),
-  } satisfies IMessageIngressLifecycle;
 }
 
 function deferred() {
@@ -313,31 +302,6 @@ describe("iMessage durable ingress", () => {
     });
   });
 
-  it("keeps a completion tombstone so a duplicate cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_message, claimLifecycle) => {
-        await claimLifecycle.onAdopted();
-        return { kind: "deferred" } as const;
-      });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch,
-        runtime: runtime(),
-      });
-      ingress.start();
-      try {
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("preserves the retired guard's GUID parity across ROWID churn", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async (_message, claimLifecycle) => {
@@ -357,30 +321,6 @@ describe("iMessage durable ingress", () => {
         await ingress.receive(rawRow({ id: 999 }));
         await ingress.waitForIdle();
         expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("stores the raw row under its GUID in the per-chat lane", async () => {
-    await withQueue(async (queue) => {
-      const event = rawRow({ text: "\u0005hello" });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: runtime(),
-      });
-      try {
-        await ingress.receive(event);
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({
-            id: "GUID-101",
-            laneKey: "chat:42",
-            payload: expect.objectContaining({ raw: event }),
-          }),
-        ]);
       } finally {
         await ingress.stop();
       }
@@ -492,27 +432,5 @@ describe("iMessage durable ingress", () => {
         await ingress.stop();
       }
     });
-  });
-
-  it("fans merged adoption to every constituent claim", async () => {
-    const first = lifecycle();
-    const second = lifecycle();
-    const merged = fanInChannelIngressLifecycles([first, second]);
-
-    await merged.lifecycle?.onAdopted();
-
-    expect(first.onAdopted).toHaveBeenCalledTimes(1);
-    expect(second.onAdopted).toHaveBeenCalledTimes(1);
-  });
-
-  it("completes every constituent claim when a flush has no dispatch", async () => {
-    const first = lifecycle();
-    const second = lifecycle();
-    const merged = fanInChannelIngressLifecycles([first, second]);
-
-    await merged.settle();
-
-    expect(first.onAdopted).toHaveBeenCalledTimes(1);
-    expect(second.onAdopted).toHaveBeenCalledTimes(1);
   });
 });

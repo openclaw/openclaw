@@ -1,14 +1,9 @@
-// Video live test helper tests cover live provider test configuration helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseCsvFilter,
-  parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
-  resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
 
@@ -17,154 +12,67 @@ describe("video-generation live-test helpers", () => {
     ["alibaba", "alibaba/wan2.6-t2v", "720P"],
     ["qwen", "qwen/wan2.6-t2v", "720P"],
     ["minimax", "minimax/MiniMax-Hailuo-2.3", "768P"],
+    ["novita", "novita/wan2.6-t2v", "720P"],
+    ["novita", "novita/minimax-hailuo-2.3-t2v", "768P"],
     ["pixverse", "pixverse/v6", "540P"],
     ["google", "google/veo-3.1-fast-generate-preview", "480P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
     expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
   });
 
-  it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
-  });
-
-  it("parses provider model overrides by provider id", () => {
-    expect(
-      parseProviderModelMap("google/veo-3.1-fast-generate-preview, openai/sora-2, invalid"),
-    ).toEqual(
-      new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
-        ["openai", "openai/sora-2"],
-      ]),
-    );
-  });
-
   it("collects configured models from primary and fallbacks", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           mediaModels: {
             video: {
               primary: "google/veo-3.1-fast-generate-preview",
-              fallbacks: ["openai/sora-2", "invalid"],
+              fallbacks: ["xai/grok-imagine-video", "invalid"],
             },
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
     expect(resolveConfiguredLiveVideoModels(cfg)).toEqual(
       new Map([
         ["google", "google/veo-3.1-fast-generate-preview"],
-        ["openai", "openai/sora-2"],
+        ["xai", "xai/grok-imagine-video"],
       ]),
     );
   });
 
-  it("uses an empty auth store when live env keys should override stale profiles", () => {
-    expect(
-      resolveLiveVideoAuthStore({
-        requireProfileKeys: false,
-        hasLiveKeys: true,
-      }),
-    ).toEqual({
-      version: 1,
-      profiles: {},
-    });
-  });
-
-  it("keeps profile-store mode when requested or when no live keys exist", () => {
-    expect(
-      resolveLiveVideoAuthStore({
-        requireProfileKeys: true,
-        hasLiveKeys: true,
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveLiveVideoAuthStore({
-        requireProfileKeys: false,
-        hasLiveKeys: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("   ")).toBe("none");
-    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
-    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
-  });
-
   it("runs buffer-backed video-to-video only for supported providers/models", () => {
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "google",
-        modelRef: "google/veo-3.1-fast-generate-preview",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "openai",
-        modelRef: "openai/sora-2",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "runway",
-        modelRef: "runway/gen4_aleph",
-      }),
-    ).toBe(true);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "runway",
-        modelRef: "runway/gen4.5",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "alibaba",
-        modelRef: "alibaba/wan2.6-r2v",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "qwen",
-        modelRef: "qwen/wan2.6-r2v",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedVideoToVideoLiveLane({
-        providerId: "xai",
-        modelRef: "xai/grok-imagine-video",
-      }),
-    ).toBe(false);
+    for (const [providerId, modelRef, expected] of [
+      ["google", "google/veo-3.1-fast-generate-preview", false],
+      ["runway", "runway/gen4_aleph", true],
+      ["runway", "runway/gen4.5", false],
+      ["alibaba", "alibaba/wan2.6-r2v", false],
+      ["qwen", "qwen/wan2.6-r2v", false],
+      ["xai", "xai/grok-imagine-video", false],
+    ] as const) {
+      expect(canRunBufferBackedVideoToVideoLiveLane({ providerId, modelRef }), modelRef).toBe(
+        expected,
+      );
+    }
   });
 
   it("runs buffer-backed image-to-video only for providers that accept bundled image inputs", () => {
-    expect(
-      canRunBufferBackedImageToVideoLiveLane({
-        providerId: "openai",
-        modelRef: "openai/sora-2",
-      }),
-    ).toBe(true);
-    expect(
-      canRunBufferBackedImageToVideoLiveLane({
-        providerId: "vydra",
-        modelRef: "vydra/veo3",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedImageToVideoLiveLane({
-        providerId: "together",
-        modelRef: "together/Wan-AI/Wan2.2-T2V-A14B",
-      }),
-    ).toBe(false);
-    expect(
-      canRunBufferBackedImageToVideoLiveLane({
-        providerId: "together",
-        modelRef: "together/Wan-AI/Wan2.2-I2V-A14B",
-      }),
-    ).toBe(true);
+    for (const [providerId, modelRef, expected] of [
+      ["xai", "xai/grok-imagine-video", true],
+      ["alibaba", "alibaba/wan2.6-t2v", true],
+      ["qwen", "qwen/wan2.6-t2v", true],
+      ["alibaba", "alibaba/wan2.6-i2v", true],
+      ["qwen", "qwen/wan2.7-r2v", true],
+      ["alibaba", "alibaba/wan2.6-r2v", false],
+      ["qwen", "qwen/wan2.6-r2v-flash", false],
+      ["vydra", "vydra/veo3", false],
+      ["together", "together/Wan-AI/Wan2.2-T2V-A14B", false],
+      ["together", "together/Wan-AI/Wan2.2-I2V-A14B", true],
+    ] as const) {
+      expect(canRunBufferBackedImageToVideoLiveLane({ providerId, modelRef }), modelRef).toBe(
+        expected,
+      );
+    }
   });
 });

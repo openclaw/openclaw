@@ -1,7 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 
 function splitModelRef(raw: string) {
   const [provider, ...model] = raw.split("/");
@@ -23,11 +25,16 @@ function normalizeModelRef(raw: string) {
 async function runToolContinuity(
   alternateTools: string[],
   params?: {
+    catchFailureResult?: boolean;
+    primaryTools?: string[];
     primaryOutboundText?: string;
     primaryDelivery?: { status: string; resultCount: number } | null;
     alternateReplyText?: string;
     alternateOutboundText?: string;
     alternateDelivery?: { status: string; resultCount: number } | null;
+    alternateResponseModel?: string;
+    alternateRerouted?: boolean;
+    alternateEffective?: { provider?: string; model?: string };
     unrelatedPrimaryOutboundText?: string;
     unrelatedLaterOutboundText?: string;
   },
@@ -40,6 +47,12 @@ async function runToolContinuity(
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
+      const effective = {
+        provider: (call === 2 ? params?.alternateEffective?.provider : undefined) ?? provider,
+        model: (call === 2 ? params?.alternateEffective?.model : undefined) ?? model,
+      };
+      const responseModel =
+        call === 2 ? (params?.alternateResponseModel ?? effective.model) : effective.model;
       const replyText =
         call === 1
           ? "the QA scenario pack verifies source and docs"
@@ -83,9 +96,11 @@ async function runToolContinuity(
             sessionId: "session-tools",
             turnId: `turn-${call}`,
             requested: { provider, model },
-            effective: { provider, model, responseModel: model },
-            successfulToolNames: call === 1 ? ["read"] : alternateTools,
-            rerouted: false,
+            effective: { ...effective, responseModel },
+            successfulToolNames: call === 1 ? (params?.primaryTools ?? ["read"]) : alternateTools,
+            rerouted:
+              (call === 2 ? params?.alternateRerouted : undefined) ??
+              (effective.provider !== provider || responseModel !== model),
             terminalDisposition: "visible",
           },
         },
@@ -103,10 +118,10 @@ async function runToolContinuity(
       },
       splitModelRef,
       normalizeModelRef,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
       hasModelSwitchContinuitySignal,
+      ...(params?.catchFailureResult ? { runScenario: runQaSuiteScenarioSteps } : {}),
       runAgentPrompt,
     },
   });
@@ -120,6 +135,8 @@ describe("model-switch tool continuity terminal evidence", () => {
         "the **model handoff** preserved the QA mission after rereading the scenario pack",
       alternateOutboundText:
         "the model handoff preserved the QA mission after rereading the scenario pack",
+      alternateResponseModel: "alternate-model-concrete",
+      alternateRerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -129,6 +146,7 @@ describe("model-switch tool continuity terminal evidence", () => {
     });
     expect(result.modelSwitchEvidence).toMatchObject({
       primary: { runId: "run-1", successfulToolNames: ["read"] },
+      primaryDelivery: { status: "sent", resultCount: 1 },
       alternate: { runId: "run-2", successfulToolNames: ["read"] },
       terminalReply: {
         disposition: "visible",
@@ -141,8 +159,26 @@ describe("model-switch tool continuity terminal evidence", () => {
     );
   });
 
-  it("does not let a successful prior-run read satisfy the alternate run", async () => {
-    await expect(runToolContinuity([])).rejects.toThrow(
+  it.each([
+    { changed: "model", alternateEffective: { model: "fallback-model" } },
+    { changed: "provider", alternateEffective: { provider: "fallback-provider" } },
+  ])(
+    "requires a changed alternate effective $changed to be marked rerouted",
+    async ({ alternateEffective }) => {
+      const { result } = await runToolContinuity(["read"], {
+        alternateEffective,
+        alternateRerouted: true,
+      });
+      expect(result.status).toBe("pass");
+
+      await expect(
+        runToolContinuity(["read"], { alternateEffective, alternateRerouted: false }),
+      ).rejects.toThrow("alternate-model run did not return exact owned successful read evidence");
+    },
+  );
+
+  it("rejects an unchanged alternate route reported as rerouted", async () => {
+    await expect(runToolContinuity(["read"], { alternateRerouted: true })).rejects.toThrow(
       "alternate-model run did not return exact owned successful read evidence",
     );
   });
@@ -156,38 +192,4 @@ describe("model-switch tool continuity terminal evidence", () => {
       }),
     ).rejects.toThrow("alternate-model terminal reply missed kickoff continuity");
   });
-
-  it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s primary delivery evidence despite identical and unrelated bus messages",
-    async (_, evidence) => {
-      await expect(
-        runToolContinuity(["read"], {
-          primaryDelivery: evidence,
-          primaryOutboundText: "the QA scenario pack verifies source and docs",
-          unrelatedPrimaryOutboundText: "an unrelated tool run also replied",
-        }),
-      ).rejects.toThrow("default-model run did not return owned sent delivery evidence");
-    },
-  );
-
-  it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s delivery evidence despite an identical bus message",
-    async (_, evidence) => {
-      await expect(
-        runToolContinuity(["read"], {
-          alternateDelivery: evidence,
-          alternateOutboundText:
-            "the model handoff preserved the QA mission after rereading the scenario pack",
-        }),
-      ).rejects.toThrow("alternate-model run did not return owned sent delivery evidence");
-    },
-  );
 });

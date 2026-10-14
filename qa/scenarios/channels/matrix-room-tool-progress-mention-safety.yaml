@@ -10,9 +10,14 @@ scenario:
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Changes Matrix streaming progress configuration and must not race an active shared-worker turn during channel reload.
     config:
       matrixConfigOverrides:
-        streaming: partial
+        streaming:
+          mode: partial
+          progress:
+            commandText: raw
         toolProfile: coding
 
 flow:

@@ -11,7 +11,7 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
-  "src/cli/capability-cli/audio.ts",
+  "src/cli/capability-cli/media-understanding-command.ts",
   "src/cli/capability-cli/embedding.ts",
   "src/cli/capability-cli/image.ts",
   "src/cli/capability-cli/model.ts",
@@ -28,8 +28,11 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
-    /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    (/\bconst\s+scopedTargets\s*=\s*getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
+      source,
+    ) &&
+      /\bresolveLocalCapabilityRuntimeConfig\(\{[^}]*\.\.\.scopedTargets\s*[,}]/m.test(source)) ||
     source.includes("collectStatusScanOverview({")
   );
 }
@@ -38,6 +41,7 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
     source.includes("resolveAgentRuntimeConfig(") ||
     source.includes("resolveLocalCapabilityRuntimeConfig(") ||
+    source.includes("resolveLocalCapabilityAgent(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
     source.includes("collectStatusScanOverview(")
@@ -53,6 +57,15 @@ describe("command secret resolution coverage", () => {
     const source = await readCommandSource("src/cli/capability-cli/shared.ts");
     expect(source).toContain("resolveCommandConfigWithSecrets({");
     expect(source).toMatch(/targetIds:\s*params\.targetIds/m);
+  });
+
+  it("rejects prepared Web target scopes from an unrelated producer", async () => {
+    const source = await readCommandSource("src/cli/capability-cli/web.ts");
+    const unrelatedSource = source.replaceAll(
+      /getCapabilityWeb(?:Fetch|Search)CommandSecretTargets/g,
+      "getUnrelatedCommandSecretTargets",
+    );
+    expect(hasSupportedTargetIdsWiring(unrelatedSource)).toBe(false);
   });
 
   it.each(SECRET_TARGET_CALLSITES)(

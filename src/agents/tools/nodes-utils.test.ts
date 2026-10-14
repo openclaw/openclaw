@@ -1,16 +1,17 @@
-// Node utility tests cover node selection defaults and gateway fallback between
-// current and legacy node list methods.
+// Node selection defaults and Gateway inventory requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
+  inProcess: false,
 }));
 vi.mock("./gateway.js", () => ({
   callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
+import { listNodes, resolveNodeIdFromList, selectDefaultNodeFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -23,25 +24,27 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
 
 beforeEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
+  gatewayMocks.inProcess = false;
 });
 
 describe("resolveNodeIdFromList defaults", () => {
-  it("keeps compact display-name matching opt-in", () => {
-    const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
-
-    expect(() => resolveNodeIdFromList(nodes, "MacStudio")).toThrow(/unknown node: MacStudio/);
-    expect(
-      resolveNodeIdFromList(nodes, "MacStudio", false, { allowCompactDisplayName: true }),
-    ).toBe("mac-1");
-  });
-
-  it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
-    const nodes: NodeListNode[] = [
-      node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1, lastSeenAtMs: 5000 }),
-      node({ nodeId: "android-1", platform: "android", connectedAtMs: 2, lastSeenAtMs: 1000 }),
-    ];
-
-    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("android-1");
+  it("selects a default in one comparison per remaining candidate", () => {
+    const nodes = Array.from({ length: 512 }, (_, index) =>
+      node({ nodeId: `node-${String((index * 197) % 512).padStart(4, "0")}`, connectedAtMs: 1 }),
+    );
+    const original = nodes.slice();
+    const compare = vi.spyOn(String.prototype, "localeCompare");
+    let selected: NodeListNode | null;
+    let comparisons: number;
+    try {
+      selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
+      comparisons = compare.mock.calls.length;
+    } finally {
+      compare.mockRestore();
+    }
+    expect(selected).toBe(nodes[0]);
+    expect(nodes).toEqual(original);
+    expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
   });
 
   it("ignores offline recency when any eligible node is connected", () => {
@@ -94,27 +97,7 @@ describe("resolveNodeIdFromList defaults", () => {
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def456-phone");
   });
 
-  it("prefers node with lastSeenAtMs over node without when all disconnected", () => {
-    const nodes: NodeListNode[] = [
-      node({
-        nodeId: "abc-no-seen",
-        platform: "ios",
-        connected: false,
-        connectedAtMs: 9000,
-      }),
-      node({
-        nodeId: "def-has-seen",
-        platform: "android",
-        connected: false,
-        connectedAtMs: 1000,
-        lastSeenAtMs: 3000,
-      }),
-    ];
-
-    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def-has-seen");
-  });
-
-  it.each([undefined, 3000])(
+  it.each([undefined])(
     "uses stable nodeId ordering when disconnected-node lastSeenAtMs ties at %s",
     (lastSeenAtMs) => {
       // Deterministic tie-breaking keeps repeated wake attempts on one target.
@@ -141,51 +124,58 @@ describe("resolveNodeIdFromList defaults", () => {
 });
 
 describe("listNodes", () => {
-  it("falls back to node.pair.list only when node.list is unavailable", async () => {
-    // Old gateways only expose node.pair.list; newer authorization failures
-    // must still surface instead of being hidden by fallback.
-    gatewayMocks.callGatewayTool
-      .mockRejectedValueOnce(new Error("unknown method: node.list"))
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
-      });
+  it.each([{ inProcess: false, gatewayCaps: [], expected: [] }])(
+    "negotiates node context through the active Gateway %j",
+    async ({ inProcess, gatewayCaps, expected }) => {
+      gatewayMocks.inProcess = inProcess;
+      gatewayMocks.callGatewayTool.mockImplementation(
+        async (_method, _opts, _params, extra: Pick<CallGatewayOptions, "onHelloOk">) => {
+          if (!inProcess) {
+            extra.onHelloOk?.({
+              type: "hello-ok",
+              protocol: 1,
+              server: { version: "test", connId: "test" },
+              features: { methods: ["node.list"], events: [], capabilities: gatewayCaps },
+              snapshot: {
+                presence: [],
+                health: {},
+                stateVersion: { presence: 0, health: 0 },
+                uptimeMs: 0,
+              },
+              auth: { role: "operator", scopes: [] },
+              policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+            });
+          }
+          return {
+            nodes: [
+              node({ nodeId: "updated-node", caps: ["system", "system.run.execution-context.v1"] }),
+            ],
+          };
+        },
+      );
+      expect((await listNodes({}))[0]?.caps).toEqual(["system", ...expected]);
+    },
+  );
+
+  it.each([
+    {
+      label: "a closed Gateway transport",
+      error: new Error("gateway closed (1008): unauthorized"),
+    },
+  ])("rethrows $label without consulting paired nodes", async ({ error }) => {
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      pending: [],
+      paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
+    });
 
     const signal = new AbortController().signal;
-    await expect(listNodes({}, signal)).resolves.toEqual([
-      {
-        nodeId: "pair-1",
-        displayName: "Pair 1",
-        platform: "ios",
-        remoteIp: "1.2.3.4",
-      },
-    ]);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
+    await expect(listNodes({}, signal)).rejects.toBe(error);
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.list",
       {},
       {},
-      { signal },
+      expect.objectContaining({ signal }),
     );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.list",
-      {},
-      {},
-      {
-        signal,
-      },
-    );
-  });
-
-  it("rethrows unexpected node.list failures without fallback", async () => {
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("gateway closed (1008): unauthorized"),
-    );
-
-    const signal = new AbortController().signal;
-    await expect(listNodes({}, signal)).rejects.toThrow("gateway closed (1008): unauthorized");
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
   });
 });

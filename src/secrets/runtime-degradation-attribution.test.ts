@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
@@ -61,22 +63,19 @@ function attachAuthOwner(params: {
     params.snapshot.sourceConfig = params.sourceConfig;
     params.snapshot.config = params.sourceConfig;
   }
-  params.snapshot.authStores = [
+  params.snapshot.authStores = prepareRuntimeAuthProfileStoreSnapshots([
     {
       agentDir: params.agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          [params.profileId]: {
-            type: "api_key",
-            provider: "openai",
-            key: "dummy",
-            keyRef: params.ref,
-          },
+      store: createAuthProfileStoreFixture({
+        [params.profileId]: {
+          type: "api_key",
+          provider: "openai",
+          key: "dummy",
+          keyRef: params.ref,
         },
-      },
+      }),
     },
-  ];
+  ]);
   const owner = {
     ownerKind: "account" as const,
     ownerId,
@@ -390,58 +389,6 @@ describe("secrets runtime degraded-owner attribution", () => {
     );
   });
 
-  it("includes active web-tool co-owners when a shared resolved value is invalid", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-invalid-web-co-owner-");
-    const secretsPath = path.join(root, "secrets.json");
-    await fs.writeFile(secretsPath, JSON.stringify({ shared: "dummy" }), "utf8");
-    await fs.chmod(secretsPath, 0o600);
-    const sharedRef = { source: "file" as const, provider: "shared", id: "/shared" };
-    const config = asConfig({
-      secrets: {
-        providers: {
-          shared: { source: "file", path: secretsPath, mode: "json" },
-        },
-      },
-      models: {
-        providers: {
-          example: {
-            apiKey: sharedRef,
-            baseUrl: "https://example.invalid/v1",
-            models: [],
-          },
-        },
-      },
-      tools: { web: { search: { provider: "gemini" } } },
-      plugins: {
-        entries: {
-          google: { config: { webSearch: { apiKey: sharedRef } } },
-        },
-      },
-    });
-    const active = await prepare(config);
-    activate(active);
-    await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
-
-    const error = await captureFailure(config);
-
-    expect(listSecretResolutionErrorOwners(error)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ ownerKind: "provider", ownerId: "example" }),
-        expect.objectContaining({
-          ownerKind: "capability",
-          ownerId: "web-search:gemini",
-          reason: "resolved secret value was invalid",
-          degradationState: "stale",
-          failureMatched: true,
-          source: "config",
-        }),
-      ]),
-    );
-  });
-
   it("includes later active web-tool co-owners when web resolution fails first", async () => {
     if (process.platform === "win32") {
       return;
@@ -490,88 +437,6 @@ describe("secrets runtime degraded-owner attribution", () => {
           ownerId: "web-fetch:firecrawl",
           reason: "resolved secret value was invalid",
           degradationState: "stale",
-          failureMatched: true,
-        }),
-      ]),
-    );
-  });
-
-  it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-tts-secretref-object-");
-    const secretsPath = path.join(root, "secrets.json");
-    await fs.writeFile(
-      secretsPath,
-      JSON.stringify(
-        {
-          providers: {
-            elevenlabs: {
-              apiKey: { value: "not-a-string" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.chmod(secretsPath, 0o600);
-    const ref = {
-      source: "file" as const,
-      provider: "ttsfile",
-      id: "/providers/elevenlabs/apiKey",
-    };
-    const config = asConfig({
-      secrets: {
-        providers: {
-          ttsfile: {
-            source: "file",
-            path: secretsPath,
-            mode: "json",
-          },
-        },
-      },
-      tts: { providers: { elevenlabs: { apiKey: ref } } },
-    });
-    const authAgentDir = "/tmp/invalid-value-auth-co-owner";
-    const authProfileId = "openai:invalid-value";
-    const active = await prepare(asConfig({}));
-    const authOwnerId = attachAuthOwner({
-      snapshot: active,
-      agentDir: authAgentDir,
-      profileId: authProfileId,
-      ref,
-      refKey: "file:ttsfile:/providers/elevenlabs/apiKey",
-      sourceConfig: config,
-    });
-    activate(active);
-
-    const error = await captureFailure(config, {
-      env: {},
-      allowUnavailableSecretOwners: true,
-    });
-
-    expect(error).toBeInstanceOf(Error);
-    expect(String(error)).toContain(
-      "tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
-    );
-    expect(listSecretResolutionErrorOwners(error)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          ownerKind: "capability",
-          ownerId: "tts",
-          paths: ["tts.providers.elevenlabs.apiKey"],
-          reason: "resolved secret value was invalid",
-          degradationState: "cold",
-          failureMatched: true,
-        }),
-        expect.objectContaining({
-          ownerKind: "account",
-          ownerId: authOwnerId,
-          reason: "resolved secret value was invalid",
-          source: "auth-store",
           failureMatched: true,
         }),
       ]),

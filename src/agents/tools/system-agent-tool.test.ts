@@ -1,39 +1,31 @@
 // OpenClaw ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import {
   createSystemAgentTool,
-  hashSystemAgentOperation,
   resolveSystemAgentDirectiveTransition,
   resolveSystemAgentProposalTransition,
   type SystemAgentToolDirective,
+  type SystemAgentToolOptions,
 } from "./system-agent-tool.js";
 
 const mocks = vi.hoisted(() => ({
+  preparePluginArtifact: vi.fn(),
   executeSystemAgentOperation: vi.fn(
     async (_op: unknown, runtime: { log: (m: string) => void }) => {
       runtime.log("op-output");
       return { applied: false };
     },
   ),
-  readConfigFileSnapshot: vi.fn(async () => ({
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "h",
-    config: {},
-    sourceConfig: {},
-    issues: [],
-  })),
+}));
+
+vi.mock("../../system-agent/plugin-artifact.js", () => ({
+  prepareSystemAgentPluginArtifact: mocks.preparePluginArtifact,
 }));
 
 vi.mock("../../system-agent/operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-agent/operations.js")>()),
   executeSystemAgentOperation: mocks.executeSystemAgentOperation,
-}));
-
-vi.mock("../../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/config.js")>()),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
 afterEach(() => {
@@ -52,7 +44,8 @@ describe("openclaw tool", () => {
   it("stays directly callable instead of entering tool catalogs", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     expect(tool.catalogMode).toBe("direct-only");
-    expect(tool.description).toContain("Exact user approval required; then approved=true.");
+    expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
+    expect(tool.description).toContain("host applies session permission policy");
   });
 
   it("runs read actions immediately", async () => {
@@ -73,32 +66,68 @@ describe("openclaw tool", () => {
     );
   });
 
-  it("refuses mutating actions without the approved assertion", async () => {
-    const proposalRef: { current?: string } = {};
-    const tool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
-    const result = await tool.execute("t2", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "18789",
+  it("preserves an allowed gateway credential reference as an exact proposal", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "gateway-reference",
+      { action: "config_set_ref", path: "gateway.auth.token", envVar: "GATEWAY_TOKEN" },
+    );
+    expect(toolText(result)).toContain("needs-approval");
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set-ref",
+      path: "gateway.auth.token",
+      source: "env",
+      id: "GATEWAY_TOKEN",
     });
-    // An armed turn can never mint its own proposal.
-    expect(toolText(result)).toContain("approval-mismatch");
-    expect(proposalRef.current).toBeUndefined();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
-  it("refuses model-asserted approval without host-verified consent", async () => {
-    // approved=true from the model alone must never mutate: the host arms
-    // approval only when the user's actual message was an explicit yes.
-    const tool = createSystemAgentTool({ surface: "cli" });
-    const result = await tool.execute("t2b", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "18789",
-      approved: true,
-    });
+  it("proposes storing a key the user gave in chat without repeating it", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const secret = " sk-owner-pasted-9d2e4b7c\n";
+    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "owner-key",
+      { action: "config_set_ref", path: "models.providers.openai.apiKey", secret },
+    );
     expect(toolText(result)).toContain("needs-approval");
+    expect(toolText(result)).not.toContain(secret);
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set-ref",
+      path: "models.providers.openai.apiKey",
+      source: "store",
+      id: "MODELS_PROVIDERS_OPENAI_API_KEY",
+      secret,
+    });
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixed credential sources before staging", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+    await expect(
+      tool.execute("mixed-source", {
+        action: "config_set_ref",
+        path: "models.providers.openai.apiKey",
+        secret: "fixture-mixed-source-secret",
+        envVar: "EXISTING_API_KEY",
+        approved: true,
+      }),
+    ).rejects.toThrow("either secret or envVar, not both");
+    expect(proposalRef).toEqual({});
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("createSystemAgentTool.execute does not stage a config proposal when cancelled", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const controller = new AbortController();
+    controller.abort(new Error("Setup cancelled"));
+    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "cancelled-proposal",
+      { action: "config_set", path: "gateway.port", value: "19001" },
+      controller.signal,
+    );
+    await expect(pending).rejects.toThrow("Setup cancelled");
+    expect(proposalRef).toEqual({});
   });
 
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
@@ -114,6 +143,81 @@ describe("openclaw tool", () => {
     ).rejects.toThrow(/trusted shell/);
     expect(proposalRef.current).toBeUndefined();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("finishes the exact artifact review before proposing and hands approved bytes to the host", async () => {
+    const args = {
+      action: "plugin_activate_artifact",
+      path: "/tmp/authored-plugin.tgz",
+      sha256: "a".repeat(64),
+    };
+    const operation = {
+      kind: "plugin-activate-artifact" as const,
+      path: args.path,
+      sha256: args.sha256,
+    };
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    let finishReview!: (value: unknown) => void;
+    let beginReview!: () => void;
+    const started = new Promise<void>((resolve) => {
+      beginReview = resolve;
+    });
+    const review = new Promise<unknown>((resolve) => {
+      finishReview = resolve;
+    });
+    mocks.preparePluginArtifact.mockImplementationOnce(async () => {
+      beginReview();
+      return await review;
+    });
+    const pending = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      proposalRef,
+    }).execute("artifact", args);
+    await started;
+    expect(proposalRef.current).toBeUndefined();
+    finishReview({ pluginId: "authored-plugin", nativeControlUi: true, sha256: args.sha256 });
+    const result = await pending;
+    expect(toolText(result)).toContain("Reviewed plugin artifact");
+    expect(toolText(result)).toContain("requesting session's permission policy");
+    expect(resolveSystemAgentProposalTransition({ args, resultText: toolText(result) })).toEqual({
+      proposal: hashSystemAgentOperation(operation),
+      operation,
+    });
+    const directiveRef: NonNullable<SystemAgentToolOptions["directiveRef"]> = {};
+    await createSystemAgentTool({
+      surface: "gateway",
+      approvalArmed: true,
+      proposalRef,
+      directiveRef,
+    }).execute("approved-artifact", { ...args, approved: true });
+    expect(directiveRef.current).toEqual({ kind: "approved-operation", operation });
+    expect(proposalRef.current).toBeUndefined();
+    expect(mocks.preparePluginArtifact).toHaveBeenCalledOnce();
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("does not propose a failed artifact review or overwrite another proposal after review", async () => {
+    const args = {
+      action: "plugin_activate_artifact",
+      path: "/tmp/authored-plugin.tgz",
+      sha256: "b".repeat(64),
+    };
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+    mocks.preparePluginArtifact.mockRejectedValueOnce(new Error("SHA256 does not match"));
+    await expect(tool.execute("invalid-artifact", args)).rejects.toThrow("SHA256 does not match");
+    expect(proposalRef.current).toBeUndefined();
+    const prior = hashSystemAgentOperation({ kind: "gateway-restart" });
+    mocks.preparePluginArtifact.mockImplementationOnce(async () => {
+      proposalRef.current = prior;
+      proposalRef.operation = { kind: "gateway-restart" };
+      return { pluginId: "authored-plugin" };
+    });
+    expect(toolText(await tool.execute("racing-artifact", args))).toContain(
+      `proposal-conflict:${prior}`,
+    );
+    expect(proposalRef.operation).toEqual({ kind: "gateway-restart" });
   });
 
   it("defers an approved mutation to the host after the full proposal handshake", async () => {
@@ -158,6 +262,37 @@ describe("openclaw tool", () => {
     expect(proposalRef.current).toBeUndefined();
   });
 
+  it("keeps the first staged config_set proposal instead of overwriting it with a second", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+
+    const first = await tool.execute("multi-a", {
+      action: "config_set",
+      path: "tts.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+    expect(toolText(first)).toContain("needs-approval");
+    const firstHash = proposalRef.current;
+    expect(firstHash).toBeDefined();
+
+    const second = await tool.execute("multi-b", {
+      action: "config_set",
+      path: "talk.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+
+    // The second, different path must not silently replace the first staged
+    // operation: only one operation can ever be approved and applied.
+    expect(toolText(second)).toContain("proposal-conflict");
+    expect(proposalRef.current).toBe(firstHash);
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set",
+      path: "tts.providers.fish-audio.model",
+      value: "s2.1-pro",
+    });
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
   it("binds setup approval to the exact verified model and workspace", async () => {
     const proposalRef: { current?: string } = {};
     const args = {
@@ -193,95 +328,48 @@ describe("openclaw tool", () => {
     });
   });
 
-  it("voids setup approval when the requested model changes", async () => {
-    const proposalRef = {
-      current: hashSystemAgentOperation({
-        kind: "setup",
-        model: "openai/gpt-5.5",
-      }),
-    };
-    const tool = createSystemAgentTool({
-      surface: "gateway",
-      approvalArmed: true,
-      proposalRef,
-    });
+  it.each([
+    {
+      proposed: { action: "create_agent", agentId: "qa-writer", name: "QA Writer" },
+      changed: { action: "create_agent", agentId: "qa-writer", name: "Other Writer" },
+    },
+  ])(
+    "refuses an armed call that differs from the proposed operation: $proposed",
+    async ({ proposed, changed }) => {
+      const proposalRef: { current?: string } = {};
+      const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
+      await proposingTool.execute("t3c", {
+        ...proposed,
+        approved: true,
+      });
+      const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
+      const result = await armedTool.execute("t3d", {
+        ...changed,
+        approved: true,
+      });
+      // A different operation than the approved one voids the approval entirely;
+      // even an identical retry in the same armed turn stays locked.
+      expect(toolText(result)).toContain("approval-mismatch");
+      expect(proposalRef.current).toBeUndefined();
+      const retry = await armedTool.execute("t3e", {
+        ...changed,
+        approved: true,
+      });
+      expect(toolText(retry)).toContain("approval-mismatch");
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
 
-    const result = await tool.execute("changed-model", {
-      action: "setup",
-      model: "anthropic/claude-sonnet-4-6",
-      approved: true,
-    });
-
-    expect(toolText(result)).toContain("approval-mismatch");
-    expect(proposalRef.current).toBeUndefined();
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-  });
-
-  it("refuses an armed call that differs from the proposed operation", async () => {
-    const proposalRef: { current?: string } = {};
-    const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
-    await proposingTool.execute("t3c", {
-      action: "set_default_model",
-      model: "openai/gpt-5.5",
-      approved: true,
-    });
-    const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
-    const result = await armedTool.execute("t3d", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    // A different operation than the approved one voids the approval entirely;
-    // even an identical retry in the same armed turn stays locked.
-    expect(toolText(result)).toContain("approval-mismatch");
-    expect(proposalRef.current).toBeUndefined();
-    const retry = await armedTool.execute("t3e", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    expect(toolText(retry)).toContain("approval-mismatch");
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-  });
-
-  it("never performs an approved write inside the model tool process", async () => {
-    const proposalRef: { current?: string } = {};
-    await createSystemAgentTool({ surface: "cli", proposalRef }).execute("t4a", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "banana",
-      approved: true,
-    });
-    const directiveRef: { current?: SystemAgentToolDirective } = {};
-    const tool = createSystemAgentTool({
-      surface: "cli",
-      approvalArmed: true,
-      proposalRef,
-      directiveRef,
-    });
-    const result = await tool.execute("t4", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "banana",
-      approved: true,
-    });
-    expect(toolText(result)).toContain("directive:approved-operation:");
-    expect(directiveRef.current).toEqual({
-      kind: "approved-operation",
-      operation: { kind: "config-set", path: "gateway.port", value: "banana" },
-    });
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("maps create_agent with optional workspace and model", async () => {
+  it.each([
+    {
+      args: { action: "create_agent", agentId: "editor", role: "writer" },
+      operation: { kind: "create-agent", agentId: "editor", role: "writer" },
+    },
+    { args: { action: "create_team" }, operation: { kind: "create-team" } },
+  ])("stages and hands off the exact creation proposal: $args", async ({ args, operation }) => {
     const proposalRef: { current?: string } = {};
     await createSystemAgentTool({ surface: "cli", proposalRef }).execute("t6a", {
-      action: "create_agent",
-      agentId: "work",
-      workspace: "/tmp/work",
+      ...args,
       approved: true,
     });
     const directiveRef: { current?: SystemAgentToolDirective } = {};
@@ -292,14 +380,12 @@ describe("openclaw tool", () => {
       directiveRef,
     });
     await tool.execute("t6", {
-      action: "create_agent",
-      agentId: "work",
-      workspace: "/tmp/work",
+      ...args,
       approved: true,
     });
     expect(directiveRef.current).toEqual({
       kind: "approved-operation",
-      operation: { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+      operation,
     });
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
@@ -307,6 +393,9 @@ describe("openclaw tool", () => {
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
+    await expect(
+      tool.execute("bad-role", { action: "create_agent", agentId: "work", role: "unknown" }),
+    ).rejects.toThrow(/unknown role/);
   });
 
   it("records interactive directives for the host without executing operations", async () => {
@@ -337,15 +426,23 @@ describe("openclaw tool", () => {
     expect(toolText(memory)).toContain("copy-only memory import");
     expect(directiveRef.current).toEqual({ kind: "memory-import" });
 
+    const accounts = await tool.execute("t5-accounts", { action: "manage_model_accounts" });
+    expect(toolText(accounts)).toContain("Nothing has changed yet");
+    expect(directiveRef.current).toEqual({ kind: "model-accounts" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
+        args: { action: "manage_model_accounts" },
+        resultText: toolText(accounts),
+      }),
+    ).toEqual({ kind: "model-accounts" });
+
     const configureModel = await tool.execute("t6", {
       action: "configure_model_provider",
       workspace: "/tmp/work",
     });
     expect(toolText(configureModel)).toContain("directive:");
-    expect(toolText(configureModel)).toContain(
-      "active inference route cannot be changed inside OpenClaw",
-    );
-    expect(toolText(configureModel)).toContain("openclaw onboard");
+    expect(toolText(configureModel)).toContain("protected Models sign-in guidance");
+    expect(toolText(configureModel)).toContain("Nothing has changed");
     expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
 
     const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
@@ -380,6 +477,23 @@ describe("openclaw tool", () => {
     expect(directiveRef.current).toEqual({ kind: "open-setup", target: "gateway" });
 
     // Directives are host handoffs, never operation executions.
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("does not promise a delegated setup handoff", async () => {
+    const args = { action: "open_setup", target: "channels" };
+    const directiveRef: { current?: SystemAgentToolDirective } = {};
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      directiveRef,
+    });
+
+    const text = toolText(await tool.execute("delegated-navigation", args));
+
+    expect(text).toContain("cannot run from a delegated agent request");
+    expect(directiveRef.current).toBeUndefined();
+    expect(resolveSystemAgentDirectiveTransition({ args, resultText: text })).toBeNull();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
@@ -437,8 +551,7 @@ describe("openclaw tool", () => {
     expect(
       resolveSystemAgentDirectiveTransition({
         args: { action: "configure_model_provider", workspace: "/tmp/work" },
-        resultText:
-          "directive: the active inference route cannot be changed inside OpenClaw; run openclaw onboard.",
+        resultText: "directive: the host returns protected Models sign-in guidance next.",
       }),
     ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
     expect(
@@ -501,10 +614,21 @@ describe("openclaw tool", () => {
         resultText: "approval-mismatch: this call is not the operation the user approved.",
       }),
     ).toEqual({ proposal: undefined });
-    // An executed mutation consumes it.
+    // Only the admitted host directive consumes it; generic failures are not admission.
     expect(
-      resolveSystemAgentProposalTransition({ args, resultText: "Default model updated." }),
+      resolveSystemAgentProposalTransition({
+        args: { ...args, approved: true },
+        resultText: "directive:approved-operation: the host will apply this action.",
+      }),
     ).toEqual({ proposal: undefined });
+    // A rejected second proposal must not overwrite the mirrored first
+    // operation: the host keeps proposalRef untouched on a null transition.
+    expect(
+      resolveSystemAgentProposalTransition({
+        args: { action: "config_set", path: "talk.providers.fish-audio.model", value: "s2.1-pro" },
+        resultText: `proposal-conflict:${hash}\nA different operation is already staged and awaiting the user's approval.`,
+      }),
+    ).toBeNull();
     // Read actions and unparsable calls never touch the proposal.
     expect(
       resolveSystemAgentProposalTransition({ args: { action: "status" }, resultText: "ok" }),

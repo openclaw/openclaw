@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../../../src/config/sessions.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
   testState,
@@ -111,18 +111,20 @@ describe("Gateway HTTP API product proof", () => {
       );
       resetConfigRuntimeState();
 
+      testState.agentConfig = { systemAgent: { agentId: "main" } };
       testState.agentsConfig = {
+        ownership: "explicit",
         entries: {
-          main: { default: true, tools: { allow: ["agents_list"] } },
+          main: { tools: { allow: ["agents_list"] } },
           beta: {},
         },
       };
       testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-      agentCommand
+      agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       gateway = await startTestGatewayServer(port, {
         host: "127.0.0.1",
         auth: { mode: "token", token: GATEWAY_TOKEN },
@@ -174,8 +176,8 @@ describe("Gateway HTTP API product proof", () => {
         type: "output_text",
         text: "qa responses response",
       });
-      expect(agentCommand).toHaveBeenCalledTimes(2);
-      expect(agentCommand.mock.calls.map((call) => call[0])).toEqual([
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(agentCommandMock.mock.calls.map((call) => call[0])).toEqual([
         expect.objectContaining({
           message: "qa chat request",
           sessionKey: expect.stringMatching(/^agent:main:openai:/),
@@ -221,7 +223,7 @@ describe("Gateway HTTP API product proof", () => {
           sessionKey: "main",
         }),
       });
-      expect(tool.response.status).toBe(200);
+      expect(tool.response.status, JSON.stringify(tool.body)).toBe(200);
       expect(tool.body.ok).toBe(true);
       expect(tool.body.result).toEqual(
         expect.objectContaining({
@@ -266,7 +268,11 @@ describe("Gateway HTTP API product proof", () => {
         body: JSON.stringify({ text: "Gateway HTTP QA wake", mode: "next-heartbeat" }),
       });
       expect(authenticatedWake.response.status).toBe(200);
-      expect(authenticatedWake.body).toEqual({ ok: true, mode: "next-heartbeat" });
+      expect(authenticatedWake.body).toEqual({
+        ok: true,
+        mode: "next-heartbeat",
+        eventOutcome: "queued",
+      });
       expect(peekSystemEventEntries(mainSessionKey).map((event) => event.text)).toEqual([
         "Gateway HTTP QA wake",
       ]);

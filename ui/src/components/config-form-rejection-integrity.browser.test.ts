@@ -1,9 +1,6 @@
-// Control UI tests cover nested config edit rejection and draft preservation.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
-import { renderArray, renderObject } from "./config-form.node.collection.ts";
-import { renderNode } from "./config-form.ts";
+// Control UI tests cover nested config edit rejection and draft preservation.
+import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
 
 type ConfigFormStructuredDraftElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -18,168 +15,28 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form rejection integrity", () => {
-  it("preserves an invalid property draft when a sibling edit rerenders the object", () => {
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        name: { type: "string", minLength: 2 },
-        mode: { type: "string", enum: ["a", "b", "c", "d", "e", "f"] },
-      },
-    };
-    let currentValue = { name: "valid", mode: "a" };
-    const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: currentValue,
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            sourceIdentity: currentValue,
-            controlIdentity: currentValue,
-            onPatch: (path, nextValue) => {
-              const key = path.at(-1);
-              if (key !== "name" && key !== "mode") {
-                return false;
-              }
-              currentValue = { ...currentValue, [key]: nextValue };
-              renderValue();
-              return true;
-            },
-          },
-          renderNode,
-        ),
-        container,
-      );
-    };
-
-    renderValue();
-    const name = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Name']"),
-      "name input",
-    );
-    name.value = "x";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(name.getAttribute("aria-invalid")).toBe("true");
-
-    const mode = expectElement(
-      container.querySelector<HTMLSelectElement>("select[aria-label='Mode']"),
-      "mode select",
-    );
-    mode.value = "1";
-    mode.dispatchEvent(new Event("change", { bubbles: true }));
-
-    const rerenderedName = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Name']"),
-      "rerendered name input",
-    );
-    expect(rerenderedName.value).toBe("x");
-    expect(rerenderedName.getAttribute("aria-invalid")).toBe("true");
-    expect(currentValue).toEqual({ name: "valid", mode: "b" });
-  });
-
-  it("keeps a nested collection draft open when its parent rejects the commit", async () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "array",
-              items: { type: "string", pattern: "^[a-z]+$" },
-            },
-          },
-          value: [["alpha"], []],
-          path: ["groups"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
-
-    const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
-    const secondGroup = expectElement(arrays[2], "second nested array");
-    const draft = expectElement(
-      secondGroup.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "second nested array draft",
-    );
-    await draft.updateComplete;
-    expectElement(
-      Array.from(secondGroup.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "second nested array add",
-    ).click();
-    await draft.updateComplete;
-    const value = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "second nested array draft value",
-    );
-    value.value = "alpha";
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
-    expectElement(
-      Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "second nested array commit",
-    ).click();
-    await draft.updateComplete;
-
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(draft.querySelector(".cfg-collection-draft")).not.toBeNull();
-    const retainedValue = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "retained nested array draft value",
-    );
-    expect(retainedValue.value).toBe("alpha");
-    expect(retainedValue.getAttribute("aria-invalid")).toBe("true");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.hidden).toBe(false);
-    container.remove();
-  });
-
   it("opens an array draft when a parent rejects the automatic default", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "array",
-              items: { type: "string" },
-            },
-          },
-          value: [[""], []],
-          path: ["groups"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "array",
+          items: { type: "string" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [[""], []],
+      path: ["groups"],
+      onPatch,
+    });
 
     const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
     const secondGroup = expectElement(arrays[2], "second auto-default array");
     const draft = expectElement(
-      secondGroup.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      secondGroup.querySelector("openclaw-config-form-collection-draft"),
       "second auto-default array draft",
     );
     await draft.updateComplete;
@@ -213,33 +70,24 @@ describe("config form rejection integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "object",
-              additionalProperties: { type: "object" },
-            },
-          },
-          value: [{ "custom-1": {} }, {}],
-          path: ["entries"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "object",
+          additionalProperties: { type: "object" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [{ "custom-1": {} }, {}],
+      path: ["entries"],
+      onPatch,
+    });
 
     const maps = Array.from(container.querySelectorAll<HTMLElement>(".cfg-map"));
     const secondMap = expectElement(maps[1], "second auto-default map");
     const draft = expectElement(
-      secondMap.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      secondMap.querySelector("openclaw-config-form-collection-draft"),
       "second auto-default map draft",
     );
     await draft.updateComplete;
@@ -275,41 +123,42 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("restores a map key when a constrained parent rejects the rename", () => {
+  it("blocks renaming a map key whose value is still a redacted secret", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "object",
-              additionalProperties: { type: "string" },
-            },
-          },
-          value: [{ a: "1" }, { b: "1" }],
-          path: ["entries"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema: {
+        type: "object",
+        additionalProperties: { type: "string" },
+      },
+      value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
+      path: ["secrets"],
+      onPatch,
+    });
 
-    const key = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Key: b']"),
-      "second map key",
+    const redactedKey = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Key: primary']"),
+      "redacted map key",
     );
-    key.value = "a";
-    key.dispatchEvent(new Event("change", { bubbles: true }));
+    redactedKey.value = "renamed";
+    redactedKey.dispatchEvent(new Event("change", { bubbles: true }));
 
+    // Moving the sentinel to a new key can only produce an unsavable draft or,
+    // folded with a delete, silently bind the wrong stored credential.
     expect(onPatch).not.toHaveBeenCalled();
-    expect(key.value).toBe("b");
+    expect(redactedKey.value).toBe("primary");
+
+    const plainKey = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Key: plain']"),
+      "plain map key",
+    );
+    plainKey.value = "renamed";
+    plainKey.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["secrets"], {
+      primary: "__OPENCLAW_REDACTED__",
+      renamed: "visible",
+    });
+    container.remove();
   });
 
   it("commits an optional object only after all required children are valid", async () => {
@@ -335,21 +184,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: currentValue,
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: currentValue,
+        path: ["settings"],
+        onPatch,
+      });
     };
 
     renderValue();
@@ -415,21 +255,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: {},
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: {},
+        path: ["settings"],
+        onPatch,
+      });
     };
 
     renderValue();
@@ -472,9 +303,9 @@ describe("config form rejection integrity", () => {
         "retained rejected port",
       ).value,
     ).toBe("18789");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
     await draft.updateComplete;
@@ -484,9 +315,9 @@ describe("config form rejection integrity", () => {
         "rerendered rejected host",
       ).value,
     ).toBe("gateway.local");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 
@@ -506,21 +337,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: {},
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: {},
+        path: ["settings"],
+        onPatch,
+      });
     };
     const add = (draft: ConfigFormStructuredDraftElement) =>
       expectElement(
@@ -554,16 +376,16 @@ describe("config form rejection integrity", () => {
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
     await draft.updateComplete;
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 });

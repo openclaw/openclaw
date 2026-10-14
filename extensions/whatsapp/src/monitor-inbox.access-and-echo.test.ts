@@ -4,14 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
 import {
   buildNotifyMessageUpsert,
-  expectPairingPromptSent,
   getRecordChannelActivityMock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
   startInboxMonitor,
   upsertPairingRequestMock,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
+  waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -113,7 +114,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
@@ -151,7 +152,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
@@ -227,14 +228,8 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
     expect(onMessage).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     const upsertBlockedAgain = buildNotifyMessageUpsert({
       id: "no-config-1b",
@@ -293,15 +288,9 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     expect(onMessage).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });
@@ -336,12 +325,15 @@ describe("web monitor inbox", () => {
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "out-1" } });
+    await listener.sendMessage("120363@g.us", "/status");
+
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [
         {
           key: {
-            id: "owner-group-1",
+            id: "in-2",
             fromMe: true,
             remoteJid: "120363@g.us",
             participant: "123@s.whatsapp.net",
@@ -372,6 +364,46 @@ describe("web monitor inbox", () => {
       }),
     );
 
+    await listener.close();
+  });
+
+  it.each([
+    { name: "remote inbound", fromMe: false, selfChatMode: false },
+    { name: "linked-device self-chat", fromMe: true, selfChatMode: true },
+  ])("admits a distinct-ID $name collision after an accepted outbound send", async (testCase) => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["+123", "+999"],
+          selfChatMode: testCase.selfChatMode,
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const remoteJid = testCase.fromMe ? "123@s.whatsapp.net" : "999@s.whatsapp.net";
+
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "out-1" } });
+    await listener.sendMessage(remoteJid, "Done.");
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "in-2", fromMe: testCase.fromMe, remoteJid },
+          message: { conversation: "Done." },
+          messageTimestamp: nowSeconds(),
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({ id: "in-2" }),
+        payload: expect.objectContaining({ body: "Done." }),
+      }),
+    );
     await listener.close();
   });
 
@@ -622,26 +654,6 @@ describe("web monitor inbox", () => {
 
     // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
-
-  it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
-    const { listener, sock } = await startInboxMonitor(vi.fn());
-
-    await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
-
-    expect(sock.sendMessage).toHaveBeenCalledWith("12345@g.us", {
-      react: {
-        text: "👍",
-        key: {
-          remoteJid: "12345@g.us",
-          id: "msg123",
-          fromMe: false,
-          participant: "6421000000@s.whatsapp.net",
-        },
-      },
-    });
 
     await listener.close();
   });

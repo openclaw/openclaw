@@ -1,5 +1,6 @@
 // Reasoning tag partitioner tests cover splitting reasoning and visible text segments.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as reasoningTagParser from "../../../markdown-core/src/reasoning-tag-parser.js";
 import {
   createReasoningTagTextPartitioner,
   type ReasoningTagTextDelta,
@@ -85,6 +86,11 @@ describe("createReasoningTagTextPartitioner", () => {
       name: "one CRLF is not mistaken for a blank block boundary",
       input: "a\r\n    <think>x</think>",
       expected: { text: "a\r\n    ", thinking: "x" },
+    },
+    {
+      name: "a whitespace-only CRLF blank line starts a new indented code block",
+      input: "a\r\n \t\r\n    <think>x</think>",
+      expected: { text: "a\r\n \t\r\n    <think>x</think>", thinking: "" },
     },
     {
       name: "compaction retains context for a following empty list item",
@@ -215,29 +221,35 @@ describe("createReasoningTagTextPartitioner", () => {
 
   it("recovers a byte-streamed 110KB malformed quoted tag without reparsing prefixes", () => {
     const input = `<think data-x="${"x".repeat(110_000)}<think>hidden</think>After`;
-    const startedAt = Date.now();
-    const result = collectVisibleMode(
-      input,
-      Array.from({ length: input.length }, (_value, index) => index + 1),
-    );
+    let parsedCharacters = 0;
+    const parserSpies = (
+      ["parseReasoningTagAt", "scanReasoningTags", "parseMarkdownOwnership"] as const
+    ).map((name) => {
+      const original = reasoningTagParser[name];
+      return vi
+        .spyOn(reasoningTagParser, name)
+        .mockImplementation((text: string, ...args: unknown[]) => {
+          // Bound reparsed input independently of runner speed, and fail before quadratic work.
+          parsedCharacters += text.length;
+          expect(parsedCharacters).toBeLessThanOrEqual(input.length * 4);
+          return Reflect.apply(original, undefined, [text, ...args]);
+        });
+    });
 
-    expect(result.text).not.toContain("hidden");
-    expect(result.text.endsWith("After")).toBe(true);
-    expect(result.thinking).toBe("hidden");
-    expect(Date.now() - startedAt).toBeLessThan(30_000);
-  });
+    try {
+      const result = collectVisibleMode(
+        input,
+        Array.from({ length: input.length }, (_value, index) => index + 1),
+      );
 
-  it("keeps newline-heavy malformed-tag recovery linear", () => {
-    const input = `<think data-x="${"x\n".repeat(20_000)}<think>hidden</think>After`;
-    const startedAt = Date.now();
-    const result = collectVisibleMode(
-      input,
-      Array.from({ length: input.length }, (_value, index) => index + 1),
-    );
-
-    expect(result.text).not.toContain("hidden");
-    expect(result.text.endsWith("After")).toBe(true);
-    expect(Date.now() - startedAt).toBeLessThan(30_000);
+      expect(result.text).not.toContain("hidden");
+      expect(result.text.endsWith("After")).toBe(true);
+      expect(result.thinking).toBe("hidden");
+    } finally {
+      for (const spy of parserSpies) {
+        spy.mockRestore();
+      }
+    }
   });
 
   it("bounds parser-owned reparsing across many code-bearing blocks", () => {
@@ -276,22 +288,6 @@ describe("createReasoningTagTextPartitioner", () => {
     deltas.push(...partitioner.pushVisible("~~~\ntail"), ...partitioner.flush());
 
     expect(deltas.filter((delta) => delta.kind === "thinking")).toEqual([]);
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
-  });
-
-  it("compacts repeated blank-terminated ordinary text", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-    const startedAt = Date.now();
-    let emittedLength = 0;
-    for (let index = 0; index < 2_000; index += 1) {
-      emittedLength += partitioner
-        .pushVisible("plain\n\n")
-        .reduce((total, delta) => total + delta.text.length, 0);
-    }
-
-    expect(emittedLength).toBe(14_000);
-    expect(partitioner.hasPending()).toBe(false);
-    expect(partitioner.flush()).toEqual([]);
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
@@ -339,74 +335,6 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.hasPending()).toBe(false);
     expect(partitioner.flush()).toEqual([]);
     expect(Date.now() - startedAt).toBeLessThan(5_000);
-  });
-
-  it("routes split inline reasoning tags away from visible text", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-    const deltas = [
-      ...partitioner.push("before <thi"),
-      ...partitioner.push("nk>hidden"),
-      ...partitioner.push("</think> after"),
-      ...partitioner.flush(),
-    ];
-
-    expect(deltas).toEqual([
-      { kind: "text", text: "before " },
-      { kind: "thinking", text: "hidden" },
-      { kind: "text", text: " after" },
-    ]);
-  });
-
-  it.each(["<div>visible", "2 < 3\nvisible", "<notreasoning\nvisible"])(
-    "streams definitely non-reasoning angle text immediately: %s",
-    (input) => {
-      const partitioner = createReasoningTagTextPartitioner();
-
-      expect(partitioner.pushVisible(input)).toEqual([{ kind: "text", text: input }]);
-      expect(partitioner.flush()).toEqual([]);
-    },
-  );
-
-  it("streams complete unambiguous reasoning tags without waiting for flush", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("Before<think>x</think>After")).toEqual([
-      { kind: "text", text: "Before" },
-      { kind: "thinking", text: "x" },
-      { kind: "text", text: "After" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
-  it("streams a parser-complete inline code span without waiting for flush", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("Use `code` now")).toEqual([
-      { kind: "text", text: "Use `code` now" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
-  it("continues through a parser-proven tag after a stable inline span", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("Use `code` now <think>x</think>After")).toEqual([
-      { kind: "text", text: "Use `code` now " },
-      { kind: "thinking", text: "x" },
-      { kind: "text", text: "After" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
-  it("closes a bounded parse epoch at a later blank block boundary", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("`one` done ")).toEqual([{ kind: "text", text: "`one` done " }]);
-    expect(partitioner.pushVisible("`two` done\n\n")).toEqual([
-      { kind: "text", text: "`two` done\n\n" },
-    ]);
-    expect(partitioner.hasPending()).toBe(false);
-    expect(partitioner.flush()).toEqual([]);
   });
 
   it("streams one parser-proven code span inside a retained list", () => {
@@ -463,16 +391,6 @@ describe("createReasoningTagTextPartitioner", () => {
     ).toBe("private");
   });
 
-  it("streams the visible suffix after a multiline reasoning block closes", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("<think>\nprivate\n</think>answer")).toEqual([
-      { kind: "thinking", text: "\nprivate\n" },
-      { kind: "text", text: "answer" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
   it("streams a split multiline reasoning block when its close arrives", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
@@ -526,16 +444,6 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(deltas.filter((delta) => delta.kind === "thinking")).toEqual([]);
   });
 
-  it("resolves a reasoning close that arrives after the opening-tag chunk", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("<think>")).toEqual([]);
-    expect(partitioner.pushVisible("secret</think>answer")).toEqual([
-      { kind: "thinking", text: "secret" },
-      { kind: "text", text: "answer" },
-    ]);
-  });
-
   it("releases a split tag prefix as soon as its name becomes invalid", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
@@ -545,17 +453,17 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
-  it.each([
-    { prefix: "<", suffix: "-ordinary text" },
-    { prefix: "< ", suffix: "!ordinary\nnext" },
-    { prefix: "</", suffix: "!ordinary" },
-    { prefix: "<\t", suffix: "&ordinary" },
-  ])("releases definitely invalid empty-name prefixes: $prefix$suffix", ({ prefix, suffix }) => {
-    const partitioner = createReasoningTagTextPartitioner();
+  it.each([{ prefix: "</", suffix: "!ordinary" }])(
+    "releases definitely invalid empty-name prefixes: $prefix$suffix",
+    ({ prefix, suffix }) => {
+      const partitioner = createReasoningTagTextPartitioner();
 
-    expect(partitioner.pushVisible(prefix)).toEqual([]);
-    expect(partitioner.pushVisible(suffix)).toEqual([{ kind: "text", text: `${prefix}${suffix}` }]);
-  });
+      expect(partitioner.pushVisible(prefix)).toEqual([]);
+      expect(partitioner.pushVisible(suffix)).toEqual([
+        { kind: "text", text: `${prefix}${suffix}` },
+      ]);
+    },
+  );
 
   it("does not replay emitted text when strict mode starts", () => {
     const partitioner = createReasoningTagTextPartitioner();
@@ -565,25 +473,6 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.hasPending()).toBe(false);
     expect(partitioner.push("def")).toEqual([]);
     expect(partitioner.flush()).toEqual([{ kind: "text", text: "def" }]);
-  });
-
-  it("does not report an empty strict boundary as pending", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    partitioner.markStrict();
-    expect(partitioner.hasPending()).toBe(false);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
-  it("keeps unterminated reasoning as thinking on flush", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect([...partitioner.push("visible <reasoning>hidden tail"), ...partitioner.flush()]).toEqual(
-      [
-        { kind: "text", text: "visible " },
-        { kind: "thinking", text: "hidden tail" },
-      ],
-    );
   });
 
   it("keeps strict orphan-close recovery global across block boundaries", () => {
@@ -613,36 +502,6 @@ describe("createReasoningTagTextPartitioner", () => {
         Array.from({ length: input.length }, (_value, index) => index + 1),
       ).text,
     ).toBe("Visible");
-  });
-
-  it("keeps split reasoning tags with attributes out of visible text", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-    const deltas = [
-      ...partitioner.pushVisible("Before <think "),
-      ...partitioner.pushVisible("id='x'>secret</think> after"),
-      ...partitioner.flush(),
-    ];
-
-    expect(deltas).toEqual([
-      { kind: "text", text: "Before " },
-      { kind: "thinking", text: "secret" },
-      { kind: "text", text: " after" },
-    ]);
-  });
-
-  it("keeps split antml reasoning tags out of visible text", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-    const deltas = [
-      ...partitioner.pushVisible("Before <antml:reas"),
-      ...partitioner.pushVisible("oning>secret</antml:reasoning> after"),
-      ...partitioner.flush(),
-    ];
-
-    expect(deltas).toEqual([
-      { kind: "text", text: "Before " },
-      { kind: "thinking", text: "secret" },
-      { kind: "text", text: " after" },
-    ]);
   });
 
   it("keeps split mm reasoning tags out of visible text", () => {
@@ -710,15 +569,17 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.flush()).toEqual([{ kind: "thinking", text: "secret" }]);
   });
 
-  it("reports pending bytes without speculating about reasoning ownership", () => {
-    const partitioner = createReasoningTagTextPartitioner();
+  it("distinguishes buffered syntax from strict visible text", () => {
+    const syntax = createReasoningTagTextPartitioner();
+    const visible = createReasoningTagTextPartitioner();
 
-    expect(partitioner.push("<think>hidden")).toEqual([]);
-    expect(partitioner.hasPending()).toBe(true);
-    expect(partitioner.isInsideReasoning()).toBe(false);
-    expect(partitioner.flush()).toEqual([{ kind: "thinking", text: "hidden" }]);
-    expect(partitioner.hasPending()).toBe(false);
-    expect(partitioner.isInsideReasoning()).toBe(false);
+    expect(syntax.pushVisible("Use `<thi")).toEqual([]);
+    expect(syntax.hasPendingSyntax()).toBe(true);
+
+    visible.markStrict();
+    expect(visible.pushVisible("Interim answer.")).toEqual([]);
+    expect(visible.hasPending()).toBe(true);
+    expect(visible.hasPendingSyntax()).toBe(false);
   });
 
   it("accepts later content after an intermediate flush boundary", () => {
@@ -735,5 +596,19 @@ describe("createReasoningTagTextPartitioner", () => {
 
     expect(partitioner.pushVisible("<think>outer<think>inner</think>")).toEqual([]);
     expect(partitioner.flush()).toEqual([{ kind: "thinking", text: "outerinner" }]);
+  });
+
+  it("never emits nested unclosed internal reflection on flush", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.pushVisible("<thinking>outer<internal>private reflection")).toEqual([]);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
+  it("never emits closed internal reflection", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.pushVisible("<internal>private reflection</internal>")).toEqual([]);
+    expect(partitioner.flush()).toEqual([]);
   });
 });

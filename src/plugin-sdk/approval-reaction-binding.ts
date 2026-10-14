@@ -1,16 +1,22 @@
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { ExecApprovalReplyDecision } from "../infra/exec-approval-reply.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
-type ApprovalKind = "exec" | "plugin";
-
 /** Validated identity and decisions shared by typed approval delivery surfaces. */
 export type ApprovalReactionDeliveryBinding = {
   approvalId: string;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
   approvalSlug?: string;
 };
+
+/** Build the private marker revalidated after channel delivery. */
+export function buildApprovalReactionDeliveredBindingMarker(
+  binding: ApprovalReactionDeliveryBinding,
+): { version: 1 } & ApprovalReactionDeliveryBinding {
+  return { version: 1, ...binding };
+}
 
 /** Read a nonempty, duplicate-free list without accepting unrecognized decisions. */
 export function readApprovalReactionDecisionList(
@@ -43,49 +49,6 @@ export function normalizeApprovalReactionDecision(value: string): ExecApprovalRe
     : null;
 }
 
-/** Read only canonical approval prompts; unrelated `/approve` help must never gain controls. */
-export function extractApprovalReactionPromptBinding(params: {
-  text: string;
-  approvalKind?: ApprovalKind;
-  replyInstructionOnly?: boolean;
-}): ApprovalReactionDeliveryBinding | null {
-  const lines = params.text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
-  let approvalKind = params.approvalKind;
-  if (!approvalKind) {
-    const exec = lines.some((line) => /^\s*[^A-Za-z0-9]*Exec approval required\s*$/i.test(line));
-    const plugin = lines.some((line) =>
-      /^\s*[^A-Za-z0-9]*Plugin approval required\s*$/i.test(line),
-    );
-    if (exec === plugin) {
-      return null;
-    }
-    approvalKind = plugin ? "plugin" : "exec";
-  }
-  const approvalId = lines
-    .map((line) => line.match(/^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i))
-    .find(Boolean)?.[1];
-  if (!approvalId) {
-    return null;
-  }
-  const commandPattern = params.replyInstructionOnly
-    ? /^\s*Reply with:\s*\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i
-    : /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  for (const line of lines) {
-    const match = line.match(commandPattern);
-    if (match?.[1] !== approvalId || !match[2]) {
-      continue;
-    }
-    for (const token of match[2].split(/[\s|,]+/)) {
-      const decision = normalizeApprovalReactionDecision(token);
-      if (decision && !allowedDecisions.includes(decision)) {
-        allowedDecisions.push(decision);
-      }
-    }
-  }
-  return allowedDecisions.length ? { approvalId, approvalKind, allowedDecisions } : null;
-}
-
 /** Compare approved decision sets independently of presentation order. */
 export function approvalReactionDecisionSetsMatch(
   left: readonly ExecApprovalReplyDecision[],
@@ -114,7 +77,9 @@ export function readApprovalReactionDeliveryMetadata(
     !approvalId ||
     (!options.trimApprovalId && approvalId !== approvalId.trim()) ||
     (options.requireApprovalSlug && !approvalSlug) ||
-    (record.approvalKind !== "exec" && record.approvalKind !== "plugin") ||
+    (record.approvalKind !== "exec" &&
+      record.approvalKind !== "plugin" &&
+      record.approvalKind !== "system-agent") ||
     !allowedDecisions
   ) {
     return null;

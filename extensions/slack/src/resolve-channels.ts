@@ -1,9 +1,8 @@
-// Slack plugin module implements resolve channels behavior.
 import type { WebClient } from "@slack/web-api";
-import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
-import { collectSlackCursorPages } from "./cursor-pages.js";
+import { collectSlackCursorPages, fetchSlackChannelListPage } from "./cursor-pages.js";
+import { resolveWorkspaceQualifiedSlackTarget } from "./target-parsing.js";
 
 export type SlackChannelLookup = {
   id: string;
@@ -32,7 +31,11 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
     return { id, name };
   }
   const prefixed = trimmed.replace(/^(slack:|channel:)/i, "");
-  if (/^[CG][A-Z0-9]+$/i.test(prefixed)) {
+  // Slack channel ids are 9+ characters. Keep every C/G-leading token of that length an id, in any
+  // case, so an existing folded id never resolves to a namesake room and inherits its policy.
+  // Shorter bare names such as "general" fall through to name lookup (#155820); use "#name" to
+  // force name lookup for longer ones.
+  if (/^[CG][A-Z0-9]{8,}$/i.test(prefixed)) {
     return { id: prefixed.toUpperCase() };
   }
   const name = prefixed.replace(/^#/, "").trim();
@@ -41,13 +44,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
 
 async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: (cursor) =>
-      client.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 1000,
-        cursor,
-      }),
+    fetchPage: (cursor) => fetchSlackChannelListPage(client, cursor),
     collectPageItems: (res) =>
       (res.channels ?? [])
         .map((channel) => {
@@ -63,7 +60,7 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
             isPrivate: Boolean(channel.is_private),
           } satisfies SlackChannelLookup;
         })
-        .filter(Boolean) as SlackChannelLookup[],
+        .filter((channel) => channel !== null),
   });
 }
 
@@ -78,11 +75,7 @@ function resolveByName(
   const matches = channels.filter(
     (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
   );
-  if (matches.length === 0) {
-    return undefined;
-  }
-  const active = matches.find((channel) => !channel.archived);
-  return active ?? matches[0];
+  return matches.find((channel) => !channel.archived) ?? matches[0];
 }
 
 export async function resolveSlackChannelAllowlist(params: {
@@ -90,52 +83,36 @@ export async function resolveSlackChannelAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackChannelResolution[]> {
-  const parsedEntries = params.entries.map((input) => ({
+  const entries = params.entries.map((input) => ({
     input,
+    workspace: resolveWorkspaceQualifiedSlackTarget(input, "channel"),
     parsed: parseSlackChannelMention(input),
   }));
-  if (parsedEntries.every((entry) => Boolean(entry.parsed.id))) {
-    return parsedEntries.map(({ input, parsed }) => ({
-      input,
-      resolved: true,
-      id: parsed.id,
-      name: parsed.name,
-    }));
+  if (entries.every(({ workspace, parsed }) => workspace || parsed.id)) {
+    return entries.map(
+      ({ input, workspace, parsed }) =>
+        workspace ?? { input, resolved: true, id: parsed.id, name: parsed.name },
+    );
   }
   const client = params.client ?? createSlackLookupClient(params.token);
   const channels = await listSlackChannels(client);
-  return resolveDirectoryAllowlistEntries<
-    { id?: string; name?: string },
-    SlackChannelLookup,
-    SlackChannelResolution
-  >({
-    entries: params.entries,
-    lookup: channels,
-    parseInput: parseSlackChannelMention,
-    findById: (lookup, id) => lookup.find((channel) => channel.id === id),
-    buildIdResolved: ({ input, parsed, match }) => ({
-      input,
-      resolved: true,
-      id: parsed.id,
-      name: match?.name ?? parsed.name,
-      archived: match?.archived,
-    }),
-    resolveNonId: ({ input, parsed, lookup }) => {
-      if (!parsed.name) {
-        return undefined;
-      }
-      const match = resolveByName(parsed.name, lookup);
-      if (!match) {
-        return undefined;
-      }
-      return {
-        input,
-        resolved: true,
-        id: match.id,
-        name: match.name,
-        archived: match.archived,
-      };
-    },
-    buildUnresolved: (input) => ({ input, resolved: false }),
+  return entries.map(({ input, workspace, parsed }) => {
+    if (workspace) {
+      return workspace;
+    }
+    const match = parsed.id
+      ? channels.find((channel) => channel.id === parsed.id)
+      : parsed.name
+        ? resolveByName(parsed.name, channels)
+        : undefined;
+    return parsed.id || match
+      ? {
+          input,
+          resolved: true,
+          id: parsed.id ?? match?.id,
+          name: match?.name ?? parsed.name,
+          archived: match?.archived,
+        }
+      : { input, resolved: false };
   });
 }

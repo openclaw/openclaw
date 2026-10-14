@@ -8,6 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -15,7 +16,7 @@ import {
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 
-type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
+type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 const tempDirs = createTempDirTracker();
 
@@ -58,11 +59,13 @@ function seedPointer(params: {
     ({ db }) => {
       executeSqliteQuerySync(
         db,
-        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db).insertInto("tui_last_sessions").values({
-          scope_key: params.scopeKey,
-          session_key: params.sessionKey,
-          updated_at: params.updatedAt,
-        }),
+        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db)
+          .insertInto("config_machine_state")
+          .values({
+            state_key: `tui.lastSession.${params.scopeKey}`,
+            value_json: JSON.stringify(params.sessionKey),
+            updated_at_ms: params.updatedAt,
+          }),
       );
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
@@ -105,6 +108,11 @@ describe("legacy TUI last-session migration", () => {
     await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
       "agent:main:tui-123",
     );
+    expect(
+      readConfigMachineStateWithMetadata<string>("tui.lastSession.terminal", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toEqual({ value: "agent:main:tui-123", updatedAtMs: 100 });
     await expect(readTuiLastSessionKey({ scopeKey: "heartbeat", stateDir })).resolves.toBeNull();
     expect(fs.readdirSync(path.dirname(sourcePath))).not.toContain("last-session.json.migrated");
   });
@@ -113,10 +121,6 @@ describe("legacy TUI last-session migration", () => {
     ["non-object top level", []],
     ["non-object record", { terminal: "agent:main:tui-123" }],
     ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-    [
-      "unknown field",
-      { terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100, extra: true } },
-    ],
   ])("retains malformed source: %s", async (_label, value) => {
     const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, value);
@@ -126,6 +130,19 @@ describe("legacy TUI last-session migration", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
     expect(fs.existsSync(sourcePath)).toBe(true);
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+  });
+
+  it("rejects an empty unexpected field before claiming or writing", async () => {
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
+    const sourcePath = writeLegacyStore(stateDir, {
+      terminal: { "": 1, later: 2, sessionKey: "agent:main:tui-123", updatedAt: 100 },
+    });
+    const result = migrate(stateDir);
+    expect(result.warnings).toEqual([
+      `Failed reading legacy TUI last-session state ${sourcePath}: Error: legacy TUI last-session record terminal has unexpected field ""`,
+    ]);
+    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["last-session.json"]);
     await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
   });
 

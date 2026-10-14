@@ -3,11 +3,17 @@ import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
+  it("distinguishes user ids from group ids", () => {
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "user:123" })).toBe("direct");
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "group:456" })).toBe("group");
+  });
+
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
   const directory = expectDirectorySurface(zaloPlugin.directory);
 
@@ -43,10 +49,6 @@ describe("zalo directory", () => {
       }),
     ).resolves.toStrictEqual([]);
   }
-
-  it("lists peers from allowFrom", async () => {
-    await expectPeersFromAllowFrom(["zalo:123", "zl:234", "345"]);
-  });
 
   it("normalizes spaced zalo prefixes in allowFrom and pairing entries", async () => {
     await expectPeersFromAllowFrom(["  zalo:123  ", "  zl:234  ", " 345 "]);

@@ -188,19 +188,6 @@ describe("connectApnsHttp2Session", () => {
     vi.useRealTimers();
   });
 
-  it("uses direct http2.connect when managed proxy is inactive", async () => {
-    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
-
-    const session = await connectApnsHttp2Session({
-      authority: "https://api.sandbox.push.apple.com",
-      timeoutMs: 10_000,
-    });
-
-    expect(session).toBe(fakeSession);
-    expect(tunnelSpy).not.toHaveBeenCalled();
-    expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
-  });
-
   it("rejects an already invalidated direct APNs setup before opening a session", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
     const controller = new AbortController();

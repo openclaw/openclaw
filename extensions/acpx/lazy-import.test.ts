@@ -10,10 +10,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("acpx Pi session catalog lazy imports", () => {
   afterEach(() => {
     vi.doUnmock("./src/pi-session-catalog-runtime.js");
+    vi.doUnmock("acpx/runtime");
+    vi.doUnmock("openclaw/plugin-sdk/agent-harness-session-runtime");
     vi.resetModules();
   });
 
   it("loads catalog and node handlers only on first use", async () => {
+    vi.doMock("acpx/runtime", () => {
+      throw new Error("native model inspection loaded during registration");
+    });
+    // mock-isolation: importing the real runtime would defeat the cold-registration guard.
+    vi.doMock("openclaw/plugin-sdk/agent-harness-session-runtime", () => {
+      throw new Error("session mutation runtime loaded during registration");
+    });
     let runtimeImports = 0;
     vi.doMock("./src/pi-session-catalog-runtime.js", () => {
       runtimeImports += 1;
@@ -25,9 +34,9 @@ describe("acpx Pi session catalog lazy imports", () => {
           checkUpstreamActivity: async () => [],
           openTerminal: async () => ({ kind: "local", argv: ["pi"] }),
         }),
-        listPiSessions: async () => "[]",
-        readPiSession: async () => "{}",
-        resumePiSession: async () => "{}",
+        listPiSessions: async () => ({ sessions: [] }),
+        readPiSession: async () => ({ hostId: "gateway", threadId: "", items: [] }),
+        requireLocalPiSession: async () => ({ threadId: "test", cwd: "/tmp" }),
       };
     });
 
@@ -53,10 +62,10 @@ describe("acpx Pi session catalog lazy imports", () => {
     expect(nodeCommands).toHaveLength(3);
     expect(nodePolicies).toHaveLength(1);
 
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
-    await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(nodeCommands[0]?.handle()).resolves.toBe('{"sessions":[]}');
+    await expect(nodeCommands[0]?.handle()).resolves.toBe('{"sessions":[]}');
     expect(runtimeImports).toBe(1);
   });
 });

@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
 
 export const OPENAI_LONG_CONTEXT_LIVE_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT";
 export const OPENAI_LONG_CONTEXT_PROFILE_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE";
-export const OPENAI_LONG_CONTEXT_METRICS_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS";
-export const OPENAI_LONG_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT";
+const OPENAI_LONG_CONTEXT_METRICS_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS";
+const OPENAI_LONG_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT";
 const OPENAI_LONG_TOOL_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT";
-export const OPENAI_LONG_TOOL_BYTES_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_BYTES";
+const OPENAI_LONG_TOOL_BYTES_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_BYTES";
 
 const OFFICIAL_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_RESPONSES_API = "openai-responses";
@@ -47,9 +48,12 @@ const PROFILES = {
     contextWindow: 48_000,
     contextTokens: 48_000,
     maxTokens: 8_192,
-    compactThreshold: 32_000,
+    // Keep the reduced live probe on OpenAI's demonstrated compaction path.
+    // High-threshold Luna probes can cross the configured threshold without
+    // emitting a checkpoint, while the 1k boundary is deterministic.
+    compactThreshold: 1_000,
     denseTurnChars: 120_000,
-    maxDenseTurns: 8,
+    maxDenseTurns: 3,
     defaultToolBytes: 300_000,
     requestTimeoutMs: 2 * 60_000,
     suiteTimeoutMs: 10 * 60_000,
@@ -57,8 +61,8 @@ const PROFILES = {
   full: {
     name: "full",
     provider: "openai",
-    modelId: "gpt-5.6-sol",
-    modelRef: "openai/gpt-5.6-sol",
+    modelId: "gpt-5.6-luna",
+    modelRef: "openai/gpt-5.6-luna",
     api: OPENAI_RESPONSES_API,
     baseUrl: OFFICIAL_OPENAI_BASE_URL,
     runtime: OPENCLAW_RUNTIME,
@@ -198,6 +202,9 @@ export function buildOpenAILongContextConfig(params: {
         workspace: params.workspace,
         skipBootstrap: true,
         thinkingDefault: "low",
+        // This suite owns the server-compaction threshold. Embedded proactive
+        // compaction would consume the same history before replay can be proved.
+        compaction: { enabled: false },
         model: { primary: profile.modelRef },
         models: {
           [profile.modelRef]: {
@@ -214,7 +221,6 @@ export function buildOpenAILongContextConfig(params: {
       },
       entries: {
         [params.agentId]: {
-          default: true,
           workspace: params.workspace,
           sandbox: { mode: "off" },
         },
@@ -254,6 +260,11 @@ export function assertOpenAILongContextConfig(
     "secrets.providers.default.source",
     cfg.secrets?.providers?.default?.source,
     "env",
+  );
+  expectConfigValue(
+    "agents.defaults.compaction.enabled",
+    cfg.agents?.defaults?.compaction?.enabled,
+    false,
   );
   expectConfigValue("models.providers.openai.models.length", provider?.models.length, 1);
   const model = provider?.models[0];
@@ -672,7 +683,7 @@ type UsageRecord = {
 };
 
 function finite(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 type OpenAILongContextTurnMetric = {

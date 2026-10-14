@@ -1,10 +1,23 @@
-// Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
-import { resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  resolveToolProfilePolicy,
+} from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
+import {
+  CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_EXTENSION_FORMATS,
+  CLAW_PACKAGE_KINDS,
+  CLAW_PACKAGE_SOURCE,
+  CLAW_SCHEMA_VERSION,
+  type ClawDiagnostic,
+  type ClawOpenClawAgentSettings,
+} from "./manifest-contract.js";
 import {
   conflictsWithClawPath,
   isCanonicalClawHubPackageName,
@@ -16,12 +29,9 @@ import {
   portableClawPathKey,
 } from "./schema-portability.js";
 import {
-  CLAW_BOOTSTRAP_FILE_NAMES,
-  CLAW_SCHEMA_VERSION,
-  type ClawDiagnostic,
-  type ClawManifest,
-  type ClawOpenClawProfile,
-} from "./types.js";
+  isConcreteBundleMcpToolName,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
 
 const nonEmptyString = z
   .string()
@@ -31,6 +41,23 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+// Check reference shape here; the add planner reports local catalog availability.
+const modelRef = nonEmptyString.regex(
+  /^[^\s/]+\/[^\s/]+(?:\/[^\s/]+)*$/,
+  "Model must use provider/model form.",
+);
+
+function isBoundedClawToolGrant(value: string): boolean {
+  const normalized = normalizeToolPolicyName(value);
+  if (
+    /[*?[\]{}]/u.test(normalized) ||
+    normalized === "group:plugins" ||
+    normalized === "bundle-mcp"
+  ) {
+    return false;
+  }
+  return !normalized.startsWith("group:") || expandToolGroups([normalized])[0] !== normalized;
+}
 
 export function clawManifestWorkspaceConflictsWithPath(
   manifest: ClawManifest,
@@ -58,7 +85,7 @@ const exactVersion = nonEmptyString.refine(
 );
 const clawHubPackageName = nonEmptyString.refine(
   isCanonicalClawHubPackageName,
-  "ClawHub package references must use their canonical lowercase name.",
+  "ClawHub package references must use their lowercase name.",
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -95,8 +122,8 @@ const openClawExtensionSchema = z
   .object({
     id: agentId,
     kind: z.literal("plugin"),
-    format: z.enum(["openclaw", "claude", "codex", "cursor"]),
-    source: z.literal("clawhub"),
+    format: z.enum(CLAW_EXTENSION_FORMATS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -107,6 +134,17 @@ const openClawProfileSchema = z
     schemaVersion: z.literal(1),
     agent: z
       .object({
+        model: z
+          .object({ primary: modelRef, fallbacks: z.array(modelRef).optional() })
+          .strict()
+          .optional(),
+        subagents: z
+          .object({
+            allowAgents: z.array(agentId).optional(),
+            delegationMode: z.enum(["suggest", "prefer"]).optional(),
+          })
+          .strict()
+          .optional(),
         groupChat: z
           .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
           .strict()
@@ -127,8 +165,14 @@ const openClawProfileSchema = z
                 "Tool profile must name a registered OpenClaw built-in profile.",
               )
               .optional(),
-            allow: z.array(nonEmptyString).min(1).optional(),
-            alsoAllow: z.array(nonEmptyString).min(1).optional(),
+            allow: z
+              .array(nonEmptyString.refine(isBoundedClawToolGrant, "Tool grants must be bounded."))
+              .min(1)
+              .optional(),
+            alsoAllow: z
+              .array(nonEmptyString.refine(isBoundedClawToolGrant, "Tool grants must be bounded."))
+              .min(1)
+              .optional(),
             deny: z.array(nonEmptyString).min(1).optional(),
             fs: z
               .object({ workspaceOnly: z.literal(true).optional() })
@@ -137,6 +181,49 @@ const openClawProfileSchema = z
           })
           .strict()
           .superRefine((tools, ctx) => {
+            if (tools.profile === "full" && !tools.allow) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["profile"],
+                message: "The full tool profile requires a bounded explicit allowlist.",
+              });
+            }
+            if (tools.profile && tools.profile !== "full" && tools.allow) {
+              const profileAllow = expandToolGroups(resolveToolProfilePolicy(tools.profile)?.allow);
+              if (
+                tools.allow.some(
+                  (grant) =>
+                    !profileAllow.some((tool) =>
+                      isToolAllowedByPolicyName(tool, { allow: [grant] }),
+                    ) &&
+                    !(profileAllow.includes("bundle-mcp") && isConcreteBundleMcpToolName(grant)),
+                )
+              ) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["allow"],
+                  message: "Every agent tools allow grant must overlap the selected profile.",
+                });
+              }
+            }
+            if (
+              tools.profile &&
+              resolveClawToolProfileSnapshot(tools)?.allow.includes("bundle-mcp")
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["allow"],
+                message:
+                  "Profiles containing bundle-mcp require a bounded allowlist of concrete tool names.",
+              });
+            }
+            if (tools.alsoAllow && !tools.profile) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["alsoAllow"],
+                message: "Agent tools can set alsoAllow only when a bounded profile is selected.",
+              });
+            }
             if (tools.allow && tools.alsoAllow) {
               ctx.addIssue({
                 code: "custom",
@@ -268,8 +355,8 @@ const workspaceSchema = z
 
 const packageSchema = z
   .object({
-    kind: z.enum(["skill", "plugin"]),
-    source: z.literal("clawhub"),
+    kind: z.enum(CLAW_PACKAGE_KINDS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -444,6 +531,7 @@ const manifestSchema = z
   .strict()
   .superRefine((manifest, ctx) => {
     const workspaceTargets = new Set<string>();
+    const nativeBootstrapTarget = new Set([portableClawPathKey("BOOTSTRAP.md")]);
     for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
       if (manifest.workspace.bootstrapFiles[name]) {
         workspaceTargets.add(portableClawPathKey(name));
@@ -451,7 +539,7 @@ const manifestSchema = z
     }
     manifest.workspace.files.forEach((file, index) => {
       const destinationKey = portableClawPathKey(file.path);
-      if (destinationKey === portableClawPathKey("BOOTSTRAP.md")) {
+      if (conflictsWithClawPath(nativeBootstrapTarget, destinationKey)) {
         ctx.addIssue({
           code: "custom",
           path: ["workspace", "files", index, "path"],
@@ -511,6 +599,19 @@ const manifestSchema = z
     });
   });
 
+export type ClawOpenClawExtension = z.output<typeof openClawExtensionSchema>;
+export type ClawOpenClawProfile = {
+  schemaVersion: 1;
+  agent: ClawOpenClawAgentSettings;
+  extensions?: ClawOpenClawExtension[];
+};
+export type ClawPackage = z.output<typeof packageSchema>;
+export type ClawMcpServer = z.output<typeof mcpServerSchema>;
+export type ClawCronJob = z.output<typeof cronJobSchema>;
+export type ClawManifest = Omit<z.output<typeof manifestSchema>, "metadata"> & {
+  metadata?: Record<string, string>;
+};
+
 function formatIssuePath(path: PropertyKey[]): string {
   if (path.length === 0) {
     return "$";
@@ -539,7 +640,7 @@ export function parseClawManifest(
   if (!parsed.success) {
     return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
   }
-  return { ok: true, manifest: parsed.data as ClawManifest, diagnostics: [] };
+  return { ok: true, manifest: parsed.data, diagnostics: [] };
 }
 
 export function parseClawOpenClawProfile(value: unknown):

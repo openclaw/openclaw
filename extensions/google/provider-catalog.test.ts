@@ -4,8 +4,8 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import {
-  buildGoogleLiveCatalogProvider,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -15,30 +15,11 @@ describe("google provider catalog", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("registers current Gemini rows for the Google Vertex provider", () => {
-    const provider = buildGoogleVertexStaticCatalogProvider();
-
-    expect(provider.api).toBe("google-vertex");
-    expect(provider.baseUrl).toBe("https://{location}-aiplatform.googleapis.com");
-    expect(provider.models.map((model) => model.id)).toEqual(
-      expect.arrayContaining([
-        "gemini-2.5-pro",
-        "gemini-3.1-pro-preview",
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-      ]),
-    );
-    expect(provider.models.find((model) => model.id === "gemini-3.6-flash")).toMatchObject({
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-      reasoning: true,
-    });
-  });
-
   it("keeps Google AI Studio and Vertex model ids aligned", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
       buildGoogleStaticCatalogProvider().models.map((model) => model.id),
     );
+    expect(buildGoogleStaticCatalogProvider().models[0]?.input).toEqual(["text", "image", "video"]);
   });
 
   it("builds the authenticated text catalog from Google models.list metadata", async () => {
@@ -75,6 +56,14 @@ describe("google provider catalog", () => {
                     inputTokenLimit: 1_048_576,
                     outputTokenLimit: 65_536,
                     supportedGenerationMethods: ["generateContent", "countTokens"],
+                    thinking: true,
+                  },
+                  {
+                    name: "models/gemini-3.7-flash",
+                    displayName: "Gemini 3.7 Flash",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent"],
                     thinking: true,
                   },
                   {
@@ -121,7 +110,7 @@ describe("google provider catalog", () => {
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-        input: ["text", "image"],
+        input: ["text", "image", "video"],
         compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
@@ -130,8 +119,18 @@ describe("google provider catalog", () => {
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-        input: ["text", "image"],
+        input: ["text", "image", "video"],
         compat: { codeMode: "preferred" },
+      }),
+      expect.objectContaining({
+        id: "gemini-3.7-flash",
+        name: "Gemini 3.7 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
+        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
       }),
       expect.objectContaining({
         id: "gemma-3-1b-it",
@@ -200,21 +199,44 @@ describe("google provider catalog", () => {
     }
   });
 
-  it("falls back to bundled rows when live discovery is unusable", async () => {
+  it.each([{}])("preserves a successful empty text inventory: %j", async (body) => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: Response.json({ models: [{ name: "models/gemini-3.6-flash" }] }),
+      response: Response.json(body),
       finalUrl: url,
       release: async () => undefined,
     }));
 
     const provider = await buildGoogleLiveCatalogProvider({
+      discoveryMode: "strict",
       apiKey: "GEMINI_API_KEY",
       discoveryApiKey: "resolved-google-key",
       fetchGuard,
     });
 
-    expect(provider.models.map((model) => model.id)).toEqual(
-      buildGoogleStaticCatalogProvider().models.map((model) => model.id),
-    );
+    expect(provider.models).toEqual([]);
+    const advisory = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: "resolved-google-key",
+      fetchGuard,
+    });
+    expect(advisory.models).toEqual(buildGoogleStaticCatalogProvider().models);
   });
+
+  it.each([{ models: "invalid" }, { models: [null] }])(
+    "rejects a malformed inventory: %j",
+    async (body) => {
+      const fetchGuard: LiveModelCatalogFetchGuard = async ({ url }) => ({
+        response: Response.json(body),
+        finalUrl: url,
+        release: async () => undefined,
+      });
+      await expect(
+        buildGoogleLiveCatalogProvider({
+          discoveryMode: "strict",
+          apiKey: "google-key",
+          fetchGuard,
+        }),
+      ).rejects.toThrow("invalid model");
+    },
+  );
 });

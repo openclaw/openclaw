@@ -5,15 +5,15 @@ import {
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
 const { installManagedPluginSourceMock } = vi.hoisted(() => ({
   installManagedPluginSourceMock: vi.fn(),
 }));
 
-vi.mock("../plugins/management-service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/management-service.js")>()),
+vi.mock("../plugins/management-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/management-install.js")>()),
   installManagedPluginSource: installManagedPluginSourceMock,
 }));
 
@@ -43,13 +43,14 @@ describe("plugin install bundled failure propagation", () => {
       }),
     );
     expect(runtimeErrors.at(-1)).toContain("bundled plugin installation failed");
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("fails when an npm package-not-found bundled fallback fails", async () => {
     findBundledPluginSourceMock.mockImplementation((...args: unknown[]) => {
       const { lookup } = args[0] as { lookup: { kind: string; value: string } };
-      return lookup.kind === "npmSpec" && lookup.value === "fallback-demo"
+      return (lookup.kind === "npmSpec" && lookup.value === "registry-name") ||
+        (lookup.kind === "pluginId" && lookup.value === "fallback-demo")
         ? {
             pluginId: "fallback-demo",
             localPath: "/app/dist/extensions/fallback-demo",
@@ -71,7 +72,7 @@ describe("plugin install bundled failure propagation", () => {
     );
 
     await expect(
-      runPluginsCommand(["plugins", "install", "fallback-demo", "--force"]),
+      runPluginsCommand(["plugins", "install", "registry-name", "--force"]),
     ).rejects.toThrow("__exit__:1");
 
     expect(installManagedPluginSourceMock).toHaveBeenNthCalledWith(
@@ -87,6 +88,6 @@ describe("plugin install bundled failure propagation", () => {
       }),
     );
     expect(runtimeErrors.at(-1)).toContain("bundled fallback installation failed");
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 });

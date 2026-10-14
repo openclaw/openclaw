@@ -1,36 +1,34 @@
-// Telegram plugin module coordinates one inbound message dispatch lifecycle.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
-import { createTelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
-import { createTelegramDraftController } from "./bot-message-dispatch-draft.js";
-import { createTelegramProgressController } from "./bot-message-dispatch-progress.js";
-import { createTelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
+import {
+  createDeliveryState,
+  deliverFallback,
+  finalizePendingAnswerBlockDraft,
+} from "./bot-message-dispatch-delivery.js";
+import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
+import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
+import { createReplyState } from "./bot-message-dispatch-reply.js";
 import {
   createFreshTelegramSessionEntryLoader,
   resolveTelegramReasoningLevel,
 } from "./bot-message-dispatch-session.js";
 import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import {
-  findModelInCatalog,
-  loadPreparedModelCatalog,
-  modelSupportsVision,
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-} from "./bot-message-dispatch.agent.runtime.js";
+import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
-  resolveMarkdownTableMode,
 } from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
+  TelegramDispatchTurn,
   TelegramDispatchResult,
-  TelegramDispatchTurnState,
 } from "./bot-message-dispatch.types.js";
 import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
 import {
@@ -38,43 +36,20 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { resolveStickerVisionSupport } from "./sticker-vision.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
-
-async function resolveStickerVisionSupport(
-  cfg: DispatchTelegramMessageParams["cfg"],
-  agentId: string,
-) {
-  try {
-    const catalog = await loadPreparedModelCatalog({
-      config: cfg,
-      agentId,
-      agentDir: resolveAgentDir(cfg, agentId),
-      readOnly: true,
-    });
-    const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    return entry ? modelSupportsVision(entry) : false;
-  } catch {
-    return false;
-  }
-}
 
 function includeStickerDescription(params: {
   body: string | undefined;
   formattedDescription: string;
 }): string {
-  if (!params.body) {
+  if (!params.body?.trim()) {
     return params.formattedDescription;
   }
-  const current = params.body.trim();
-  if (!current) {
-    return params.formattedDescription;
-  }
-  // Cached descriptions can already be present from inbound context construction.
-  // Keep that body intact so captions, forwarded text, and supplemental context survive.
   if (params.body.includes(params.formattedDescription)) {
     return params.body;
   }
@@ -82,7 +57,7 @@ function includeStickerDescription(params: {
 }
 
 function resolveTelegramQuoteContext(params: {
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   replyToMode: DispatchTelegramMessageParams["replyToMode"];
 }) {
   const { context, replyToMode } = params;
@@ -99,18 +74,21 @@ function resolveTelegramQuoteContext(params: {
     replyQuoteText && !context.ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(context.ctxPayload.ReplyToId)
       : undefined;
+  const replyQuotePosition =
+    typeof context.ctxPayload.ReplyToQuotePosition === "number"
+      ? context.ctxPayload.ReplyToQuotePosition
+      : undefined;
+  const replyQuoteEntities = Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
+    ? context.ctxPayload.ReplyToQuoteEntities
+    : undefined;
   const replyQuoteTargetsBotMessage = context.msg.reply_to_message?.from?.is_bot === true;
   const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
   if (replyToMode !== "off") {
     if (replyQuoteText && replyQuoteMessageId != null) {
       addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
         text: replyQuoteText,
-        ...(typeof context.ctxPayload.ReplyToQuotePosition === "number"
-          ? { position: context.ctxPayload.ReplyToQuotePosition }
-          : {}),
-        ...(Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-          ? { entities: context.ctxPayload.ReplyToQuoteEntities }
-          : {}),
+        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
+        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
       });
     }
     addTelegramNativeQuoteCandidate(
@@ -142,23 +120,17 @@ function resolveTelegramQuoteContext(params: {
       : undefined;
   return {
     draftReplyToMessageId,
-    hasTelegramQuoteReply: replyToMode !== "off" && replyQuoteText != null,
     replyQuoteByMessageId,
-    replyQuoteEntities: Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-      ? context.ctxPayload.ReplyToQuoteEntities
-      : undefined,
+    replyQuoteEntities,
     replyQuoteMessageId,
-    replyQuotePosition:
-      typeof context.ctxPayload.ReplyToQuotePosition === "number"
-        ? context.ctxPayload.ReplyToQuotePosition
-        : undefined,
+    replyQuotePosition,
     replyQuoteText,
   };
 }
 
 async function prepareTelegramSticker(params: {
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
@@ -172,10 +144,10 @@ async function prepareTelegramSticker(params: {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
-  const stickerSupportsVision = await resolveStickerVisionSupport(
-    params.cfg,
-    context.route.agentId,
-  );
+  const stickerSupportsVision = await resolveStickerVisionSupport({
+    cfg: params.cfg,
+    agentId: context.route.agentId,
+  });
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
@@ -193,22 +165,19 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    const isCaptionlessSticker =
-      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
     context.ctxPayload.Body = includeStickerDescription({
       body: context.ctxPayload.Body,
       formattedDescription,
     });
-    context.ctxPayload.BodyForAgent =
-      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
-        ? formattedDescription
-        : includeStickerDescription({
-            body: context.ctxPayload.BodyForAgent,
-            formattedDescription,
-          });
+    // Reply finalization projects BodyForAgent from the canonical agent text.
+    context.ctxPayload.agentText = includeStickerDescription({
+      body: context.ctxPayload.agentText ?? context.ctxPayload.BodyForAgent,
+      formattedDescription,
+    });
+    context.ctxPayload.BodyForAgent = context.ctxPayload.agentText;
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
-  cacheSticker({
+  await cacheSticker({
     fileId: sticker.fileId,
     fileUniqueId: sticker.fileUniqueId,
     emoji: sticker.emoji,
@@ -223,7 +192,7 @@ async function prepareTelegramSticker(params: {
 function scheduleDmTopicLabel(params: {
   bot: DispatchTelegramMessageParams["bot"];
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   isFirstTurnInSession: boolean;
   telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
 }) {
@@ -257,6 +226,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
@@ -274,282 +244,237 @@ function scheduleDmTopicLabel(params: {
   })();
 }
 
-export const dispatchTelegramMessage = async ({
-  context,
-  bot,
-  cfg,
-  runtime,
-  replyToMode,
-  streamMode,
-  textLimit,
-  telegramCfg,
-  telegramDeps: injectedTelegramDeps,
-  opts,
-  retryDispatchErrors = false,
-  suppressFailureFallback = false,
-  turnAdoptionLifecycle,
-}: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
+export const dispatchTelegramMessage = async (
+  dispatchParams: DispatchTelegramMessageParams,
+): Promise<TelegramDispatchResult> => {
+  const {
+    context,
+    bot,
+    cfg,
+    runtime,
+    replyToMode,
+    telegramCfg,
+    telegramDeps: injectedTelegramDeps,
+    retryDispatchErrors = false,
+    suppressFailureFallback = false,
+    turnAdoptionLifecycle,
+  } = dispatchParams;
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ context });
+  const dispatchContext = await resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
-  const tableMode = resolveMarkdownTableMode({
+  const richMessagesParams = {
     cfg,
-    channel: "telegram",
     accountId: dispatchContext.route.accountId,
-    supportsBlockTables: telegramCfg.richMessages === true,
-  });
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+    accountConfig: telegramCfg,
+  };
+  const richMessages = resolveTelegramRichMessages(richMessagesParams);
+  const tableMode = resolveTelegramTableMode(richMessagesParams);
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
     loadFreshSessionEntry,
   });
-  const forceBlockStreamingForReasoning =
-    resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
   // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
   // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
   const hookRunner = getGlobalHookRunner();
-  const allowProviderPreview = !(
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false)
-  );
-  // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
+  const allowProviderPreview =
+    !dispatchContext.ctxPayload.GroupThread &&
+    !(
+      (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+      (hookRunner?.hasHooks("message_sending") ?? false)
+    );
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
-  const dispatchGeneration = 0;
-  const draft = createTelegramDraftController({
-    accountId: dispatchContext.route.accountId,
+  const turnConfig = {
+    ...dispatchParams,
+    ...quote,
     allowProviderPreview,
-    bot,
-    cfg,
-    chatId: dispatchContext.chatId,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
-    forceBlockStreamingForReasoning,
-    hasTelegramQuoteReply: quote.hasTelegramQuoteReply,
-    isDispatchSuperseded,
-    isRoomEvent,
-    replyToMode,
-    resolvedReasoningLevel,
-    streamMode,
-    tableMode,
-    telegramCfg,
-    telegramDeps,
-    textLimit,
-    threadSpec: dispatchContext.threadSpec,
-  });
-  const progress = createTelegramProgressController({
-    accountId: dispatchContext.route.accountId,
-    chatId: dispatchContext.chatId,
-    draft,
-    statusReactionController: status.controller,
-    streamMode,
-    streamReasoningInProgressDraft: draft.streamReasoningInProgressDraft,
-    telegramCfg,
-    threadId: dispatchContext.threadSpec.id,
-  });
-  const delivery = createTelegramDeliveryController({
-    bot,
-    cfg,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
-    draft,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
-    isDispatchSuperseded,
+    isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
-    opts,
-    progress,
-    replyQuoteByMessageId: quote.replyQuoteByMessageId,
-    replyQuoteEntities: quote.replyQuoteEntities,
-    replyQuoteMessageId: quote.replyQuoteMessageId,
-    replyQuotePosition: quote.replyQuotePosition,
-    replyQuoteText: quote.replyQuoteText,
-    replyToMode,
-    runtime,
-    streamMode,
+    resolvedReasoningLevel,
+    richMessages,
+    statusReactionController: status.controller,
     tableMode,
-    telegramCfg,
     telegramDeps,
-    textLimit,
-    threadSpec: dispatchContext.threadSpec,
-  });
-  const state: TelegramDispatchTurnState = {
-    queuedFinal: false,
+  };
+  const draftState = createDraftState(turnConfig);
+  const progressState = createProgressState(turnConfig, draftState, () => turn);
+  const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
+  const turn: TelegramDispatchTurn = {
+    ...turnConfig,
+    ...draftState,
+    ...progressState,
+    ...deliveryState,
+    ...createReplyState(),
+    finalDispatchClaimed: false,
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
   };
-  const reply = createTelegramReplyDelivery({
-    cfg,
-    context: dispatchContext,
-    delivery,
-    draft,
-    fence: {
-      generation: () => dispatchGeneration,
-      isSuperseded: isDispatchSuperseded,
-    },
-    progress,
-    runtime,
-    state,
-    streamMode,
-    telegramCfg,
-  });
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  try {
-    await prepareTelegramSticker({ cfg, context: dispatchContext });
-    if (isDmTopic) {
-      try {
-        const sessionKey = dispatchContext.ctxPayload.SessionKey;
-        if (sessionKey) {
-          isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-            .entry?.systemSent;
-        } else {
-          logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
-        }
-      } catch (err) {
-        logVerbose(`auto-topic-label: session store error: ${String(err)}`);
-      }
-    }
-    loadFreshSessionEntry.clear();
-    if (status.controller && !isRoomEvent) {
-      void status.controller.setThinking();
-    }
+  await prepareTelegramSticker({ cfg, context: dispatchContext });
+  if (isDmTopic) {
     try {
-      turnDispatched = await runTelegramDispatchTurn({
-        cfg,
-        context: dispatchContext,
-        delivery,
-        draft,
-        turnAdoptionLifecycle,
-        isSuperseded: isDispatchSuperseded,
-        progress,
-        reply,
-        state,
-        statusReactionController: status.controller,
-        streamMode,
-        telegramCfg,
-        telegramDeps,
-      });
+      const sessionKey = dispatchContext.ctxPayload.SessionKey;
+      if (sessionKey) {
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
     } catch (err) {
-      state.dispatchError = err;
-      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
-    } finally {
-      progress.cancel();
-      await draft.waitForEvents();
-      try {
-        await delivery.finalizePendingAnswerBlockDraft(state);
-      } catch (err) {
-        state.dispatchError ??= err;
-        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
-      }
-      await draft.cleanup(isDispatchSuperseded());
-      if (
-        streamMode === "progress" &&
-        progress.sawProgressFinal() &&
-        !state.dispatchError &&
-        !state.hadErrorReplyFailureOrSkip &&
-        !isDispatchSuperseded()
-      ) {
-        await delivery.deliverProgressCollapseSummary();
-      }
+      logVerbose(`auto-topic-label: session store error: ${String(err)}`);
     }
-  } finally {
-    dispatchWasSuperseded = isDispatchSuperseded();
   }
-
+  loadFreshSessionEntry.clear();
+  // Media hydration and other pre-dispatch work can outlive the durable
+  // ingress watchdog. Never enter the reply pipeline after that owner has
+  // already fenced this attempt; the canonical spool row will retry it.
+  if (isDispatchSuperseded()) {
+    status.finalizeInBackground("cancelled", "cancelled finalize");
+    return { kind: "completed" };
+  }
+  if (status.controller && !isRoomEvent) {
+    void status.controller.setThinking();
+  }
+  try {
+    turnDispatched = await runTelegramDispatchTurn(turn);
+  } catch (err) {
+    turn.dispatchError = err;
+    turn.previewLifecycle.observeFailure(
+      isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+    );
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+  } finally {
+    // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
+    turn.progressCompositor.cancel();
+    await turn.draftEventQueue;
+    try {
+      await finalizePendingAnswerBlockDraft(turn);
+    } catch (err) {
+      turn.dispatchError ??= err;
+      turn.previewLifecycle.observeFailure(
+        isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+      );
+      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
+    }
+    await cleanupDrafts(turn, isDispatchSuperseded());
+  }
+  const dispatchWasSuperseded = isDispatchSuperseded();
   if (turnDispatched === false) {
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
+      status.finalizeInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
 
-  const deliverySummary = delivery.snapshot();
+  let deliverySummary = turn.deliveryState.snapshot();
+  if (!turn.sendPolicyDenied && deliverySummary.failedNonSilent > 0) {
+    await settleFailedFinalDelivery(turn);
+    deliverySummary = turn.deliveryState.snapshot();
+  }
   let sentFallback = false;
+  const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    !suppressFailureFallback &&
-    !progress.finalAnswerDelivered() &&
-    (state.dispatchError ||
-      deliverySummary.failedNonSilent > 0 ||
-      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
+    !turn.previewLifecycle.finalSuppressed &&
+    !turn.sendPolicyDenied &&
+    !turn.finalDispatchClaimed &&
+    (!suppressFailureFallback || turn.agentRunFailed) &&
+    !turn.previewLifecycle.finalDelivered &&
+    (terminalFailure ||
+      (!turn.progressContinuationAdopted &&
+        (deliverySummary.failedNonSilent > 0 ||
+          (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
-    const fallbackText = state.dispatchError
+    const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await delivery.deliverFallback(
+    const result = await deliverFallback(
+      turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (state.dispatchError != null || state.hadErrorReplyFailureOrSkip),
+        Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }
 
   if (
     !sentFallback &&
-    !state.dispatchError &&
+    !turn.previewLifecycle.finalSuppressed &&
+    !turn.sendPolicyDenied &&
+    !turn.dispatchError &&
     !deliverySummary.delivered &&
-    !state.suppressSilentReplyFallback &&
-    !state.queuedFinal &&
-    state.noVisibleReplyFallbackEligible
+    !turn.suppressSilentReplyFallback &&
+    !turn.finalDispatchClaimed &&
+    turn.noVisibleReplyFallbackEligible
   ) {
-    sentFallback = (await delivery.deliverFallback([{ text: EMPTY_RESPONSE_FALLBACK }], false))
+    sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
       .delivered;
     silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
       hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
-      queuedFinal: state.queuedFinal,
+      finalDispatchClaimed: turn.finalDispatchClaimed,
       sentFallback,
     });
   }
 
+  const intentionalNoResponse =
+    turn.previewLifecycle.finalSuppressed ||
+    turn.sendPolicyDenied ||
+    turn.suppressSilentReplyFallback;
   const hasFinalResponse =
-    progress.finalAnswerDelivered() ||
-    sentFallback ||
-    state.suppressSilentReplyFallback ||
-    state.queuedFinal;
-  const hasVisibleResponse =
-    deliverySummary.delivered ||
-    sentFallback ||
-    state.suppressSilentReplyFallback ||
-    state.queuedFinal;
+    intentionalNoResponse ||
+    turn.previewLifecycle.finalDelivered ||
+    turn.progressContinuationAdopted ||
+    sentFallback;
+  const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
-    !progress.finalAnswerDelivered() &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+    !intentionalNoResponse &&
+    !turn.previewLifecycle.finalDelivered &&
+    !turn.progressContinuationAdopted &&
+    (turn.previewLifecycle.finalFailed ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
-    state.dispatchError ??
+    turn.dispatchError ??
     (deliveryFailureWithoutFinalResponse
       ? new Error(
           `Telegram reply delivery failed without a final response (failed=${deliverySummary.failedNonSilent}, skipped=${deliverySummary.skippedNonSilent})`,
         )
       : null);
 
-  if (status.controller && !hasVisibleResponse) {
-    status.finalizeInBackground({ outcome: "error" }, "error finalize");
+  if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
+    status.finalizeInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
-    ((state.dispatchError != null && !hasFinalResponse) ||
-      (state.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
+    !turn.finalDispatchClaimed &&
+    ((turn.dispatchError != null && !hasFinalResponse) ||
+      (turn.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
-  if (!hasVisibleResponse) {
+  if (!hasVisibleResponse && !intentionalNoResponse) {
     return { kind: "completed" };
   }
 
@@ -562,12 +487,13 @@ export const dispatchTelegramMessage = async ({
   });
   if (status.controller) {
     status.finalizeInBackground(
-      {
-        outcome:
-          !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
-            ? "error"
-            : "done",
-      },
+      turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+        ? "error"
+        : "done",
       "finalize",
     );
   }

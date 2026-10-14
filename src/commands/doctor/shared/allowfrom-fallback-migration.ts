@@ -1,12 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Doctor migration from legacy DM allowFrom fallback to explicit groupAllowFrom lists.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
-import { asObjectRecord } from "./object.js";
 
 const PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
 const ACCOUNT_SCHEMA_WILDCARD = "*";
@@ -20,67 +20,39 @@ const ACCOUNT_GROUP_ALLOW_FROM_PATH = [
 type ChannelRecord = Record<string, unknown>;
 type SchemaPath = readonly string[];
 
-function isDisabled(record: ChannelRecord): boolean {
-  return record.enabled === false;
-}
-
 function normalizeAllowFrom(raw: unknown): string[] {
   return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
 
-function readGroupAllowFrom(record: ChannelRecord): string[] {
-  return normalizeAllowFrom(record.groupAllowFrom);
-}
-
-function readDmAllowFrom(params: {
-  channelName: string;
-  account: ChannelRecord;
-  parent?: ChannelRecord;
-}): string[] {
-  return normalizeAllowFrom(
-    resolveChannelDmAllowFrom({
-      account: params.account,
-      parent: params.parent,
-      mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
-    }),
-  );
-}
-
-function readOwnDmAllowFrom(params: { channelName: string; account: ChannelRecord }): string[] {
-  return normalizeAllowFrom(
-    resolveChannelDmAllowFrom({
-      account: params.account,
-      mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
-    }),
-  );
-}
-
-function findGeneratedChannelConfigSchema(
+function readDmAllowFrom(
   channelName: string,
-): Record<string, unknown> | undefined {
-  const normalizedChannelId = normalizeAnyChannelId(channelName);
-  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
-    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
-  )?.schema;
+  account: ChannelRecord,
+  parent?: ChannelRecord,
+): string[] {
+  return normalizeAllowFrom(
+    resolveChannelDmAllowFrom({
+      account,
+      parent,
+      mode: getDoctorChannelCapabilities(channelName).dmAllowFromMode,
+    }),
+  );
 }
 
 function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
   if (path.length === 0) {
     return true;
   }
-  const node = asObjectRecord(schema);
+  const node = asNullableRecord(schema);
   if (!node) {
     return true;
   }
 
-  const anyOf = Array.isArray(node.anyOf) ? node.anyOf : undefined;
-  if (anyOf) {
-    // Union schemas allow writes when at least one branch accepts the target config path.
-    return anyOf.some((branch) => schemaAllowsConfigPath(branch, path));
-  }
-  const oneOf = Array.isArray(node.oneOf) ? node.oneOf : undefined;
-  if (oneOf) {
-    return oneOf.some((branch) => schemaAllowsConfigPath(branch, path));
+  // Union schemas allow writes when at least one branch accepts the target config path.
+  for (const key of ["anyOf", "oneOf"] as const) {
+    const branches = node[key];
+    if (Array.isArray(branches)) {
+      return branches.some((branch) => schemaAllowsConfigPath(branch, path));
+    }
   }
   const allOf = Array.isArray(node.allOf) ? node.allOf : undefined;
   if (allOf) {
@@ -90,7 +62,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
   const segment = expectDefined(path[0], "schema path segment");
   const rest = path.slice(1);
-  const properties = asObjectRecord(node.properties);
+  const properties = asNullableRecord(node.properties);
   if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
     return schemaAllowsConfigPath(expectDefined(properties[segment], "schema property"), rest);
   }
@@ -106,7 +78,10 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 }
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
-  const schema = findGeneratedChannelConfigSchema(channelName);
+  const normalizedChannelId = normalizeAnyChannelId(channelName);
+  const schema = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
+  )?.schema;
   // Extension-installed channels (e.g. ClawHub agentmail) have no generated-metadata entry;
   // without schema info we can't prove the write is safe, so fail closed rather than open.
   return schema !== undefined && schemaAllowsConfigPath(schema, path);
@@ -120,30 +95,33 @@ function migrateRecord(params: {
   parent?: ChannelRecord;
   parentHadGroupAllowFrom?: boolean;
   prefix: string;
-}): boolean {
+}): void {
   if (!params.canWriteGroupAllowFrom) {
-    return false;
+    return;
   }
-  if (readGroupAllowFrom(params.account).length > 0) {
-    return false;
+  if (normalizeAllowFrom(params.account.groupAllowFrom).length > 0) {
+    return;
   }
   if (params.parent && params.parentHadGroupAllowFrom) {
-    return false;
+    return;
   }
-  const ownAllowFrom = readOwnDmAllowFrom(params);
-  if (params.parent && ownAllowFrom.length === 0 && readGroupAllowFrom(params.parent).length > 0) {
-    return false;
+  const ownAllowFrom = readDmAllowFrom(params.channelName, params.account);
+  if (
+    params.parent &&
+    ownAllowFrom.length === 0 &&
+    normalizeAllowFrom(params.parent.groupAllowFrom).length > 0
+  ) {
+    return;
   }
-  const allowFrom = readDmAllowFrom(params);
+  const allowFrom = readDmAllowFrom(params.channelName, params.account, params.parent);
   if (allowFrom.length === 0) {
-    return false;
+    return;
   }
   params.account.groupAllowFrom = allowFrom;
   const noun = allowFrom.length === 1 ? "entry" : "entries";
   params.changes.push(
     `${params.prefix}.groupAllowFrom: copied ${allowFrom.length} sender ${noun} from allowFrom for explicit group allowlist.`,
   );
-  return true;
 }
 
 /** Copy legacy allowFrom entries into groupAllowFrom where channel metadata permits fallback. */
@@ -151,7 +129,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
-  const channels = asObjectRecord(cfg.channels);
+  const channels = asNullableRecord(cfg.channels);
   if (!channels) {
     return { config: cfg, changes: [] };
   }
@@ -168,14 +146,14 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     ) {
       continue;
     }
-    if (isDisabled(channelConfig)) {
+    if (channelConfig.enabled === false) {
       continue;
     }
     if (!getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom) {
       continue;
     }
 
-    const hadGroupAllowFrom = readGroupAllowFrom(channelConfig).length > 0;
+    const hadGroupAllowFrom = normalizeAllowFrom(channelConfig.groupAllowFrom).length > 0;
     const canWriteChannelGroupAllowFrom = generatedSchemaAllowsGroupAllowFrom(
       channelName,
       CHANNEL_GROUP_ALLOW_FROM_PATH,
@@ -188,7 +166,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       prefix: `channels.${channelName}`,
     });
 
-    const accounts = asObjectRecord(channelConfig.accounts);
+    const accounts = asNullableRecord(channelConfig.accounts);
     if (!accounts) {
       continue;
     }
@@ -197,8 +175,8 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       ACCOUNT_GROUP_ALLOW_FROM_PATH,
     );
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountConfig);
-      if (!account || isDisabled(account)) {
+      const account = asNullableRecord(accountConfig);
+      if (!account || account.enabled === false) {
         continue;
       }
       migrateRecord({
@@ -213,8 +191,5 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     }
   }
 
-  if (changes.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-  return { config: next, changes };
+  return { config: changes.length > 0 ? next : cfg, changes };
 }

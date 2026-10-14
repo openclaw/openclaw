@@ -1,13 +1,10 @@
 // Covers default device identity SQLite path under the state dir.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGatewayLockDir } from "../config/paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
 afterEach(() => {
@@ -20,13 +17,10 @@ describe("device identity state dir defaults", () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const lockDir = resolveGatewayLockDir(stateDir);
 
       expect(loadDeviceIdentityIfPresent()).toEqual(identity);
       expect(fs.existsSync(databasePath)).toBe(true);
-      expect(fs.readdirSync(lockDir)).toContainEqual(
-        expect.stringMatching(/^device-identity\.[0-9a-f]{8}\.lock\.sqlite$/u),
-      );
+      expect(fs.readdirSync(stateDir)).toEqual(["state"]);
       expect(fs.existsSync(path.join(stateDir, "identity", "device.json"))).toBe(false);
     });
   });
@@ -40,15 +34,12 @@ describe("device identity state dir defaults", () => {
     });
   });
 
-  it("uses the supplied state environment for its coordinator", async () => {
+  it("uses the supplied state environment and removes its schema ownership marker", async () => {
     await withTempDir("openclaw-identity-env-state-", async (rootDir) => {
       const stateDir = path.join(rootDir, "selected-state");
       const fakeHome = path.join(rootDir, "home");
-      const legacyTmpDir = path.join(rootDir, "legacy-process-tmp");
       fs.mkdirSync(stateDir, { recursive: true });
       fs.mkdirSync(fakeHome, { recursive: true });
-      fs.mkdirSync(legacyTmpDir, { recursive: true });
-      vi.spyOn(os, "tmpdir").mockReturnValue(legacyTmpDir);
       const env = {
         ...process.env,
         HOME: fakeHome,
@@ -56,27 +47,10 @@ describe("device identity state dir defaults", () => {
         OPENCLAW_STATE_DIR: stateDir,
       };
 
-      loadOrCreateDeviceIdentity({ env });
+      const identity = loadOrCreateDeviceIdentity({ env });
 
-      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
-        databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
-        stateDir,
-        temporaryDirectory: legacyTmpDir,
-        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
-      const processTempPath = coordinatorPaths[0];
-      const stateLocalPath = coordinatorPaths[1];
-      if (!processTempPath || !stateLocalPath) {
-        throw new Error("coordinator bridge paths are unavailable");
-      }
-      const stateCoordinators = fs
-        .readdirSync(path.dirname(stateLocalPath))
-        .filter((entry) => entry.startsWith("device-identity."));
-      const processTempCoordinators = fs
-        .readdirSync(path.dirname(processTempPath))
-        .filter((entry) => entry.startsWith("device-identity."));
-      expect(stateCoordinators).toHaveLength(1);
-      expect(processTempCoordinators).toEqual(stateCoordinators);
+      expect(loadDeviceIdentityIfPresent({ env })).toEqual(identity);
+      expect(fs.readdirSync(stateDir)).toEqual(["state"]);
       expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);
     });
   });

@@ -35,8 +35,6 @@ public enum ChatImageProcessor {
             throw ProcessError.notAnImage
         } catch JPEGTranscodeError.propertiesMissing {
             throw ProcessError.decodeFailed
-        } catch JPEGTranscodeError.sizeLimitExceeded {
-            throw ProcessError.encodeFailed
         } catch {
             throw ProcessError.encodeFailed
         }

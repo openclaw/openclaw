@@ -5,7 +5,8 @@ import { authorizeSlackDirectMessage } from "./dm-auth.js";
 
 const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./conversation.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
 }));
 
@@ -65,15 +66,15 @@ describe("authorizeSlackDirectMessage", () => {
     });
   });
 
-  it("keeps allowlist DM policy gated by allowFrom", async () => {
+  it("allows bare user ids for workspace-install DMs", async () => {
     const params = makeParams("allowlist");
+    params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+    params.allowFromLower = ["u123"];
 
-    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
 
-    expect(params.onUnauthorized).toHaveBeenCalledWith({
-      allowMatchMeta: "matchKey=none matchSource=none",
-      senderName: "Alice",
-    });
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
   });
 
   it("creates independent pairing requests for the same user in two Grid workspaces", async () => {

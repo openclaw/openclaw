@@ -1,10 +1,9 @@
-// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
+import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { filterTuiExecArgv } from "./tui-exec-argv.js";
-import type { TuiOptions } from "./tui.js";
+import type { TuiOptions } from "./tui-types.js";
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
@@ -13,16 +12,16 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
-function buildCurrentCliEntryArgs(): string[] {
+function buildTuiCliArgs(opts: TuiOptions): string[] {
   const entry = process.argv[1]?.trim();
   if (!entry) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
-  return path.isAbsolute(entry) ? [entry] : [];
-}
-
-function buildTuiCliArgs(opts: TuiOptions): string[] {
-  const args = [...filterTuiExecArgv(process.execArgv), ...buildCurrentCliEntryArgs(), "tui"];
+  const args = [
+    ...filterOpenClawChildExecArgv(process.execArgv),
+    ...(path.isAbsolute(entry) ? [entry] : []),
+    "tui",
+  ];
   if (opts.local) {
     args.push("--local");
   }
@@ -41,7 +40,6 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   return args;
 }
 
-/** Launches a child TUI process with inherited stdio. */
 export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const args = buildTuiCliArgs(opts);
   // Pause parent stdin while the inherited-stdio child owns the terminal.
@@ -55,7 +53,10 @@ export async function launchTuiCli(opts: TuiOptions): Promise<void> {
     });
     const { detach } = attachChildProcessBridge(child);
 
-    child.once("error", (error) => {
+    child.on("error", (error) => {
+      if (child.pid !== undefined) {
+        return;
+      }
       detach();
       reject(new Error(`failed to launch TUI: ${formatErrorMessage(error)}`));
     });

@@ -561,7 +561,7 @@ class WearProxyClientTest {
         )
       client.updatePreferredPhoneNodeId("phone-stale")
 
-      client.invalidatePreferredPhoneNode()
+      client.updatePreferredPhoneNodeId(null)
       val result = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
 
       assertEquals("phone-reachable", result.sourceNodeId)
@@ -596,7 +596,7 @@ class WearProxyClientTest {
 
       val first = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
       discoveryStarted.await()
-      client.invalidatePreferredPhoneNode()
+      client.updatePreferredPhoneNodeId(null)
       resolvedNode = "phone-new"
       releaseDiscovery.complete(Unit)
 
@@ -695,6 +695,26 @@ class WearProxyClientTest {
 
     assertFalse(tracker.isResponseCurrent(olderRequest, "stream", 12))
     assertTrue(tracker.isResponseCurrent(newerRequest, "stream", 10))
+  }
+
+  @Test
+  fun readOnlyRpcCursorDoesNotInvalidateAnOverlappingModelRequest() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+    val pulseBeforeModel = tracker.beginReadOnlyResponseRequest()
+    val modelRequest = tracker.beginResponseRequest()
+    val pulseRequest = tracker.beginReadOnlyResponseRequest()
+    tracker.beginReadOnlyResponseRequest()
+
+    assertTrue(tracker.isReadOnlyResponseCurrent(pulseBeforeModel, "stream", 10))
+    assertTrue(tracker.isResponseCurrent(modelRequest, "stream", 10))
+    assertTrue(tracker.isReadOnlyResponseCurrent(pulseRequest, "stream", 10))
+
+    val staleLegacyPulse = tracker.beginReadOnlyResponseRequest()
+    assertEquals(WearSequenceDecision.Accepted, tracker.accept("stream", 11))
+    assertFalse(tracker.isReadOnlyResponseCurrent(staleLegacyPulse, null, null))
+    assertFalse(tracker.isReadOnlyResponseCurrent(pulseRequest, "stream", 10))
   }
 
   @Test
@@ -841,7 +861,7 @@ private fun testProxyClient(
   nodeResolver: suspend () -> String?,
   transport: suspend (String, String, ByteArray) -> Unit,
 ): WearProxyClient =
-  WearProxyClient.createForTests(
+  WearProxyClient(
     nodeResolver = WearNodeResolver(nodeResolver),
     transport = WearMessageTransport(transport),
   )

@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeId } from "openclaw/plugin-sdk/string-coerce-runtime";
 type ActiveDiscordTurnThreadRoute = {
   accountId?: string;
   sourceChannelId: string;
@@ -9,11 +10,6 @@ type ActiveDiscordTurnThreadRoute = {
 };
 
 const activeRoutes = new Map<string, Set<ActiveDiscordTurnThreadRoute>>();
-
-function normalizeId(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
 
 export function beginDiscordActiveTurnThreadRoute(
   sessionKey: string | undefined,
@@ -70,29 +66,19 @@ export function notifyDiscordActiveTurnThreadReplyDelivered(params: {
   accountId?: string | null;
   threadId?: string;
 }): boolean {
-  const route = findDiscordActiveTurnThreadReplyRoute(params);
-  const threadId = normalizeId(params.threadId ?? undefined);
-  if (!route || !threadId) {
+  const key = normalizeId(params.sessionKey ?? undefined);
+  const threadId = normalizeId(params.threadId);
+  if (!key || !threadId) {
+    return false;
+  }
+  const route = Array.from(activeRoutes.get(key) ?? []).find(
+    (candidate) =>
+      candidate.adoptedThreadId === threadId &&
+      (!candidate.accountId || !params.accountId || candidate.accountId === params.accountId),
+  );
+  if (!route) {
     return false;
   }
   route.onThreadReplyDelivered?.(threadId);
   return true;
-}
-
-function findDiscordActiveTurnThreadReplyRoute(params: {
-  sessionKey?: string | null;
-  accountId?: string | null;
-  threadId?: string;
-}): ActiveDiscordTurnThreadRoute | undefined {
-  const key = normalizeId(params.sessionKey ?? undefined);
-  const threadId = normalizeId(params.threadId);
-  if (!key || !threadId) {
-    return undefined;
-  }
-  return Array.from(activeRoutes.get(key) ?? []).find(
-    (route) =>
-      Boolean(route.adoptedThreadId) &&
-      route.adoptedThreadId === threadId &&
-      (!route.accountId || !params.accountId || route.accountId === params.accountId),
-  );
 }

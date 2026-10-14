@@ -1,19 +1,23 @@
-import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Managed Chrome graphics diagnostics.
  *
  * Reads the browser-level SystemInfo domain and caches normalized facts on the
  * exact RunningChrome instance that owns the process.
  */
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNullableRecord,
+  asFiniteNumber,
+  filterStringEntries,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
-import { getChromeWebSocketUrl, type RunningChrome } from "./chrome.js";
+import { getChromeWebSocketEndpoint, type RunningChrome } from "./chrome.js";
 import type {
   BrowserGraphicsAcceleration,
   BrowserGraphicsDevice,
   BrowserGraphicsDiagnostics,
-  BrowserVideoDecodeCapability,
-  BrowserVideoEncodeCapability,
 } from "./client.types.js";
 
 type ChromeGraphicsProbeOptions = {
@@ -24,11 +28,11 @@ type ChromeGraphicsProbeOptions = {
 };
 
 function readChromeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function readChromeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return asFiniteNumber(value) ?? 0;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -42,12 +46,6 @@ function readStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
 function readSize(value: unknown): { width: number; height: number } {
   const size = asNullableRecord(value);
   return {
@@ -58,34 +56,6 @@ function readSize(value: unknown): { width: number; height: number } {
 
 function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function readDevices(value: unknown): BrowserGraphicsDevice[] {
-  return readRecordArray(value).map((device) => ({
-    vendorId: readChromeNumber(device.vendorId),
-    deviceId: readChromeNumber(device.deviceId),
-    vendor: readChromeString(device.vendorString),
-    device: readChromeString(device.deviceString),
-    driverVendor: readChromeString(device.driverVendor),
-    driverVersion: readChromeString(device.driverVersion),
-  }));
-}
-
-function readVideoDecoding(value: unknown): BrowserVideoDecodeCapability[] {
-  return readRecordArray(value).map((capability) => ({
-    profile: readChromeString(capability.profile),
-    minResolution: readSize(capability.minResolution),
-    maxResolution: readSize(capability.maxResolution),
-  }));
-}
-
-function readVideoEncoding(value: unknown): BrowserVideoEncodeCapability[] {
-  return readRecordArray(value).map((capability) => ({
-    profile: readChromeString(capability.profile),
-    maxResolution: readSize(capability.maxResolution),
-    maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
-    maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
-  }));
 }
 
 function firstAttribute(
@@ -131,7 +101,7 @@ function classifyGraphicsAcceleration(params: {
 
 function normalizeChromeGraphicsInfo(
   value: unknown,
-  observedAt = Date.now(),
+  observedAt: number,
 ): BrowserGraphicsDiagnostics {
   const result = asNullableRecord(value);
   const gpu = asNullableRecord(result?.gpu);
@@ -145,7 +115,14 @@ function normalizeChromeGraphicsInfo(
 
   const attributes = readStringRecord(gpu.auxAttributes);
   const featureStatus = readStringRecord(gpu.featureStatus);
-  const devices = readDevices(gpu.devices);
+  const devices = readRecordArray(gpu.devices).map((device) => ({
+    vendorId: readChromeNumber(device.vendorId),
+    deviceId: readChromeNumber(device.deviceId),
+    vendor: readChromeString(device.vendorString),
+    device: readChromeString(device.deviceString),
+    driverVendor: readChromeString(device.driverVendor),
+    driverVersion: readChromeString(device.driverVersion),
+  }));
   const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
   const disabledFeatures = Object.entries(featureStatus)
     .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
@@ -162,9 +139,18 @@ function normalizeChromeGraphicsInfo(
     devices,
     featureStatus,
     disabledFeatures,
-    driverBugWorkarounds: readStringArray(gpu.driverBugWorkarounds),
-    videoDecoding: readVideoDecoding(gpu.videoDecoding),
-    videoEncoding: readVideoEncoding(gpu.videoEncoding),
+    driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
+    videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
+      profile: readChromeString(capability.profile),
+      minResolution: readSize(capability.minResolution),
+      maxResolution: readSize(capability.maxResolution),
+    })),
+    videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
+      profile: readChromeString(capability.profile),
+      maxResolution: readSize(capability.maxResolution),
+      maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
+      maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
+    })),
   };
 }
 
@@ -174,19 +160,28 @@ export async function inspectChromeGraphicsDiagnostics(
 ): Promise<BrowserGraphicsDiagnostics> {
   const observedAt = Date.now();
   try {
-    const wsUrl = await getChromeWebSocketUrl(cdpUrl, options.httpTimeoutMs, options.ssrfPolicy);
-    if (!wsUrl) {
+    const endpoint = await getChromeWebSocketEndpoint(
+      cdpUrl,
+      options.httpTimeoutMs,
+      options.ssrfPolicy,
+    );
+    if (!endpoint) {
       return {
         status: "unavailable",
         observedAt,
         reason: "browser-level CDP WebSocket was not advertised",
       };
     }
-    const result = await withCdpSocket(wsUrl, async (send) => await send("SystemInfo.getInfo"), {
-      handshakeTimeoutMs: options.handshakeTimeoutMs,
-      commandTimeoutMs: options.commandTimeoutMs,
-      handshakeRetries: 0,
-    });
+    const result = await withCdpSocket(
+      endpoint.url,
+      async (send) => await send("SystemInfo.getInfo"),
+      {
+        handshakeTimeoutMs: options.handshakeTimeoutMs,
+        commandTimeoutMs: options.commandTimeoutMs,
+        handshakeRetries: 0,
+        lookup: endpoint.lookup,
+      },
+    );
     return normalizeChromeGraphicsInfo(result, observedAt);
   } catch (error) {
     return {

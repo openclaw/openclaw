@@ -14,33 +14,30 @@ function parseZoomMeetingIdentity(url: string | undefined): ZoomMeetingIdentity 
   if (!url) {
     return undefined;
   }
-  try {
-    const parsed = new URL(url);
-    if (
-      parsed.protocol !== "https:" ||
-      parsed.port ||
-      parsed.username ||
-      parsed.password ||
-      !isZoomHostname(parsed.hostname.toLowerCase())
-    ) {
-      return undefined;
-    }
-    const invitation = parsed.pathname.match(/^\/j\/(\d{9,11})\/?$/);
-    const webClient =
-      parsed.hostname.toLowerCase() === "app.zoom.us"
-        ? parsed.pathname.match(/^\/wc\/(\d{9,11})\/join\/?$/)
-        : undefined;
-    const meetingId = invitation?.[1] ?? webClient?.[1];
-    return meetingId
-      ? {
-          kind: invitation ? "invitation" : "web-client",
-          meetingId,
-          passcode: parsed.searchParams.get("pwd") || undefined,
-        }
-      : undefined;
-  } catch {
+  const parsed = URL.parse(url);
+  if (
+    !parsed ||
+    parsed.protocol !== "https:" ||
+    parsed.port ||
+    parsed.username ||
+    parsed.password ||
+    !isZoomHostname(parsed.hostname.toLowerCase())
+  ) {
     return undefined;
   }
+  const invitation = parsed.pathname.match(/^\/j\/(\d{9,11})\/?$/);
+  const webClient =
+    parsed.hostname.toLowerCase() === "app.zoom.us"
+      ? parsed.pathname.match(/^\/wc\/(\d{9,11})\/join\/?$/)
+      : undefined;
+  const meetingId = invitation?.[1] ?? webClient?.[1];
+  return meetingId
+    ? {
+        kind: invitation ? "invitation" : "web-client",
+        meetingId,
+        passcode: parsed.searchParams.get("pwd") || undefined,
+      }
+    : undefined;
 }
 
 export function normalizeZoomMeetingUrl(input: unknown): string {
@@ -102,10 +99,8 @@ export function isRecoverableZoomMeetingTab(
   if (normalizeZoomMeetingUrlForReuse(tab.url)) {
     return true;
   }
-  try {
-    const hostname = new URL(tab.url ?? "").hostname.toLowerCase();
-    return isZoomHostname(hostname) && /sign in|verification|zoom/i.test(tab.title ?? "");
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(tab.url ?? "")?.hostname.toLowerCase();
+  return Boolean(
+    hostname && isZoomHostname(hostname) && /sign in|verification|zoom/i.test(tab.title ?? ""),
+  );
 }

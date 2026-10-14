@@ -1,0 +1,343 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import {
+  validatePluginsInstallParams,
+  validatePluginsReloadParams,
+  validatePluginsSetEnabledParams,
+} from "../../../packages/gateway-protocol/src/validator-registry.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../plugin-runtime-refresh.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
+import { createPluginsTool } from "./plugins-tool.js";
+
+vi.mock("./in-process-gateway.js", () => ({ callAgentToolGatewayRequest: vi.fn() }));
+
+const callGateway = vi.mocked(callAgentToolGatewayRequest);
+const runtime = { operationId: "reload-1", generation: 2, pluginIds: ["local-tool"] };
+
+describe("plugins tool", () => {
+  let refresh: ReturnType<typeof createAgentPluginRuntimeRefresh>;
+  beforeEach(() => {
+    callGateway.mockReset();
+    refresh = createAgentPluginRuntimeRefresh();
+  });
+  afterEach(() => refresh.close());
+
+  it("rejects an unsupported install source before dispatch", async () => {
+    await expect(
+      createPluginsTool().execute("unsupported", { action: "install", source: "local" }),
+    ).rejects.toThrow("Unknown plugin installation source: local");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reports a committed error without an absent continuation consumer", async () => {
+    callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Plugin activation failed",
+        details: {
+          runtime: { ...runtime, committed: true, phase: "activate" },
+          warnings: ["Cleanup pending: " + "🦞".repeat(2_000)],
+        },
+      }),
+    );
+    await refresh.run(async () => {
+      const result = await createPluginsTool().execute("unsupported-runtime", {
+        action: "reload",
+        pluginId: "local-tool",
+      });
+      expect(result.details).toMatchObject({
+        next: expect.stringContaining("new conversation"),
+      });
+      expect(JSON.stringify(result.details)).toContain("do not repeat");
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
+      expect(result.terminate).toBeUndefined();
+      expect(captureAgentPluginRuntimeRefresh().isRequested()).toBe(false);
+    });
+  });
+
+  it("keeps saved-install and earlier-publication facts when a later failure exceeds the budget", async () => {
+    callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Later activation failed",
+        details: {
+          persistence: { operation: "install", pluginId: "local-tool" },
+          runtime: { ...runtime, committed: true, warnings: ["🦞".repeat(2_000)] },
+          runtimeAttempt: { ...runtime, generation: 3, committed: false, phase: "prepare" },
+        },
+      }),
+    );
+    const result = await createPluginsTool().execute("saved", {
+      action: "install",
+      source: "official",
+      pluginId: "local-tool",
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        persistence: { operation: "install" },
+        runtime: { generation: 2, committed: true },
+        warnings: ["🦞".repeat(80)],
+        runtimeAttempt: { generation: 3, committed: false, phase: "prepare" },
+        next: expect.stringContaining("do not reinstall"),
+      },
+    });
+    expect(Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8")).toBeLessThanOrEqual(
+      3_840,
+    );
+  });
+
+  it.each([
+    {
+      args: { action: "enable", pluginId: "local-tool" },
+      method: "plugins.setEnabled",
+      validate: validatePluginsSetEnabledParams,
+      params: { pluginId: "local-tool", enabled: true },
+    },
+    {
+      args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+      method: "plugins.install",
+      validate: validatePluginsInstallParams,
+      params: { source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    },
+  ])(
+    "routes $args.action through the authorized management owner",
+    async ({ args, method, params, validate }) => {
+      callGateway.mockResolvedValue({ runtime, restartRequired: false });
+      const signal = new AbortController().signal;
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const tool = createPluginsTool();
+        const result = await tool.execute("management", args, signal);
+        expect(validate(callGateway.mock.calls[0]?.[0].params)).toBe(true);
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+          method,
+          params,
+          signal,
+          timeoutMs: null,
+        });
+        expect(result).toMatchObject({
+          details: { runtime, restartRequired: false },
+          terminate: true,
+        });
+        await expect(tool.execute("stale", args, signal)).rejects.toThrow("Plugin runtime changed");
+        expect(callGateway).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it("rejects an official version before dispatch", async () => {
+    const args = {
+      action: "install",
+      source: "official",
+      pluginId: "local-tool",
+      version: "1.0.0",
+    };
+    await expect(createPluginsTool().execute("version", args)).rejects.toThrow(
+      "Official catalog installs do not accept a version",
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("retains capability review details without scheduling refresh after rejection", async () => {
+    const details = { capabilityConsent: { reviewToken: "review-1", pluginId: "local-tool" } };
+    callGateway
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "Review the declared capability change",
+          details,
+        }),
+      )
+      .mockResolvedValueOnce({ runtime, restartRequired: false });
+    await refresh.run(async () => {
+      captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+      const owner = captureAgentPluginRuntimeRefresh();
+      const tool = createPluginsTool();
+      const result = await tool.execute("review", { action: "reload", pluginId: "local-tool" });
+      expect(result).toMatchObject({
+        isError: true,
+        details: {
+          code: "INVALID_REQUEST",
+          error: "Review the declared capability change",
+          details,
+        },
+      });
+      expect(result.terminate).toBeUndefined();
+      expect(owner.isPending()).toBe(false);
+      await tool.execute("approved", {
+        action: "reload",
+        pluginId: "local-tool",
+        reviewToken: "review-1",
+      });
+      expect(callGateway).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          params: {
+            plugins: [{ pluginId: "local-tool" }],
+            acknowledgeCapabilities: { reviewToken: "review-1" },
+          },
+        }),
+      );
+      expect(validatePluginsReloadParams(callGateway.mock.calls.at(-1)?.[0].params)).toBe(true);
+      expect(owner.isPending()).toBe(true);
+    });
+  });
+
+  it("keeps old callback closures fenced after another generation is admitted", async () => {
+    callGateway.mockResolvedValue({ runtime });
+    const oldTool = refresh.run(() => createPluginsTool());
+    refresh.close();
+    await refresh.run(async () => {
+      captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+      await expect(
+        oldTool.execute("stale", { action: "reload", pluginId: "local-tool" }),
+      ).rejects.toThrow("Plugin runtime changed");
+      expect(callGateway).not.toHaveBeenCalled();
+      const nextTool = createPluginsTool();
+      await expect(
+        nextTool.execute("current", { action: "reload", pluginId: "local-tool" }),
+      ).resolves.toMatchObject({ terminate: true });
+    });
+  });
+
+  it.each([
+    {
+      action: "inspect",
+      payload: {
+        ok: true,
+        declared: { tools: Array.from({ length: 600 }, () => "x") },
+        reviewToken: "complete-review-only",
+      },
+    },
+    {
+      action: "search",
+      payload: { results: [{ package: { name: "large", summary: "🦞".repeat(2_000) } }] },
+    },
+  ])(
+    "bounds the complete $action result without exposing a partial review",
+    async ({ action, payload }) => {
+      callGateway.mockResolvedValue(payload);
+      const result = await createPluginsTool().execute("large-result", {
+        action,
+        pluginId: "local-tool",
+        query: "large",
+      });
+      expect(result).toMatchObject({
+        details: { ok: true, detailsOmitted: "response_budget_exceeded" },
+        content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
+      });
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
+      expect(JSON.stringify(result)).not.toContain("complete-review-only");
+      expect(result.terminate).toBeUndefined();
+    },
+  );
+
+  it("keeps selected-entry guidance when a compact result requires a restart", async () => {
+    callGateway.mockResolvedValue({
+      ok: true,
+      runtime: {
+        ...runtime,
+        selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+      },
+      restartRequired: true,
+      warnings: ["x".repeat(4_000)],
+    });
+    const result = await createPluginsTool().execute("reload", {
+      action: "reload",
+      pluginId: "local-tool",
+    });
+    expect(result).toMatchObject({
+      details: {
+        restartRequired: true,
+        runtime: { generation: runtime.generation },
+        next: expect.stringContaining(
+          "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+        ),
+      },
+    });
+    expect(result.details).toMatchObject({
+      next: expect.stringMatching(/restart the Gateway/i),
+    });
+    expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+    expect(Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8")).toBeLessThanOrEqual(
+      3_840,
+    );
+  });
+
+  it("retains committed publication and continuation when mutation details exceed the budget", async () => {
+    const application = {
+      ...runtime,
+      committed: true,
+      phase: "activate",
+    };
+    const oversized = {
+      restartRequired: false,
+      warnings: ["🦞".repeat(2_000), "界".repeat(2_000), "Additional cleanup warning"],
+    };
+    callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Activation failed",
+        details: {
+          runtime: application,
+          ...oversized,
+          capabilityConsent: { reviewToken: "complete-review-only" },
+        },
+      }),
+    );
+    await refresh.run(async () => {
+      captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+      const owner = captureAgentPluginRuntimeRefresh();
+      const result = await createPluginsTool().execute("large-mutation", {
+        action: "reload",
+        pluginId: "local-tool",
+      });
+      expect(result).toMatchObject({
+        details: {
+          ok: false,
+          runtime: { generation: runtime.generation, committed: true, phase: "activate" },
+          restartRequired: false,
+          warnings: ["🦞".repeat(80), "界".repeat(160)],
+          omittedWarningCount: 1,
+          detailsOmitted: "response_budget_exceeded",
+        },
+        content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
+      });
+      expect(result).toMatchObject({ isError: true });
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
+      expect(JSON.stringify(result)).not.toContain("complete-review-only");
+      expect(result.terminate).toBe(true);
+      expect(owner.isPending()).toBe(true);
+    });
+  });
+
+  it("bounds inventory and narrows it without hiding the omitted count", async () => {
+    const plugins = Array.from({ length: 25 }, (_, index) => ({
+      id: `plugin-${index}`,
+      name: `Plugin ${index}`,
+      description: "runtime detail",
+      version: "1.0.0",
+      state: "enabled",
+    }));
+    callGateway.mockResolvedValue({ plugins, mutationAllowed: true });
+    const tool = createPluginsTool();
+    const all = await tool.execute("inventory", { action: "list" });
+    expect(all.details).toMatchObject({ matching: 25, omitted: 5, mutationAllowed: true });
+    expect((all.details as { plugins: unknown[] }).plugins).toHaveLength(20);
+    const narrowed = await tool.execute("filter", { action: "list", query: "plugin-24" });
+    expect(narrowed.details).toMatchObject({
+      plugins: [{ id: "plugin-24", state: "enabled", version: "1.0.0" }],
+      matching: 1,
+      omitted: 0,
+    });
+  });
+});
