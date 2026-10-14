@@ -348,7 +348,7 @@ describe("memory-core plugin runtime registration", () => {
     }
   });
 
-  it("hides intent create, list, and cancel from non-owner turns", () => {
+  it("hides intent from non-owners and prepares owner integer arguments for validation", () => {
     const warn = vi.fn();
     let intentFactory:
       | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
@@ -383,14 +383,22 @@ describe("memory-core plugin runtime registration", () => {
       "memory-core: intent tool unavailable: runtime config is unavailable for this turn",
     );
 
-    const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as {
-      name?: string;
-      description?: string;
-      parameters?: {
-        properties?: Record<string, { default?: string }>;
-      };
-    };
+    const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as AnyAgentTool;
     expect(ownerTool).toMatchObject({ name: "intent" });
+    for (const maxFires of ["3", 3]) {
+      const prepared = ownerTool.prepareArguments?.({
+        action: "create",
+        maxFires,
+        cooldownSeconds: "0",
+      });
+      expect(prepared).toEqual({ action: "create", maxFires: 3, cooldownSeconds: 0 });
+      expect(Value.Check(ownerTool.parameters, prepared)).toBe(true);
+    }
+    for (const maxFires of ["abc", "3.5", "-1", "0"]) {
+      expect(() => ownerTool.prepareArguments?.({ action: "create", maxFires })).toThrow(
+        "maxFires must be a positive integer",
+      );
+    }
     expect(ownerTool.description).toContain("system injects the reminder automatically");
     expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
     expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
