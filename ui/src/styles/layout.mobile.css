@@ -78,7 +78,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .shell--mobile-nav .shell-nav-backdrop {
-  position: fixed;
+  /* Use the positioned app canvas, including its safe-area padding. Safari
+     extends fixed backgrounds into browser chrome with an independent fade. */
+  position: absolute;
   z-index: 65;
   inset: 0;
   display: block;
