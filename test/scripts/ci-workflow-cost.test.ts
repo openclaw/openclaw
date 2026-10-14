@@ -174,8 +174,17 @@ describe("workflow cost admission", () => {
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
       const accepts = (path: string) =>
-        workflow.on.pull_request.paths.some((pattern: string) => matchesGlob(path, pattern));
+        workflow.on.pull_request.paths.reduce(
+          (selected: boolean, pattern: string) =>
+            pattern.startsWith("!")
+              ? selected && !matchesGlob(path, pattern.slice(1))
+              : selected || matchesGlob(path, pattern),
+          false,
+        );
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
+      for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
+        expect(accepts(path), path).toBe(false);
+      }
       for (const path of [
         `.github/workflows/${name}.yml`,
         ".github/actions/setup-node-env/install-dependencies.sh",
@@ -187,9 +196,12 @@ describe("workflow cost admission", () => {
         "scripts/ci-hydrate-testbox-env.sh",
         ".npmrc",
         "packages/fs-safe/package.json",
+        "patches/vitest@5.0.1.patch",
+        "patches/runtime-fixture.md",
       ]) {
         expect(accepts(path), path).toBe(true);
       }
+      expect(["patches/README.md", "patches/vitest@5.0.1.patch"].some(accepts)).toBe(true);
       expect(workflow.on.workflow_dispatch).toBeDefined();
     },
   );
