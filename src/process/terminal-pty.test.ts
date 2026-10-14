@@ -33,8 +33,14 @@ vi.mock("./kill-tree.js", () => ({
   signalPtySessionTree: mocks.signalPtySessionTree,
 }));
 vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
-vi.mock("./terminal-pty-bun.js", () => ({ spawnBunTerminalPty: mocks.spawnBunTerminalPty }));
-vi.mock("./terminal-pty-node.js", () => ({ spawnNodeTerminalPty: mocks.spawnNodeTerminalPty }));
+vi.mock("./terminal-pty-bun.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./terminal-pty-bun.js")>()),
+  spawnBunTerminalPty: mocks.spawnBunTerminalPty,
+}));
+vi.mock("./terminal-pty-node.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./terminal-pty-node.js")>()),
+  spawnNodeTerminalPty: mocks.spawnNodeTerminalPty,
+}));
 
 const { prepareTerminalPty, spawnTerminalPty } = await import("./terminal-pty.js");
 
