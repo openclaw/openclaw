@@ -92,8 +92,8 @@ export type SessionEntryListScope = Partial<
   sessionKeys?: readonly string[];
   /** Set false for readers that do not consume derived participant identities or counts. */
   includeParticipants?: boolean;
-  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
-  cronRetention?: true;
+  /** Page full cron-run entries for exact deletion guards without hydrating the store. */
+  cronRetention?: { afterSessionKey?: string; limit: number };
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
 };

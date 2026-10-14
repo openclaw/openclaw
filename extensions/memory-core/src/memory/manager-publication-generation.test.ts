@@ -101,7 +101,7 @@ function indexCommands(calls: unknown[][]): string[] {
   });
 }
 
-function recordIndexCommands(prototype: Pick<MessagePort, "postMessage">) {
+function recordIndexCommands(prototype: Pick<Worker, "postMessage">) {
   const commands: string[] = [];
   const nativePost = prototype.postMessage;
   const posts = vi.spyOn(prototype, "postMessage").mockImplementation(function (
