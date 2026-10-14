@@ -10,7 +10,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { getLocale, t } from "../lib/reactive/i18n.ts";
+import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -71,14 +71,13 @@ function Elapsed(props: {
   timestamp: number;
   display?: "compact" | "minute-compact" | "single-unit";
 }) {
-  const date = () => new Date(props.timestamp);
+  const date = createMemo(() => new Date(props.timestamp));
+  const localizedDate = createMemo(() => date().toLocaleString(getLocale()));
   return (
     <time
       datetime={date().toISOString()}
-      title={date().toLocaleString(getLocale())}
-      aria-label={
-        props.display === "minute-compact" ? undefined : date().toLocaleString(getLocale())
-      }
+      title={localizedDate()}
+      aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
     >
       <openclaw-elapsed-time
         prop:startMs={props.timestamp}
@@ -110,7 +109,10 @@ function Sessions(props: {
               keyed={({ row, agentId }) => sessionIdentity(row.key, agentId, props.input)}
             >
               {(session) => {
-                const name = () => resolveSessionDisplayName(session().row.key, session().row);
+                const name = createMemo(() => {
+                  i18nRevision();
+                  return resolveSessionDisplayName(session().row.key, session().row);
+                });
                 const target = () =>
                   sessionNavigationTarget({
                     face: resolveSessionPreferredFace(session().row),
@@ -125,11 +127,10 @@ function Sessions(props: {
                     class="person-activity-card__session session-row-host"
                     href={target().href}
                     onClick={(event) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
+                      if (shouldHandleNavigationClick(event)) {
+                        event.preventDefault();
+                        props.input.openSession(session().row, session().agentId);
                       }
-                      event.preventDefault();
-                      props.input.openSession(session().row, session().agentId);
                     }}
                   >
                     <span class="person-activity-card__session-icon" aria-hidden="true">
@@ -184,11 +185,12 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
   });
   const lastActivityAt = createMemo(() => presenceViewerLastActivity(user()));
   const activity = createMemo(() => presenceViewerActivity(user()));
-  const where = createMemo(() => presenceConnectionDescriptions(user().entries ?? []));
+  const where = createMemo(() => {
+    i18nRevision();
+    return presenceConnectionDescriptions(user().entries ?? []);
+  });
   const zones = createMemo(() =>
-    [
-      ...new Set((user().entries ?? []).flatMap((entry) => entry.timeZone?.trim() || [])),
-    ].toSorted(),
+    [...new Set(user().entries?.flatMap((entry) => entry.timeZone?.trim() || []))].toSorted(),
   );
   let recentSessionKeys: string[] | undefined;
   const sessions = createMemo(() => {
@@ -325,11 +327,10 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
   } else if (existing) {
     existing.update(input);
   } else {
-    const initial: CardValue = input;
     // The portal outlives the caller’s transient render scope.
     const dispose = runWithOwner(null, () =>
       render(() => {
-        const [value, setValue] = createSignal<CardValue>(initial, { ownedWrite: true });
+        const [value, setValue] = createSignal<CardValue>(input, { ownedWrite: true });
         cards.set(container, { update: setValue, dispose: () => dispose() });
         onCleanup(() => cards.delete(container));
         return (
@@ -340,10 +341,7 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
             })()}
             fallback={
               <div class="person-reference__status" role="status">
-                {(() => {
-                  const current = value();
-                  return typeof current === "string" ? current : "";
-                })()}
+                {String(value())}
               </div>
             }
           >
