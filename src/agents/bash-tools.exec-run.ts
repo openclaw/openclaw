@@ -75,6 +75,10 @@ import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
+import {
+  commandInvokesGitHubCli,
+  unavailableGitHubExecProfileDir,
+} from "./github-invalid-selection.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -506,10 +510,22 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
+        const unavailableProfileDir =
+          preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR ||
+          unavailableGitHubExecProfileDir();
+        // Direct gh uses the refusing launcher. Other commands still run, but their
+        // environment keeps this missing directory so an indirect gh cannot open
+        // another account's config.
         const githubProfileDir =
-          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
-            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
-            : undefined;
+          host === "gateway" &&
+          preparedRunEnvironment.invalidGitHubSelection &&
+          commandInvokesGitHubCli(params.command)
+            ? unavailableProfileDir
+            : host === "gateway" &&
+                preparedRunEnvironment.managedLocalIdentity &&
+                !preparedRunEnvironment.invalidGitHubSelection
+              ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
+              : undefined;
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({

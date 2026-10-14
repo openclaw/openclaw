@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
@@ -5,6 +6,7 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { INVALID_GITHUB_SELECTION_EXEC_ENV } from "../github-invalid-selection.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 afterEach(() => {
@@ -66,6 +68,31 @@ describe("prepared harness tool environment", () => {
       host.closeHost();
       expect(() => host.hostCapabilities.preparedEnvironment?.()).toThrow("no longer active");
       expect(() => host.hostCapabilities.activeComputerContext?.()).toThrow("no longer active");
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+    }
+  });
+
+  it("keeps an invalid GitHub selection from using a stored account", async () => {
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-invalid-github",
+      agentId: "main",
+      sessionKey: "agent:main:invalid-github",
+      config: {
+        tools: { github: { profileId: `ghp_${"Z".repeat(36)}` } },
+      },
+    });
+    try {
+      const environment = host.hostCapabilities.preparedEnvironment?.();
+      expect(environment?.managedLocalIdentity).toBe(true);
+      expect(environment?.credentialScrubEnv).toMatchObject(INVALID_GITHUB_SELECTION_EXEC_ENV);
+      const profileDir = environment?.localIdentityEnv.GH_CONFIG_DIR;
+      expect(profileDir).toEqual(expect.any(String));
+      if (!profileDir) {
+        throw new Error("expected an unavailable GitHub config directory");
+      }
+      await expect(fs.access(profileDir)).rejects.toThrow();
     } finally {
       host.closeHost();
       host.closeAdmission();
