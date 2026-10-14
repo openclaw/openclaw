@@ -593,6 +593,7 @@ export async function reviewDependencyChanges(
   if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown dependency guard mode: ${mode}`);
   }
+  const enforce = mode === "enforce" || mode === "prepare";
   const dependencyFiles = [
     ...new Set(files.flatMap((file) => [file.filename, file.previous_filename])),
   ]
@@ -655,7 +656,6 @@ export async function reviewDependencyChanges(
       }
       return true;
     }
-    mode = "enforce";
   }
 
   const comments = await api.paginate(`${issuePath}/comments`);
@@ -675,7 +675,7 @@ export async function reviewDependencyChanges(
       owner,
       repo,
       labelNames: new Set(labels.map((label) => label.name)),
-      recoverCommentWrites: mode === "enforce",
+      recoverCommentWrites: enforce,
     });
   // Consolidate the former awareness and enforcement comments into one notice.
   await deleteCommentIfPresent(findComment(dependencyChangeMarker));
@@ -688,7 +688,7 @@ export async function reviewDependencyChanges(
       );
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
-    if (mode === "enforce") {
+    if (enforce) {
       return await finishGuard(guard, securityReviewContracts.dependency.success.clear);
     }
     return true;
@@ -767,7 +767,7 @@ export async function reviewDependencyChanges(
     }
   }
 
-  if (mode === "enforce") {
+  if (enforce) {
     const allowed = await finishGuard(
       guard,
       securityReviewContracts.dependency.success[removalOnly ? "removals" : "approved"],

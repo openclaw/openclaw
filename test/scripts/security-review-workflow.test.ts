@@ -237,9 +237,12 @@ describe("security review workflow trust boundaries", () => {
             );
             continue;
           }
-          expect(step.run).toBe(
-            `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
-          );
+          // Final enforcement is exercised with preparation outputs below.
+          if (step.env?.OPENCLAW_SECURITY_REVIEW_MODE !== "enforce") {
+            expect(step.run).toBe(
+              `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
+            );
+          }
           expect(step.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
         }
       }
