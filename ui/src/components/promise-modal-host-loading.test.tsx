@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
@@ -32,7 +31,7 @@ afterEach(async () => {
 it("keeps modal code cold until requested and settles an abort before that code arrives", async () => {
   expect(view.started).not.toHaveBeenCalled();
   const abort = new AbortController();
-  const content = vi.fn(() => html`<openclaw-modal-dialog label="Aborted modal" />`);
+  const content = vi.fn(() => <openclaw-modal-dialog label="Aborted modal" />);
   const cancelled = withPromiseModalHost({ signal: abort.signal, value: "aborted" }, (modal) => {
     modal.render(content);
   });
@@ -43,13 +42,17 @@ it("keeps modal code cold until requested and settles an abort before that code 
   expect(document.body.childElementCount).toBe(0);
 
   const finished = withPromiseModalHost<string>(undefined, ({ render, finish }) => {
-    render(
-      () => html`<openclaw-modal-dialog label="Current modal">
-        <button @click=${() => finish("done")}>Finish</button>
-      </openclaw-modal-dialog>`,
-    );
+    render(() => (
+      <openclaw-modal-dialog label="Current modal">
+        <button onClick={() => finish("done")}>Finish</button>
+      </openclaw-modal-dialog>
+    ));
   });
+  const failed = vi.fn();
+  void finished.catch(failed);
   view.resolve();
+  await vi.dynamicImportSettled();
+  expect(failed.mock.calls).toEqual([]);
   const { modal, dialog } = await waitForRenderedModalDialog(document.body);
   expect(view.started).toHaveBeenCalledOnce();
   expect(dialog.getAttribute("aria-label")).toBe("Current modal");

@@ -284,7 +284,6 @@ export function createSessionHistoryWorkerReaders(
         (value) => value,
       );
     },
-    readSessionMaintenance: reader("session-maintenance-read", (value) => value),
     readProgressCard: reader("session-progress-card", (value) => value.card),
     readPendingInputHistory: reader("session-pending-input-history", (value) => value.snapshot),
     readPendingInputReceipts: reader("session-pending-input-receipts", (value) => value.receipts),
