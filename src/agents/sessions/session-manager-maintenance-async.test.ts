@@ -52,29 +52,32 @@ async function appendUser(manager: SessionManager, text: string): Promise<string
   return (await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage(text, 1))).entryId;
 }
 
-it("isolates prepared and published transcript rewrite payloads", async () => {
+it("shares admitted immutable payloads when preparing and publishing a rewrite", async () => {
   const manager = SessionManager.inMemory("/synthetic");
-  const id = await manager.appendCustomEntryAsync("tool-output", {
-    chunks: [{ text: "original" }],
+  const id = await manager.appendCustomEntryAsync("large-tool-output", {
+    chunks: Array.from({ length: 1024 }, () => ({ text: "x".repeat(1024) })),
   });
   const original = manager.getEntry(id);
   if (original?.type !== "custom" || !isRecord(original.data)) {
-    throw new Error("Missing transcript payload");
+    throw new Error("Missing large transcript payload");
   }
   const rewrite = await manager.prepareTranscriptRewriteAsync();
+  expect(rewrite.sessionManager.getEntry(id)).not.toBe(original);
   const prepared = rewrite.sessionManager.getEntry(id);
-  if (prepared?.type !== "custom" || !isRecord(prepared.data)) {
+  if (prepared?.type !== "custom") {
     throw new Error("Missing prepared transcript payload");
   }
-  expect(prepared).not.toBe(original);
-  prepared.data.chunks = [{ text: "prepared" }];
-  expect(original.data.chunks).toEqual([{ text: "original" }]);
+  expect(prepared.data).toBe(original.data);
+  expect(Object.isFrozen(original.data)).toBe(true);
+  expect(Reflect.set(original.data, "chunks", [])).toBe(false);
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
   expect(manager.getEntry(replacementId)).toBeUndefined();
   await rewrite.commit(new Map());
-  expect(manager.getEntry(id)).toMatchObject({ data: { chunks: [{ text: "prepared" }] } });
-  prepared.data.chunks = [{ text: "later" }];
-  expect(manager.getEntry(id)).toMatchObject({ data: { chunks: [{ text: "prepared" }] } });
+  const published = manager.getEntry(id);
+  if (published?.type !== "custom") {
+    throw new Error("Missing published transcript payload");
+  }
+  expect(published.data).toBe(original.data);
   expect(manager.getEntry(replacementId)).toMatchObject({
     appendMode: "side",
     message: { content: "replacement" },
@@ -123,6 +126,32 @@ it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", asy
   expect(committed).not.toBe(entry);
   entry.data.text = "later";
   expect(committed).toMatchObject({ data: { text: "prepared" } });
+});
+
+it("preserves opaque SDK aliases into an admitted payload during a rewrite", async () => {
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 4, id: "aliases", cwd: "/synthetic" },
+    { type: "opaque", id: "opaque", parentId: null },
+  ]);
+  const id = await manager.appendCustomEntryAsync("owned", { child: { text: "original" } });
+  const owned = manager.getEntry(id);
+  const opaque = manager
+    .getPersistedEntries()
+    .find((entry) => isRecord(entry) && entry.type === "opaque");
+  if (owned?.type !== "custom" || !isRecord(owned.data) || !isRecord(opaque)) {
+    throw new Error("Missing alias fixture");
+  }
+  opaque.alias = owned.data.child;
+  const rewrite = await manager.prepareTranscriptRewriteAsync();
+  const prepared = rewrite.sessionManager.getEntry(id);
+  const preparedOpaque = rewrite.sessionManager
+    .getPersistedEntries()
+    .find((entry) => isRecord(entry) && entry.type === "opaque");
+  if (prepared?.type !== "custom" || !isRecord(prepared.data) || !isRecord(preparedOpaque)) {
+    throw new Error("Missing prepared aliases");
+  }
+  expect(preparedOpaque.alias).toBe(prepared.data.child);
+  expect(prepared.data).toBe(owned.data);
 });
 
 it("settles queued suffix removals in order and rebuilds the pending branch projection", async () => {
