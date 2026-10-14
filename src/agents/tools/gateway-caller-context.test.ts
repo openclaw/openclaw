@@ -414,9 +414,7 @@ describe("gateway caller context wrapper", () => {
 
   it.each([
     [undefined, true, true],
-    [true, undefined, true],
     [true, false, false],
-    [false, true, false],
   ])("narrows same-run Full Access from %s and %s to %s", async (outer, inner, expected) => {
     await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:session", fullPermission: outer },

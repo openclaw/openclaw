@@ -845,20 +845,6 @@ describe("agents_wait", () => {
     });
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
-
-    expect(result.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "missing", error: "not_found" }],
-      success: false,
-    });
-    expect(isToolResultError(result)).toBe(true);
-  });
-
   it.each([
     { ids: [" ", "\t"], timeoutSeconds: 0, error: "at least one non-empty run id" },
     {

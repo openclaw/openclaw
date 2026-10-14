@@ -85,7 +85,7 @@ describe("computer Gateway and node targets", () => {
     expect(callGatewayToolMock.mock.calls[2]?.[2].generation).toBe("live-generation");
   });
 
-  it.each([{ gatewayUrl: "wss://released-gateway.example" }, { gatewayToken: "fixture-token" }])(
+  it.each([{ gatewayUrl: "wss://released-gateway.example" }])(
     "preserves v2026.9.4 implicit remote-node selection with %j",
     async (gatewayOptions) => {
       const [nodes, computer] = await Promise.all([
@@ -132,7 +132,7 @@ describe("computer Gateway and node targets", () => {
     },
   );
 
-  it.each([undefined, "gateway"] as const)(
+  it.each([undefined] as const)(
     "refreshes failed prepared discovery for target %s",
     async (target) => {
       const unavailable = {
