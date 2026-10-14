@@ -1,4 +1,4 @@
-// Auth monitor tests cover notification delivery and optional helper script contracts.
+// Auth monitor tests cover optional systemd and Termux helper script contracts.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,50 +22,6 @@ function createAuthMonitorHarness() {
   const curlLog = join(home, "curl.log");
   const openclawLog = join(home, "openclaw.log");
   const stateFile = join(home, ".openclaw", "auth-monitor-state");
-  const scriptsDir = join(home, "scripts");
-  const statusFile = join(home, "status.json");
-  let simpleStatus = "OK";
-  let simpleExit = 0;
-  mkdirSync(scriptsDir);
-  writeFileSync(join(scriptsDir, "auth-monitor.sh"), readScript(AUTH_MONITOR_PATH));
-  writeFileSync(
-    join(scriptsDir, "claude-auth-status.sh"),
-    [
-      "#!/bin/sh",
-      'if [ "$1" = json ]; then cat "$FAKE_AUTH_STATUS_FILE"; exit "$FAKE_AUTH_STATUS_EXIT"; fi',
-      'printf "%s\\n" "$FAKE_AUTH_SIMPLE_STATUS"',
-      'exit "$FAKE_AUTH_SIMPLE_EXIT"',
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-  function setStatus({
-    nativeStatus = "OK:configured",
-    nativeMessage,
-    managedStatus = "OK:native",
-    expiresAt = 0,
-    simple = "OK",
-    exit = 0,
-  }: {
-    nativeStatus?: string;
-    nativeMessage?: string;
-    managedStatus?: string;
-    expiresAt?: number;
-    simple?: string;
-    exit?: number;
-  } = {}) {
-    writeFileSync(
-      statusFile,
-      JSON.stringify({
-        claude_code: { status: nativeStatus, expires_at_ms: 0, message: nativeMessage },
-        openclaw: { status: managedStatus, expires_at_ms: expiresAt },
-        needs_reauth: exit === 1 || exit === 2,
-      }),
-    );
-    simpleStatus = simple;
-    simpleExit = exit;
-  }
-  setStatus();
   mkdirSync(binDir);
   writeFileSync(
     join(binDir, "date"),
@@ -81,7 +37,7 @@ function createAuthMonitorHarness() {
     join(binDir, "openclaw"),
     [
       "#!/bin/sh",
-      'if [ "$1" = "models" ]; then exit 64; fi',
+      'if [ "$1" = "models" ]; then exit 1; fi',
       'if [ "$#" -ne 6 ] || [ "$1" != "message" ] || [ "$2" != "send" ] || [ "$3" != "--target" ] || [ "$5" != "--message" ]; then exit 64; fi',
       `jq -cn --arg target "$4" --arg message "$6" '{target:$target,message:$message}' >> "$FAKE_OPENCLAW_LOG"`,
       'exit "$FAKE_OPENCLAW_EXIT_CODE"',
@@ -95,39 +51,37 @@ function createAuthMonitorHarness() {
     home,
     openclawLog,
     stateFile,
-    setStatus,
-    setManagedExpiry: (minutes = 90) => {
-      setStatus({
-        managedStatus: "EXPIRING",
-        expiresAt: (NOW_SECONDS + minutes * 60) * 1000,
-        simple: "OPENCLAW_EXPIRING",
-        exit: 2,
-      });
+    enablePhoneAuth: (minutes = 90) => {
+      const expiresAt = (NOW_SECONDS + minutes * 60) * 1000;
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      mkdirSync(join(home, ".openclaw", "agents", "main", "agent"), { recursive: true });
+      writeFileSync(
+        join(home, ".claude", ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { expiresAt } }),
+      );
+      writeFileSync(
+        join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+        JSON.stringify({
+          profiles: { "anthropic:default": { expires: expiresAt, provider: "anthropic" } },
+        }),
+      );
     },
     run: ({
       curlExitCode = 0,
       notifyNtfy = "test-topic",
       notifyPhone = "",
       openclawExitCode = 0,
-      statusExitCode = 0,
-      warnHours = 2,
     }: {
       curlExitCode?: number;
       notifyNtfy?: string;
       notifyPhone?: string;
       openclawExitCode?: number;
-      statusExitCode?: number;
-      warnHours?: number;
     } = {}) =>
-      spawnSync("bash", [join(scriptsDir, "auth-monitor.sh")], {
+      spawnSync("bash", [AUTH_MONITOR_PATH], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
           ...process.env,
-          FAKE_AUTH_STATUS_FILE: statusFile,
-          FAKE_AUTH_STATUS_EXIT: String(statusExitCode),
-          FAKE_AUTH_SIMPLE_STATUS: simpleStatus,
-          FAKE_AUTH_SIMPLE_EXIT: String(simpleExit),
           FAKE_CURL_EXIT_CODE: String(curlExitCode),
           FAKE_CURL_LOG: curlLog,
           FAKE_OPENCLAW_EXIT_CODE: String(openclawExitCode),
@@ -136,7 +90,7 @@ function createAuthMonitorHarness() {
           NOTIFY_NTFY: notifyNtfy,
           NOTIFY_PHONE: notifyPhone,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          WARN_HOURS: String(warnHours),
+          WARN_HOURS: "2",
         },
       }),
   };
@@ -153,6 +107,7 @@ describe("auth monitoring scripts", () => {
 
     expect(joined).not.toContain(privateHomePath);
     expect(joined).not.toContain(privateHostAlias);
+    expect(joined).toContain("Run on the OpenClaw host: ${SCRIPT_DIR}/mobile-reauth.sh");
     for (const script of TERMUX_WIDGET_PATHS.map(readScript)) {
       expect(script).toContain('SERVER="${OPENCLAW_SERVER:-openclaw-host}"');
     }
@@ -166,7 +121,7 @@ describe("auth monitoring scripts", () => {
 
   it("delivers a phone alert and rate-limits with 30 minutes left", () => {
     const harness = createAuthMonitorHarness();
-    harness.setManagedExpiry(30);
+    harness.enablePhoneAuth(30);
 
     const delivered = harness.run({
       curlExitCode: 22,
@@ -176,7 +131,7 @@ describe("auth monitoring scripts", () => {
     expect(existsSync(harness.stateFile)).toBe(true);
     expect(JSON.parse(readFileSync(harness.openclawLog, "utf8"))).toEqual({
       target: "+15550000000",
-      message: "OpenClaw-managed auth expires in 0h 30m. Consider re-auth soon.",
+      message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
     });
 
     const throttled = harness.run({
@@ -190,7 +145,7 @@ describe("auth monitoring scripts", () => {
 
   it("retries when all configured notification channels fail", () => {
     const harness = createAuthMonitorHarness();
-    harness.setManagedExpiry();
+    harness.enablePhoneAuth();
 
     const failed = harness.run({
       curlExitCode: 22,
@@ -210,131 +165,4 @@ describe("auth monitoring scripts", () => {
     expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(2);
     expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
   });
-
-  it.each(["OK:configured", "UNKNOWN"])(
-    "does not notify for native %s with CLI-owned expiry",
-    (nativeStatus) => {
-      const harness = createAuthMonitorHarness();
-      harness.setStatus({ nativeStatus });
-
-      const result = harness.run({ notifyPhone: "+15550000000" });
-
-      expect(result.status).toBe(0);
-      expect(existsSync(harness.curlLog)).toBe(false);
-      expect(existsSync(harness.openclawLog)).toBe(false);
-      expect(existsSync(harness.stateFile)).toBe(false);
-    },
-  );
-
-  it("notifies with the owner's recovery message for a definitely missing native login", () => {
-    const harness = createAuthMonitorHarness();
-    const nativeMessage =
-      "Claude login missing. Run CLAUDE_CONFIG_DIR=/example/claude claude auth login";
-    harness.setStatus({
-      nativeStatus: "MISSING",
-      nativeMessage,
-      simple: "CLAUDE_EXPIRED",
-      exit: 1,
-    });
-
-    const result = harness.run({ notifyPhone: "+15550000000" });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(nativeMessage);
-    expect(existsSync(harness.curlLog)).toBe(true);
-    expect(existsSync(harness.openclawLog)).toBe(false);
-    expect(existsSync(harness.stateFile)).toBe(true);
-  });
-
-  it("does not turn a failed status query into a login alert", () => {
-    const harness = createAuthMonitorHarness();
-
-    const result = harness.run({ statusExitCode: 3, notifyPhone: "+15550000000" });
-
-    expect(result.status).toBe(3);
-    expect(result.stderr).toContain("Auth status unavailable");
-    expect(existsSync(harness.curlLog)).toBe(false);
-    expect(existsSync(harness.openclawLog)).toBe(false);
-    expect(existsSync(harness.stateFile)).toBe(false);
-  });
-
-  it("uses WARN_HOURS for managed credentials rather than the helper's warning window", () => {
-    const harness = createAuthMonitorHarness();
-    harness.setManagedExpiry(90);
-
-    const outsideWindow = harness.run({ warnHours: 1 });
-    expect(outsideWindow.status).toBe(0);
-    expect(existsSync(harness.curlLog)).toBe(false);
-
-    const insideWindow = harness.run({ warnHours: 2 });
-    expect(insideWindow.status).toBe(0);
-    expect(insideWindow.stdout).toContain("OpenClaw-managed auth expires in 1h 30m");
-    expect(existsSync(harness.stateFile)).toBe(true);
-  });
-
-  it("starts cooldown when ntfy succeeds even if phone delivery fails", () => {
-    const harness = createAuthMonitorHarness();
-    harness.setManagedExpiry();
-
-    const result = harness.run({ notifyPhone: "+15550000000", openclawExitCode: 1 });
-
-    expect(result.status).toBe(0);
-    expect(existsSync(harness.openclawLog)).toBe(true);
-    expect(existsSync(harness.curlLog)).toBe(true);
-    expect(existsSync(harness.stateFile)).toBe(true);
-  });
-
-  it.each(["MISSING", "EXPIRED:1h"])("notifies for managed %s credentials", (managedStatus) => {
-    const harness = createAuthMonitorHarness();
-    harness.setStatus({ managedStatus, simple: "OPENCLAW_EXPIRED", exit: 1 });
-
-    const result = harness.run({ notifyPhone: "+15550000000" });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("OpenClaw-managed auth missing or expired");
-    expect(existsSync(harness.openclawLog)).toBe(false);
-    expect(existsSync(harness.stateFile)).toBe(true);
-  });
-
-  it.each(["scripts/mobile-reauth.sh", ...TERMUX_WIDGET_PATHS])(
-    "%s does not request login when status is unavailable",
-    (script) => {
-      const home = tempDirs.make("openclaw-auth-unknown-");
-      const binDir = join(home, "bin");
-      const toastLog = join(home, "toast.log");
-      const scriptPath = join(home, "wrapper.sh");
-      mkdirSync(binDir);
-      writeFileSync(scriptPath, readScript(script));
-      const unknownStatus = '#!/bin/sh\nprintf "UNKNOWN\\n"\nexit 3\n';
-      writeFileSync(join(home, "claude-auth-status.sh"), unknownStatus, { mode: 0o755 });
-      writeFileSync(join(binDir, "ssh"), unknownStatus, { mode: 0o755 });
-      writeFileSync(
-        join(binDir, "termux-toast"),
-        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_TOAST_LOG"\n',
-        { mode: 0o755 },
-      );
-      for (const command of ["claude", "termux-open-url", "termux-dialog", "termux-vibrate"]) {
-        writeFileSync(
-          join(binDir, command),
-          '#!/bin/sh\nprintf "unexpected auth action\\n" >&2\nexit 64\n',
-          { mode: 0o755 },
-        );
-      }
-
-      const result = spawnSync("bash", [scriptPath], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          FAKE_TOAST_LOG: toastLog,
-        },
-      });
-
-      expect(result.status).toBe(script === "scripts/mobile-reauth.sh" ? 3 : 0);
-      expect(result.stderr).not.toContain("unexpected auth action");
-      const output = result.stdout + (existsSync(toastLog) ? readFileSync(toastLog, "utf8") : "");
-      expect(output).toMatch(/[Aa]uth status (?:is )?unavailable/);
-    },
-  );
 });

@@ -43,32 +43,10 @@ export function writeNodeBackedJq(binDir: string): void {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const query = args.at(-1) ?? "";
-const input = args.includes("-n") ? null : JSON.parse(fs.readFileSync(0, "utf8"));
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const print = (value) => process.stdout.write(String(value ?? "") + "\\n");
 
-if (args.includes("-n")) {
-  const values = {};
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--arg") {
-      values[args[i + 1]] = args[i + 2];
-      i += 2;
-    }
-  }
-  print(JSON.stringify({
-    claude_code: {status: values.cs, expires_at_ms: 0, readiness: values.nr, message: values.nm},
-    openclaw: {status: values.bs, expires_at_ms: Number(values.be)},
-    needs_reauth: /^(EXPIRED|EXPIRING|MISSING)/.test(values.cs) || /^(EXPIRED|EXPIRING|MISSING)/.test(values.bs),
-  }));
-} else if (query.includes(".auth.runtimeAuthRoutes")) {
-  print(JSON.stringify((input.auth?.runtimeAuthRoutes ?? []).find((route) =>
-    route.nativeAuth?.runtimeId === "claude-cli" && route.nativeAuth?.mode === "oauth") ?? {}));
-} else if (query.includes(".nativeAuth.readiness")) {
-  print(input.nativeAuth?.readiness ?? "unknown");
-} else if (query.includes(".nativeAuth.message")) {
-  print(input.nativeAuth?.message ?? "");
-} else if (query.includes(".status")) {
-  print(input.status ?? "");
-} else if (query.includes("{id: .profileId")) {
+if (query.includes("{id: .profileId")) {
   const profiles = input.auth?.oauth?.profiles ?? [];
   const profile = profiles.filter((item) => item.provider === "anthropic" && item.type === "oauth").sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0))[0];
   print(profile?.profileId ?? "none");

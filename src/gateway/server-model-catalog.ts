@@ -243,7 +243,6 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   if (!candidate) {
     return undefined;
   }
-  await candidate.recheckNativeLogin?.();
   const published = materializePreparedModelCatalogOwner(candidate);
   const owner = resolvePublishedModelCatalogOwner(published);
   return projectPreparedGatewayModelCatalogSnapshot(

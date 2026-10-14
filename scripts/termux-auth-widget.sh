@@ -16,8 +16,12 @@ EXIT_CODE=$?
 
 case "$STATUS" in
     OK)
+        # Get remaining time
+        DETAILS=$(ssh "$SERVER" '$HOME/openclaw/scripts/claude-auth-status.sh json' 2>&1)
+        HOURS=$(echo "$DETAILS" | jq -r '.claude_code.status' | grep -oP '\d+(?=h)' || echo "?")
+
         termux-vibrate -d 50
-        termux-toast "Auth OK"
+        termux-toast "Auth OK (${HOURS}h left)"
         ;;
 
     CLAUDE_EXPIRING|OPENCLAW_EXPIRING)
@@ -68,10 +72,6 @@ case "$STATUS" in
                 termux-toast "Warning: OpenClaw won't work until re-auth"
                 ;;
         esac
-        ;;
-
-    UNKNOWN)
-        termux-toast "Auth status unavailable - try again later"
         ;;
 
     *)
