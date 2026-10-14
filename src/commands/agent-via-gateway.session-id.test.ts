@@ -65,6 +65,7 @@ describe("agent CLI session IDs", () => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           method: "agent",
+          requiredCapabilities: ["agent-session-id-create-v1"],
           params: expect.objectContaining({
             agentId: "main",
             sessionId: "saved-id",
