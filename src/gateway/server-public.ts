@@ -63,7 +63,7 @@ export type GatewayServerOptions = {
   /** Retained run-loop ownership; direct servers acquire and release their own owner. */
   gatewayStateOwner?: Pick<
     import("../infra/gateway-lock.js").GatewayLockHandle,
-    "assertDatabaseAccess"
+    "assertDatabaseAccess" | "markListening"
   >;
   /** Internal native-host operation; direct readers retain their own execution owner. */
   prepareConfigSnapshot?: ConfigSnapshotPreparation;

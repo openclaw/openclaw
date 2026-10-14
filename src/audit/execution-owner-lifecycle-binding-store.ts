@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
@@ -24,7 +24,7 @@ export const ensureExecutionOwnerLifecycleBindingSchema = createSqliteSchemaEnsu
 
 /** The first admitted execution owns this diagnostic link for the receipt's lifetime. */
 export function bindExecutionOwnerLifecycleMetadata(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   ownerKind: ExecutionOwnerLifecycleKind;
   ownerId: string;
   binding: { contextId: string; executionId: string };
@@ -61,7 +61,7 @@ export function bindExecutionOwnerLifecycleMetadata(params: {
 
 /** Removes exact owner metadata without allocating the opt-in table. */
 export function deleteExecutionOwnerLifecycleMetadata(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   ownerKind: ExecutionOwnerLifecycleKind;
   ownerIds: readonly string[];
   /** Connection-owned schema fact; deletion never allocates opt-in metadata. */

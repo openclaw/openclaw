@@ -221,7 +221,11 @@ describe("models.authLogin ownership", () => {
         expect(hooks.activate).toHaveBeenCalledTimes(credentialOnly ? 0 : 1);
         if (!credentialOnly) {
           expect(hooks.activate).toHaveBeenCalledWith(
-            expect.objectContaining({ kind: "provider-auth", authChoice: "fixture-device" }),
+            expect.objectContaining({
+              kind: "provider-auth",
+              authChoice: "fixture-device",
+              selectModel: false,
+            }),
           );
         }
       } finally {

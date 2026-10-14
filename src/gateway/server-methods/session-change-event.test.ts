@@ -80,10 +80,7 @@ function createContext(
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
     },
     ensureMaterialized: async () => {},
-    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => ({
-      kind: "complete",
-      value: consume(),
-    }),
+    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => consume(),
     snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
   };
   return {

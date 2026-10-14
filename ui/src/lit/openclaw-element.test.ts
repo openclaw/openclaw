@@ -1,12 +1,11 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
-import { OpenClawLightDomContentsElement, OpenClawLightDomElement } from "./openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "./openclaw-element.ts";
 
 const LIGHT_ELEMENT_NAME = "test-openclaw-light-dom-element";
-const LIGHT_CONTENTS_ELEMENT_NAME = "test-openclaw-light-dom-contents-element";
 
-class TestLightDomElement extends OpenClawLightDomElement {
+class TestLightDomElement extends OpenClawLightDomContentsElement {
   renderCount = 0;
 
   override render() {
@@ -15,17 +14,8 @@ class TestLightDomElement extends OpenClawLightDomElement {
   }
 }
 
-class TestLightDomContentsElement extends OpenClawLightDomContentsElement {
-  override render() {
-    return html`<span>contents</span>`;
-  }
-}
-
 if (!customElements.get(LIGHT_ELEMENT_NAME)) {
   customElements.define(LIGHT_ELEMENT_NAME, TestLightDomElement);
-}
-if (!customElements.get(LIGHT_CONTENTS_ELEMENT_NAME)) {
-  customElements.define(LIGHT_CONTENTS_ELEMENT_NAME, TestLightDomContentsElement);
 }
 
 describe("OpenClaw Lit elements", () => {
@@ -38,19 +28,15 @@ describe("OpenClaw Lit elements", () => {
     await i18n.setLocale("en");
   });
 
-  it("provides light-DOM and contents bases", async () => {
+  it("renders in light DOM without adding a layout box", async () => {
     const light = document.createElement(LIGHT_ELEMENT_NAME) as TestLightDomElement;
-    const contents = document.createElement(
-      LIGHT_CONTENTS_ELEMENT_NAME,
-    ) as TestLightDomContentsElement;
-    document.body.append(light, contents);
+    document.body.append(light);
 
-    await Promise.all([light.updateComplete, contents.updateComplete]);
+    await light.updateComplete;
 
     expect(light.shadowRoot).toBeNull();
     expect(light.textContent).toContain("Refresh");
-    expect(contents.shadowRoot).toBeNull();
-    expect(contents.style.display).toBe("contents");
+    expect(light.style.display).toBe("contents");
   });
 
   it("tracks locale changes across disconnect and reconnect", async () => {

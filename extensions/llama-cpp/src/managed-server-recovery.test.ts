@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   genericCreate: vi.fn(),
   reap: vi.fn(),
-  supportsRecovery: true,
 }));
 
 vi.mock("./defaults.js", async (importOriginal) => ({
@@ -26,9 +25,7 @@ vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
 }));
 // mock-isolation: Plugin preparation selects recovery policy; native process custody has owner tests.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
-  get reapOrphanedProcesses() {
-    return mocks.supportsRecovery ? mocks.reap : undefined;
-  },
+  reapOrphanedProcesses: mocks.reap,
 }));
 
 import { llamaCppEmbeddingProviderAdapter } from "./embedding-provider.js";
@@ -50,7 +47,6 @@ async function createFixture() {
   const root = tempDirs.make("llama-managed-recovery-");
   mocks.dataDir.mockReturnValue(path.join(root, "tools", "llama.cpp"));
   mocks.reap.mockResolvedValue([]);
-  mocks.supportsRecovery = true;
   const asset = selectLlamaServerAsset();
   const { command, presetPath } = resolveManagedLlamaServerPaths(asset);
   const modelPath = path.join(root, "chat.gguf");
@@ -107,15 +103,6 @@ describe("managed llama-server recovery", () => {
 
     await ensureManagedLlamaServerForChat({ model, provider });
 
-    expect(mocks.reap).not.toHaveBeenCalled();
-  });
-
-  it("preserves preparation on released hosts without the recovery capability", async () => {
-    const { command, model, presetPath, provider } = await createFixture();
-    mocks.supportsRecovery = false;
-    await ensureManagedLlamaServerForChat({ model, provider });
-    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
-    expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
     expect(mocks.reap).not.toHaveBeenCalled();
   });
 

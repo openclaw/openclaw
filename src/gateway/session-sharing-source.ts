@@ -1,7 +1,9 @@
 import {
+  bindPublishedSessionSourceAdmission,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
+  type SessionSourcePredicate,
   type SessionSourcePredicateFacts,
 } from "../config/sessions/session-source-authority.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -12,6 +14,7 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   createSessionSharingLookupCaches,
+  findPreparedSharingTarget,
   sessionMutationTargetChanged,
   type AuthorizedSessionMutationTarget,
   type SessionSharingLookupCaches,
@@ -189,6 +192,7 @@ export function withPreparedSessionSharingSource(params: {
     if (params.talk?.kind === "relay" && !params.talk.isCurrent()) {
       throw changed();
     }
+    return cfg;
   };
   for (const target of params.targets) {
     const facts = captureSessionSharingMemoryFacts(target, assertSourceCurrent);
@@ -246,32 +250,40 @@ export function withPreparedSessionSharingSource(params: {
       assertPreparedCurrent();
       return {
         assertCurrent: assertPreparedCurrent,
-        checks: prepared.flatMap((read, index) =>
-          read.actorSource
-            ? []
-            : [
-                {
-                  predicate: {
-                    source: read.source,
-                    sessionKey: targets[index]!.storeKey,
-                    fields: [
-                      "sessionId",
-                      "lifecycleRevision",
-                      "createdActor",
-                      "visibility",
-                      "incognito",
-                      "sandbox",
-                    ],
-                    expected: read.target?.entry,
-                    members: read.members,
-                  },
-                  refuse: (facts) => {
-                    assertPrepared(index, facts);
-                    throw targetChanged(params.targets[index]!.sessionKey);
-                  },
-                },
-              ],
-        ),
+        checks: prepared.flatMap((read, index) => {
+          if (read.actorSource) {
+            return [];
+          }
+          const expected = params.targets[index]!;
+          const predicate: SessionSourcePredicate = {
+            source: read.source,
+            sessionKey: targets[index]!.storeKey,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "createdActor",
+              "visibility",
+              "incognito",
+              "sandbox",
+            ],
+            expected: read.target?.entry,
+            members: read.members,
+          };
+          if (findPreparedSharingTarget(params.request, expected)) {
+            bindPublishedSessionSourceAdmission(predicate, () => {
+              params.assertTargetCurrent(expected, expected, assertSourceCurrent());
+            });
+          }
+          return [
+            {
+              predicate,
+              refuse: (facts: SessionSourcePredicateFacts) => {
+                assertPrepared(index, facts);
+                throw targetChanged(expected.sessionKey);
+              },
+            },
+          ];
+        }),
         release,
       };
     } catch (error) {

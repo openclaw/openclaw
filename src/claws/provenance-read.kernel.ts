@@ -1,5 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { CLAW_SCHEMA_VERSION } from "./manifest-contract.js";
@@ -67,7 +68,7 @@ function clawInstallRecordFromRow(row: ClawInstallRow): PersistedClawInstall {
   };
 }
 
-function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow | undefined {
+function selectClawInstallRow(db: EngineConnection, agentId: string): ClawInstallRow | undefined {
   return (
     db /* sqlite-allow-raw: this Claw prototype state-table read is scoped to one owned row. */
       .prepare(
@@ -85,14 +86,14 @@ function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow
 }
 
 export function readClawInstallRecordFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
 ): PersistedClawInstall | undefined {
   const row = selectClawInstallRow(db, agentId);
   return row ? clawInstallRecordFromRow(row) : undefined;
 }
 
-export function readClawInstallRecordsInDatabase(db: DatabaseSync): PersistedClawInstall[] {
+export function readClawInstallRecordsInDatabase(db: EngineConnection): PersistedClawInstall[] {
   const rows =
     db /* sqlite-allow-raw: read-only Claw install inventory ordered by stable agent id. */
       .prepare(
@@ -121,9 +122,12 @@ export type ClawPackageRefQuery = {
 };
 
 export function readClawPackageRefsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   options: ClawPackageRefQuery = {},
 ): PersistedClawPackageRef[] {
+  if (isPostgresSqlConnection(db)) {
+    throw new Error("Claw package provenance requires SQLite named-parameter support.");
+  }
   const conditions: string[] = [];
   const params: Record<string, string> = {};
   for (const [column, value] of [
@@ -159,7 +163,7 @@ export function readClawPackageRefsInDatabase(
 }
 
 export function readClawOrphanWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
 ): ClawOrphanWorkspace | undefined {
   const row = executeSqliteQueryTakeFirstSync(

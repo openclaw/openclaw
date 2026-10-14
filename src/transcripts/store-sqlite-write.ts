@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import {
@@ -45,7 +45,7 @@ type TranscriptSummaryValues = Pick<
 >;
 
 export function writeMeetingTranscriptSessionInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   params: {
     session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
     sessionValues: TranscriptSessionValues;
@@ -124,7 +124,7 @@ export function writeMeetingTranscriptSessionInDatabase(
 }
 
 export function deleteEmptyMeetingTranscriptCandidateInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   expectedInputRevision: string,
 ): void {
@@ -165,7 +165,7 @@ export function deleteEmptyMeetingTranscriptCandidateInDatabase(
 }
 
 export function writeMeetingTranscriptSummaryInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   summaryValues: TranscriptSummaryValues,
   guard?: TranscriptSummaryWriteGuard,
@@ -209,7 +209,7 @@ export function writeMeetingTranscriptSummaryInDatabase(
 }
 
 function updateMeetingTranscriptExportState(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   update: (
     stored:
@@ -229,7 +229,7 @@ function updateMeetingTranscriptExportState(
 }
 
 export function updateMeetingTranscriptExportManifestInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   exportedHashes: Readonly<Record<string, string>>,
   removedExports: ReadonlySet<string>,
@@ -253,7 +253,7 @@ export function updateMeetingTranscriptExportManifestInDatabase(
 }
 
 export function markMeetingTranscriptPendingExportsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   fileNames: string[],
 ): void {

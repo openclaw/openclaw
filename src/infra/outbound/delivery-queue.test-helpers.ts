@@ -12,6 +12,7 @@ import {
   renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
 } from "../delivery-queue-sqlite-claim.kernel.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
@@ -153,6 +154,9 @@ export function setQueuedEntryState(
   }
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   const entryJson = JSON.stringify(entry);
+  if (isPostgresSqlConnection(db)) {
+    throw new Error("Delivery queue fixture mutation requires a SQLite database");
+  }
   db.prepare(
     `
       UPDATE delivery_queue_entries

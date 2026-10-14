@@ -8,6 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { findCronRunForTests, readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -120,26 +121,28 @@ async function writeDueIsolatedJobSnapshot(storePath: string, now: number) {
 function insertCronJobRow(storePath: string, job: CronJob) {
   const { state, ...jobConfig } = job;
   runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare(
-      `INSERT INTO cron_jobs (
+    requireNativeSqliteDatabase(db)
+      .prepare(
+        `INSERT INTO cron_jobs (
         store_key, job_id, declaration_key, name, description, enabled, payload_kind,
         job_json, state_json, updated_at
       ) VALUES (
         $storeKey, $jobId, $declarationKey, $name, $description, $enabled, $payloadKind,
         $jobJson, $stateJson, $updatedAt
       )`,
-    ).run({
-      $storeKey: path.resolve(storePath),
-      $jobId: job.id,
-      $declarationKey: job.declarationKey ?? null,
-      $name: job.name,
-      $description: job.description ?? null,
-      $enabled: job.enabled ? 1 : 0,
-      $payloadKind: job.payload.kind,
-      $jobJson: JSON.stringify(jobConfig),
-      $stateJson: JSON.stringify(state),
-      $updatedAt: job.updatedAtMs,
-    });
+      )
+      .run({
+        $storeKey: path.resolve(storePath),
+        $jobId: job.id,
+        $declarationKey: job.declarationKey ?? null,
+        $name: job.name,
+        $description: job.description ?? null,
+        $enabled: job.enabled ? 1 : 0,
+        $payloadKind: job.payload.kind,
+        $jobJson: JSON.stringify(jobConfig),
+        $stateJson: JSON.stringify(state),
+        $updatedAt: job.updatedAtMs,
+      });
   });
 }
 

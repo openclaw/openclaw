@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -85,7 +85,7 @@ export async function listAgentProvenance(
 }
 
 /** Delete one row inside the caller's authoritative state transaction. */
-export function deleteAgentProvenanceForAgent(database: DatabaseSync, agentId: string): void {
+export function deleteAgentProvenanceForAgent(database: EngineConnection, agentId: string): void {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   executeSqliteQuerySync(
     database,

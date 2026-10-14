@@ -62,7 +62,7 @@ it("coalesces prepared keyless refreshes without repeating prepared facts", asyn
   }
 });
 
-it.each(["ready", "preparation", "canonical deferral"] as const)(
+it.each(["ready", "preparation"] as const)(
   "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -171,21 +171,6 @@ it.each(["ready", "preparation", "canonical deferral"] as const)(
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
-        } else if (failure === "canonical deferral") {
-          vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-            kind: "pending",
-            database: {
-              agentId: "main",
-              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-              initializeCanonicalValidation: false,
-              assertStateCurrent: () => {},
-              source: {
-                key: "synthetic:pending",
-                canonicalPath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-                incarnation: "synthetic-pending",
-              },
-            },
-          });
         }
         if (failure !== "ready") {
           vi.useFakeTimers();

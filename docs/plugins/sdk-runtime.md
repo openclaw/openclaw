@@ -685,6 +685,16 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 
 ## Setup secret egress
 
+Worker providers can optionally implement `runSetupCommand` to run repository
+binding lifecycle commands over their owned lease transport. The host supplies
+the prepared workspace and HOME, a script factory accepting only the bounded
+remote environment, and a live attached-environment/repository authority guard.
+The provider rechecks that guard after awaits and immediately before launch.
+Returning `undefined` retains the normal node tunnel; a protected transport error
+must reject instead of falling back. Project preparation's script factory accepts
+the same bounded prepared environment. Secrets and host proxy credentials remain
+owned by the setup-egress capability below.
+
 The private official-plugin entrypoint `openclaw/plugin-sdk/secret-egress-runtime`
 exports `withSetupSecretEgress(options, run)` alongside `withConfiguredModelEgress`.
 Both use the same worker-owned, revocable job grant lifecycle. Setup options

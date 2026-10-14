@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -69,9 +69,9 @@ function normalizeInput(input: WorkerTranscriptCommitInput, nowMs: number): Norm
   };
 }
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<TranscriptCommitDb>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<TranscriptCommitDb>(db);
 
-function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | undefined {
+function findHead(db: EngineConnection, input: NormalizedCommitInput): HeadRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -82,7 +82,7 @@ function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | und
   );
 }
 
-function findCommit(db: DatabaseSync, input: NormalizedCommitInput): CommitRow | undefined {
+function findCommit(db: EngineConnection, input: NormalizedCommitInput): CommitRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -123,7 +123,7 @@ function classifyExistingCommit(params: {
 function writeTranscriptCommit<T>(
   database: OpenClawStateDatabase,
   operationLabel: string,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
 ): T {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

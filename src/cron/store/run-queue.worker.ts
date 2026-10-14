@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -39,11 +39,11 @@ import {
 
 const ownerStartTime = getFileLockProcessStartTime(process.pid);
 
-function query(db: DatabaseSync) {
+function query(db: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(db);
 }
 
-function loadJobs(db: DatabaseSync, storeKey: string) {
+function loadJobs(db: EngineConnection, storeKey: string) {
   const jobs = loadedCronStoreFromRows(
     loadCronRows(db, storeKey, undefined, { includeGrantDefinitionProjection: true }),
   ).store.jobs;
@@ -63,7 +63,7 @@ function matchingExit(job: CronJob, context: CronRunRequestContext): boolean {
 }
 
 function skipRequest(
-  db: DatabaseSync,
+  db: EngineConnection,
   receiptSchema: CronRunReceiptWriteSchema,
   handle: CronRunReceiptHandle,
   job: CronJob | undefined,
@@ -121,7 +121,7 @@ export function requestCronRunsInWorker(
 }
 
 function requestCronRunsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
   jobs: Map<string, CronJob>,
   receiptSchema: CronRunReceiptWriteSchema,
@@ -223,6 +223,8 @@ function requestCronRunsInDatabase(
       delete job.state.forcePreservedNextRunAtMs;
     } else if (request.preserveSchedule) {
       retainManualOneShotOccurrence(job, request.scheduleOwnershipAtMs ?? input.nowMs);
+    } else {
+      delete job.state.forcePreservedNextRunAtMs;
     }
     job.state.queuedAtMs = input.nowMs;
     if (persistQueuedState) {
@@ -248,7 +250,7 @@ export function drainCronQueueInWorker(
 }
 
 function drainCronQueueInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CronRunQueueOperations["cron.drainQueue"]["input"],
   jobs: Map<string, CronJob>,
   receiptSchema: CronRunReceiptWriteSchema,

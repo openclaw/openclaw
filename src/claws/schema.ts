@@ -516,6 +516,14 @@ const manifestSchema = z
   .object({
     schemaVersion: z.literal(CLAW_SCHEMA_VERSION),
     agent: agentSchema,
+    categories: z
+      .array(nonEmptyString.regex(/^[a-z][a-z0-9-]*$/, "Category must be a lowercase slug."))
+      .min(1)
+      .max(3)
+      .refine((categories) => new Set(categories).size === categories.length, {
+        message: "Categories must be unique.",
+      })
+      .optional(),
     metadata: z.record(nonEmptyString, z.string()).optional().default({}),
     workspace: workspaceSchema.optional().default({ bootstrapFiles: {}, files: [] }),
     packages: z.array(packageSchema).optional().default([]),
