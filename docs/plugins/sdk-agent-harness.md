@@ -18,6 +18,10 @@ current embedded runner. Core-only auxiliary-run controls are excluded: Side
 chat's direct-tool and selected-session read restrictions are internal behavior,
 not supported plugin harness inputs.
 
+Embedding hosts using the existing coding-tool factory can bind a
+[host acquisition transport](/tools/web-fetch#host-acquisition-transport) to
+native `web_fetch` without replacing its extraction or tool-policy behavior.
+
 ## When to use a harness
 
 Register an agent harness when a model family has its own native session
