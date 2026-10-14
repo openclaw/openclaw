@@ -44,10 +44,11 @@ describe("hot channel restart with inactive account SecretRefs", () => {
         id: "telegram",
         listAccountIds: (cfg) => Object.keys(cfg.channels?.telegram?.accounts ?? {}),
         resolveAccount: (cfg, accountId) => {
-          const account = cfg.channels?.telegram?.accounts?.[accountId];
+          const resolvedId = accountId ?? "default";
+          const account = cfg.channels?.telegram?.accounts?.[resolvedId];
           resolveSecretInputString({
             value: account?.botToken,
-            path: `channels.telegram.accounts.${accountId}.botToken`,
+            path: `channels.telegram.accounts.${resolvedId}.botToken`,
           });
           return { enabled: account?.enabled !== false, configured: true };
         },
