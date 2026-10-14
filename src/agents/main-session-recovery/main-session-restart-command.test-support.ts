@@ -1,5 +1,10 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import type { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -37,6 +42,7 @@ async function runRecoveryCommandDuringStop(params: {
   sessionKey: string;
   storePath: string;
   stateDir: string;
+  signal: AbortSignal;
 }): Promise<void> {
   const [
     { getAcpSessionManager },
@@ -49,6 +55,7 @@ async function runRecoveryCommandDuringStop(params: {
   ]);
   const opts = {
     message: "Resume the interrupted task.",
+    abortSignal: params.signal,
     mainRestartRecoveryAdmitted: true,
     mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
     onActiveModelSelected: () => markGatewayRestartDraining("stop (SIGTERM)"),
@@ -169,7 +176,9 @@ export function registerAcceptedRecoveryStopCase(params: {
     sendRecoveryNotice,
   } = params;
   const discordDeliveryContext = { channel: "discord", to: "discord:dm:123" } as const;
-  it("restores accepted recovery refused during stop and reports bounded exhaustion", async () => {
+  it("restores accepted recovery refused during stop and reports bounded exhaustion", async ({
+    signal,
+  }) => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: getStateDir() }, async () => {
       const { sessionsDir, storePath, sessionKey, readEntry } = await makeMainSessionFixture({
         restartRecoveryDeliveryRunId: "recovery-main",
@@ -179,6 +188,8 @@ export function registerAcceptedRecoveryStopCase(params: {
       await writeTranscript(sessionsDir, "main-session", [
         { role: "user", content: "recover without losing the owner" },
       ]);
+      // Runtime imports and I/O must settle before the unrelated start watchdog can expire.
+      vi.useFakeTimers();
       const previousRegistry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const scheduleSpy = vi
@@ -189,64 +200,87 @@ export function registerAcceptedRecoveryStopCase(params: {
       const commandErrors: unknown[] = [];
       const emittedErrors: Record<string, unknown>[] = [];
       const persistedEntries: Array<ReturnType<typeof loadSessionEntry>> = [];
-      const dispatchAgent = vi.fn(
-        async (
-          request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-          _timeoutMs: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[1],
-          options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-        ): Promise<never> => {
-          const runId = request.idempotencyKey!;
-          const lifecycleGeneration = getAgentEventLifecycleGeneration();
-          await recoveryStore.commitMainSessionRecovery({
-            command: {
-              kind: "admit_recovery",
-              lifecycleGeneration,
-              now: Date.now(),
-              runId,
-              sessionId: "main-session",
-            },
-            requireWriteSuccess: true,
-            target: { sessionKey, storePath },
-          });
-          options?.onAccepted?.({ runId, status: "accepted" });
-          const admittedEntry = readEntry()!;
-          const terminalEvents: Parameters<
-            typeof persistGatewaySessionLifecycleEvent
-          >[0]["event"][] = [];
-          const unsubscribe = onAgentEvent((event) => {
-            if (
-              event.runId === runId &&
-              event.stream === "lifecycle" &&
-              event.data.phase === "error"
-            ) {
-              terminalEvents.push(event);
-            }
-          });
-          let commandError: unknown;
-          try {
-            await runRecoveryCommandDuringStop({
-              entry: admittedEntry,
-              runId,
-              sessionKey,
-              storePath,
-              stateDir: getStateDir(),
-            });
-          } catch (error) {
-            commandError = error;
-          } finally {
-            unsubscribe();
+      const dispatchSettlements: Promise<void>[] = [];
+      const dispatchRecoveryCommand = async (
+        request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
+        _timeoutMs: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[1],
+        options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
+      ): Promise<never> => {
+        const runId = request.idempotencyKey!;
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        await recoveryStore.commitMainSessionRecovery({
+          command: {
+            kind: "admit_recovery",
+            lifecycleGeneration,
+            now: Date.now(),
+            runId,
+            sessionId: "main-session",
+          },
+          requireWriteSuccess: true,
+          target: { sessionKey, storePath },
+        });
+        options?.onAccepted?.({ runId, status: "accepted" });
+        const admittedEntry = readEntry()!;
+        const terminalEvents: Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"][] =
+          [];
+        const terminalObserved =
+          createDeferred<Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"]>();
+        const unsubscribe = onAgentEvent((event) => {
+          if (
+            event.runId === runId &&
+            event.stream === "lifecycle" &&
+            event.data.phase === "error"
+          ) {
+            terminalEvents.push(event);
+            terminalObserved.resolve(event);
           }
-          commandErrors.push(commandError);
-          for (const event of terminalEvents) {
-            emittedErrors.push(event.data ?? {});
-          }
-          for (const event of terminalEvents) {
-            await persistGatewaySessionLifecycleEvent({ sessionKey, agentId: "main", event });
-          }
-          persistedEntries.push(readEntry());
-          throw commandError;
-        },
-      );
+        });
+        // Observe the expected rejection immediately, then join its real lifecycle settlement.
+        const commandSettlement = runRecoveryCommandDuringStop({
+          entry: admittedEntry,
+          runId,
+          sessionKey,
+          storePath,
+          stateDir: getStateDir(),
+          signal,
+        }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        let commandError: unknown;
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              terminalObserved.promise,
+              commandSettlement,
+              "Expected command error lifecycle before shutdown command settled",
+            ),
+            signal,
+          );
+        } finally {
+          commandError = await commandSettlement;
+          unsubscribe();
+        }
+        commandErrors.push(commandError);
+        for (const event of terminalEvents) {
+          emittedErrors.push(event.data ?? {});
+        }
+        for (const event of terminalEvents) {
+          await persistGatewaySessionLifecycleEvent({ sessionKey, agentId: "main", event });
+        }
+        persistedEntries.push(readEntry());
+        throw commandError;
+      };
+      const dispatchAgent = vi.fn((...args: Parameters<typeof dispatchRecoveryCommand>) => {
+        const dispatch = dispatchRecoveryCommand(...args);
+        dispatchSettlements.push(
+          dispatch.then(
+            () => {},
+            () => {},
+          ),
+        );
+        return dispatch;
+      });
       const gatewayRuntime = createMockGatewayRecoveryRuntime({
         dispatchAgent,
         sendRecoveryNotice,
@@ -322,6 +356,11 @@ export function registerAcceptedRecoveryStopCase(params: {
           });
           expect(dispatchAgent).toHaveBeenCalledTimes(attempt);
         }
+        expect(commandErrors).toHaveLength(3);
+        for (const error of commandErrors) {
+          expect(error).toBeInstanceOf(GatewayDrainingError);
+        }
+        expect(emittedErrors).toHaveLength(3);
         resetGatewayWorkAdmission();
         rotateAgentEventLifecycleGeneration();
         await expect(
@@ -342,10 +381,12 @@ export function registerAcceptedRecoveryStopCase(params: {
           mainRestartRecovery: { tombstone: expect.any(Object) },
         });
       } finally {
+        await Promise.all(dispatchSettlements);
         scheduleSpy.mockRestore();
         transitionSpy.mockRestore();
         queueSpy.mockRestore();
         restoreActivePluginRegistrySnapshot(previousRegistry);
+        vi.useRealTimers();
       }
     });
   });
