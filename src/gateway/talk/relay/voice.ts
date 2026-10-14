@@ -217,15 +217,19 @@ export function closeRelayVoiceSession(
         agentId,
         physicalSource: captureRelayVoiceSessionSource(session),
       });
+      const errors: unknown[] = [];
       try {
-        try {
-          if (disposition === "detach") {
-            for (const append of session.unspokenAnswers?.values() ?? []) {
+        if (disposition === "detach") {
+          for (const append of session.unspokenAnswers?.values() ?? []) {
+            try {
               // The stable-key transcript turn reconciles any earlier commit before inserting.
               await withRelayTranscriptRetries(() => append(writer), true);
+            } catch (error) {
+              errors.push(error);
             }
           }
-        } finally {
+        }
+        try {
           const config = session.voiceConfig ?? session.context.getRuntimeConfig();
           await closeRelayVoiceSessionRecord(
             {
@@ -236,9 +240,11 @@ export function closeRelayVoiceSession(
             },
             writer,
           );
+        } catch (error) {
+          errors.push(error);
         }
       } finally {
-        await writer.release();
+        await releaseSessionSourceAuthorities([writer], errors);
       }
     },
     async (error) => {

@@ -144,6 +144,34 @@ describe("realtime relay voice transcript persistence", () => {
     },
   );
 
+  it.each([false, true])(
+    "attempts later detached answers after a failure (later fails=%s)",
+    async (laterFails) => {
+      const { session } = createRelaySession();
+      session.voiceSessionCreated = true;
+      const firstError = new Error("First answer failed");
+      const laterError = new Error("Later answer failed");
+      const first = vi.fn().mockRejectedValue(firstError);
+      const later = laterFails
+        ? vi.fn().mockRejectedValue(laterError)
+        : vi.fn().mockResolvedValue(undefined);
+      session.unspokenAnswers = new Map([
+        ["first", first],
+        ["later", later],
+      ]);
+
+      const closing = closeRelayVoiceSession(session, "detach");
+      if (laterFails) {
+        await expect(closing).rejects.toMatchObject({ errors: [firstError, laterError] });
+      } else {
+        await expect(closing).rejects.toBe(firstError);
+      }
+      expect(first).toHaveBeenCalledTimes(3);
+      expect(later).toHaveBeenCalledTimes(laterFails ? 3 : 1);
+      expect(voiceSessionMocks.closeRelayVoiceSessionRecord).toHaveBeenCalledOnce();
+    },
+  );
+
   it("joins its accepted prefix after close settlement admission is lost", async () => {
     const lifecycle = await vi.importActual<
       typeof import("../../../talk/client-voice-session-lifecycle.js")
