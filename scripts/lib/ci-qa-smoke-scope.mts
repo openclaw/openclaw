@@ -1,3 +1,5 @@
+import { isCiDocumentationPath } from "../ci-changed-scope.mjs";
+
 // QA-owned surfaces keep the smoke lane on PRs and main: the harness and
 // scenario data, its matrix/telegram channels, packaging, and CI orchestration.
 // Keep this pure policy independent of test inventory and import-graph discovery.
@@ -10,4 +12,3 @@ export function hasQaSmokeAffectingChange(changedPaths: string[]) {
     (changedPath) => !isCiDocumentationPath(changedPath) && QA_SMOKE_SURFACE_RE.test(changedPath),
   );
 }
-import { isCiDocumentationPath } from "../ci-changed-scope.mjs";
