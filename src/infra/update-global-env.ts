@@ -2,7 +2,6 @@ import path from "node:path";
 import { pathExists } from "../utils.js";
 import { applyNpmFreshnessBypassEnv, applyPosixNpmScriptShellEnv } from "./npm-install-env.js";
 import { applyPathPrepend } from "./path-prepend.js";
-import type { GlobalInstallManager } from "./update-global.js";
 import { resolvePnpmHome } from "./update-native-package-owner.js";
 
 async function resolvePortableGitPathPrepend(): Promise<string[]> {
@@ -28,6 +27,8 @@ async function resolvePortableGitPathPrepend(): Promise<string[]> {
   }
   return existing;
 }
+
+export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
 /** Prepares the selected package manager for unattended global installs. */
 export async function createGlobalInstallEnv(

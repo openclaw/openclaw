@@ -20,6 +20,7 @@ import { readPackageName, readPackageVersion } from "./package-json.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
+import type { GlobalInstallManager } from "./update-global-env.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
   resolvePnpmHome,
@@ -37,7 +38,7 @@ import {
   type SystemPackageOwnershipInspection,
 } from "./update-system-package-ownership.js";
 
-export type GlobalInstallManager = "npm" | "pnpm" | "bun";
+export type { GlobalInstallManager };
 
 type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
