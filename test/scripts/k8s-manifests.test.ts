@@ -95,7 +95,9 @@ describe("k8s manifests", () => {
     const volumes = asRecords(podSpec.volumes, "pod volumes");
     const securityContext = assertRecord(gateway.securityContext, "gateway security context");
 
-    expect(gateway.command).toEqual(["node", "/app/dist/index.js", "gateway", "run"]);
+    // `command` would replace the image entrypoint that migrates retained state.
+    expect(gateway).not.toHaveProperty("command");
+    expect(gateway.args).toEqual(["node", "/app/dist/index.js", "gateway", "run"]);
     expect(findNamed(env, "HOME")).toMatchObject({ value: "/home/node" });
     expect(findNamed(env, "OPENCLAW_CONFIG_DIR")).toMatchObject({ value: "/home/node/.openclaw" });
     expect(findNamed(env, "OPENCLAW_GATEWAY_TOKEN")).toMatchObject({

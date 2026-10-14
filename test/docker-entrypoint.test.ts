@@ -85,6 +85,17 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     },
   );
 
+  it("repairs before the Kubernetes manifest's absolute Gateway args", async ({ command }) => {
+    const f = fixture(command);
+    const args = [path.join(f.root, "dist/index.js"), "gateway", "run"];
+    const result = await f.run(args);
+    expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
+    expect(f.read().map((row) => row.args)).toEqual([
+      ["doctor", "--fix", "--non-interactive"],
+      ["gateway", "run"],
+    ]);
+  });
+
   it("repairs before the image's installed openclaw command", async ({ command }) => {
     const f = fixture(command);
     fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));

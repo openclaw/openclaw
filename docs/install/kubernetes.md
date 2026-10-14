@@ -155,6 +155,22 @@ Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
+### Upgrading an existing deployment
+
+The image entrypoint runs `openclaw doctor --fix --non-interactive` against the
+retained PVC before it starts the Gateway, and the Gateway refuses to start on
+state an older release wrote until Doctor migrates it. The shipped manifest
+passes the Gateway command as container `args` so that entrypoint still runs.
+
+If you maintain your own copy of the manifest from an older template that sets
+`command: [node, /app/dist/index.js, gateway, run]`, `command` replaces the
+entrypoint, so an upgraded pod skips Doctor and crash-loops with exit code `78`.
+Rename `command:` to `args:` before bumping the image. If the pod is already
+crash-looping, either make that change, or run `openclaw doctor --fix` once with
+the new image against the same PVC while the Gateway is stopped (see
+[Upgrading container images](/install/docker#upgrading-container-images)), then
+restart the Deployment.
+
 ### Expose beyond port-forward
 
 The default manifests bind the gateway to loopback inside the pod. That works with `kubectl port-forward`, but not with a Kubernetes `Service` or Ingress path that needs to reach the pod IP directly.
