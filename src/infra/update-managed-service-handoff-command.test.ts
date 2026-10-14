@@ -126,6 +126,7 @@ async function startHandoffAndReadCommand(params: {
   commandArgv: string[] | undefined;
   recoveryCommandArgv: string[];
   triageCommandArgv: string[];
+  triageContextCommand: string;
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -161,6 +162,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
+    triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -177,6 +179,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv: helperParams.commandArgv,
     recoveryCommandArgv: helperParams.recoveryCommandArgv,
     triageCommandArgv: helperParams.triageCommandArgv,
+    triageContextCommand: helperParams.triageContextCommand,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -204,6 +207,8 @@ describe("managed service update handoff command", () => {
       argv1: path.join(current, "openclaw.mjs"),
       channel: "beta",
     });
+    expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
+    expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
     for (const argv of [
       prepared.commandArgv,
       prepared.recoveryCommandArgv,

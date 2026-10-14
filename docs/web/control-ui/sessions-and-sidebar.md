@@ -108,9 +108,12 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-The submitted browser draft is retired before the confirmed conversation URL is
-committed, so closing the tab does not restore a sent prompt. Saved worktree-name
-preferences can finish clearing alongside navigation.
+As soon as creation is accepted, the submitted prompt and attachments are cleared
+from the New session composer, without waiting for its chat preview to load. The
+submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. A failed creation or
+a newer unsent draft stays available. Saved worktree-name preferences can finish
+clearing alongside navigation.
 
 ## Move an existing session
 
