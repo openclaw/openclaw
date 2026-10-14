@@ -69,6 +69,7 @@ type PublicationRows = WeakMap<
   }
 >;
 type Publication = {
+  factsRevision: number;
   rows: PublicationRows;
   lists: Map<
     string,
@@ -190,13 +191,16 @@ export function prepareSessionRowPublication(
     if (!publication) {
       publication = {
         revision,
+        factsRevision: 0,
         rows: new WeakMap(),
         lists: new Map(),
       };
       publications.set(projection, publication);
-      const { lists } = publication;
+      const published = publication;
+      const { lists } = published;
       projection.onSelectionChange(() => lists.clear());
       projection.onFactsChange((change) => {
+        published.factsRevision++;
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of lists.values()) {
           if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
@@ -541,6 +545,13 @@ export function prepareProjectedSessionPresentation(
     return projectModels(row);
   };
   return {
+    get audienceKey() {
+      return JSON.stringify([
+        sharing.cacheKey,
+        presentFastMode("ultrafast"),
+        publicationState?.factsRevision,
+      ]);
+    },
     rowContext: preparedRowContext,
     active,
     sharing,
