@@ -1,11 +1,10 @@
 // End-to-end embedded-agent runner tests with mocked model/runtime seams.
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
-  addEmbeddedRunnerAnthropicProvider as addAnthropicProvider,
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
   createMockUsage,
@@ -49,7 +48,6 @@ const resolveModelAsyncMock = vi.fn(
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 let getReplyPayloadMetadata: typeof import("../auto-reply/reply-payload.js").getReplyPayloadMetadata;
 
@@ -213,17 +211,10 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
-  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
-  const runWithPreparedAdmission = wrapRunWithTestPreparedAdmission(
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
-  runEmbeddedAgent = (params) => {
-    // Direct runner fixtures publish the config normally prepared by Gateway startup.
-    if (params.config) {
-      setRuntimeConfigSnapshot(params.config);
-    }
-    return runWithPreparedAdmission(params);
-  };
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
   ({ loadTranscriptEvents, upsertSessionEntryCore } =
     await import("../config/sessions/session-accessor.js"));
@@ -240,7 +231,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   preparedPluginRegistry.agentHarnesses.length = 0;
-  clearRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot({});
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();
@@ -258,8 +249,6 @@ beforeEach(() => {
     throw new Error("unexpected extra runEmbeddedAttempt call");
   });
 });
-
-afterEach(() => clearRuntimeConfigSnapshot());
 
 const nextSessionCompatibilityKey = () => {
   sessionCounter += 1;
@@ -310,6 +299,32 @@ async function createNativeSessionFixture(
   });
   return { sessionId, sessionKey: target.sessionKey };
 }
+
+const addAnthropicProvider = (
+  cfg: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>,
+  modelIds: string[],
+) => ({
+  ...cfg,
+  models: {
+    providers: {
+      ...cfg.models?.providers,
+      anthropic: {
+        api: "anthropic-messages" as const,
+        apiKey: "sk-test",
+        baseUrl: "https://example.com",
+        models: modelIds.map((id) => ({
+          id,
+          name: `Mock ${id}`,
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 16_000,
+          maxTokens: 2048,
+        })),
+      },
+    },
+  },
+});
 
 const mockSuccessfulEmbeddedAttempt = () => {
   runEmbeddedAttemptMock.mockResolvedValueOnce(

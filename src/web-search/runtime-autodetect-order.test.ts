@@ -10,6 +10,12 @@ import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.type
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { runWebSearch } from "./runtime.js";
 
+// mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
+
 const { resolveProviders } = vi.hoisted(() => ({
   resolveProviders: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
 }));

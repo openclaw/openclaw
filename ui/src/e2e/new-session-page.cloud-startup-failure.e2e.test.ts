@@ -53,7 +53,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page
-          .locator("wa-popover.new-session-page__where-popover")
+          .locator(".oc-popover.new-session-page__where-popover")
           .getByRole("button", { name: "aws", exact: true })
           .click();
         await page.getByRole("switch", { name: "Incognito" }).click();
@@ -198,7 +198,7 @@ suite.define(() => {
           await gateway.waitForRequest("environments.list");
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "aws", exact: true })
             .click();
           const composer = page.locator(".new-session-page__message");

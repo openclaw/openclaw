@@ -29,10 +29,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
-const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const startDevicePairSetupMaintenanceMock = vi.fn(async () => 0);
 
+// mock-isolation: In-memory maintenance timers must not start the device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+  startDevicePairSetupMaintenance: startDevicePairSetupMaintenanceMock,
 }));
 
 vi.mock("../media/store.js", async () => {
@@ -105,7 +106,7 @@ describe("startGatewayMaintenanceTimers", () => {
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
-    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
+    startDevicePairSetupMaintenanceMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -239,6 +240,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const sweep = createDeferred();
@@ -298,29 +300,14 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    const prune = createDeferred<number>();
-    pruneExpiredDevicePairSetupCompletionsMock.mockReturnValueOnce(prune.promise);
+  it("delegates setup-outcome deadlines to the device owner", async () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
-      nowMs: Date.now(),
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledOnce();
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledWith({
+      scheduler: expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      onError: expect.any(Function),
     });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
-
-    prune.resolve(0);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
-      nowMs: Date.now(),
-    });
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
-
     await stopMaintenanceTimers(timers);
   });
 
@@ -737,7 +724,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("converts expired stalled terminal persistence into a recovery candidate", async () => {
+  it("preserves captured recovery custody when stalled terminal persistence expires", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -747,6 +734,15 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
     terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
     deps.chatAbortControllers.set(runId, terminalRun);
+    const recoveryCandidate = {
+      runId,
+      sourceRunId: "source-terminal-persistence",
+      lifecycleGeneration: "generation-1",
+      sessionKey: "main",
+      sessionId: "sess-1",
+      observedAt: terminalRun.projectSessionTerminalObservedAt,
+    };
+    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(59_000);
@@ -759,13 +755,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(terminalRun.controller.signal.aborted).toBe(false);
     expect([await drain, deps.chatAbortControllers.has(runId)]).toEqual([false, false]);
-    expect(deps.restartRecoveryCandidates.get(runId)).toEqual({
-      runId,
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: Date.now() - 60_500,
-    });
+    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

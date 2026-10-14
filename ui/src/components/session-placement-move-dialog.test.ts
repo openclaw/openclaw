@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -15,6 +15,65 @@ beforeEach(() => {
 afterEach(() => {
   document.body.replaceChildren();
   restoreDialogPolyfill();
+});
+
+describe.each(["dispatch", "move", "restart"] as const)("%s machine selection", (mode) => {
+  it.each(["smaller", "configured", "explicit"] as const)(
+    "submits the displayed %s choice",
+    async (choice) => {
+      const result = showSessionPlacementTargetDialog({
+        mode,
+        sessionLabel: "Example session",
+        activeRun: false,
+        loadCatalog: async () => ({
+          devices: [],
+          profiles: [
+            {
+              id: "cloud",
+              providerId: "worker",
+              operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+              machines: [
+                {
+                  id: "large",
+                  label: "Large",
+                  cpu: 32,
+                  memoryGb: 64,
+                  default: choice === "configured",
+                },
+                { id: "small", label: "Small", cpu: 8, memoryGb: 16 },
+              ],
+            },
+          ],
+        }),
+      });
+      flush();
+      const { modal } = await getRenderedModalDialog(document.body);
+      try {
+        modal.querySelector<HTMLButtonElement>('[data-value="cloud:cloud"]')!.click();
+        flush();
+        if (choice === "explicit") {
+          modal.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
+          flush();
+        }
+        const machineClass = choice === "smaller" ? "small" : "large";
+        expect(
+          modal
+            .querySelector(`[data-value="machine:${machineClass}"]`)
+            ?.getAttribute("aria-pressed"),
+        ).toBe("true");
+        modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+        await expect(result).resolves.toEqual({
+          kind: "profile",
+          profileId: "cloud",
+          os: "linux",
+          machineClass,
+        });
+      } finally {
+        modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+        await result;
+      }
+    },
+  );
 });
 
 it("does not repaint a cancelled placement dialog when its catalog finishes loading", async () => {
@@ -162,5 +221,30 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
   } finally {
     modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     await result;
+  }
+});
+
+it("does not select or submit a disabled default Gateway target", async () => {
+  const result = showSessionPlacementTargetDialog({
+    mode: "move",
+    sessionLabel: "Example session",
+    activeRun: false,
+    gatewayDisabledReason: "Gateway unavailable",
+    loadCatalog: async () => ({ profiles: [], devices: [] }),
+  });
+  flush();
+  const { modal } = await getRenderedModalDialog(document.body);
+  try {
+    expect(modal.querySelector<HTMLButtonElement>('[data-value="gateway"]')!.disabled).toBe(true);
+    expect(modal.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    flush();
+    expect(modal.isConnected).toBe(true);
+  } finally {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    await expect(result).resolves.toBeNull();
   }
 });

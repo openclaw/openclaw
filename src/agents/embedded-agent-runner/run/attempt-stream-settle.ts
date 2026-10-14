@@ -341,6 +341,9 @@ export async function settleEmbeddedAttemptStream(input: {
               error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }
@@ -452,6 +455,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     auth,
   });
   const sessionFork = {
+    runId: attempt.runId,
     sessionId: attempt.sessionId,
     agentId: input.sessionAgentId,
   };
@@ -655,6 +659,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

@@ -48,6 +48,8 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+// Load after the fixture mocks, during collection rather than the first RPC deadline.
+import "./server-methods/sessions-compact.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
@@ -226,8 +228,6 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   });
 
   const { ws } = await openClient();
-  // Prepare the lazy handler before arming the RPC and event observers.
-  await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
   const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
   const signal = loseSessionSignalAcknowledgement();
@@ -589,6 +589,31 @@ test("sessions.compact rejects stale terminal persistence after the session chan
     const replacedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(replacedEntry?.sessionId).toBe("sess-replacement");
     expect(replacedEntry?.compactionCount).toBeUndefined();
+  } finally {
+    compaction.release();
+    await Promise.allSettled([compactResult]);
+    await closeGatewayTestWebSocket(ws);
+  }
+});
+
+test("sessions.compact accounts from the latest entry without overwriting concurrent metadata", async () => {
+  const scope = await createCompactionSession("sess-compact-metadata");
+  const compaction = holdCompaction();
+  const { ws } = await openClient();
+  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
+  try {
+    await compaction.waitForEntry(compactResult);
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope),
+      sessionId: scope.sessionId,
+      compactionCount: 3,
+      label: "changed during compaction",
+    });
+    compaction.release();
+    expectMainCompactionResult(await compactResult, true);
+    const entry = loadSessionEntry(scope);
+    expect(entry?.label).toBe("changed during compaction");
+    expect(entry?.compactionCount).toBe(4);
   } finally {
     compaction.release();
     await Promise.allSettled([compactResult]);

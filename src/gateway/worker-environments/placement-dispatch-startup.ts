@@ -1,5 +1,6 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   sameWorkerBuild,
   supportsCurrentWorkerLaunch,
@@ -27,11 +28,13 @@ import {
   requireProvisionedEnvironment,
 } from "./placement-dispatch-provisioning.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
+  readWorkerPreparation,
   readWorkerProjectPreparation,
-  type WorkerProviderPreparedIntent,
-} from "./preparation-identity.js";
+} from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import { runWorkerProjectLifecycle } from "./project-setup-script.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
   WorkerPlacementAdmissionTargetError,
@@ -145,7 +148,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     intent: WorkerProviderPreparedIntent;
     assertCurrent: WorkerPlacementAuthorization;
   }) => {
-    const preparation = readWorkerProjectPreparation(params.intent.profileSnapshot.project);
+    const preparation = readWorkerPreparation(params.intent.profileSnapshot);
     if (!preparation || params.intent.preparationKey !== preparation.key) {
       return undefined;
     }
@@ -231,6 +234,14 @@ export function createWorkerPlacementDispatchStartup(options: {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
     }
     const { request } = params;
+    if (
+      params.workspace.kind === "device-folder" &&
+      (params.environment.nodeDeviceId !== params.workspace.deviceId ||
+        request.deviceId !== params.workspace.deviceId ||
+        request.executionMode !== "worker-turn")
+    ) {
+      throw new Error("Device folders require an OpenClaw worker on their original paired device");
+    }
     params.signal?.throwIfAborted();
     const provisioned = requireProvisionedEnvironment(
       params.environment,
@@ -347,6 +358,8 @@ export function createWorkerPlacementDispatchStartup(options: {
         requireAttachedEnvironment();
       };
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
+      let lifecycleHomeDir: string | undefined;
+      let assertPreparedBindingCurrent: (() => void) | undefined;
       let preparedRepository: Parameters<
         typeof syncSessionRepositoryWorkspace
       >[0]["preparedRepository"];
@@ -362,6 +375,8 @@ export function createWorkerPlacementDispatchStartup(options: {
           assertCurrent: assertSyncOwner,
         });
         assertSyncOwner();
+        lifecycleHomeDir = prepared.homeDir;
+        assertPreparedBindingCurrent = prepared.assertCurrent;
         if (project && "source" in project) {
           if (
             params.workspace.kind !== "repository" ||
@@ -378,33 +393,70 @@ export function createWorkerPlacementDispatchStartup(options: {
         }
       }
       const synced =
-        params.workspace.kind === "repository"
-          ? await syncSessionRepositoryWorkspace({
-              repository: params.workspace.repository,
-              preparedRepository,
-              tunnel,
-              sessionId: request.sessionId,
-              sessionKey: request.sessionKey,
-              agentId: request.agentId,
-              generation: placement.generation,
-              gitAuthor,
-              runSetupScript: request.runSetupScript,
-              recovery: params.recovery,
-              assertCurrent: assertSyncOwner,
-            })
-          : await tunnel.syncWorkspace({
-              source: {
-                kind: "local",
-                path: params.workspace.path,
-                ...(project ? { projectKey: project.key } : {}),
-              },
+        params.workspace.kind === "device-folder"
+          ? await tunnel.syncWorkspace({
+              source: params.workspace,
               sessionId: request.sessionId,
               sessionKey: request.sessionKey,
               generation: placement.generation,
-              ...(gitAuthor ? { gitAuthor } : {}),
               authorize: assertSyncOwner,
-            });
+            })
+          : params.workspace.kind === "repository"
+            ? await syncSessionRepositoryWorkspace({
+                repository: params.workspace.repository,
+                preparedRepository,
+                tunnel,
+                sessionId: request.sessionId,
+                sessionKey: request.sessionKey,
+                agentId: request.agentId,
+                generation: placement.generation,
+                gitAuthor,
+                runSetupScript: request.runSetupScript,
+                recovery: params.recovery,
+                assertCurrent: assertSyncOwner,
+              })
+            : await tunnel.syncWorkspace({
+                source: {
+                  kind: "local",
+                  path: params.workspace.path,
+                  ...(project ? { projectKey: project.key } : {}),
+                },
+                sessionId: request.sessionId,
+                sessionKey: request.sessionKey,
+                generation: placement.generation,
+                ...(gitAuthor ? { gitAuthor } : {}),
+                authorize: assertSyncOwner,
+              });
+      if (
+        (params.workspace.kind === "device-folder") !==
+        (synced.manifestRef === DEVICE_FOLDER_MANIFEST_REF)
+      ) {
+        throw new Error(
+          "Workspace preparation returned a mismatched device-folder manifest marker",
+        );
+      }
       assertSyncOwner();
+      const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
+      if (preparation?.recipe && preparation.runSetupScript !== false) {
+        await runWorkerProjectLifecycle({
+          recipe: preparation.recipe,
+          tunnel,
+          workspaceDir: synced.remoteWorkspaceDir,
+          homeDir: lifecycleHomeDir,
+          runSetupCommand: runProjectLifecycleCommand
+            ? (command) =>
+                runProjectLifecycleCommand(provisioned.environmentId, ownerEpoch, command)
+            : undefined,
+          // A completed activation is the existing durable witness. An interrupted
+          // first binding retries declared setup; commands should be idempotent.
+          postCreate: params.environment.lastActivatedAtMs === null,
+          assertCurrent: () => {
+            assertSyncOwner();
+            assertPreparedBindingCurrent?.();
+          },
+          signal: params.signal,
+        });
+      }
       const assertActivationCurrent = () => {
         assertRequestCurrent();
         requireAttachedEnvironment();

@@ -114,7 +114,11 @@ export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
-  expected: { effectiveRunAttempt: number; plannedRunAttempt: number },
+  expected: {
+    effectiveRunAttempt: number;
+    effectiveRunStatus?: string;
+    plannedRunAttempt: number;
+  },
 ): {
   effectiveRunAttempt: number;
   jobs: ReleaseRecord[];

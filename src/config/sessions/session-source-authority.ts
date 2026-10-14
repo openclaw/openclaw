@@ -74,6 +74,8 @@ export type PreparedSessionSourceAuthority = {
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
   opaqueCommitGuard?: boolean;
+  /** Keep the source owner alive through accepted work that outlasts its request. */
+  retain?: () => () => void;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
   assertScopeCurrent?: () => void;
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
@@ -348,6 +350,21 @@ export function composeSessionSourceAssertion(
       prepareSessionSourceScope: () => prepare(true),
     },
   );
+  if (sources.some((source) => source?.retain)) {
+    Object.assign(assertion, {
+      retain: () => {
+        using acquired = new DisposableStack();
+        for (const source of sources) {
+          const release = source?.retain?.();
+          if (release) {
+            acquired.defer(release);
+          }
+        }
+        const retained = acquired.move();
+        return () => retained.dispose();
+      },
+    });
+  }
   return Object.defineProperty(assertion, "nativeSource", {
     enumerable: true,
     get: () => sources.some((source) => source?.nativeSource),

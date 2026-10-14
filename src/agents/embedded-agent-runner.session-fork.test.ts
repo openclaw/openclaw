@@ -3,6 +3,7 @@ import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
@@ -10,9 +11,12 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { stagePlacementWorkspaceJournalWorkerPublication } from "../gateway/worker-environments/placement-turn-authority.js";
+import type { AssistantMessage, Model, ToolCall } from "../llm/types.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,7 +24,15 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { runBtwSideQuestion } from "./btw.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import {
+  runEmbeddedSessionFork,
+  wrapStreamFnWithSessionFork,
+} from "./embedded-agent-runner/session-fork.js";
+import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { Agent, type StreamFn } from "./runtime/index.js";
 import * as sessionPlacementAdmission from "./session-placement-admission.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type Api = "openai-completions" | "openai-responses" | "anthropic-messages";
 function response(api: Api, model: string, tool: boolean): Response {
@@ -395,7 +407,8 @@ describe("embedded cache-parity session fork", () => {
           expect(JSON.stringify(replayMessages.slice(0, originalMessages.length))).toBe(
             JSON.stringify(originalMessages),
           );
-          expect(replayMessages).toHaveLength(originalMessages.length + 1);
+          expect(replayMessages).toHaveLength(originalMessages.length + 2);
+          expect(JSON.stringify(replayMessages.at(-2))).toContain("Review answer");
           expect(JSON.stringify(replayMessages.at(-1))).toContain("Review only");
           expect(JSON.stringify(replay.tools)).toBe(JSON.stringify(original.tools));
           expect(replay.tool_choice).toEqual(
@@ -451,4 +464,172 @@ describe("embedded cache-parity session fork", () => {
       });
     },
   );
+});
+
+const loopModel: Model = {
+  id: "fork-fixture",
+  name: "Fork fixture",
+  api: "openai-responses",
+  provider: "openai",
+  baseUrl: "https://example.test",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 10000,
+  maxTokens: 1000,
+};
+const loopIdentity = { agentId: "main", sessionId: "fork-async-tail", runId: "fork-async-tail" };
+function assistant(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant",
+    api: loopModel.api,
+    provider: loopModel.provider,
+    model: loopModel.id,
+    content,
+    stopReason: "stop",
+    usage: createZeroUsageFixture(),
+    timestamp: 1,
+  };
+}
+
+it("forks the canonical completed async tool fragments and outcomes in order", async () => {
+  const payloads: unknown[] = [];
+  const ready = createDeferredCore();
+  const resultPublished = createDeferredCore();
+  const parentResponse = createAssistantMessageEventStream();
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "lookup-call",
+    name: "lookup",
+    arguments: {},
+    async: true,
+  };
+  const transport: StreamFn = async (requestModel, context, options) => {
+    const payload = { input: structuredClone(context.messages) };
+    payloads.push((await options?.onPayload?.(payload, requestModel)) ?? payload);
+    if (payloads.length === 1) {
+      ready.resolve();
+      return parentResponse;
+    }
+    const review = createAssistantMessageEventStream();
+    review.end(assistant([{ type: "text", text: "Review answer" }]));
+    return review;
+  };
+  const agent = new Agent({
+    initialState: {
+      model: loopModel,
+      tools: [
+        {
+          name: "lookup",
+          label: "Lookup",
+          description: "Synthetic asynchronous lookup",
+          parameters: Type.Object({}),
+          execute: async () => ({
+            content: [{ type: "text", text: "TOOL_RESULT_4837" }],
+            details: {},
+            terminate: true,
+          }),
+        },
+      ],
+    },
+    streamFn: wrapStreamFnWithSessionFork(transport, loopIdentity),
+  });
+  const { session, emit } = createStubSessionHarness();
+  Object.assign(session, { agent });
+  const subscription = subscribeEmbeddedAgentSession({
+    session,
+    ...loopIdentity,
+    runId: "fork-async-tail",
+  });
+  const unsubscribe = agent.subscribe((event) => {
+    emit(event);
+    if (event.type === "message_end" && event.message.role === "toolResult") {
+      resultPublished.resolve();
+    }
+  });
+  try {
+    const run = agent.prompt("Parent question");
+    await ready.promise;
+    parentResponse.push({ type: "start", partial: assistant([]) });
+    parentResponse.push({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall,
+      partial: assistant([toolCall]),
+    });
+    await resultPublished.promise;
+    parentResponse.push({
+      type: "done",
+      reason: "stop",
+      message: assistant([toolCall, { type: "text", text: "PARENT_FINAL_4837" }]),
+    });
+    parentResponse.end();
+    await run;
+    await subscription.waitForPendingEvents();
+    await expect(
+      runEmbeddedSessionFork({
+        ...loopIdentity,
+        model: loopModel,
+        question: "Review completed turn",
+        assertCurrent() {},
+      }),
+    ).resolves.toBe("Review answer");
+    expect(payloads.at(-1)).toEqual({
+      input: [
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Parent question" }],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [expect.objectContaining({ type: "toolCall", id: "lookup-call" })],
+        }),
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "lookup-call",
+          content: [{ type: "text", text: "TOOL_RESULT_4837" }],
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "PARENT_FINAL_4837" }],
+        }),
+        expect.objectContaining({ role: "user", content: "Review completed turn" }),
+      ],
+    });
+    cleanupSessionResources(loopIdentity.sessionId);
+    emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
+    await expect(
+      runEmbeddedSessionFork({
+        ...loopIdentity,
+        model: loopModel,
+        question: "After reset",
+        assertCurrent() {},
+      }),
+    ).rejects.toThrow("requires a parent turn");
+    const nextParent = wrapStreamFnWithSessionFork(transport, {
+      ...loopIdentity,
+      runId: "replacement-run",
+    });
+    await nextParent(
+      loopModel,
+      { messages: [{ role: "user", content: "Replacement parent", timestamp: 2 }] },
+      {},
+    );
+    emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
+    await runEmbeddedSessionFork({
+      ...loopIdentity,
+      model: loopModel,
+      question: "Review replacement",
+      assertCurrent() {},
+    });
+    expect(payloads.at(-1)).toEqual({
+      input: [
+        { role: "user", content: "Replacement parent", timestamp: 2 },
+        expect.objectContaining({ role: "user", content: "Review replacement" }),
+      ],
+    });
+  } finally {
+    unsubscribe();
+    subscription.unsubscribe();
+  }
 });

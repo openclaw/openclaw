@@ -1,8 +1,13 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync as canonicalPath } from "../../infra/boundary-path.js";
+import { readGatewayLockProcessCmdline as readCmdline } from "../../infra/gateway-lock-process.js";
+import { readLockPayload, resolveGatewayLockPaths as lockPaths } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv as classify } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   captureTargetDatabaseSchemaContext,
@@ -96,6 +101,25 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
             collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
         },
       );
+    }
+    if (
+      params.updateInstallKind === "package" &&
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+    ) {
+      const owner = await readLockPayload(lockPaths(process.env).ownerLockPath);
+      const live = owner && isPidAlive(owner.pid) && (owner.role ?? "gateway") === "gateway";
+      const argv = live ? readCmdline(owner.pid, process.platform, params.timeoutMs) : null;
+      const entry = classify(argv ?? [], { requirePackageIdentity: true, pid: owner?.pid });
+      if (
+        live &&
+        ((process.platform === "win32" && (!argv || entry.kind === "unclassified")) ||
+          (entry.kind === "openclaw" &&
+            entry.packageIdentity &&
+            canonicalPath(entry.packageIdentity.root) === canonicalPath(params.roots[0] ?? root)))
+      ) {
+        const failure = createUpdatePreflightFailure("gateway-stop-unverified");
+        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
+      }
     }
     if (
       foreground &&

@@ -16,6 +16,7 @@ import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -51,6 +52,7 @@ export function resolveAuthStorePathForDisplay(agentDir?: string): string {
     compatibility:
       "This selected-path helper remains supported until removal in a later stable release after deprecation ships; its async path replacement is core-internal.",
   });
+  prepareSharedAuthStoreOwnershipForNative();
   const localPath = agentDir
     ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
     : undefined;

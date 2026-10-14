@@ -14,9 +14,7 @@ import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
 import {
   createConfigIO,
   parseConfigJson5,
-  readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
-  resolveConfigSnapshotHash,
 } from "../../config/io.js";
 import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
@@ -81,6 +79,7 @@ import {
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
+import { readConfigWriteSnapshotOrRespond } from "./config-write-snapshot.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -88,6 +87,7 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -98,44 +98,6 @@ const configWriteRecovery = new WeakMap<
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigRestartWriteMode = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["mode"];
-
-function requireConfigBaseHash(
-  params: unknown,
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-  respond: RespondFn,
-  revisionProjector: GatewayConfigRevisionProjector,
-): boolean {
-  if (!snapshot.exists) {
-    return true;
-  }
-  const snapshotHash = resolveConfigSnapshotHash(snapshot);
-  const baseHash = resolveBaseHashParam(params);
-  if (!snapshotHash || !baseHash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `config base hash ${snapshotHash ? "required" : "unavailable"}; re-run config.get and retry`,
-      ),
-    );
-    return false;
-  }
-  if (baseHash !== revisionProjector.projectRawHash(snapshotHash)) {
-    // A fresh write snapshot can observe an edit before the watcher invalidates reads.
-    invalidateConfigGetResponseCache();
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "config changed since last load; re-run config.get and retry",
-      ),
-    );
-    return false;
-  }
-  return true;
-}
 
 function collectDestructiveArrayPatchPaths(params: {
   base: unknown;
@@ -360,18 +322,6 @@ function rejectDestructiveArrayPatchWithoutIntent(params: {
     ),
   );
   return true;
-}
-
-async function readConfigWriteSnapshotOrRespond(
-  params: unknown,
-  respond: RespondFn,
-  revisionProjector: GatewayConfigRevisionProjector,
-): Promise<Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>> | null> {
-  const result = await readConfigFileSnapshotForWrite();
-  if (!requireConfigBaseHash(params, result.snapshot, respond, revisionProjector)) {
-    return null;
-  }
-  return result;
 }
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {
@@ -844,7 +794,9 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     writeResult.queueFollowUp();
   },
-  "config.patch": async ({ params, respond, client, context }) => {
+  "config.patch": async (options) => {
+    const { params, respond, client, context } = options;
+    const authority = readGatewayRequestMutationAuthority(options);
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
@@ -1004,7 +956,16 @@ export const configHandlers: GatewayRequestHandlers = {
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
-      writeSnapshot,
+      writeSnapshot: {
+        ...writeSnapshot,
+        writeOptions: {
+          ...writeOptions,
+          assertCurrent: () => {
+            writeOptions.assertCurrent?.();
+            authority.assertCurrent();
+          },
+        },
+      },
       writeConfig,
       nextConfig: validatedConfig,
       actor,

@@ -496,7 +496,7 @@ it.for([
     });
     const availableChanged = vi.fn();
     const scheduleChanged = vi.fn();
-    const announce = vi.fn();
+    const announce = vi.fn(async () => {});
     lifecycle.onUpdateAvailableChange = availableChanged;
     lifecycle.onUpdateScheduleChange = scheduleChanged;
     lifecycle.announceDevGitUpdate = announce;

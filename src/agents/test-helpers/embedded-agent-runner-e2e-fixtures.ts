@@ -67,64 +67,6 @@ export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenC
   };
 }
 
-export const addEmbeddedRunnerAnthropicProvider = (cfg: OpenClawConfig, modelIds: string[]) => ({
-  ...cfg,
-  models: {
-    providers: {
-      ...cfg.models?.providers,
-      anthropic: {
-        api: "anthropic-messages" as const,
-        apiKey: "sk-test",
-        baseUrl: "https://example.com",
-        models: modelIds.map((id) => ({
-          id,
-          name: `Mock ${id}`,
-          reasoning: false,
-          input: ["text" as const],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 16_000,
-          maxTokens: 2048,
-        })),
-      },
-    },
-  },
-});
-
-export const createEmbeddedRunnerAuthConfig = (opts?: {
-  fallbacks?: string[];
-  apiKey?: string;
-}): OpenClawConfig =>
-  ({
-    agents: {
-      defaults: {
-        model: {
-          fallbacks: opts?.fallbacks ?? [],
-        },
-      },
-      entries: { test: {} },
-    },
-    models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          apiKey: opts?.apiKey ?? "sk-test",
-          baseUrl: "https://example.com",
-          models: [
-            {
-              id: "mock-1",
-              name: "Mock 1",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2048,
-            },
-          ],
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
-
 export async function immediateEnqueue<T>(task: () => Promise<T>): Promise<T> {
   return await task();
 }

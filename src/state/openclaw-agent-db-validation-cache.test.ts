@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
@@ -16,7 +17,10 @@ import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "./agent-database-admission-error.js";
-import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
+import {
+  loadOpenClawAgentCanonicalValidationReceipt,
+  recordOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
@@ -560,11 +564,14 @@ describe("canonical proof on physical database validation", () => {
           const received = independentWorkerReceipt(database);
           closeOpenClawAgentDatabaseByPath(database.path);
           clearOpenClawAgentDatabaseValidationCache(database.path);
+          revokeSqliteDatabaseAdmissionsForPath(database.path);
           const reader = openOpenClawAgentDatabaseReadOnly(options);
           if (!reader.found || !received.schema) {
             throw new Error("Expected a canonical reader and an independently admitted receipt");
           }
           try {
+            // Native fixture supplies the cold read-admission step performed by the worker.
+            loadOpenClawAgentCanonicalValidationReceipt(reader.database);
             expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
             if (cache === "empty") {
               clearOpenClawAgentDatabaseValidationCache(database.path);
@@ -878,6 +885,9 @@ describe("canonical proof on physical database validation", () => {
           state === "empty" || state === "durable handoff",
         );
         if (state === "durable handoff") {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          invalidateOpenClawAgentCanonicalValidation(database);
+          expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
           expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
         }
       });

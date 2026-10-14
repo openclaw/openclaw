@@ -4,9 +4,13 @@ import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startu
 const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 
 import { getRuntimeConfig } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -17,6 +21,141 @@ import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-s
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 describe("worker placement session events", () => {
+  it("retires changed placements after real placement and session writes without idle rescans", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const time = createGatewaySchedulerClock();
+      const placements = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase(),
+      });
+      const identity = {
+        sessionId: "session-retirement-current",
+        sessionKey: "agent:main:retirement-current",
+        agentId: "main",
+      };
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+      await upsertSessionEntryCore(
+        { ...identity, storePath },
+        { sessionId: identity.sessionId, updatedAt: Date.now() },
+      );
+      const claim = await placements.claimTurn({
+        ...identity,
+        claimId: "retirement-current-claim",
+        runId: "retirement-current-run",
+        owner: { kind: "local" },
+      });
+      await placements.releaseTurn(claim);
+      const evidence = await vi.importActual<
+        typeof import("./server-worker-placement-session-evidence.js")
+      >("./server-worker-placement-session-evidence.js");
+      runtimeFactoryMocks.createSessionEvidenceResolver.mockImplementation(
+        evidence.createWorkerPlacementSessionEvidenceResolver,
+      );
+      const list = vi.spyOn(placements, "listAsync");
+      let reconciled = createDeferredCore();
+      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+        read: vi.fn(),
+        version: () => 0,
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
+        sweep: vi.fn().mockResolvedValue(undefined),
+      });
+      runtimeFactoryMocks.createDispatch.mockReturnValue({
+        dispatch: vi.fn(),
+        forceDestroyEnvironment: vi.fn(),
+        reclaim: vi.fn(),
+        reconcile: vi.fn().mockResolvedValue(undefined),
+        reconcileActive: vi.fn(async () => reconciled.resolve()),
+      });
+      const warn = vi.fn();
+      const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: [],
+        scheduler: createTestGatewayScheduler(time.clock),
+        getCommittedRuntimeConfig: getRuntimeConfig,
+        cancelSessionWork: vi.fn(async () => {}),
+        placements,
+        environments: {
+          subscribeMachineShapeChanged: () => () => {},
+          installReconcileEnvironmentGuard: () => () => {},
+          start() {},
+          stop: async () => {},
+        } as never,
+        gatewayNamespace: "gateway-test",
+        revokeSessionAuthority: vi.fn(),
+        warn,
+      });
+      const sidecar = await runtime.startRuntime({
+        isClosePreludeStarted: () => false,
+        registerSidecar: vi.fn(),
+        unregisterSidecar: vi.fn(),
+      });
+      try {
+        await time.advanceBy(60_000);
+        await time.advanceBy(60_000);
+        expect(list).toHaveBeenCalledOnce();
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+        expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
+
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        sessionChanges.emit({ all: true, scope: "config-presentation" });
+        sessionChanges.emit({
+          sessionKey: identity.sessionKey,
+          scope: "transcript",
+          factsInvalidated: true,
+        });
+        await time.advanceBy(60_000);
+        expect(list).toHaveBeenCalledOnce();
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+
+        const invalidations: SessionRowChange[] = [
+          { all: true, scope: "config" },
+          { ...identity, factsInvalidated: true },
+        ];
+        for (const [index, change] of invalidations.entries()) {
+          sessionChanges.emit(change);
+          await time.advanceBy(60_000);
+          expect(list).toHaveBeenCalledTimes(2 + index);
+        }
+
+        const orphan = {
+          sessionId: "session-retirement-orphan",
+          sessionKey: "agent:main:retirement-orphan",
+          agentId: "main",
+        };
+        const orphanClaim = await placements.claimTurn({
+          ...orphan,
+          claimId: "retirement-orphan-claim",
+          runId: "retirement-orphan-run",
+          owner: { kind: "local" },
+        });
+        await placements.releaseTurn(orphanClaim);
+        await time.advanceBy(60_000);
+        expect(await placements.getAsync(orphan.sessionId)).toBeUndefined();
+        expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith([
+          expect.objectContaining(orphan),
+        ]);
+        expect(list).toHaveBeenCalledTimes(3);
+
+        reconciled = createDeferredCore();
+        await deleteSessionEntryLifecycle({
+          agentId: identity.agentId,
+          storePath,
+          archiveTranscript: false,
+          target: { canonicalKey: identity.sessionKey, storeKeys: [identity.sessionKey] },
+        });
+        await reconciled.promise;
+        expect(await placements.getAsync(identity.sessionId)).toBeUndefined();
+        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith([
+          expect.objectContaining(identity),
+        ]);
+        expect(list).toHaveBeenCalledTimes(3);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await sidecar?.stop();
+      }
+    });
+  });
+
   it("finishes background reconciliation after the notifying session request closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const time = createGatewaySchedulerClock();
@@ -37,6 +176,8 @@ describe("worker placement session events", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: () => 0,
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -53,6 +194,7 @@ describe("worker placement session events", () => {
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
+          subscribeChanges: () => () => {},
           workspaceResultInstanceId: () => "gateway-test",
           getAsync: async () => undefined,
           getManyAsync: async () => new Map(),
@@ -111,6 +253,8 @@ describe("worker placement session events", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: () => 0,
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -127,6 +271,7 @@ describe("worker placement session events", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
+        subscribeChanges: () => () => {},
         workspaceResultInstanceId: () => "gateway-test",
         getAsync: async () => undefined,
         getManyAsync: async () => new Map(),

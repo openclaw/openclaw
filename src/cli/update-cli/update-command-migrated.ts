@@ -262,6 +262,7 @@ export async function continueMigratedUpdateInFreshProcess(
       requesterAuthority,
       executorFence,
       sourceArtifactLock: _sourceArtifactLock,
+      deadline: _deadline,
       ...runIdentity
     } = run;
     const input: MigratedUpdateFinalizationInput = {
@@ -295,7 +296,7 @@ export async function continueMigratedUpdateInFreshProcess(
         beforeInput: bindChild,
         // Only an operator deadline bounds forward finalization. Probes and
         // cancellation settlement keep their separate finite allowances.
-        timeoutMs: run.activationTimeoutMs,
+        timeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);

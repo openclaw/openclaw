@@ -3,6 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_SOURCE_FENCE } from "../infra/sqlite-source-fence-contract.js";
@@ -34,6 +35,7 @@ import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-w
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
@@ -148,6 +150,18 @@ function createSharedStateWorkerBackend(
   let publicationSourceReader:
     | ReturnType<NonNullable<typeof publicationSource>["createGitHubPublicationSourceWorker"]>
     | undefined;
+  const retainCachedDatabase = () => {
+    // Existing-only operations can acquire their first writable handle through a native owner.
+    if (!nativeDatabase) {
+      const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+        context.databasePath,
+      );
+      if (database) {
+        borrow = retainOpenClawStateDatabase(database);
+        nativeDatabase = database;
+      }
+    }
+  };
   const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
@@ -313,6 +327,7 @@ function createSharedStateWorkerBackend(
       if (
         commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
+        commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
@@ -385,16 +400,7 @@ function createSharedStateWorkerBackend(
             env: stateDatabaseInitializationEnvironment(),
           });
         } finally {
-          // An existing-only actor may acquire its first writable handle through this owner.
-          if (!nativeDatabase) {
-            const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
-              context.databasePath,
-            );
-            if (database) {
-              borrow = retainOpenClawStateDatabase(database);
-              nativeDatabase = database;
-            }
-          }
+          retainCachedDatabase();
         }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
@@ -421,6 +427,16 @@ function createSharedStateWorkerBackend(
       ) {
         return executeOpenClawStateLeaseCommand(command, open());
       }
+      if (command.type === "database.publishSchema") {
+        try {
+          return reconcileOpenClawStateSchemaPublication({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          });
+        } finally {
+          retainCachedDatabase();
+        }
+      }
       if (command.type === "database.walMaintenance") {
         const database = open();
         const admit = (stage: "transaction" | "commit") => {
@@ -431,7 +447,9 @@ function createSharedStateWorkerBackend(
             runOpenClawStateWriteTransaction(
               ({ db }) => {
                 admit("transaction");
-                refreshSqlitePlannerStatistics(db);
+                if (!isPostgresSqlConnection(db)) {
+                  refreshSqlitePlannerStatistics(db);
+                }
                 admit("commit");
               },
               { database },
@@ -503,7 +521,7 @@ function createSharedStateWorkerBackend(
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }
-        if (nativeDatabase.db.isOpen) {
+        if (nativeDatabase.db.isOpen && !isPostgresSqlConnection(nativeDatabase.db)) {
           assertNoActiveSqliteReaders(nativeDatabase.db, "Shared-state worker");
         }
       }

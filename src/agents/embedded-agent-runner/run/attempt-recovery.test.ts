@@ -763,6 +763,8 @@ describe("recoverEmbeddedRunAttempt", () => {
         ...unsettledBatches,
         ["the attempt yielded", { yieldDetected: true }],
         ["the retry budget is disabled", { retryAvailable: false }],
+        ["raw model runs cannot carry the continuation transcript", { modelRun: true }],
+        ["prompt-free runs cannot carry the continuation transcript", { promptMode: "none" }],
         ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
         [
           "the run deadline expired",

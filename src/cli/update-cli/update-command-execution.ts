@@ -1,10 +1,11 @@
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
+import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
-import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -367,12 +368,20 @@ export async function executeMutableUpdate(
     await recordPhase("validating");
     assertExecutionCurrent();
     try {
+      const manifest =
+        params.updateInstallKind === "package"
+          ? await tryReadJson<unknown>(path.join(root, "package.json"))
+          : undefined;
+      if (params.updateInstallKind === "package") {
+        await assertUpdateDatabaseEngineContexts(
+          admission!.contexts,
+          async () => asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines,
+        );
+      }
       // Staged manifests own package schema support; Git builds refresh their admitted versions.
       const versions =
         params.updateInstallKind === "package"
-          ? (parsePackageOpenClawSchemaVersions(
-              await tryReadJson<unknown>(path.join(root, "package.json")),
-            ) ?? admittedTargetSchemaVersions)
+          ? (parsePackageOpenClawSchemaVersions(manifest) ?? admittedTargetSchemaVersions)
           : admittedTargetSchemaVersions;
       admittedTargetSchemaVersions = versions;
       if (stagedPluginAdmission) {
@@ -480,16 +489,7 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs =
-      params.timeoutMs === undefined
-        ? undefined
-        : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-            env,
-            databases: schemaVersions,
-            observedStartupMs: observedGatewayStartupMs,
-            pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
-            nodeRunner: params.packageUpdateNodeRunner,
-          });
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
@@ -603,6 +603,10 @@ export async function executeMutableUpdate(
         channel: params.channel,
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
+          await assertUpdateDatabaseEngineContexts(
+            admission!.contexts,
+            async () => target.databaseEngines,
+          );
           retentionInstallTarget = installTarget;
           await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
           assertExecutionCurrent();
@@ -634,6 +638,10 @@ export async function executeMutableUpdate(
         },
         beforeGitMutation: async (target) => {
           assertReadableGitMetadata(target.metadataUnreadable);
+          await assertUpdateDatabaseEngineContexts(
+            admission!.contexts,
+            async () => target.databaseEngines,
+          );
           admittedTargetSchemaVersions = target.schemaVersions;
           await beforeActivate(gitMutationRoots ?? [params.root]);
         },

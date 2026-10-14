@@ -626,7 +626,7 @@ function EmbeddedModelSetup(props: {
       <openclaw-modal-dialog
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
-        onWa-after-show={(event: Event) =>
+        onOverlay-after-show={(event: Event) =>
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >

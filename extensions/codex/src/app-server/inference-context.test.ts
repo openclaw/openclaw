@@ -205,6 +205,85 @@ describe("parent-local inference context", () => {
     context.close();
   });
 
+  it.each([false, true])(
+    "keeps the complete native suffix when reconstructed prefix changes=%s",
+    (changed) => {
+      const { context, register } = fixture();
+      const parent = register("private");
+      const input = [
+        { role: "developer", content: "parent environment" },
+        { role: "user", content: "parent question" },
+      ];
+      const expected = context.prepare({ ...request("root", parent.generation), input }).body;
+      parent.release();
+      const fork = context.fork({
+        sourceThreadId: "root",
+        threadId: "fork",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+      const tail: JsonObject[] = [
+        { role: "assistant", content: "Parent final answer 4837" },
+        { role: "user", content: "Review that answer" },
+        { type: "function_call", call_id: "denied", name: "read", arguments: "{}" },
+        { type: "function_call_output", call_id: "denied", output: "Tool execution denied" },
+      ];
+      const rebuilt = changed
+        ? [{ role: "developer", content: "rebuilt environment" }, ...input.slice(1)]
+        : input;
+      try {
+        const prepared = context.prepare({
+          ...request("fork", fork.generation),
+          instructions: "rebuilt base",
+          input: [...rebuilt, ...tail],
+        }).body;
+        expect(prepared.input).toEqual([...rebuilt, ...tail]);
+        expect(prepared.instructions).toBe(expected.instructions);
+        expect(prepared.tool_choice).toBe("none");
+      } finally {
+        context.close();
+      }
+    },
+  );
+
+  it.each([undefined, ""])(
+    "preserves recorded instructions=%j when native history is rebuilt",
+    (instructions) => {
+      const { context, register } = fixture();
+      const parent = register("");
+      const source = request("root", parent.generation);
+      delete source.instructions;
+      if (instructions !== undefined) {
+        source.instructions = instructions;
+      }
+      context.prepare(source);
+      parent.release();
+      const fork = context.fork({
+        sourceThreadId: "root",
+        threadId: "fork",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+      const input = [
+        { role: "developer", content: "rebuilt environment" },
+        { role: "assistant", content: "completed parent answer" },
+        { role: "user", content: "side question" },
+      ];
+      try {
+        const prepared = context.prepare({
+          ...request("fork", fork.generation),
+          instructions: "rebuilt base",
+          input,
+        }).body;
+        expect(prepared.input).toEqual(input);
+        expect(prepared.instructions).toBe(instructions);
+        expect(Object.hasOwn(prepared, "instructions")).toBe(instructions !== undefined);
+      } finally {
+        context.close();
+      }
+    },
+  );
+
   it("preserves parent tool declarations but uses native history after a WebSocket continuation", () => {
     const { context, register } = fixture();
     const parent = register("private");
@@ -279,7 +358,7 @@ describe("parent-local inference context", () => {
       try {
         expect(context.prepare(rebuilt).body).toEqual({
           ...rebuilt,
-          instructions: "rebuilt base\n\nprivate",
+          instructions: "native base\n\nprivate",
           tool_choice: "none",
         });
       } finally {
@@ -329,13 +408,16 @@ describe("parent-local inference context", () => {
         const rebuilt = {
           ...request("fork", child.generation),
           instructions: "rebuilt",
-          input: [{ role: "user", content: "side question" }],
+          input: [
+            { role: "user", content: payload },
+            { role: "user", content: "side question" },
+          ],
         };
         const prepared = contextAt(index).prepare(rebuilt).body;
         expect(prepared.instructions).toBe(
           index === 1 ? "rebuilt\n\nprivate" : "native base\n\nprivate",
         );
-        expect(prepared.input).toHaveLength(index === 1 ? 1 : 2);
+        expect(prepared.input).toHaveLength(2);
         child.release();
       }
     } finally {

@@ -608,7 +608,8 @@ assert_single_listener() {
 	LISTENER_SNAPSHOT="$listing" EXPECTED_PID="$expected_pid" EXPECTED_PORT="$gateway_port" \
 		"$node_bin" -e '
 const lines = (process.env.LISTENER_SNAPSHOT ?? "").split("\n").filter(Boolean);
-if (lines.length < 1 || lines.length > 2) process.exit(2);
+if (!lines.length) process.exit(75);
+if (lines.length > 2) process.exit(2);
 const families = new Set();
 for (const line of lines) {
   const address = line.match(new RegExp("(?:^|\\s)(127\\.0\\.0\\.1|\\[::1\\]):" + process.env.EXPECTED_PORT + "(?:\\s|$)"))?.[1];
@@ -805,16 +806,22 @@ request_suspension() {
 }
 
 poll_suspension() {
-	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit
+	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit category
+	local timeout_ms=30000 rpc_budget="${OPENCLAW_TEAM_RPC_BUDGET:-45}"
+	if ((drain_deadline > 0)); then
+		timeout_ms=5000; rpc_budget=5
+	fi
 	params="$(proof suspension-lease-params "$held_suspension")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=params method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
 	}
-	response="$(run_gateway "$release" gateway call gateway.suspend.status \
-		--params "$params" --json --timeout 30000)" || {
+	response="$(OPENCLAW_TEAM_RPC_BUDGET="$rpc_budget" run_gateway "$release" gateway call gateway.suspend.status \
+		--params "$params" --json --timeout "$timeout_ms")" || {
 		rpc_exit=$?
+		category="$(proof_json suspension-poll-failure "$response" "$rpc_exit" 2>/dev/null)" || category=fatal
 		printf 'SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=%s\n' "$rpc_exit" >&2
-		return "$rpc_exit"
+		[[ "$category" != retry ]] || return 76
+		return 1
 	}
 	parsed="$(proof_json suspension-status "$response" "$held_suspension" "$suspension_expiry")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=proof method=gateway.suspend.status exit=%s\n' "$?" >&2
@@ -907,22 +914,28 @@ prepare_suspension() {
 		if ((SECONDS >= drain_deadline)); then
 			continue
 		fi
-		if poll_suspension "$release"; then
-			:
-		else
-			poll_exit=$?
-			# A deadline-owned timeout enters the same fresh lease/generation check as
-			# expiry between polls. Other failed observations never authorize interruption.
-			if ((poll_exit == 124 && SECONDS >= drain_deadline)); then continue; fi
-			if ((SECONDS >= drain_deadline)); then
-				printf 'DEFERRED preserve-only Gateway drain exceeded its %s-second budget blockers=%s\n' \
-					"$drain_budget" "$suspension_blockers"
-			else
+		retry_seconds=1
+		while true; do
+			if poll_suspension "$release"; then break; else poll_exit=$?; fi
+			if ((poll_exit != 76)); then
 				printf 'DEFERRED preserve-only Gateway drain status changed, expired, or became unavailable blockers=%s\n' \
 					"$suspension_blockers"
+				return 75
 			fi
-			return 75
-		fi
+			# Failed reads grant no authority. Deadline expiry still needs fresh lease,
+			# generation, and write-custody proof before any authorized interruption.
+			remaining_budget=$((drain_deadline - SECONDS))
+			((remaining_budget > 0)) || break
+			sleep_seconds="$retry_seconds"
+			if ((sleep_seconds > remaining_budget)); then sleep_seconds="$remaining_budget"; fi
+			printf 'SUSPENSION_POLL_RETRY backoffSeconds=%s remainingSeconds=%s\n' "$sleep_seconds" "$remaining_budget" >&2
+			sleep "$sleep_seconds"
+			((SECONDS < drain_deadline)) || break
+			now_ms="$(proof suspension-now)" || return 1
+			# Re-enter the existing lease renewal owner instead of retrying past expiry.
+			((suspension_expiry - now_ms > 30000)) || break
+			if ((retry_seconds < 4)); then retry_seconds=$((retry_seconds * 2)); fi
+		done
 	done
 	drain_deadline=0
 	if [[ "$suspension_state" != READY ]]; then
@@ -1168,13 +1181,21 @@ verification_step() {
 verify_convergence() {
 	local release="$1" expected_info="$2" scope="${3:-system}" expected_build channels gateway_json
 	local observed_process health_json health_status startup_json startup_status ready_json ready_status
-	local convergence_state channel_state timeout_ms verification_result_started
+	local convergence_state channel_state timeout_ms verification_result_started listener_exit
 	local -a probe_args channel_args
 	cpu_degraded_waived=0
 	profile_convergence=""
 	expected_build="$(INFO_JSON="$expected_info" verification_step convergence.expected-build "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.INFO_JSON).buildId)')" || return 1
 	verification_step convergence.release proof validate-release "$release" "$(basename "$release")" "$root_uid" sealed >/dev/null || return 1
-	verification_step convergence.generation capture_generation "$scope" || return 1
+	verification_step convergence.generation capture_service_generation "$scope" || return 1
+	if assert_single_listener "$service_pid"; then :; else
+		listener_exit=$?
+		# An empty socket table is normal while this bound generation starts.
+		((listener_exit == 75)) && return 75
+		verification_failure convergence.generation "$listener_exit" "$SECONDS" invalid-listener
+		fail 'Gateway does not own one exact loopback listener'
+		return 1
+	fi
 	verified_pid="$service_pid"
 	verified_generation="$service_generation"
 	if [[ "$scope" == system ]]; then
@@ -1418,7 +1439,7 @@ load_journal_witness() {
 }
 
 wait_for_live() {
-	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline
+	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline convergence_exit listener_wait_logged=0
 	local verification_owned_pid="${4:-}" verification_owned_generation="${5:-}" verification_owned_scope="$scope"
 	local +x cpu_degraded_waived=0
 	# Descriptor-less legacy recovery and no-journal checks can prove only fresh current state.
@@ -1441,6 +1462,12 @@ wait_for_live() {
 					"$(basename "$release")" "$verified_pid" "$verified_generation" "$scope" >&2
 			fi
 			return 0
+		else
+			convergence_exit=$?
+			if ((convergence_exit == 75 && listener_wait_logged == 0)); then
+				printf 'VERIFICATION_WAITING stage=convergence.listener outcome=not-bound\n' >&2
+				listener_wait_logged=1
+			fi
 		fi
 		sleep_seconds="${OPENCLAW_TEAM_RETRY_SECONDS:-2}"
 		((SECONDS < verification_deadline)) || break

@@ -546,17 +546,10 @@ export class BoardViewState {
     });
   }
 
-  readonly handleTabShow = (event: CustomEvent<{ name: string }>): void => {
+  readonly selectTab = (tabId: string): void => {
     const tabs = this.props.snapshot ? orderedBoardTabs(this.props.snapshot.tabs) : [];
     const currentTabId = this.activeTab(tabs)?.tabId ?? this.props.activeTabId;
-    if (event.detail.name !== currentTabId && tabs.some((tab) => tab.tabId === event.detail.name)) {
-      this.props.callbacks?.selectTab(event.detail.name);
-    }
-  };
-
-  readonly handleOverflowSelect = (event: CustomEvent<{ item: { value?: string } }>): void => {
-    const tabId = event.detail.item.value;
-    if (tabId && this.props.snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
+    if (tabId !== currentTabId && tabs.some((tab) => tab.tabId === tabId)) {
       this.props.callbacks?.selectTab(tabId);
     }
   };

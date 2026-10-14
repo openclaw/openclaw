@@ -32,7 +32,7 @@ import {
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
@@ -292,7 +292,7 @@ export function createNativeConversationBridge(
         ),
       );
       const pane = [
-        ...document.querySelectorAll<ChatPaneBase>("openclaw-chat-page openclaw-chat-pane"),
+        ...document.querySelectorAll<ChatPaneElement>("openclaw-chat-page openclaw-chat-pane"),
       ].find((candidate) => areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey));
       const activity = pane?.runActivity;
       const paneActive =
@@ -419,7 +419,7 @@ export function createNativeConversationBridge(
         if (openActions) {
           const page = document.querySelector<LitElement>("openclaw-chat-page");
           await page?.updateComplete;
-          const pane = page?.querySelector<ChatPaneBase>(".chat-pane-cache__pane--active");
+          const pane = page?.querySelector<ChatPaneElement>(".chat-pane-cache__pane--active");
           await pane?.updateComplete;
           if (!active() || !targetSelected() || !pane) {
             return "unavailable";

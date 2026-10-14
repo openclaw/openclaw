@@ -16,6 +16,7 @@ const PREPARATION_CLEANUP_GUARD_MS = 5_000;
 
 export type AgentWorkerFixtureOperations = {
   inspect: { input: undefined; output: number };
+  failWorker: { input: "crash" | "exit"; output: never };
   append: {
     input: {
       value: string;
@@ -90,6 +91,16 @@ export function bindSqliteWorkerBackend(
       });
     },
     prepare(command) {
+      if (command.type === "failWorker") {
+        return new Promise<never>(() => {
+          setImmediate(() => {
+            if (command.input === "exit") {
+              process.exit(17);
+            }
+            throw new Error("Fixture worker crashed");
+          });
+        });
+      }
       if (!preparation) {
         return undefined;
       }
@@ -109,6 +120,9 @@ export function bindSqliteWorkerBackend(
       });
     },
     execute(command) {
+      if (command.type === "failWorker") {
+        throw new Error("Fixture failure must terminate the worker during preparation");
+      }
       if (command.type === "inspect") {
         const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
         if (typeof count !== "number") {

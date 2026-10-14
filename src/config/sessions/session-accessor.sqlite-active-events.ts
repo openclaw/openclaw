@@ -134,10 +134,10 @@ export function everySessionTranscriptUserInputFrom(
     })
       .select(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', ${transcriptEventRunIdSql("event")}),
-          'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
+        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.role'),
+          'idempotencyKey', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.idempotencyKey'),
+          '__openclaw', json_object('runId', ${transcriptEventRunIdSql(projection.database.db, "event")}),
+          'provenance', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.provenance'))`.as(
           "message_json",
         ),
       )

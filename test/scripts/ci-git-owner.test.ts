@@ -571,7 +571,11 @@ linuxIt.for([
     fixtureGit(origin, ["init", "--quiet"]);
     const script = "scripts/ci-additional-checks.sh";
     const trustedScript = readFileSync(script, "utf8");
-    for (const file of [".github/actions/setup-node-env/action.yml", script]) {
+    for (const file of [
+      ".github/actions/setup-node-env/action.yml",
+      script,
+      "scripts/ci-collect-checks.sh",
+    ]) {
       mkdirSync(dirname(join(origin, file)), { recursive: true });
       writeFileSync(join(origin, file), readFileSync(file));
     }

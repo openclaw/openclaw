@@ -185,7 +185,7 @@ describe("plugin session fork visibility transport", () => {
               // Prepare the parent's replay through the same capture and HTTP transport as a turn.
               const parent = wrapStreamFnWithSessionFork(
                 createOpenAICompletionsTransportStreamFn(),
-                { agentId: "research", sessionId: SESSION_ID },
+                { agentId: "research", sessionId: SESSION_ID, runId: "parent" },
               );
               const parentStream = await parent(
                 attachModelProviderRequestTransport(model, { allowPrivateNetwork: true }),

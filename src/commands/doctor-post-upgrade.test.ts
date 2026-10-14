@@ -14,7 +14,7 @@ import {
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
@@ -34,7 +34,9 @@ async function makeFixtureRoot(prefix: string): Promise<string> {
 
 async function cleanupFixtureRoot(root: string): Promise<void> {
   clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseByPath(resolveInstalledPluginIndexStorePath({ stateDir: root }));
+  await closeOpenClawStateDatabaseByPathAsync(
+    resolveInstalledPluginIndexStorePath({ stateDir: root }),
+  );
   await fs.rm(root, { recursive: true, force: true });
 }
 

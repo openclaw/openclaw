@@ -208,7 +208,6 @@ src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
-src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts

@@ -272,4 +272,44 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  it.each([
+    { status: "failed", cleaned: true, wake: false, outstanding: false },
+    { status: "failed", cleaned: false, wake: false, outstanding: true },
+    { status: "failed", cleaned: true, wake: true, outstanding: true },
+    { status: "pending", cleaned: true, wake: false, outstanding: true },
+    { status: "in_progress", cleaned: true, wake: false, outstanding: true },
+    { status: "suspended", cleaned: true, wake: false, outstanding: true },
+  ] as const)(
+    "projects $status delivery with cleaned=$cleaned and wake=$wake",
+    async ({ status, cleaned, wake, outstanding }) => {
+      const endedAt = Date.now() - 20_000;
+      seedSubagentRunForReadTest({
+        runId: "failed-delivery",
+        childSessionKey: "agent:main:subagent:failed-delivery",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        task: "deliver the report",
+        execution: { status: "terminal", endedAt },
+        completion: { required: true, resultText: "child result" },
+        delivery: { status },
+        cleanupCompletedAt: cleaned ? endedAt + 1_000 : undefined,
+        requesterSettleWake: wake
+          ? { status: "pending", attemptCount: 0, rearmGeneration: 1 }
+          : undefined,
+      });
+
+      const prompt = await buildActiveSubagentRuntimeContext({
+        cfg: {},
+        controllerSessionKey: "agent:main:main",
+        includeSpawnContext: false,
+      });
+      if (outstanding) {
+        expect(prompt).toContain("## Child results awaiting delivery");
+        expect(prompt).toContain("child result");
+      } else {
+        expect(prompt).toBeUndefined();
+      }
+    },
+  );
 });

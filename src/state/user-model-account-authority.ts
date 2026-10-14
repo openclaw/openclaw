@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { withAuthProfileCredentialWriteCustody } from "../agents/auth-profiles/credential-write-custody.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -203,7 +203,7 @@ const nativeAuthProfileCredentialPublication = createStateDomainPublication<unkn
     if (shared) {
       return `${shared.key}:${shared.birthtime ?? ""}`;
     }
-    const agent = findOpenClawAgentDatabaseIdentity({ db });
+    const agent = findOpenClawAgentDatabaseIdentity({ db: sqlPublicationAnchor(db) });
     if (!agent || typeof agent.identity !== "string") {
       return Symbol("auth-profile-credentials");
     }
@@ -310,16 +310,17 @@ authProfileCredentialPublication.subscribeFacts((change) => {
 
 /** Deny before the native effect; managed settlement installs all facts before releasing denial. */
 export function withAuthProfileCredentialWrite<T>(
-  db: DatabaseSync,
+  db: EngineConnection,
   payload: unknown,
   write: () => T,
   didWrite: (result: T) => boolean = () => true,
 ): T {
   return withAuthProfileCredentialWriteCustody(db, () => {
-    const identity = authProfileCredentialPublication.receipt(db, new Map()).source.identity;
+    const identity = authProfileCredentialPublication.receipt(sqlPublicationAnchor(db), new Map())
+      .source.identity;
     const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
     let failed = false;
-    const managed = stageSqliteTransactionState(db, {
+    const managed = stageSqliteTransactionState(sqlPublicationAnchor(db), {
       stage() {},
       commit() {
         if (failed) {
@@ -334,9 +335,9 @@ export function withAuthProfileCredentialWrite<T>(
       const result = write();
       if (didWrite(result)) {
         if (payload === undefined) {
-          authProfileCredentialPublication.stageDeletions(db, ["store"]);
+          authProfileCredentialPublication.stageDeletions(sqlPublicationAnchor(db), ["store"]);
         } else {
-          authProfileCredentialPublication.stagePostimages(db, [payload]);
+          authProfileCredentialPublication.stagePostimages(sqlPublicationAnchor(db), [payload]);
         }
       }
       if (!managed) {

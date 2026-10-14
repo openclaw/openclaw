@@ -121,6 +121,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
@@ -155,6 +156,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      await awaitRequestedHandoff?.(signal);
       // The requested transition can acknowledge a detached caller while setup continues.
       // Revalidate that retained caller before any node or provider-side preparation.
       assertCurrent();
@@ -177,6 +179,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         }
       }
       const workspace = await options.resolveWorkspace(request);
+      if (
+        workspace.kind === "device-folder" &&
+        (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
+      ) {
+        throw new Error(
+          "Device folders require an explicit dispatch to their original paired device using the OpenClaw harness.",
+        );
+      }
       if (
         workspace.kind === "repository" &&
         !request.deviceId &&

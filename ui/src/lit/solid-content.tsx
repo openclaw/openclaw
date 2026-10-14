@@ -22,7 +22,11 @@ export type { TemplateResult as LegacyTemplateResult } from "lit";
 
 /** Render opaque plugin SDK templates with their event receiver. */
 export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  renderLit(template, target, { host });
+  if (template === undefined) {
+    unmountLitContent(target);
+  } else {
+    mountLitContent(template, target, { host });
+  }
 }
 
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
@@ -41,6 +45,18 @@ type NestedSolidRoot = { element: HTMLElement; dispose: () => void };
 let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
 
+/** Retire the existing range without restoring a possibly disposed creator. */
+function unmountLitContent(container: HTMLElement | DocumentFragment): void {
+  litContentMounts.get(container)?.dispose();
+}
+
+/** A top-level Lit caller settles now; nested Solid work settles with its owner. */
+export function flushLegacyContent(): void {
+  if (!getOwner() && !currentLitRoots) {
+    flush();
+  }
+}
+
 /** One retained Lit range owns each legacy content container. */
 export function mountLitContent(
   value: unknown,
@@ -57,17 +73,18 @@ export function mountLitContent(
   const owner = getOwner();
   const renderOptions = { ...options, renderBefore: end };
   const roots = new Set<NestedSolidRoot>();
-  // Later commits restore the creator owner for nested directive resources.
-  const commit = (next: unknown) => {
+  // Restore the creator for nested resources; keep the handoff marked so those
+  // roots register here without starting a reentrant flush.
+  const commit = <T,>(run: () => T): T => {
     const previous = currentLitRoots;
     currentLitRoots = roots;
     try {
-      return runWithOwner(owner, () => renderLit(next, container, renderOptions));
+      return runWithOwner(owner, run);
     } finally {
       currentLitRoots = previous;
     }
   };
-  const part = commit(value);
+  const part = commit(() => renderLit(value, container, renderOptions));
   let ownedNodes: Node[] = [];
   const readOwnedNodes = (): Node[] => {
     const start = part.startNode;
@@ -84,7 +101,7 @@ export function mountLitContent(
   let disposed = false;
   const mount: LitContentMount = {
     update(next) {
-      commit(next);
+      commit(() => renderLit(next, container, renderOptions));
       ownedNodes = readOwnedNodes();
       // Lit does not notify a second disconnection when parked content is removed.
       for (const root of roots) {
@@ -104,7 +121,7 @@ export function mountLitContent(
       nodes.push(end);
       return nodes;
     },
-    setConnected: (connected) => runWithOwner(owner, () => part.setConnected(connected)),
+    setConnected: (connected) => commit(() => part.setConnected(connected)),
     dispose() {
       if (disposed) {
         return;
@@ -196,9 +213,7 @@ class SolidContent extends AsyncDirective {
     }
     if (this.dispose) {
       this.updateProps?.(props);
-      if (!getOwner()) {
-        flush();
-      }
+      flushLegacyContent();
     } else {
       this.mount();
     }
@@ -235,7 +250,7 @@ class SolidContent extends AsyncDirective {
     };
     // Nested top-level rendering can flush effects under the parent's render owner.
     this.dispose = runWithOwner(owner, () =>
-      owner
+      owner || currentLitRoots
         ? createRoot((dispose) => {
             insert(element, view());
             return () => {

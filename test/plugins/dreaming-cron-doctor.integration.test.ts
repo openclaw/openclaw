@@ -12,6 +12,7 @@ import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
 import { getCronJobsStoreRevision } from "../../src/cron/store.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import type { EngineConnection } from "../../src/infra/sql-connection.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
 import type { PluginDoctorRepairAuthority } from "../../src/infra/state-migrations.types.js";
@@ -56,7 +57,7 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
-function readRows(db: DatabaseSync) {
+function readRows(db: EngineConnection) {
   return {
     jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
     scratch: db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key, job_id").all(),
@@ -73,7 +74,7 @@ type Fixture = {
   retiredStore: string;
   untouchedStore: string;
   databasePath: string;
-  db: () => DatabaseSync;
+  db: () => EngineConnection;
 };
 
 async function withCronFixture(

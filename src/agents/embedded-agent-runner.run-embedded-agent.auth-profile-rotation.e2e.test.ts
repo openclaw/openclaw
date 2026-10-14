@@ -20,7 +20,6 @@ import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types
 import type { AgentHarness } from "./harness/types.js";
 import {
   buildEmbeddedRunnerAssistant as buildAssistant,
-  createEmbeddedRunnerAuthConfig as makeConfig,
   makeEmbeddedRunnerAttempt as makeAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
@@ -107,8 +106,6 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
-let setRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
-let clearRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
 let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
 let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
 let createOpenClawDatabaseMaintenanceScope: typeof import("../state/openclaw-state-db-async-lifecycle.js").createOpenClawDatabaseMaintenanceScope;
@@ -117,13 +114,13 @@ let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 let registerAgentHarnessFn: typeof import("./harness/registry.js").registerAgentHarness;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } =
-    await import("../config/runtime-snapshot.js"));
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
@@ -146,8 +143,6 @@ type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
 async function runEmbeddedAgentInline(
   params: RunEmbeddedAgentTestParams,
 ): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
-  // Direct runner fixtures publish the config normally prepared by Gateway startup.
-  setRuntimeConfigSnapshot(params.config ?? {});
   const maintenance = createOpenClawDatabaseMaintenanceScope();
   try {
     return await maintenance.run(() =>
@@ -160,6 +155,7 @@ async function runEmbeddedAgentInline(
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -178,13 +174,44 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearRuntimeConfigSnapshot();
   globalThis.fetch = originalFetch;
   cleanupLogCapture?.();
   cleanupLogCapture = undefined;
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
+
+const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
+  ({
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: opts?.fallbacks ?? [],
+        },
+      },
+      entries: { test: {} },
+    },
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          apiKey: opts?.apiKey ?? "sk-test",
+          baseUrl: "https://example.com",
+          models: [
+            {
+              id: "mock-1",
+              name: "Mock 1",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16_000,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
 
 const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
   ({

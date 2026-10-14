@@ -491,15 +491,13 @@ export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdenti
     "REST cannot prove complete check-suite evidence",
   );
   const represented = new Set(matchingChecks.map((check) => check.check_suite?.id));
-  for (const suite of suites) {
-    const requiredApp = required.some(({ app }) => app === null || app === suite.app.id);
-    if (
-      !requiredApp ||
-      represented.has(suite.id) ||
-      (suite.status === "completed" && suite.conclusion === "success")
-    ) {
-      continue;
-    }
+  const unrepresented = suites.filter(
+    (suite) =>
+      required.some(({ app }) => app === null || app === suite.app.id) &&
+      !represented.has(suite.id) &&
+      !(suite.status === "completed" && suite.conclusion === "success"),
+  );
+  for (const suite of unrepresented) {
     requireEvidence(
       (suite.latest_check_runs_count === 0 ||
         (suite.status === "completed" && nonemptyString(suite.conclusion))) &&
@@ -508,34 +506,59 @@ export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdenti
         suite.latest_check_runs_count >= 0,
       "new required-app check suite has no complete check evidence",
     );
-    // Empty installed-app suites and skipped labelers contribute no required
-    // context only when their own complete, stable check result proves that.
-    const scoped = checkPages(
+  }
+  if (unrepresented.length > 0) {
+    // The commit endpoint covers at most 1,000 suites, not 1,000 check runs.
+    // The complete suite inventory above bounds that documented truncation.
+    // Read all checks once, then reread suites after their checks, rather than
+    // making two requests per empty installed-app suite or skipped labeler.
+    const complete = checkPages(
       repo,
-      `/check-suites/${suite.id}/check-runs?filter=latest&per_page=100`,
+      `/commits/${head}/check-runs?filter=latest&per_page=100`,
       "check_runs",
       head,
     );
-    requireEvidence(
-      scoped.length === suite.latest_check_runs_count &&
-        validCheckRuns(scoped, head) &&
-        scoped.every(
-          (check) => check.check_suite?.id === suite.id && check.app.id === suite.app.id,
-        ) &&
-        !scoped.some(matchesRequired),
-      "terminal suite contains missing or required check evidence",
+    requireEvidence(validCheckRuns(complete, head), "invalid complete check-run identities");
+    const bySuite = new Map(suites.map((suite) => [suite.id, []]));
+    for (const check of complete) {
+      const scoped = bySuite.get(check.check_suite?.id);
+      requireEvidence(scoped, "check run has no inventoried suite");
+      scoped.push(check);
+    }
+    for (const suite of unrepresented) {
+      const scoped = bySuite.get(suite.id);
+      requireEvidence(
+        scoped.length === suite.latest_check_runs_count &&
+          scoped.every((check) => check.app.id === suite.app.id) &&
+          !scoped.some(matchesRequired),
+        "terminal suite contains missing or required check evidence",
+      );
+    }
+    const current = checkPages(
+      repo,
+      `/commits/${head}/check-suites?per_page=100`,
+      "check_suites",
+      head,
     );
-    const current = read(repo, `/check-suites/${suite.id}`);
+    const currentById = new Map(current.map((suite) => [suite?.id, suite]));
     requireEvidence(
-      current?.id === suite.id &&
-        current.head_sha === head &&
-        current.app?.id === suite.app.id &&
-        current.status === suite.status &&
-        current.conclusion === suite.conclusion &&
-        current.updated_at === suite.updated_at &&
-        current.latest_check_runs_count === suite.latest_check_runs_count,
-      "terminal suite changed while proving its checks irrelevant",
+      current.length === suites.length &&
+        currentById.size === suites.length &&
+        suites.every((suite) => currentById.has(suite.id)),
+      "check-suite inventory changed while proving checks irrelevant",
     );
+    for (const suite of unrepresented) {
+      const fresh = currentById.get(suite.id);
+      requireEvidence(
+        fresh.head_sha === head &&
+          fresh.app?.id === suite.app.id &&
+          fresh.status === suite.status &&
+          fresh.conclusion === suite.conclusion &&
+          fresh.updated_at === suite.updated_at &&
+          fresh.latest_check_runs_count === suite.latest_check_runs_count,
+        "terminal suite changed while proving its checks irrelevant",
+      );
+    }
   }
   for (const check of candidates) {
     if (check.status !== "completed" || check.conclusion !== "success") {

@@ -61,6 +61,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflowCondition,
   evaluateWorkflowExpression,
   evaluateWorkflowRunner,
   quoteShell,
@@ -2307,7 +2308,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       path: ".ci-harness",
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
-      "sparse-checkout": ".github/actions",
+      "sparse-checkout": ".github/actions\nscripts/ci-collect-checks.sh\n",
     });
     expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
@@ -4295,12 +4296,13 @@ ${step.run}`,
           runAttempt: 1,
           env: { HISTORICAL_TARGET: String(historical) },
           matrix: { phase },
+          steps: {
+            "watch-rust-toolchain": { outputs: {}, outcome: expected ? "success" : "skipped" },
+          },
           fileHashes: hasWatchRtc ? { "apps/shared/OpenClawWatchRTC/Cargo.toml": "present" } : {},
         };
-        expect(evaluateWorkflowExpression(`\${{ ${install.if} }}`, context)).toBe(expected);
-        expect(evaluateWorkflowExpression(`\${{ ${engine.if} }}`, context)).toBe(
-          expected && phase === "tests",
-        );
+        expect(evaluateWorkflowCondition(install.if, context)).toBe(expected);
+        expect(evaluateWorkflowCondition(engine.if, context)).toBe(expected && phase === "tests");
       }
     }
   });
@@ -4421,7 +4423,7 @@ ${buildScript}`,
     ]);
   });
 
-  it("uses native macOS Swift tests and preserves the first failure", () => {
+  it("uses native macOS Swift tests and retains failures after completing every profile", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
@@ -4483,6 +4485,10 @@ ${buildScript}`,
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
+      symlinkSync(
+        path.resolve("scripts/ci-collect-checks.sh"),
+        path.join(root, ".ci-harness/scripts/ci-collect-checks.sh"),
+      );
       writeFileSync(
         path.join(binDir, "swift"),
         `#!/usr/bin/env bash
@@ -4543,16 +4549,28 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
               expect.stringMatching(
                 /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
+              expect.stringMatching(
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+              ),
+              expect.stringMatching(
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter AppStateIsolationTests\|ProfileChatPreferencesTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+              ),
             ]
           : []),
       ]);
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
       const outputLines = output.split("\n");
       if (buildExitCode === 0) {
-        expect(outputLines).toHaveLength(2);
+        expect(outputLines).toHaveLength(4);
         expect(outputLines[0]).toBe("debug-tests-built=true");
         expect(
           outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+        ).toBe(true);
+        expect(
+          outputLines[2]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+        ).toBe(true);
+        expect(
+          outputLines[3]?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
         ).toBe(true);
       } else {
         expect(output).toBe("");
@@ -4929,6 +4947,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const root = tempDirs.make("openclaw-hosted-lint-owner-");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       copyFileSync(
+        new URL("../../scripts/ci-collect-checks.sh", import.meta.url),
+        path.join(root, ".ci-harness/scripts/ci-collect-checks.sh"),
+      );
+      copyFileSync(
         new URL("../../scripts/ci-static-step.sh", import.meta.url),
         path.join(root, ".ci-harness/scripts/ci-static-step.sh"),
       );
@@ -5088,6 +5110,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     ).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=2/5 --threads=1",
     ]);
     expect(
       runLintOwner({
@@ -5101,6 +5124,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=3/5 --threads=1",
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=4/5 --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=5/5 --threads=1",
     ]);
 
     expect(runLintOwner({ capability: true, lane: "check", profile: "github" })).toEqual([
@@ -5373,6 +5397,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       repository: "openclaw/openclaw",
       runAttempt: 1,
       runnerBackend: "hybrid",
+      steps: {
+        node_setup: { outputs: {}, outcome: "success" },
+        ui_chromium: { outputs: {}, outcome: "success" },
+      },
     } as const;
     const shards = evaluateWorkflowExpression(ui.strategy.matrix, context).include.map(
       (row: { shard: number }) => row.shard,
@@ -5455,7 +5483,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ...(scenario.compatibilityTarget ? [] : [`--shard=${shard}/${scenario.shards.length}`]),
       ];
       const steps = [
-        ...(!lint.if || evaluateWorkflowExpression(lint.if, rowContext) ? [lint] : []),
+        ...(!lint.if || evaluateWorkflowCondition(lint.if, rowContext) ? [lint] : []),
         test,
       ];
       for (const step of steps) {
@@ -5702,9 +5730,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run built artifact checks",
     );
 
-    // The verifiers always run, so the shared step cannot be gated on the
-    // selected checks; each check keeps its own RUN_* gate inside the body.
-    expect(verifierStep.if).toBeUndefined();
+    // Dist is the only producer dependency; selected checks retain their
+    // individual RUN_* gates inside the body.
+    expect(verifierStep.if).toContain("!cancelled()");
+    expect(verifierStep.if).toContain("steps.dist_build.outcome == 'success'");
     expect(steps.some((step: WorkflowStep) => step.name === "Verify built runtime artifacts")).toBe(
       false,
     );
@@ -6517,6 +6546,110 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(publisher.run).toContain("--request-run-id");
   expect(JSON.stringify(steps)).not.toContain("linux-updater-manifest.mjs publish");
   expect(JSON.stringify(steps)).not.toContain("--clobber");
+});
+
+it("hands this run's signed Linux inputs to the publisher when bundles are already public", () => {
+  const steps = readWorkflow(".github/workflows/linux-app-release.yml").jobs.publish
+    .steps as WorkflowStep[];
+  const publisher = expectDefined(
+    steps.find(
+      ({ name }) =>
+        name === "Publish immutable bundles, canonical Linux channel, and legacy mirror",
+    ),
+    "one publisher",
+  );
+  const localInputs = publisher.env?.LOCAL_INPUTS;
+  if (typeof localInputs !== "string") {
+    throw new Error("Linux publisher must select its local inputs from validate_release");
+  }
+  // The Ubuntu runner's Bash expands an empty array under `set -u`; macOS /bin/bash 3.2 does not.
+  const bash = expectDefined(
+    ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/usr/bin/bash", "/bin/bash"].find(
+      (binary) =>
+        existsSync(binary) &&
+        spawnSync(binary, ["--noprofile", "--norc", "-c", "((BASH_VERSINFO[0] >= 5))"]).status ===
+          0,
+    ),
+    "Bash 5 (on macOS: brew install bash)",
+  );
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-linux-publisher-"));
+  try {
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const calls = path.join(root, "publish-args");
+    writeFileSync(
+      path.join(bin, "node"),
+      `#!/bin/bash
+if [[ "$1" == scripts/linux-updater-manifest.mjs ]]; then
+  printf '%s\\n' "$FIXTURE_STATUS"
+else
+  printf '%s\\n' "$@" > "$FIXTURE_CALLS"
+fi
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(path.join(bin, "gh"), '#!/bin/sh\nprintf "%s\\n" "$TAG_SHA"\n', {
+      mode: 0o755,
+    });
+    // Drain the checksum pipe so the publisher's printf cannot fail with SIGPIPE under pipefail.
+    writeFileSync(path.join(bin, "sha256sum"), "#!/bin/sh\ncat > /dev/null\n", { mode: 0o755 });
+    const run = (alreadyPublished: string, status: object, desktop = "false") => {
+      rmSync(calls, { force: true });
+      const result = spawnSync(bash, ["--noprofile", "--norc", "-c", publisher.run ?? ""], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          FIXTURE_CALLS: calls,
+          FIXTURE_STATUS: JSON.stringify(status),
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_STEP_SUMMARY: devNull,
+          RUNNER_TEMP: root,
+          RELEASE_TAG: "v2026.10.3",
+          TAG_SHA: "a".repeat(40),
+          WORKFLOW_SHA: "b".repeat(40),
+          WORKFLOW_REF: "main",
+          WORKFLOW_FULL_REF: "refs/heads/main",
+          REQUEST_RUN_ID: "43",
+          REQUEST_RUN_ATTEMPT: "1",
+          MINISIGN_BINARY_SHA256: "c".repeat(64),
+          DESKTOP_TEST_BUNDLES: desktop,
+          LOCAL_INPUTS: String(
+            runInNewContext(localInputs.replace(/^\$\{\{|\}\}$/gu, ""), {
+              needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
+            }),
+          ),
+        },
+      });
+      return {
+        status: result.status,
+        stderr: result.stderr,
+        args: existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : undefined,
+      };
+    };
+    const complete = { state: "published", assetsComplete: true };
+    const localArgs = [
+      "--assets",
+      "dist/release",
+      "--signature",
+      "dist/input/linux/signatures/OpenClaw-2026.10.3-amd64.AppImage.sig",
+    ];
+    // An interrupted publication leaves complete public bundles while the
+    // run's signed Windows manifest exists only in its local inputs.
+    const resumed = run("false", complete);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.args?.join(" ")).toContain(localArgs.join(" "));
+    const reused = run("true", complete);
+    expect(reused.status, reused.stderr).toBe(0);
+    expect(reused.args).not.toContain("--assets");
+    const fresh = run("false", { state: "pending", assetsComplete: false });
+    expect(fresh.args?.join(" ")).toContain(localArgs.join(" "));
+    const desktop = run("false", complete, "true");
+    expect(desktop.status).toBe(1);
+    expect(desktop.args).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {
@@ -7818,9 +7951,23 @@ it("pins trusted Performance Git owners before checkout", () => {
 describe("frozen CI compatibility contracts", () => {
   it("skips current-only launcher and QA contracts for frozen targets", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(source).toContain(
-      `if: \${{ needs.preflight.outputs.frozen_target != 'true' }}\n        run: |\n          bun openclaw.mjs --help`,
+    const launcher = readCiWorkflow().jobs["build-artifacts"].steps.find((step: WorkflowStep) =>
+      step.run?.includes("bun openclaw.mjs --help"),
     );
+    for (const frozenTarget of [false, true]) {
+      expect(
+        evaluateWorkflowCondition(launcher.if, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          frozenTarget,
+          steps: {
+            dist_build: { outputs: {}, outcome: "success" },
+            dist_build_cache: { outputs: {} },
+          },
+        }),
+      ).toBe(!frozenTarget);
+    }
     expect(source).toContain(
       "[skip] ${partId} is not declared by this checkout's legacy smoke plan",
     );

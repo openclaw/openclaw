@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import {
   createTestAcpEventLedger,
@@ -137,7 +138,9 @@ describe("ACP event ledger", () => {
           cwd: "/é/e\u0301/台\0😀",
           complete: true,
         };
-        const { db } = openOpenClawStateDatabase({ path: databasePath });
+        const db = requireNativeSqliteDatabase(
+          openOpenClawStateDatabase({ path: databasePath }).db,
+        );
         await ledger.startSession(session);
         const initial = expectAcpReplayUtf8Accounting(db);
         for (let count = 0; count < 10; count++) {

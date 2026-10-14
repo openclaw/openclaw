@@ -4,10 +4,6 @@ import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 
-const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
-
-/** Transient menus use hidden triggers. Keep Escape intent on the host so Lit
- * re-renders cannot lose it before Web Awesome finishes hiding the popup. */
 export function trackDropdownKeyboardDismissal(
   event: KeyboardEvent,
   focusDurableTrigger?: () => void,
@@ -16,16 +12,7 @@ export function trackDropdownKeyboardDismissal(
   // use a hidden trigger, so move focus first and let native Tab continue.
   if (event.key === "Tab") {
     focusDurableTrigger?.();
-    return;
   }
-  if (event.key === "Escape" && event.currentTarget) {
-    keyboardDismissedDropdowns.add(event.currentTarget);
-  }
-}
-
-export function consumeDropdownKeyboardDismissal(event: Event): boolean {
-  const dropdown = event.currentTarget;
-  return dropdown !== null && keyboardDismissedDropdowns.delete(dropdown);
 }
 
 /** Web Awesome exposes checkbox items only. Preserve its roving-focus item
@@ -131,15 +118,13 @@ function startDropdownLabelSync(event: Event) {
   labelDropdownMenu(dropdown);
   labelDropdownSubmenus(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
-  if (typeof MutationObserver === "undefined") {
-    return;
-  }
   const observer = new MutationObserver(() => {
     labelDropdownMenu(dropdown);
     labelDropdownSubmenus(dropdown);
   });
   // Open menus can survive an in-place locale render. Watch only their light
   // DOM so translated labels stay current without observing the whole app.
+  // MutationObserver is part of the supported Control UI browser floor.
   observer.observe(dropdown, {
     attributes: true,
     attributeFilter: ["aria-label"],

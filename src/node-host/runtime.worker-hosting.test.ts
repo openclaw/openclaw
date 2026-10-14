@@ -357,3 +357,14 @@ describe("node-host worker manifest", () => {
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
 });
+
+it.each([undefined, [], ["~/projects"]])(
+  "advertises device-folder capability only when node-local consent permits it (%j)",
+  async (folders) => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, folders } } },
+      env: { PATH: "/usr/bin" },
+    });
+    expect(prepared.deviceFoldersEnabled).toBe(folders?.length !== 0 ? true : undefined);
+  },
+);

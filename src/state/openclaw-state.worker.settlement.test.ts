@@ -6,6 +6,7 @@ import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.j
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -197,7 +198,7 @@ it("does not checkpoint a retained existing-schema actor during idle inspection"
     const { db } = openOpenClawStateDatabase();
     const { constants } = requireNodeSqlite();
     const checkpoints: string[] = [];
-    db.setAuthorizer((action, name) => {
+    requireNativeSqliteDatabase(db).setAuthorizer((action, name) => {
       if (action === constants.SQLITE_PRAGMA && name === "wal_checkpoint") {
         checkpoints.push(name);
       }
@@ -207,7 +208,7 @@ it("does not checkpoint a retained existing-schema actor during idle inspection"
       expect(backend.execute({ type: "database.inspectIdle", input: undefined })).toBe("retire");
       expect(checkpoints).toEqual([]);
     } finally {
-      db.setAuthorizer(null);
+      requireNativeSqliteDatabase(db).setAuthorizer(null);
       await backend.close();
     }
   });

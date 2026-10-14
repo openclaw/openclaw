@@ -6,6 +6,7 @@ import {
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
@@ -113,6 +114,7 @@ export function createChatMetadataOwner(
   provider = "test",
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
+  prepareSharedAuthStoreOwnershipForNative();
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
   const authStore: AuthProfileStore = {
     version: 1,

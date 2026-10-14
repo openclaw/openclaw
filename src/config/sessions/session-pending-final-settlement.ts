@@ -83,7 +83,6 @@ function projectPendingFinalDeliveryState(
   const existingNotice = entry.pendingDeliveryNotice;
   const owedNotice =
     settled === "unknown" &&
-    (current === "queued" || current === "unknown") &&
     pending.context &&
     pending.intentId &&
     existingNotice?.intentId !== pending.intentId &&

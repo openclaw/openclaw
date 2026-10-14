@@ -20,7 +20,7 @@ afterEach(resetAgentRunRegistryForTest);
 afterEach(() => vi.restoreAllMocks());
 
 describe("agent harness reply media", () => {
-  it.each(["missing", "delivered"] as const)(
+  it.each(["missing", "pending", "delivered"] as const)(
     "selects current-input attachments by canonical completion after an earlier final reply (%s)",
     async (sourceReplyDeliveryState) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -71,7 +71,7 @@ describe("agent harness reply media", () => {
           if (result.kind !== "attempt") {
             throw new Error("expected prepared attempt media");
           }
-          if (sourceReplyDeliveryState === "delivered") {
+          if (sourceReplyDeliveryState !== "missing") {
             expect(readWorkspaceFile).not.toHaveBeenCalled();
             expect(result.preparedMedia).toEqual([]);
           } else {

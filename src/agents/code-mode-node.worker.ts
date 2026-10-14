@@ -18,7 +18,7 @@ import {
   USER_SOURCE_FILE,
   type SourceLocation,
 } from "./code-mode-source-location.js";
-import { prepareSource } from "./code-mode-source.js";
+import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
   CodeModeNodeInput,
@@ -337,7 +337,7 @@ function formatGuestFailure(
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
-    return { code: "invalid_input", error: "code mode module access is disabled." };
+    return { code: "invalid_input", error: CODE_MODE_MODULE_ACCESS_ERROR };
   }
   return {
     code: value.bridgeCode ?? "internal_error",
@@ -467,6 +467,11 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       if (failureJson !== undefined) {
         const failure = formatGuestFailure(current, failureJson);
+        channel?.notify({
+          status: "failure",
+          error: JSON.parse(failureJson),
+          failurePhase: failure.failurePhase ?? "guest",
+        });
         return failed(
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
@@ -487,6 +492,13 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       };
     }
   } catch (error) {
+    channel?.notify({
+      status: "failure",
+      error: types.isNativeError(error)
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : String(error),
+      failurePhase: "guest",
+    });
     const timeout = types.isNativeError(error) && error.message === "code mode timeout exceeded";
     if (cell && output.length === 0 && !timeout) {
       try {

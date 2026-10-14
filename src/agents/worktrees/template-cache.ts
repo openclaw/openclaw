@@ -2,12 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
+import {
+  withWorktreeMutationLease,
+  startWorktreeWait,
+  type WorktreeAllocationGuard,
+} from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import {
@@ -16,7 +21,10 @@ import {
   worktreePathExists,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
-import { setWorktreePreparationTemplate } from "./preparation-timing.js";
+import {
+  setWorktreePreparationTemplate,
+  startWorktreePreparationPhase,
+} from "./preparation-timing.js";
 import {
   deleteTemplateAsync,
   listTemplatesAsync,
@@ -31,6 +39,7 @@ import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
+const pendingPreparations = new Map<string, Promise<void>>();
 
 async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
@@ -189,19 +198,66 @@ export async function prepareWorktreeTemplate(params: {
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
   let retained: PreparedWorktreeTemplate | undefined;
+  let preparationKey: string | undefined;
+  let finishPreparation: (() => void) | undefined;
   try {
     const assertCallerCurrent = () => {
       params.options.signal?.throwIfAborted();
       params.options.commitGuard();
     };
-    retained = await retainWorktreeTemplate(
-      params.env,
-      { cacheKey: params.cacheKey, contentKey: params.contentKey, backend: params.backend },
-      assertCallerCurrent,
-    );
-    if (retained) {
-      setWorktreePreparationTemplate("warm", { reason: "ready" });
-      return retained;
+    while (true) {
+      retained = await retainWorktreeTemplate(
+        params.env,
+        { cacheKey: params.cacheKey, contentKey: params.contentKey, backend: params.backend },
+        assertCallerCurrent,
+      );
+      if (retained) {
+        setWorktreePreparationTemplate("warm", { reason: "ready" });
+        return retained;
+      }
+      preparationKey ??= JSON.stringify([
+        captureOpenClawStateWorkerContext({ env: params.env }).admission.coordinationKey,
+        params.cacheKey,
+      ]);
+      const pending = pendingPreparations.get(preparationKey);
+      if (!pending) {
+        pendingPreparations.set(
+          preparationKey,
+          new Promise<void>((resolve) => {
+            finishPreparation = resolve;
+          }),
+        );
+        break;
+      }
+      // Wait for local publication, then acquire our own reader. Idle templates
+      // still need validation; the persisted lease coordinates other processes.
+      const waiting = startWorktreeWait(params.options.waitBudget);
+      const finishWait = startWorktreePreparationPhase("mutationWait");
+      const deadline = AbortSignal.timeout(waiting.waitMs);
+      try {
+        await racePromiseWithAbortSignal(
+          pending,
+          params.options.signal ? AbortSignal.any([params.options.signal, deadline]) : deadline,
+        );
+        assertCallerCurrent();
+      } catch (error) {
+        assertCallerCurrent();
+        if (deadline.aborted) {
+          const timeout = new OpenClawStateLeaseError(
+            "managed worktree template preparation wait expired",
+            {
+              code: "OPENCLAW_STATE_LEASE_HELD",
+              cause: error,
+            },
+          );
+          waiting.end(timeout);
+          throw timeout;
+        }
+        throw error;
+      } finally {
+        waiting.end();
+        finishWait();
+      }
     }
     return await withWorktreeMutationLease(
       { env: params.env, ...params.options, id: `template:${params.cacheKey}` },
@@ -302,5 +358,10 @@ export async function prepareWorktreeTemplate(params: {
       });
     }
     throw error;
+  } finally {
+    if (finishPreparation && preparationKey) {
+      pendingPreparations.delete(preparationKey);
+      finishPreparation();
+    }
   }
 }

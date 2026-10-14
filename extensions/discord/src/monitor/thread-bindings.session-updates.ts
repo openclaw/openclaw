@@ -41,8 +41,8 @@ const maxAgeSetters = createDurationSetters("maxAgeMs");
 export const setThreadBindingIdleTimeoutBySessionKeyAsync = idleSetters.setAsync;
 export const setThreadBindingMaxAgeBySessionKeyAsync = maxAgeSetters.setAsync;
 
-/** @deprecated Use setThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setThreadBindingIdleTimeoutBySessionKey = idleSetters.set;
 
-/** @deprecated Use setThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setThreadBindingMaxAgeBySessionKey = maxAgeSetters.set;

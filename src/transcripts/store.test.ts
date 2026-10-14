@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
@@ -79,6 +80,42 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it("reuses list pages without worker requests and observes another store's writes", async () => {
+    const { store } = createStore();
+    const writer = createStore().store;
+    const target = { ...session(), title: "Initial title" };
+    await writer.writeSession(target);
+    const options = { limit: 50, projection: "public" } as const;
+    const initial = await store.listReadEntries(options);
+    expect(initial.entries).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
+    initial.entries[0]!.title = "Caller mutation";
+
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    const sql = observeMainThreadSql();
+    try {
+      expect((await createStore().store.listReadEntries(options)).entries).toMatchObject([
+        { title: "Initial title", utteranceCount: 0 },
+      ]);
+      expect(requests).not.toHaveBeenCalled();
+      sql.expectIdle();
+
+      await writer.writeSession({ ...target, title: "Updated title" });
+      expect((await store.listReadEntries(options)).entries).toMatchObject([
+        { title: "Updated title", utteranceCount: 0 },
+      ]);
+      await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
+      expect((await store.listReadEntries(options)).entries).toMatchObject([
+        { title: "Updated title", utteranceCount: 1 },
+      ]);
+      expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
+      expect((await store.listReadEntries(options)).entries).toHaveLength(1);
+      sql.expectIdle();
+    } finally {
+      requests.mockRestore();
+      sql.restore();
+    }
+  });
+
   it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] as const)(
     "discards only unchanged empty failed admissions (%s)",
     async (state) => {

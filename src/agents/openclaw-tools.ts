@@ -28,7 +28,10 @@ import {
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
-import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
+import {
+  createHostedConversationTools,
+  createHostedGatewayTools,
+} from "./openclaw-tools.gateway.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -56,11 +59,6 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
-import {
-  createConversationsListTool,
-  createConversationsSendTool,
-  createConversationsTurnTool,
-} from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
@@ -196,7 +194,7 @@ export function createOpenClawTools(
 }
 
 function* createOpenClawToolsSteps(
-  options?: OpenClawToolsOptions,
+  options: OpenClawToolsOptions | undefined,
   preparedDelegateTools?: AnyAgentTool[],
   preparedWebSearchConfigured?: boolean,
   preparedMediaTools?: Readonly<ReturnType<typeof resolveOptionalMediaToolFactoryPlan>>,
@@ -290,6 +288,7 @@ function* createOpenClawToolsSteps(
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
   const mediaGenerationToolOptions = {
     ...options,
+    sandboxSessionKey: options?.agentSessionKey,
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
@@ -391,6 +390,7 @@ function* createOpenClawToolsSteps(
   const nodesToolBase = createNodesTool({
     ...options,
     agentId: sessionAgentId,
+    agentSessionKey: requesterSessionKey,
   });
   const nodesTool = applyNodesToolWorkspaceGuard(nodesToolBase, {
     ...options,
@@ -609,17 +609,7 @@ function* createOpenClawToolsSteps(
     ...(embedded
       ? []
       : [
-          ...[
-            createConversationsListTool,
-            createConversationsSendTool,
-            createConversationsTurnTool,
-          ].map((createTool) =>
-            createTool({
-              ...options,
-              agentId: sessionAgentId,
-              agentSessionId: options?.sessionId,
-            }),
-          ),
+          ...createHostedConversationTools(options, sessionAgentId),
           // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
             ...options,

@@ -194,11 +194,12 @@ describe("inference HTTP transport ownership", () => {
       assertCurrent: () => {},
     });
     const question = { role: "user", content: "side question" };
+    const finalAnswer = { role: "assistant", content: "Parent final answer 4837" };
     await send("fork", fork.generation, {
       instructions: "rebuilt base",
       previous_response_id: "child-prewarm-response",
       tools: [],
-      input: [{ role: "developer", content: "rebuilt environment" }, question],
+      input: [...input, finalAnswer, question],
     });
     const [parentBytes, forkBytes] = received;
     if (!parentBytes || !forkBytes) {
@@ -208,7 +209,8 @@ describe("inference HTTP transport ownership", () => {
     const forkWire = JSON.parse(forkBytes.toString());
     expect(forkWire.instructions).toBe(parentWire.instructions);
     expect(JSON.stringify(forkWire.tools)).toBe(JSON.stringify(parentWire.tools));
-    expect(JSON.stringify(forkWire.input.slice(0, -1))).toBe(JSON.stringify(parentWire.input));
+    expect(JSON.stringify(forkWire.input.slice(0, -2))).toBe(JSON.stringify(parentWire.input));
+    expect(forkWire.input.at(-2)).toEqual(finalAnswer);
     expect(forkWire.input.at(-1)).toEqual(question);
     expect(forkWire.tool_choice).toBe("none");
     expect(forkWire).not.toHaveProperty("previous_response_id");

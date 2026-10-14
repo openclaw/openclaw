@@ -3,11 +3,13 @@ import type {
   WorkerExecutionMode,
   WorkerMachineOption as ProtocolWorkerMachineOption,
   WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
+  WorkerEnvironmentStartStatus,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { SpawnResult } from "../process/exec.js";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
@@ -143,6 +145,8 @@ type WorkerNodeBootstrapAccess = {
     openclawVersion: string;
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
+    /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
+    linuxToolchainSetup?: string;
   };
   /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
   signal?: AbortSignal;
@@ -338,6 +342,8 @@ export type WorkerProvider = {
     options?: {
       /** Configured profile id for display; settings and operation id own allocation identity. */
       profileId?: string;
+      /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */
+      reportStartStatus?: (status: WorkerEnvironmentStartStatus) => void;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
@@ -362,6 +368,7 @@ export type WorkerProvider = {
           purpose: "session" | "reserve";
           demandAtMs: number;
         };
+        secretNames?: readonly string[];
         signal: AbortSignal;
         assertCurrent: () => void;
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
@@ -373,15 +380,40 @@ export type WorkerProvider = {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
           runScriptWithBudget?: (
-            createScript: (timeoutMs: number) => string,
+            createScript: (timeoutMs: number, setupEnv?: Record<string, string>) => string,
             signal: AbortSignal,
           ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+          /** Persist diagnostics before a declared recipe rejects preparation. */
+          recordRecipePreparation?: (value: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          }) => Promise<void>;
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
           /** New completed setup must enter the reusable image before enrollment. */
           captureRequired?: true;
+          /** Detected setup is best effort; this allocation must remain cold on failure. */
+          captureSkipped?: string;
+          recipePreparation?: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          };
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;
@@ -394,6 +426,18 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
+  runSetupCommand?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    command: {
+      createScript: (setupEnv?: Record<string, string>) => string;
+      workspaceDir: string;
+      homeDir: string;
+      timeoutMs: number;
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+    },
+  ) => Promise<SpawnResult | undefined>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.
@@ -457,7 +501,7 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
@@ -478,7 +522,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
@@ -501,7 +545,7 @@ export type RealtimeVoiceProviderPlugin = {
   resolveConfigAsync?: (
     ctx: RealtimeVoiceProviderResolveConfigContext,
   ) => Promise<RealtimeVoiceProviderConfig>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;

@@ -10,10 +10,12 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
@@ -43,6 +45,7 @@ async function repairWorktreeObjects(
       throw new Error("Worktree object repair exceeded its five-minute budget");
     }
     return {
+      operation,
       signal: params.signal,
       beforeRun: () => {
         params.signal?.throwIfAborted();
@@ -163,6 +166,7 @@ async function maintainWorktreePacks(
     params.commitGuard?.();
   };
   const options = {
+    operation,
     signal: params.signal,
     beforeRun: assertCurrent,
     killProcessTree: true,
@@ -345,9 +349,10 @@ async function consolidatePacks(
   }
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
+export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.now) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
+  const nextRunAt = new Map<string, number>();
   return async (params: MaintenanceParams): Promise<void> => {
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -367,6 +372,11 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
       if (failed.get(repoRoot) === "packs" || params.shouldDeferRepository?.(repoRoot)) {
         continue;
       }
+      if (!params.retryDeferred && now() < (nextRunAt.get(repoRoot) ?? 0)) {
+        continue;
+      }
+      // Archive notifications also run cleanup; repository housekeeping stays hourly.
+      nextRunAt.set(repoRoot, now() + 60 * 60_000);
       let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
         // Repair lookup before traversing objects: interrupted writers can leave
@@ -388,6 +398,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               repoRoot,
               ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
               {
+                operation,
                 killProcessTree: true,
                 lowerPriority: true,
                 signal: params.signal,

@@ -1,4 +1,5 @@
 import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
+import type { WorkerEnvironmentStartStatus } from "../../../../packages/gateway-protocol/src/schema/environments.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -71,7 +72,24 @@ export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPh
 export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
+  environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
 ): string | undefined {
+  const startStatus = environmentStartStatus;
+  if (
+    startStatus &&
+    placement?.phase !== "reconnecting" &&
+    (!run || run.phase === "provisioning_environment")
+  ) {
+    if (startStatus.phase === "saving") {
+      return t("chat.startupStatus.savingSnapshot");
+    }
+    if (startStatus.mode === "snapshot") {
+      return t("chat.startupStatus.startingFromSnapshot");
+    }
+    if (startStatus.phase === "preparing") {
+      return t("chat.startupStatus.preparingCloudEnvironment");
+    }
+  }
   if (run) {
     if (run.phase === "retrying") {
       return t("chat.recovery.retrying");

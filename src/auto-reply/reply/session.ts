@@ -588,11 +588,8 @@ async function initSessionStateAttemptLocked(
     : entry
       ? resolveReplySessionRolloverState(entry, sessionKey)
       : undefined;
-  // Implicit rollover keeps the worker workspace; explicit resets keep their detachment policy.
+  // Repository attachments retain their implicit-only rollover policy.
   if (isNewSession && !resetTriggered && entry && preservedState) {
-    if (entry.worktree) {
-      preservedState.worktree = entry.worktree;
-    }
     if (entry.repositoryWorkspaceId) {
       preservedState.repositoryWorkspaceId = entry.repositoryWorkspaceId;
     }
