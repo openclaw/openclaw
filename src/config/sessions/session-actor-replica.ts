@@ -60,8 +60,8 @@ function estimateReplicaBytes(value: unknown): number {
     return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
   }
   let bytes = 32;
-  for (const [key, child] of Object.entries(value)) {
-    bytes += 16 + key.length * 2 + estimateReplicaBytes(child);
+  for (const key in value) {
+    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
   }
   return bytes;
 }
