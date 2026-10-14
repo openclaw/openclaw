@@ -949,6 +949,29 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     });
   });
 
+  it("keeps auth none authoritative over retained inline provider keys", async () => {
+    const auth = await resolveAuth({
+      provider: "custom-studio",
+      cfg: configForProviders({
+        "custom-studio": {
+          baseUrl: "https://studio.example.ts.net/v1",
+          api: "openai-completions",
+          auth: "none",
+          apiKey: "inline-stale-key-must-not-egress",
+          models: [createModelConfig()],
+        },
+      }),
+      store: authStore({}),
+      allowAuthProfileFallback: false,
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.providers.custom-studio (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("does not synthesize no-auth for auth none providers on non-openai-completions adapters", async () => {
     await expect(
       resolveAuth({

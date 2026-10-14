@@ -259,7 +259,9 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   }
   if (
     (!params.route && (!providerConfig || !isCustomLocalProviderConfig(providerConfig))) ||
-    (providerConfig !== undefined && hasExplicitProviderApiKeyConfig(providerConfig))
+    (providerConfig !== undefined &&
+      !noAuthOverride &&
+      hasExplicitProviderApiKeyConfig(providerConfig))
   ) {
     return false;
   }
