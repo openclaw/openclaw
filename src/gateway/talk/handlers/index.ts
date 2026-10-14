@@ -343,7 +343,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if (!expired && !lifetime?.aborted) {
+        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {

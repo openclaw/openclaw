@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -245,6 +246,49 @@ it("reuses selected transcription readiness and refreshes it on the next catalog
     ok: true,
     response: { transcription: { ready: false, providers: [{ configured: false }] } },
   });
+});
+
+it("publishes the first catalog after a slow cold refresh without starting concurrent work", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const cfg: OpenClawConfig = {
+    plugins: { enabled: false },
+    talk: { realtime: { provider: "slow" } },
+  };
+  const context = { getRuntimeConfig: () => cfg };
+  const readiness = createDeferred<boolean>();
+  const readAvailability = vi.fn(() => readiness.promise);
+  registry.realtime = [
+    {
+      id: "slow",
+      label: "Slow realtime",
+      isConfigured: () => false,
+      isConfiguredAsync: readAvailability,
+      capabilities: {
+        transports: ["gateway-relay"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+      },
+      createBridge: () => {
+        throw new Error("catalog must not create a session");
+      },
+    },
+  ];
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  expect(await read()).toMatchObject({
+    ok: false,
+    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
+  });
+  await vi.advanceTimersByTimeAsync(6_000);
+  const waiting = await Promise.all(Array.from({ length: 20 }, read));
+  expect(waiting.every((result) => !result.ok)).toBe(true);
+  expect(readAvailability).toHaveBeenCalledTimes(1);
+  readiness.resolve(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { realtime: { ready: true, providers: [{ id: "slow", configured: true }] } },
+  });
+  expect(readAvailability).toHaveBeenCalledTimes(1);
 });
 
 it("serves the last catalog during one slow refresh and retains it after the deadline", async () => {
