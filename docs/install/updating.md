@@ -16,6 +16,11 @@ hint without changing the package or stopping the Gateway; background checks
 skip package-registry updates. Missing or invalid markers retain normal install
 behavior, with a warning for an invalid marker.
 
+For [standalone builds](/install/standalone#update-the-complete-artifact), update
+the owning desktop app or replace the complete executable and runtime directory.
+The standalone CLI refuses package-manager and git updates with a visible next
+step; mixing artifacts from different builds is unsupported.
+
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
 image entrypoint runs Doctor before starting the Gateway and exits if mounted

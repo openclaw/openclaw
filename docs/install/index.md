@@ -185,6 +185,13 @@ Keep npm install scripts and optional dependencies enabled so pnpm can provision
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
+### Standalone builds
+
+For application packaging or a deployment without a separate Node or Bun
+installation, build an executable and companion runtime directory from source.
+See [Standalone builds](/install/standalone) for modes, output files, signing,
+and the update boundary.
+
 ### Install from the GitHub main checkout
 
 ```bash
