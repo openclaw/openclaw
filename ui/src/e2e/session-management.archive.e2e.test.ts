@@ -628,6 +628,7 @@ suite.define(() => {
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",
+          exact: true,
         }),
       );
       await waitForPatch(
@@ -717,11 +718,21 @@ suite.define(() => {
 
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archiveToast.waitFor({ state: "detached" });
+      await gateway.deferNext("sessions.patch", { key: selected.key, archived: false });
       await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      await gateway.setMethodResponse("sessions.describe", {
+        session: {
+          ...selectedWithoutDerivedTitle,
+          archived: false,
+          archivedAt: null,
+          archivedBy: null,
+        },
+      });
+      await gateway.resolveDeferred("sessions.patch");
       const restoredSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,

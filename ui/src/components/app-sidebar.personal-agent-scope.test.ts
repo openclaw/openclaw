@@ -9,14 +9,19 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import { bindChatPageSession } from "../pages/chat/chat-state-route.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
+import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
+import {
+  createContext,
+  createGatewayHarness,
+  createSidebarElement,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
-it("keeps My sessions across agents and resumes the selected agent's own conversation", async () => {
+it("keeps selected owners across agents and resumes the selected agent's own conversation", async () => {
   const rows: GatewaySessionRow[] = [
     {
       key: "agent:main:mine",
@@ -87,13 +92,10 @@ it("keeps My sessions across agents and resumes the selected agent's own convers
   await sessions.refresh({ agentId: "main", force: true });
   const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
   const provider = createApplicationContextProvider(context);
-  const sidebar = document.createElement("openclaw-app-sidebar");
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("Expected registered sidebar");
-  }
+  const sidebar = await createSidebarElement();
   sidebar.activeRouteId = "chat";
   sidebar.sidebarAgentsMode = "chip";
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   document.body.append(provider);
   try {
     sidebar.connected = true;
@@ -120,6 +122,17 @@ it("keeps My sessions across agents and resumes the selected agent's own convers
     await settleLitElement(sidebar);
     await sidebar.sessionData.refreshSidebarSessions();
     await settleLitElement(sidebar);
+
+    // A named owner has the same cross-agent scope as My sessions, even while
+    // the open conversation belongs to an agent where that owner has no rows.
+    await sidebar.sidebarMenus.preloadMenuRenderer();
+    await selectSessionMenuValue(sidebar, "status:all");
+    await selectSessionMenuValue(sidebar, "owner:other");
+    await settleLitElement(sidebar);
+    expect(sidebar.getRouteSessionKey()).toBe("agent:main:mine");
+    expect(sidebar.querySelector('[data-session-key="agent:research:shared"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+    await selectSessionMenuValue(sidebar, "owner:viewer");
 
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;

@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type {
@@ -7,11 +6,13 @@ import type {
   GatewaySessionRow,
   SessionsListResult,
 } from "../api/types.ts";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
@@ -31,6 +32,11 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
+        await page.addInitScript(() => {
+          // Exercise the full refresh collection window deterministically.
+          Math.random = () => 0;
+        });
+        await page.clock.install();
         const agentsList: AgentsListResult = {
           defaultId: "main",
           mainKey: "main",
@@ -193,7 +199,9 @@ suite.define(() => {
         expect(await sidebar.locator(".sidebar-agent-roster__menu wa-dropdown-item").count()).toBe(
           0,
         );
-        expect(await sidebar.locator(".sidebar-new-session-menu wa-dropdown-item").count()).toBe(0);
+        expect(await sidebar.locator('.sidebar-new-session-menu [role="menu"]').isVisible()).toBe(
+          false,
+        );
         const rosterMenu = sidebar.locator('[data-agent-group="main"] .sidebar-agent-roster__menu');
         await rosterMenu.getByRole("button", { name: "Options for Harbor", exact: true }).focus();
         await page.keyboard.press("Enter");
@@ -265,23 +273,38 @@ suite.define(() => {
         };
         const activityReads = () => gateway.getRequests("sessions.list", activityQuery);
         const initialReads = (await activityReads()).length;
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessions,
+          sessions: sessions.sessions.map((row) =>
+            row.key === "agent:main:project"
+              ? Object.assign({}, row, { label: "Harbor project refreshed" })
+              : row,
+          ),
+        });
+        await pauseVirtualClock(page);
         await gateway.deferNext("sessions.list", activityQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           key: "agent:main:main",
         });
+        // Deliver nested mock response timers so background-read admission can drain.
+        await page.clock.runFor(5_001);
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 1);
         for (let index = 0; index < 3; index += 1) {
           await gateway.emitGatewayEvent("sessions.changed", {
             agentId: "main",
             key: "agent:main:main",
           });
-          // Exercise separate debounce windows while the original server read stays held.
-          await page.waitForTimeout(250);
+          // Cross full collection windows while the original server read stays held.
+          await page.clock.runFor(5_001);
           expect(await activityReads()).toHaveLength(initialReads + 1);
         }
         await gateway.resolveDeferred("sessions.list");
-        await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 2);
+        // A held read reaches the maximum cooldown before its one trailing refresh.
+        await page.clock.runFor(15_001);
+        await sidebar.getByText("Harbor project refreshed", { exact: true }).waitFor();
+        expect(await activityReads()).toHaveLength(initialReads + 2);
+        await page.clock.resume();
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         const workspaceMenu = sidebar.locator(".sidebar-agent-menu");
@@ -332,18 +355,20 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
-        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         const newMenu = sidebar.locator(".sidebar-new-session-menu");
-        await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
+        await expect
+          .poll(() => newMenu.locator('a[role="menuitem"]').first().isVisible())
+          .toBe(true);
         await page.keyboard.press("Escape");
-        expect(await newMenu.locator("wa-dropdown-item").count()).toBe(4);
-        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        expect(await newMenu.locator('a[role="menuitem"]').count()).toBe(4);
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         expect(
           await newMenu
-            .locator("wa-dropdown-item a")
+            .locator('a[role="menuitem"]')
             .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
         ).toEqual(["main", "forge", "scout", "bloom"].map((id) => `/new?agent=${id}`));
-        await newMenu.locator('wa-dropdown-item[value="scout"]').click();
+        await newMenu.locator('a[role="menuitem"][data-value="scout"]').click();
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         expect(new URL(page.url()).searchParams.get("agent")).toBe("scout");
         await sidebar.locator('[data-agent-id="forge"]').click();
@@ -594,24 +619,35 @@ suite.define(() => {
           const action = headerLocator.locator('button[slot="trigger"]');
           await action.focus();
           await expectSignals();
-          const boxes = await sidebar.evaluate(async (sidebarElement, key) => {
-            const host = sidebarElement as AppSidebarSessionNavigationElement;
-            // Feed the shell-owned outbox summary, not a replacement row projection.
-            host.storedOutboxes = {
+          await evaluateControlUiContext(
+            page,
+            (context, key) => {
+              context.sessions.setPullRequestSummary(key, { numbers: [103], state: "open" });
+            },
+            mainKey,
+          );
+          await sidebar.evaluate((element, key) => {
+            // Keep badge geometry proof at the sidebar's presentation boundary.
+            (element as AppSidebarElement).storedOutboxes = {
               total: 2,
-              attentionCountForSession: (sessionKey) => (sessionKey === key ? 2 : 0),
-              hasSessionDraft: (sessionKey) => sessionKey === key,
+              attentionCountForSession: (sessionKey: string) => (sessionKey === key ? 2 : 0),
+              hasSessionDraft: (sessionKey: string) => sessionKey === key,
             };
-            host.sessionDataContext!.sessions.setPullRequestSummary(key, {
-              numbers: [103],
-              state: "open",
-            });
-            await host.updateComplete;
-            const roster = host.querySelector<LitElement>("openclaw-sidebar-agent-roster")!;
-            await roster.updateComplete;
-            const header = roster.querySelector(
-              '[data-agent-group="forge"] .sidebar-agent-roster__header',
-            )!;
+          }, mainKey);
+          await expect
+            .poll(() =>
+              headerLocator
+                .locator(".session-row-badge, .session-owner-chip")
+                .evaluateAll((badges) => badges.map((badge) => badge.getAttribute("aria-label"))),
+            )
+            .toEqual(
+              expect.arrayContaining([
+                "#103 · Open",
+                "2 messages need attention",
+                touch ? "Incognito session" : "Unsent draft",
+              ]),
+            );
+          const boxes = await headerLocator.evaluate((header) => {
             const box = (element: Element) => {
               const rect = element.getBoundingClientRect();
               return {
@@ -635,7 +671,7 @@ suite.define(() => {
                 }),
               ),
             };
-          }, mainKey);
+          });
           expect(boxes.nameFits).toBe(true);
           expect(
             boxes.signals.right <= boxes.actions.left ||
@@ -645,13 +681,6 @@ suite.define(() => {
           ).toBe(true);
           // The agent avatar is the header identity; Home's creator never renders beside it.
           expect(boxes.badges.map((badge) => badge.label)).not.toContain("Created by Riley");
-          expect(boxes.badges.map((badge) => badge.label)).toEqual(
-            expect.arrayContaining([
-              "#103 · Open",
-              "2 messages need attention",
-              touch ? "Incognito session" : "Unsent draft",
-            ]),
-          );
           for (const badge of boxes.badges) {
             expect(badge.visible).toBe(true);
           }

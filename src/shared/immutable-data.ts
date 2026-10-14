@@ -14,7 +14,7 @@ function isPlainDataObject(value: object): boolean {
   );
 }
 
-function inspectPlainData(value: unknown, freeze: boolean): boolean {
+function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
@@ -26,7 +26,7 @@ function inspectPlainData(value: unknown, freeze: boolean): boolean {
   const pending = [value];
   while (pending.length) {
     const candidate = pending.pop()!;
-    if (inspected.has(candidate) || deeplyFrozenPlainData.has(candidate)) {
+    if (inspected.has(candidate)) {
       continue;
     }
     if (!isPlainDataObject(candidate)) {
@@ -36,7 +36,7 @@ function inspectPlainData(value: unknown, freeze: boolean): boolean {
       plain = false;
       continue;
     }
-    if (!freeze && !Object.isFrozen(candidate)) {
+    if (!freeze && requireFrozen && !Object.isFrozen(candidate)) {
       return false;
     }
     inspected.add(candidate);
@@ -63,7 +63,7 @@ function inspectPlainData(value: unknown, freeze: boolean): boolean {
     }
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
-  if (plain) {
+  if (plain && (freeze || requireFrozen)) {
     if (freeze) {
       // Freezing publishes a root; admission can memoize descendants when they are consumed.
       deeplyFrozenPlainData.add(value);
@@ -74,6 +74,11 @@ function inspectPlainData(value: unknown, freeze: boolean): boolean {
     }
   }
   return plain;
+}
+
+/** Inspect mutable plain graphs without caching them or reading accessors. */
+export function isPlainData(value: unknown): boolean {
+  return inspectPlainData(value, false, false);
 }
 
 /** Immutable graphs keep their classification for exactly as long as their objects live. */

@@ -9,6 +9,7 @@ import {
   createSignal,
   getOwner,
   onCleanup,
+  onSettled,
   runWithOwner,
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +24,24 @@ import {
 } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
+  it("settles parent refs after mounting nested Solid content through Lit", () => {
+    const settled = vi.fn();
+    const Nested = () => <span>Provider</span>;
+    function Parent() {
+      let sibling: HTMLButtonElement | undefined;
+      onSettled(() => settled(sibling?.isConnected));
+      return (
+        <section>
+          <LegacyOutlet render={() => html`${solidContent(Nested, {})}`} />
+          <button ref={(element) => (sibling = element)}>Next</button>
+        </section>
+      );
+    }
+    mountSolid(() => <Parent />);
+    flush();
+    expect(settled).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
   it("updates a retained media mount and clears its range before remounting", () => {
     const disconnected = vi.fn();
     class MediaContent extends AsyncDirective {
@@ -60,95 +79,6 @@ describe("Lit and Solid content boundaries", () => {
       mounted.dispose();
       container.remove();
     }
-  });
-
-  it("keeps Lit markup as direct children, updates it, and disconnects nested directives", () => {
-    const disconnected = vi.fn();
-    class TrackedContent extends AsyncDirective {
-      render(value: string) {
-        return value;
-      }
-
-      protected override disconnected() {
-        disconnected();
-      }
-    }
-    const tracked = directive(TrackedContent);
-    const content = (label: string) =>
-      html`<button>${tracked(label)}</button>
-        <p>Details</p>`;
-    const [value, setValue] = createSignal(content("First"));
-    const [shown, setShown] = createSignal(true);
-    const view = mountSolid(() => (
-      <section>
-        <Show when={shown()}>
-          <LitContent value={value()} />
-        </Show>
-        <footer>Retained sibling</footer>
-      </section>
-    ));
-    flush();
-    const section = view.container.querySelector("section")!;
-    const button = view.getByRole("button", { name: "First" });
-    const footer = section.querySelector("footer");
-    expect([...section.children].map((element) => element.tagName)).toEqual([
-      "BUTTON",
-      "P",
-      "FOOTER",
-    ]);
-    expect(button.parentElement).toBe(section);
-
-    setValue(content("Second"));
-    flush();
-    expect(view.getByRole("button", { name: "Second" })).toBe(button);
-    expect(section.querySelector("footer")).toBe(footer);
-    expect(disconnected).not.toHaveBeenCalled();
-
-    setShown(false);
-    flush();
-    expect([...section.children]).toEqual([footer]);
-    expect(disconnected).toHaveBeenCalledOnce();
-    expect(button.isConnected).toBe(false);
-    view.unmount();
-    expect(disconnected).toHaveBeenCalledOnce();
-  });
-
-  it("adopts eagerly created Lit content after its Solid branch becomes visible", () => {
-    const [shown, setShown] = createSignal(false);
-    const disconnected = vi.fn();
-    class DelayedContent extends AsyncDirective {
-      render() {
-        return "Delayed action";
-      }
-
-      protected override disconnected() {
-        disconnected();
-      }
-    }
-    const delayed = directive(DelayedContent);
-    const view = mountSolid(() => {
-      const content = <LitContent value={html`<button>${delayed()}</button>`} />;
-      return (
-        <section>
-          <Show when={shown()}>{content}</Show>
-          <footer>Retained sibling</footer>
-        </section>
-      );
-    });
-    flush();
-    expect(view.queryByRole("button")).toBeNull();
-
-    setShown(true);
-    flush();
-    const section = view.container.querySelector("section")!;
-    const button = view.getByRole("button", { name: "Delayed action" });
-    expect(button.parentElement).toBe(section);
-    expect([...section.children].map((element) => element.tagName)).toEqual(["BUTTON", "FOOTER"]);
-    expect(disconnected).not.toHaveBeenCalled();
-
-    view.unmount();
-    expect(button.isConnected).toBe(false);
-    expect(disconnected).toHaveBeenCalledOnce();
   });
 
   it("retires changed template roots when Solid removes a computed subtree", () => {
@@ -288,46 +218,6 @@ describe("Lit and Solid content boundaries", () => {
     }
   });
 
-  it("mounts and reconnects Solid content introduced by a Lit content effect", async () => {
-    const disposed = vi.fn();
-    function Counter(props: { label: string }) {
-      const [count, setCount] = createSignal(0);
-      onCleanup(disposed);
-      return (
-        <button type="button" onClick={() => setCount((current) => current + 1)}>
-          {props.label}: {count()}
-        </button>
-      );
-    }
-    const [value, setValue] = createSignal<unknown>(nothing);
-    const [presented, setPresented] = createSignal(true);
-    const content = (label: string) => html`${solidContent(Counter, { label })}`;
-    const view = mountSolid(() => (
-      <SolidContentPresentation value={presented}>
-        <LitContent value={value()} />
-      </SolidContentPresentation>
-    ));
-
-    setValue(content("First"));
-    flush();
-    const button = view.getByRole("button", { name: "First: 0" });
-    button.click();
-    flush();
-    setValue(content("Second"));
-    flush();
-    expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
-
-    setPresented(false);
-    flush();
-    await Promise.resolve();
-    expect(disposed).not.toHaveBeenCalled();
-    setPresented(true);
-    flush();
-    expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
-    view.unmount();
-    await Promise.resolve();
-    expect(disposed).toHaveBeenCalledOnce();
-  });
   it.each(["replace", "unmount"] as const)(
     "parks nested Solid content and retires it on %s",
     async (removal) => {

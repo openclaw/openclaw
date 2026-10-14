@@ -1,9 +1,13 @@
+import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, Show } from "solid-js";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
-import { renderNewSessionLink } from "../components/new-session-link.ts";
+import {
+  renderContextNewSessionAction,
+  renderNewSessionLink,
+} from "../components/new-session-link.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -22,11 +26,12 @@ import {
   SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
-import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
+import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { floatingSidebarAttentionVisible, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
+import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
 export type { ShellViewHost } from "./app-shell-view-state.ts";
 
@@ -47,6 +52,7 @@ export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
 }
 
 function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+  let content!: HTMLElement;
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
@@ -55,6 +61,10 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
     props.host.shellRevision();
     return props.host.routeState.routeId !== undefined || props.host.routeState.routeFailed;
   };
+  // Legacy Mac hosts stamp this immutable host class before mounting the shell.
+  // The web-chrome flag remains a reactive view read for the current host path.
+  const legacyMacChrome = () =>
+    !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
   createEffect(view, (state) => {
     props.host.lazyCustomElements.requestWhileActive(
       props.host.onboardingMemoryImportElement,
@@ -117,16 +127,11 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         <Show when={view().nativeWebChrome && !view().onboarding}>
           <openclaw-macos-titlebar-controls
             inert={view().navDrawerOpen}
-            prop:navCollapsed={(props.host.shellRevision(), props.host.nativeNavCollapsed())}
             prop:historyOnly={view().settingsTakeover}
             prop:canGoBack={(props.host.shellRevision(), props.host.nativeHistoryState.canGoBack)}
             prop:canGoForward={
               (props.host.shellRevision(), props.host.nativeHistoryState.canGoForward)
             }
-            prop:newSessionDisabledReason={view().newSessionDisabledReason}
-            prop:onToggleSidebar={props.host.viewCallbacks.toggleSidebar}
-            prop:onOpenPalette={props.host.openPalette}
-            prop:onOpenNewSession={props.host.handleNativeNewSession}
           />
         </Show>
         <Show when={!view().nativeEmbed}>
@@ -135,53 +140,74 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
+            prop:newSessionAction={
+              view().mobileNavLayout &&
+              !view().mergedChatChrome &&
+              !view().navDrawerOpen &&
+              !view().onboarding &&
+              !view().nativeWebChrome &&
+              !document.documentElement.classList.contains("openclaw-native-nav")
+                ? renderContextNewSessionAction(
+                    view().context,
+                    "header-new-session",
+                    view().selectedAgentId,
+                  )
+                : undefined
+            }
             prop:onOpenPalette={props.host.openPalette}
             prop:onToggleDrawer={props.host.toggleNavigationSurface}
           />
         </Show>
         <Show when={view().collapsedControls}>
-          <div class="shell-chrome-controls">
-            <openclaw-tooltip
-              prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-            >
-              <button
-                type="button"
-                class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
-                aria-label={t("nav.expand")}
-                aria-expanded="false"
-                data-env-avatar={
-                  view().config.environment
-                    ? view().config.assistantIdentity.name.charAt(0)
-                    : undefined
+          <div class="shell-chrome-controls" onMouseDown={beginNativeWindowDrag}>
+            {/* Native hosts retain their window-control expand action; web uses the rail. */}
+            <Show when={view().nativeWebChrome || legacyMacChrome()}>
+              <openclaw-tooltip
+                prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
+              >
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                  aria-label={t("nav.expand")}
+                  aria-expanded="false"
+                  data-env-avatar={
+                    view().config.environment
+                      ? view().config.assistantIdentity.name.charAt(0)
+                      : undefined
+                  }
+                  onClick={() => props.host.viewCallbacks.toggleSidebar()}
+                  ref={createLitContentRef(() => icons.panelLeftOpen)}
+                />
+              </openclaw-tooltip>
+            </Show>
+            <Show when={!view().railAvailable}>
+              <LitRouteHost
+                renderValue={() =>
+                  renderNewSessionLink({
+                    basePath: view().context.basePath,
+                    agentId: view().selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    showShortcut: true,
+                    disabledReason: view().newSessionDisabledReason,
+                    onOpen: props.host.viewCallbacks.requestOpenNewSession,
+                  })
                 }
-                onClick={() => props.host.viewCallbacks.toggleSidebar()}
-                ref={createLitContentRef(() => icons.panelLeftOpen)}
               />
-            </openclaw-tooltip>
-            <LitRouteHost
-              renderValue={() =>
-                renderNewSessionLink({
-                  basePath: view().context.basePath,
-                  agentId: view().selectedAgentId,
-                  className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                  label: t("chat.runControls.newSession"),
-                  showShortcut: true,
-                  disabledReason: view().newSessionDisabledReason,
-                  onOpen: props.host.viewCallbacks.requestOpenNewSession,
-                })
-              }
-            />
-            <openclaw-tooltip
-              prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-            >
-              <button
-                type="button"
-                class="shell-chrome-controls__button shell-chrome-controls__search"
-                aria-label={t("chat.openCommandPalette")}
-                onClick={() => props.host.openPalette()}
-                ref={createLitContentRef(() => icons.search)}
-              />
-            </openclaw-tooltip>
+            </Show>
+            <Show when={!view().railAvailable || legacyMacChrome()}>
+              <openclaw-tooltip
+                prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+              >
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__search"
+                  aria-label={t("chat.openCommandPalette")}
+                  onClick={() => props.host.openPalette()}
+                  ref={createLitContentRef(() => icons.search)}
+                />
+              </openclaw-tooltip>
+            </Show>
             <Show when={view().homePanelAvailable && !view().railAvailable}>
               <LitRouteHost
                 renderValue={() => {
@@ -261,7 +287,10 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
               "content--actions-blocked": view().pageActionsBlocked,
             },
           ]}
-          ref={props.host.shellLayout.contentRef}
+          ref={(element) => {
+            content = element;
+            props.host.shellLayout.contentRef(element);
+          }}
           tabindex={-1}
           onMouseDown={beginNativeWindowDragFromTopInset}
           inert={
@@ -296,16 +325,29 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <Show when={view().embedNavigation}>
             <LitRouteHost renderValue={() => view().navigationContent} />
           </Show>
-          <RouterOutlet
-            inert={view().pageActionsBlocked || view().reloadRequired}
-            aria-disabled={view().pageActionsBlocked || view().reloadRequired ? "true" : undefined}
-            router={view().runtime.router}
-            retryContext={view().context}
-            retryEnabled={view().gatewayConnected}
-            retentionScope={view().presentationScope}
-            onNotFound={props.host.recoverNotFoundRoute}
-            notFoundRecoveryReady={view().gatewayConnected}
-          />
+          <ShellLayoutProvider
+            value={{
+              get owner() {
+                return props.host.shellLayout;
+              },
+              get host() {
+                return content;
+              },
+            }}
+          >
+            <RouterOutlet
+              inert={view().pageActionsBlocked || view().reloadRequired}
+              aria-disabled={
+                view().pageActionsBlocked || view().reloadRequired ? "true" : undefined
+              }
+              router={view().runtime.router}
+              retryContext={view().context}
+              retryEnabled={view().gatewayConnected}
+              retentionScope={view().presentationScope}
+              onNotFound={props.host.recoverNotFoundRoute}
+              notFoundRecoveryReady={view().gatewayConnected}
+            />
+          </ShellLayoutProvider>
         </main>
         <Show when={view().shellConnectionStatus}>
           <div class="shell-connection-status">

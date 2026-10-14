@@ -108,6 +108,15 @@ describe("gateway startup log", () => {
     vi.useRealTimers();
   });
 
+  it("logs version alignment guidance as information on ordinary startup", async () => {
+    const { info, warn } = await startup({});
+
+    expect(info).toHaveBeenCalledWith(
+      "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("warns when dangerous config flags are enabled", async () => {
     const { warn } = await startup({
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },

@@ -50,10 +50,10 @@ export function readSqliteTextEncoding(database: DatabaseSync): string {
   return encoding.encoding;
 }
 
-/** Capture the physical catalog once; native lifecycle owners publish the resulting facts. */
-function captureSqliteSchemaFacts(
+/** Capture the physical catalog for admission or pre-admission schema maintenance. */
+export function captureSqliteSchemaFacts(
   database: DatabaseSync,
-  revision: number,
+  revision = 0,
   validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts {
   const retainedTextEncoding = getSqliteDatabaseAdmission(database, textEncodingAdmission);

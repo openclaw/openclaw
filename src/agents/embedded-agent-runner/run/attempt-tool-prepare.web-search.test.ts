@@ -109,6 +109,7 @@ describe("prepared missing-search guidance", () => {
 
   it.each([
     { name: "ordinary unconfigured", expected: true },
+    { name: "dashboard unconfigured", dashboard: true, expected: true },
     { name: "configured", configured: true, expected: false },
     { name: "policy denied", deny: true, expected: false },
     { name: "globally disabled", disabled: true, expected: false },
@@ -136,7 +137,9 @@ describe("prepared missing-search guidance", () => {
         config,
         runId: "search-guidance",
         sessionId: "search-guidance",
-        sessionKey: "agent:main:search-guidance",
+        sessionKey: scenario.dashboard
+          ? "agent:main:dashboard:search-guidance"
+          : "agent:main:search-guidance",
         agentDir: "/tmp/search-guidance-agent",
         modelId: "test-model",
         provider: scenario.native ? "openai" : "anthropic",

@@ -194,6 +194,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
+      "dist/extensions/workboard/src/workboard-schema.postgres.sql",
     ]);
     expect(payload.sources).not.toContain(
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
@@ -2183,6 +2184,12 @@ describe("previous release update compatibility", () => {
     ["config-doctor", "missing"],
     ["native-hook-relay", "present"],
     ["native-hook-relay", "missing"],
+    ["control-ui", "present"],
+    ["control-ui", "missing"],
+    ["control-ui.build-123-fixture", "present"],
+    ["control-ui.build-123-fixture", "missing"],
+    ["control-ui.build-123-fixture.retired", "present"],
+    ["control-ui.build-123-fixture.retired", "missing"],
   ])(
     "excludes the isolated %s graph when the runtime binding is %s",
     async (directory, runtime) => {

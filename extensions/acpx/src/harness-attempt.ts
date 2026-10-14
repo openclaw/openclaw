@@ -14,7 +14,7 @@ import {
   type EmbeddedRunAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { buildSessionContext, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "openclaw/plugin-sdk/approval-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -368,7 +368,7 @@ export async function runAcpHarnessAttempt(params: {
       updateMode: "inline",
       message: { ...assistant, idempotencyKey: assistantItemId },
       preparation: {
-        source: createNativeSessionBindingAuthority([], input.hostCapabilities.assertActive)
+        source: createNativeSessionBindingScope(input.hostCapabilities.assertActive)
           .assertLegacyCurrent,
       },
     });

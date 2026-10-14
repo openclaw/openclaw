@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
   withDeferredPluginConfigRollback,
@@ -112,7 +112,7 @@ export async function writeConfigFileFromContext(
   writeOptions: ConfigWriteOptions,
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
-  const { deps, configPath } = context;
+  const { deps, configPath, options: ioOptions } = context;
   let options = writeOptions;
   const sourceGuard = captureConfigWriteLockGuard(configPath);
   const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
@@ -140,7 +140,7 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const pendingMigrations = readConfigWriteMigrationFacts(snapshot, deps.env, context.options);
+  const pendingMigrations = await readConfigWriteMigrationFacts(snapshot, deps.env, ioOptions);
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
@@ -182,7 +182,7 @@ export async function writeConfigFileFromContext(
   };
   const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {
-        storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
+        storePath: await resolveCronJobsStorePathFromConfigAsync(nextConfig, deps.env),
         ...cronOwner,
         env: deps.env,
       })

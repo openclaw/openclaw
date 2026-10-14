@@ -208,6 +208,7 @@ export async function executeFollowupTurn(params: {
     onModelSelected: turn.queued.runObservers?.onModelSelected,
     prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
     resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+    resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
     onDeliberateSilentTerminalReply: turn.queued.runObservers?.onDeliberateSilentTerminalReply,
     commentaryPayloadsEnabled,
     runId: turn.runId,

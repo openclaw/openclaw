@@ -8,7 +8,7 @@ import {
   embedderSnapshot,
   installEmbedderGatewayTestBridge,
 } from "../test-helpers/embedder-gateways.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 

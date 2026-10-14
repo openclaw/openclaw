@@ -26,6 +26,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -759,7 +760,11 @@ async function startFastAutoProgressTest(
     params.onAgentEvent = onAgentEvent;
   }
   const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
+  await awaitGateBeforeSettlement(
+    harness.waitForMethod("turn/start"),
+    run,
+    "Codex attempt settled before turn/start",
+  );
   return { harness, now, onAgentEvent, onToolResult, params, run, workspaceDir };
 }
 
@@ -776,7 +781,11 @@ async function completeStartedRun(
   completeTurn: ReturnType<typeof createStartedThreadHarness>["completeTurn"],
   threadId = "thread-1",
 ): Promise<void> {
-  await waitForMethod("turn/start");
+  await awaitGateBeforeSettlement(
+    waitForMethod("turn/start"),
+    run,
+    "Codex attempt settled before turn/start",
+  );
   await completeTurn({ threadId, turnId: "turn-1" });
   await run;
 }
@@ -835,7 +844,11 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -862,7 +875,14 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toBe(preparationError);
+    const harness = createStartedThreadHarness();
+    await expect(
+      completeStartedRun(
+        runCodexAppServerAttempt(params),
+        harness.waitForMethod,
+        harness.completeTurn,
+      ),
+    ).rejects.toBe(preparationError);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(warning).toHaveBeenCalledWith(
       expect.stringContaining("step=codex-dynamic-tool-cleanup error=Codex tool cleanup failed"),
@@ -912,6 +932,7 @@ describe("runCodexAppServerAttempt", () => {
     params.authProfileId = authProfileId;
     params.authProfileStore = authProfileStore;
     params.config = config;
+    setRuntimeConfigSnapshot(params.config);
     const expected = await prepareCodexAppServerAuthBinding({
       authProfileId,
       authProfileStore,
@@ -919,7 +940,11 @@ describe("runCodexAppServerAttempt", () => {
       config,
     });
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
     expect(result.authBindingFingerprint).toBe(expected?.fingerprint);
@@ -1058,6 +1083,7 @@ describe("runCodexAppServerAttempt", () => {
           },
         },
       } as never;
+      setRuntimeConfigSnapshot(params.config);
       const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
         params,
         sandbox as never,
@@ -1168,7 +1194,11 @@ describe("runCodexAppServerAttempt", () => {
     params.timeoutMs = 60_000;
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     const request = {
       id: "request-tool-1",
       method: "item/tool/call",
@@ -1254,7 +1284,11 @@ describe("runCodexAppServerAttempt", () => {
         skills: [],
       };
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       const turnStart = harness.requests.find((request) => request.method === "turn/start");
@@ -1377,7 +1411,11 @@ describe("runCodexAppServerAttempt", () => {
     const onAgentEvent = vi.fn();
     params.onAgentEvent = onAgentEvent;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await vi.waitFor(() => {
       expect(resourcesSpy.mock.results[0]?.value.projectorRef.current).toBeDefined();
     });
@@ -1434,7 +1472,11 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await expect(
       vi.waitFor(
         async () => {
@@ -1490,7 +1532,11 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "guardian" } },
     });
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     const item = {
       type: "fileChange" as const,
       id: "patch-approval-timeout",
@@ -1774,7 +1820,11 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();
     expect(
@@ -2149,7 +2199,11 @@ describe("runCodexAppServerAttempt", () => {
           params.toolAuthorityFingerprint = "synthetic-authority";
         }
         const run = runCodexAppServerAttempt(params);
-        await harness.waitForMethod("turn/start");
+        await awaitGateBeforeSettlement(
+          harness.waitForMethod("turn/start"),
+          run,
+          "Codex attempt settled before turn/start",
+        );
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         await run;
         expect(privateParseBytes).toBe(0);
@@ -2197,7 +2251,11 @@ describe("runCodexAppServerAttempt", () => {
       };
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
 
@@ -2421,7 +2479,11 @@ describe("runCodexAppServerAttempt", () => {
         "[Subagent Task]\nReport the synthetic result code from inherited completed tool evidence.";
       const harness = createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
 
@@ -2469,7 +2531,11 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2511,7 +2577,11 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -2553,7 +2623,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     try {
       const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       const item = {
         id: "resumed-search",
         type: "webSearch",
@@ -2597,7 +2671,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     try {
       const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       const item = {
         id: "resumed-search-with-raw",
         type: "webSearch",
@@ -2663,7 +2741,11 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "is the previous message trustworthy?";
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -2711,7 +2793,11 @@ describe("runCodexAppServerAttempt", () => {
     params.contextTokenBudget = 300_000;
     params.prompt = "continue after the dense resume";
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -2743,7 +2829,11 @@ describe("runCodexAppServerAttempt", () => {
     params.contextTokenBudget = 300_000;
     params.prompt = "record this turn's density";
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     for (const inputTokens of [140_000, 150_000]) {
       await harness.notify({
         method: "rawResponse/completed",
@@ -2785,7 +2875,11 @@ describe("runCodexAppServerAttempt", () => {
     // density would later shrink continuity history it never measured.
     params.prompt = `dense direct paste: ${"y".repeat(80_000)}`;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.notify({
       method: "thread/tokenUsage/updated",
       params: {
@@ -2836,7 +2930,11 @@ describe("runCodexAppServerAttempt", () => {
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.prompt = "is the previous message trustworthy?";
     const firstRun = runCodexAppServerAttempt(firstParams);
-    await firstHarness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      firstHarness.waitForMethod("turn/start"),
+      firstRun,
+      "Codex attempt settled before turn/start",
+    );
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const firstTurnStart = firstHarness.requests.find((request) => request.method === "turn/start");
@@ -2851,7 +2949,11 @@ describe("runCodexAppServerAttempt", () => {
     const secondParams = createParams(sessionFile, workspaceDir);
     secondParams.prompt = "continue from there";
     const secondRun = runCodexAppServerAttempt(secondParams);
-    await secondHarness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      secondHarness.waitForMethod("turn/start"),
+      secondRun,
+      "Codex attempt settled before turn/start",
+    );
     await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await secondRun;
     const secondTurnStart = secondHarness.requests.find(
@@ -3132,9 +3234,14 @@ describe("runCodexAppServerAttempt", () => {
           bootstrapTotalMaxChars: 1000,
         },
       },
-    } as EmbeddedRunAttemptParams["config"];
+    } satisfies NonNullable<EmbeddedRunAttemptParams["config"]>;
+    setRuntimeConfigSnapshot(params.config);
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -3169,7 +3276,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -3210,7 +3321,11 @@ describe("runCodexAppServerAttempt", () => {
       skills: [],
     };
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -3242,6 +3357,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const params = createRunParams();
     params.config = { tools: { exec: { mode: "full" } } };
+    setRuntimeConfigSnapshot(params.config);
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
     await completeStartedRun(run, harness.waitForMethod, harness.completeTurn);
@@ -3261,7 +3377,11 @@ describe("runCodexAppServerAttempt", () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     const error = {
       message: "This content was flagged for possible biological risk. Try rephrasing it.",
       codexErrorInfo: "other",
@@ -3387,7 +3507,11 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     for (const [id, status, exitCode] of [
       ["command-failed-1", "failed", 1],
       ["command-succeeded", "completed", 0],
@@ -3434,7 +3558,11 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "guardian" } },
     });
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
@@ -3583,7 +3711,11 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("thread/resume");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("thread/resume"),
+      run,
+      "Codex attempt settled before thread/resume",
+    );
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
@@ -3613,7 +3745,11 @@ describe("runCodexAppServerAttempt", () => {
         turn: { id: "compact-turn", status: "completed", items: [] },
       },
     });
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
@@ -3857,7 +3993,11 @@ describe("runCodexAppServerAttempt", () => {
     void run.then(() => {
       resolved = true;
     });
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -3904,7 +4044,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createRunParams());
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     const mcpItem = {
       type: "mcpToolCall",
       id: "raw-item",
@@ -3969,7 +4113,11 @@ describe("runCodexAppServerAttempt", () => {
       };
       const harness = createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       const item = {
         type: "mcpToolCall",
         id: "active-mcp",
@@ -4169,7 +4317,11 @@ describe("runCodexAppServerAttempt", () => {
     const params = createRunParams();
     params.abortSignal = abortController.signal;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     expect(harness.request.mock.calls.map(([method]) => method)).toContain("turn/start");
     abortController.abort("test_abort");
     turnStart.resolve(turnStartResult());
@@ -4460,6 +4612,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     } as never;
+    setRuntimeConfigSnapshot(params.config);
     params.authProfileStore.profiles["openai:work"] =
       createCodexTestOAuthProfile("synthetic-account");
     const run = runCodexAppServerAttempt(params, {
@@ -5047,7 +5200,11 @@ describe("saved assistant occurrence settlement", () => {
       params.deferTerminalLifecycle = true;
       params.onAgentEvent = onRunAgentEvent;
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
 
       if (commentary) {
         await harness.notify(
@@ -5409,7 +5566,11 @@ describe("runCodexAppServerAttempt usage limits", () => {
       saveAuthProfileStore(params.authProfileStore, params.agentDir);
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("account/rateLimits/read");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("account/rateLimits/read"),
+        run,
+        "Codex attempt settled before account/rateLimits/read",
+      );
 
       const result = await run;
       expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
@@ -5442,7 +5603,11 @@ describe("runCodexAppServerAttempt usage limits", () => {
     const params = createUsageParams("streamed-usage-limit-agent");
     saveAuthProfileStore(params.authProfileStore, params.agentDir);
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
     await harness.notify(
       turnCompleted({
         id: "turn-1",
@@ -5488,7 +5653,11 @@ describe("runCodexAppServerAttempt usage limits", () => {
       saveAuthProfileStore(params.authProfileStore, params.agentDir);
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await awaitGateBeforeSettlement(
+        harness.waitForMethod("turn/start"),
+        run,
+        "Codex attempt settled before turn/start",
+      );
       await harness.notify(rateLimitsUpdated(resetsAt));
       await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error }));
 

@@ -18,8 +18,13 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
+import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
-import { adoptCronRunRequests, drainCronRunQueue } from "./run-queue.js";
+import {
+  adoptCronRunRequests,
+  getCronRunQueueRequests,
+  launchCronRunQueueResult,
+} from "./run-queue.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
@@ -135,6 +140,8 @@ export async function startCronScheduler(
         monotonicMs: performance.now(),
         skipJobIds: [...skipJobIds],
         deferAgentWork: true,
+        paused: state.schedulingPaused,
+        requests: getCronRunQueueRequests(state),
       },
     });
     const requests = adoptCronRunRequests(
@@ -147,7 +154,7 @@ export async function startCronScheduler(
     started = true;
     state.schedulerStarted = true;
     await publish(state, result);
-    await drainCronRunQueue(state);
+    await locked(state, () => launchCronRunQueueResult(state, result, context));
     const completed = await Promise.allSettled(requests.map((request) => request.completion));
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {
@@ -209,6 +216,7 @@ async function runCronSchedulerTick(
           storeKey: cronStoreKey(state.deps.storePath),
           channelName: connection.channelName,
           paused: false,
+          requests: getCronRunQueueRequests(state),
           snapshot: await captureCronSchedulerSnapshot(state),
           nowMs: state.deps.nowMs(),
           monotonicMs: performance.now(),
@@ -216,7 +224,7 @@ async function runCronSchedulerTick(
       });
       adoptCronRunRequests(state, result.accepted, { source: "scheduled" }, undefined, generation);
       await publish(state, result);
-      await drainCronRunQueue(state);
+      await locked(state, () => launchCronRunQueueResult(state, result));
     });
   } finally {
     admission.release();

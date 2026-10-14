@@ -991,7 +991,7 @@ extension MacNodeRuntimeTests {
         let factoryGate = AsyncTestGate()
         defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
-        let admissionCalls = LockedCounter()
+        let secondAdmission = AsyncTestGate()
         let runtime = await MacNodeRuntime(
             desktopAvailability: services.desktopAvailability,
             makeMainActorServices: {
@@ -999,10 +999,8 @@ extension MacNodeRuntimeTests {
                 await factoryGate.wait()
                 return services
             },
-            computerControlEnabled: {
-                admissionCalls.increment()
-                return true
-            })
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
         let params = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1010,11 +1008,14 @@ extension MacNodeRuntimeTests {
             await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
         try #require(try await waitForCount(1, counter: factoryCalls, "services factory call"))
+        await MainActor.run {
+            services.desktopPlatform.onConsoleStateRead = { secondAdmission.open() }
+        }
         let second = Task {
             await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(try await waitForCount(2, counter: admissionCalls, "second invoke admission"))
-        // The actor barrier proves the second invoke reached its first suspension.
+        try await secondAdmission.wait("second desktop admission")
+        // Permission evaluation runs after service initialization; observe desktop admission instead.
         await runtime.updateMainSessionKey("single-flight-barrier")
 
         #expect(factoryCalls.value() == 1)
@@ -1023,6 +1024,7 @@ extension MacNodeRuntimeTests {
         let secondResponse = await second.value
         #expect(firstResponse.ok)
         #expect(secondResponse.ok)
+        #expect(factoryCalls.value() == 1)
     }
 
     @MainActor

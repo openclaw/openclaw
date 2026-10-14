@@ -15,7 +15,7 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -299,28 +299,22 @@ export function loadSubagentRunsForChildSessionFromSqlite(
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }
 
-/** Raw versions accompany decoded values, so normalization cannot hide a foreign write. */
-export function loadVersionedSubagentRunsInDatabase(
+export function loadSubagentRunsByIdsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   runIds: readonly string[],
-): { runs: Map<string, SubagentRunRecord>; versions: Map<string, string | null> } {
-  const versions = new Map<string, string | null>(runIds.map((runId) => [runId, null]));
-  const runs = decodeSubagentRegistryRows(
+): Map<string, SubagentRunRecord> {
+  return decodeSubagentRegistryRows(
     runIds.length === 0 ? [] : readSubagentRegistryRows({ kind: "runs", runIds }, database),
     (entry) => entry,
-    (row) => versions.set(row.run_id, subagentRunRowVersion(row)),
   );
-  return { runs, versions };
 }
 
 function decodeSubagentRegistryRows<T>(
   rows: Iterable<SubagentRunSqliteRow>,
   project: (entry: SubagentRunRecord) => T,
-  observe?: (row: SubagentRunSqliteRow) => void,
 ): Map<string, T> {
   const runs = new Map<string, T>();
   for (const row of rows) {
-    observe?.(row);
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, project(entry));

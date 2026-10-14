@@ -56,6 +56,12 @@ It describes the preferred selection for the observed configured channel, not ca
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
 
+Root-owned, protected immutable layouts managed by an external deployment owner
+report a host-managed installation even without native adoption. Startup status
+does not run Git discovery or enable automatic updates for these layouts. Use the
+deployment owner to update them; native preparation and activation still require
+explicit adoption after the previous updater has stopped.
+
 For adopted immutable installations, the installation projection includes
 `activationEnabled` only when explicitly enabled. `activation` reports a
 retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`,
@@ -93,6 +99,12 @@ completes. This check also works after a direct Git/source or package-manager up
 with no update run. Run `openclaw doctor --fix` after those upgrades; normal commands
 and Gateway startup do not inspect or apply deferred plugin migrations. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
+
+The final update summary reconciles plugin migration warnings with the pending
+ledger after the last repair pass. Completed obligations leave the final summary
+and persisted warning steps; pending obligations keep their retry command.
+If the ledger cannot be read, the summary retains the warnings. Messages already
+printed during an earlier phase can remain in the terminal scrollback.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This

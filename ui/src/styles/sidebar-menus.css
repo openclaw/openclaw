@@ -317,14 +317,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   flex: 1;
 }
 
-.sidebar-session-menu-switch wa-switch {
+.sidebar-session-menu-switch .settings-toggle {
   pointer-events: none;
-}
-
-/* The empty label slot keeps a leading margin that would pull the track off
-   the shared right edge. */
-.sidebar-session-menu-switch wa-switch::part(label) {
-  display: none;
 }
 
 /* Reset's text ends on the controls' edge; its padded hover surface extends past it. */

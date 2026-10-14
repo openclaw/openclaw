@@ -335,20 +335,18 @@ export function logWs(
       );
       return;
     }
-    if (
-      direction !== "out" ||
-      kind !== "res" ||
-      !(
-        ok === false ||
-        (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS) ||
-        (meta?.method === "sessions.list" &&
-          typeof meta.bytes === "number" &&
-          meta.bytes >= 200 * 1024)
-      )
-    ) {
+    if (direction !== "out" || kind !== "res") {
       return;
     }
   } else if (compact && kind === "req" && direction === "in" && connId && id) {
+    return;
+  }
+
+  const level =
+    !verbose && ok === true && !(typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS)
+      ? "debug"
+      : "info";
+  if (!wsLog.isEnabled(level)) {
     return;
   }
 
@@ -374,7 +372,7 @@ export function logWs(
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  wsLog.info(
+  wsLog[level](
     [
       `${arrowColor(arrow)} ${chalk.bold(kind)}`,
       kind === "res" && ok !== undefined

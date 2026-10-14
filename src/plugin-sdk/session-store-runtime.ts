@@ -42,7 +42,6 @@ import {
   readSessionEntrySummariesInWorker,
   readSessionUpdatedAtInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
@@ -243,6 +242,8 @@ export async function listSessionEntriesAsync(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   storePath?: string;
+  /** External readers cannot reuse the Gateway process's writer receipts. */
+  readConsistency?: "latest";
 }): Promise<SessionStoreEntrySummary[]> {
   const entries = await readSessionEntrySummariesInWorker({
     ...params,
@@ -567,31 +568,6 @@ export async function cleanupSessionLifecycleArtifacts(
       ? `agent:${params.agentId}:${params.sessionKeySegmentPrefix.trim()}`
       : undefined,
   };
-  const source = captureIncognitoSessionSource(selection);
-  if (source && "kind" in source) {
-    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
-  }
-  if (source) {
-    const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
-    if (!sessionKeySegmentPrefix || !params.transcriptContentMarker) {
-      return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
-    }
-    return cleanupAccessorSessionLifecycleArtifacts({
-      kind: "incognito",
-      actor: source.actor,
-      authority: { assertCurrent: () => source.actor.assertCurrent() },
-      admissionSignal: source.admissionSignal,
-      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../..") },
-      ownerStorePath: storePath,
-      input: {
-        sessionKeySegmentPrefix,
-        transcriptContentMarker: params.transcriptContentMarker,
-        pluginOwnerId: params.pluginOwnerId?.trim(),
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-        nowMs: params.nowMs ?? Date.now(),
-      },
-    });
-  }
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath: resolveExplicitSessionStorePathForScope(selection) ?? storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),

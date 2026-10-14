@@ -91,6 +91,7 @@ describe("GitHub publication selection admission", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("rejects a stale turn claim after awaited identity verification", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -110,30 +111,52 @@ describe("GitHub publication selection admission", () => {
       runId: "run-1",
       owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
     });
-    let resolveIdentity: ((value: unknown) => void) | undefined;
-    mocks.prepareIdentity.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          resolveIdentity = resolve;
-        }),
-    );
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    mocks.prepareIdentity.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return {
+        source: "system-configured",
+        profileId: "ghp_11111111111111111111111111111111",
+        account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+        env: {},
+      };
+    });
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    const pending = coordinator.requestForClaimV2({
-      claim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "publish-stale",
-    });
-    await vi.waitFor(() => expect(resolveIdentity).toBeTypeOf("function"));
-    await placements.releaseTurn(claim);
-    resolveIdentity?.({
-      source: "system-configured",
-      profileId: "ghp_11111111111111111111111111111111",
-      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
-      env: {},
-    });
+    const pending = coordinator
+      .requestForClaimV2({
+        claim,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        idempotencyKey: "publish-stale",
+      })
+      .catch((error: unknown) => error);
+    let result: unknown;
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then((error) => {
+          throw error;
+        }),
+      ]);
+      await placements.releaseTurn(claim);
+    } finally {
+      release.resolve();
+      result = await pending;
+    }
 
-    await expect(pending).rejects.toThrow("lost the live session turn claim after verification");
+    expect(result).toBeInstanceOf(Error);
+    expect(result).toMatchObject({
+      message: "GitHub publication lost the live session turn claim after verification.",
+    });
+    expect(
+      readGitHubPublicationRequest(database.db, {
+        sessionId: REQUEST.sessionId,
+        idempotencyKey: "publish-stale",
+      }),
+    ).toBeUndefined();
+    expect(commands).toEqual([]);
   });
 
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {

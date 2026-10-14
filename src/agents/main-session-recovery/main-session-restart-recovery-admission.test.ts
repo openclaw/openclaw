@@ -524,7 +524,7 @@ describe("startup recovery admission", () => {
                 sessionKey: first.sessionKey,
                 sourceRunId: "interrupted-main",
                 decision: "started",
-                nextOwner: "main-lane",
+                nextOwner: "background-lane",
                 boot: expect.any(String),
                 pass: expect.any(String),
               }),
@@ -702,7 +702,7 @@ describe("startup recovery admission", () => {
           phase = "initial-preparation";
           await withinTest(firstPreparationSettled.promise, signal);
           holdPreparationRead = true;
-          await patchSessionEntryCore(target, () => ({ title: "preparation progress" }));
+          await patchSessionEntryCore(target, () => ({ label: "preparation progress" }));
         }
         if (timing !== "preparation commit") {
           phase = timing;

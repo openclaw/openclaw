@@ -491,104 +491,123 @@ describe("sessions.dispatch", () => {
     expectDispatchError(respond, "Cloud workspace inventory exceeds its entry limit");
   });
 
-  it("delegates a provisioning managed-worktree session and projects placement", async () => {
-    useWorktreeSession(
-      {
-        agentRuntimeOverride: "openclaw",
-        permissionMode: "workspace",
-        sessionRoot: "/repo/worktree",
-      },
-      "/repo/worktree",
-    );
-    const dispatchedPlacement: WorkerSessionPlacementRecord = {
-      ...activePlacementRecord(),
-      environmentId: "environment-1",
-      generation: 5,
-      activeOwnerEpoch: 2,
-    };
-    const provisioning: WorkerSessionPlacementRecord = {
-      ...reclaimedPlacementRecord(),
-      state: "provisioning",
-      activeOwnerEpoch: null,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-      workerBundleHash: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      terminalReason: null,
-      terminalAtMs: null,
-    };
-    const dispatch = vi.fn(
-      async (
-        _request: WorkerPlacementDispatchRequest,
-        onTransition?: (placement: WorkerSessionPlacementRecord) => void,
-      ) => {
-        for (const state of [
-          "requested",
-          "provisioning",
-          "syncing",
-          "starting",
-          "active",
-        ] as const) {
-          onTransition?.({ ...dispatchedPlacement, state } as WorkerSessionPlacementRecord);
-        }
-        return dispatchedPlacement;
-      },
-    );
-    const context = makeContext({
-      getRuntimeConfig: () => ({
-        cloudWorkers: {
-          profiles: { test: { provider: "fake" }, mapped: { provider: "fake" } },
-          projectProfiles: { "github.com/acme/app": "mapped" },
+  it.each(["test", "cloud"])(
+    "dispatches a saved %s profile and projects placement",
+    async (profileId) => {
+      useWorktreeSession(
+        {
+          agentRuntimeOverride: "openclaw",
+          permissionMode: "workspace",
+          sessionRoot: "/repo/worktree",
         },
-      }),
-      getSessionEventSubscriberConnIds: () => new Set(),
-      workerPlacementDispatchService: { dispatch },
-      workerSessionPlacementService: { getMany: () => new Map([[sessionId, provisioning]]) },
-    });
-    const changes = vi.fn();
-    onTestFinished(
-      sessionChanges.subscribe((change) => {
-        // Capture placement broadcasts, excluding writes that prepare the fixture store.
-        if ("sessionKey" in change && change.agentId === undefined) {
-          changes(change);
-        }
-      }),
-    );
-    const respond = await invoke(context, { profileId: "test", machineClass: "large", os: "os-a" });
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId,
-        sessionKey,
-        agentId: "main",
-        executionMode: "worker-turn",
-        profileId: "test",
-        machineClass: "large",
-        os: "os-a",
-        devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      }),
-      expect.any(Function),
-      undefined,
-      undefined,
-    );
-    expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        key: sessionKey,
-        sessionId,
-        placement: expect.objectContaining({
-          state: "active",
-          environmentId: "environment-1",
-          activeOwnerEpoch: 2,
+        "/repo/worktree",
+      );
+      const dispatchedPlacement: WorkerSessionPlacementRecord = {
+        ...activePlacementRecord(),
+        environmentId: "environment-1",
+        generation: 5,
+        activeOwnerEpoch: 2,
+      };
+      const provisioning: WorkerSessionPlacementRecord = {
+        ...reclaimedPlacementRecord(),
+        state: "provisioning",
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        terminalReason: null,
+        terminalAtMs: null,
+      };
+      const dispatch = vi.fn(
+        async (
+          _request: WorkerPlacementDispatchRequest,
+          onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+        ) => {
+          for (const state of [
+            "requested",
+            "provisioning",
+            "syncing",
+            "starting",
+            "active",
+          ] as const) {
+            onTransition?.({ ...dispatchedPlacement, state } as WorkerSessionPlacementRecord);
+          }
+          return dispatchedPlacement;
+        },
+      );
+      const context = makeContext({
+        getRuntimeConfig: () => ({
+          cloudWorkers: {
+            profiles: {
+              test: { provider: "fake" },
+              mapped: { provider: "fake" },
+              cloud: {
+                provider: "crabbox",
+                install: "bundle",
+                suspendAfter: "45m",
+                settings: {
+                  provider: "aws",
+                  target: "linux",
+                  class: "standard",
+                  ttl: "8h",
+                  idleTimeout: "45m",
+                  warmImage: true,
+                },
+              },
+            },
+            projectProfiles: { "github.com/acme/app": "mapped" },
+          },
         }),
-      }),
-      undefined,
-    );
-  });
+        getSessionEventSubscriberConnIds: () => new Set(),
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map([[sessionId, provisioning]]) },
+      });
+      const changes = vi.fn();
+      onTestFinished(
+        sessionChanges.subscribe((change) => {
+          // Capture placement broadcasts, excluding writes that prepare the fixture store.
+          if ("sessionKey" in change && change.agentId === undefined) {
+            changes(change);
+          }
+        }),
+      );
+      const respond = await invoke(context, { profileId, machineClass: "large", os: "os-a" });
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId,
+          sessionKey,
+          agentId: "main",
+          executionMode: "worker-turn",
+          profileId,
+          machineClass: "large",
+          os: "os-a",
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        }),
+        expect.any(Function),
+        undefined,
+        undefined,
+      );
+      expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          key: sessionKey,
+          sessionId,
+          placement: expect.objectContaining({
+            state: "active",
+            environmentId: "environment-1",
+            activeOwnerEpoch: 2,
+          }),
+        }),
+        undefined,
+      );
+    },
+  );
   it("requires admin before resolving a configured project profile", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {
@@ -908,6 +927,8 @@ describe("sessions.dispatch", () => {
             chatAbortControllers: new Map(),
             getSessionEventSubscriberConnIds: () => new Set(["another-client"]),
           });
+          const cfg = context.getRuntimeConfig();
+          setRuntimeConfigSnapshot(cfg, cfg);
 
           try {
             const changes = vi.fn();

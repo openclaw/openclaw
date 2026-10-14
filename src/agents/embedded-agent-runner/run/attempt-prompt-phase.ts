@@ -216,6 +216,7 @@ export async function runEmbeddedAttemptPromptPhase(
         leasedSteering = lease;
       },
     });
+    input.setup.prepStages.mark("prompt-build");
     systemPromptText = sessionRuntimeState.systemPromptText;
     if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
       setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
@@ -246,6 +247,7 @@ export async function runEmbeddedAttemptPromptPhase(
       systemPromptText,
       toolResultPromptProjectionState,
     });
+    input.setup.prepStages.mark("prompt-context");
     if (runAbortController.signal.aborted) {
       throw createAbortableError(runAbortController.signal);
     }
@@ -418,6 +420,7 @@ export async function runEmbeddedAttemptPromptPhase(
       // request budget) so client tools appended by attempt-client-tools are counted.
       toolSchemaTokens: estimateToolSchemaTokenPressure(activeSession.agent.state.tools),
     });
+    input.setup.prepStages.mark("compaction-preflight");
     publishDispatchState(state);
 
     if (!state.skipPromptSubmission) {

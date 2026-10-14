@@ -16,6 +16,7 @@ import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -111,6 +112,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           },
         },
       } as never;
+      setRuntimeConfigSnapshot(params.config);
       params.sessionId = "diagnostic-session-1";
       params.sessionKey = "agent:diagnostic:diagnostic-session-1";
       params.runId = "diagnostic-run-1";
@@ -176,6 +178,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       params.config = {
         diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
       } as never;
+      setRuntimeConfigSnapshot(params.config);
       params.timeoutMs = 60_000;
 
       const run = runCodexAppServerAttempt(params);

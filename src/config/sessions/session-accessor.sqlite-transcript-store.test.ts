@@ -33,12 +33,6 @@ import {
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import {
-  appendPreparedSessionTranscriptProjectionChunkInTransaction,
-  finalizePreparedSessionTranscriptProjectionInTransaction,
-  prepareSessionTranscriptProjection,
-  claimPreparedSessionTranscriptProjectionInTransaction,
-} from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
@@ -421,30 +415,6 @@ describe("SQLite exact transcript rewrite", () => {
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);
-  });
-
-  it("recovers a claimed projection on metadata rewrite and fences stale publication", async () => {
-    await withRewriteFixture(({ db, rewrite, snapshot, scope }) => {
-      const before = snapshot();
-      const plan = prepareSessionTranscriptProjection(db, scope.sessionId)!;
-      db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(true);
-      db.prepare("DELETE FROM session_transcript_active_events").run();
-      db.prepare("DELETE FROM session_transcript_fts_rows").run();
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
-      rewrite({ ...rewriteEvents[1], message: { ...rewriteEvents[1].message, provenance: "new" } });
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      expect(snapshot().active).toEqual(before.active);
-      expect(snapshot().search).toEqual(before.search);
-      expect(
-        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-          sessionId: scope.sessionId,
-          claimId: -1,
-          ftsRows: plan.ftsRows,
-        }),
-      ).toBe(false);
-      expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(false);
-    });
   });
 
   it.each([

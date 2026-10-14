@@ -125,6 +125,7 @@ export type InternalPluginLoadOverrides = {
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   const subagent: PluginRuntime["subagent"] = {
     complete: (...args) => runtime.subagent.complete(...args),
+    forkSession: (...args) => runtime.subagent.forkSession(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),

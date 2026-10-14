@@ -577,7 +577,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     );
   }
 
-  /** @deprecated Await appendMessageAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendMessageAsync. This method will be removed in a later stable release after the deprecation period. */
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -624,7 +624,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     };
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in a later stable release after the deprecation period. */
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,

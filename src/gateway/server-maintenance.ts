@@ -14,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -139,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -288,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -300,15 +302,12 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+    },
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -400,20 +399,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      if (entry.projectSessionTerminalPersistence) {
-        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
-        const sessionKey = entry.sessionKey.trim();
-        const sessionId = entry.sessionId.trim();
-        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
-          params.restartRecoveryCandidates.set(runId, {
-            runId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt: entry.projectSessionTerminalObservedAt,
-          });
-        }
-      } else if (entry.projectSessionActive !== false) {
+      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
         const aborted = abortChatRunById(params, {
           runId,
           sessionKey: entry.sessionKey,

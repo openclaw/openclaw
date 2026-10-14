@@ -269,6 +269,8 @@ it.each(cases)(
         },
       },
       plugins: {
+        // Keep unrelated memory retries off the fixture's held transport clock.
+        slots: { memory: "none" },
         allow: ["codex", "openai", "recovery-instructions"],
         load: { paths: [plugin] },
         entries: {
@@ -303,11 +305,20 @@ it.each(cases)(
     };
     const readyThreads = new Map<string, ReadyThread>();
     const lifecycleErrors = new Map<string, string[]>();
+    const abortedRuns = new Set<string>();
     const gateway = await startGatewayWithClient({
       cfg,
       configPath: values.OPENCLAW_CONFIG_PATH,
       token: values.OPENCLAW_GATEWAY_TOKEN,
       onEvent: ({ event, payload }) => {
+        if (
+          event === "chat" &&
+          isRecord(payload) &&
+          payload.state === "aborted" &&
+          typeof payload.runId === "string"
+        ) {
+          abortedRuns.add(payload.runId);
+        }
         if (
           event !== "agent" ||
           !isRecord(payload) ||
@@ -392,7 +403,8 @@ it.each(cases)(
         siblingSessionKey = created.key;
       }
       const idle = await start("Remember IDLE_SIBLING_CONTEXT.", "idle-first", siblingSessionKey);
-      expect(await wait(idle.runId)).toMatchObject({ status: "ok" });
+      const idleResult = await wait(idle.runId);
+      expect(idleResult, idleResult.error).toMatchObject({ status: "ok" });
       idleThread = await ready(idle.runId);
     }
     const first = await start("Remember HISTORY_ALPHA.", "first");
@@ -532,9 +544,10 @@ it.each(cases)(
       expect(primaryRequests).toHaveLength(1);
       await assertOriginalBinding();
       if (shutdown === "cancelled") {
-        expect(
-          await gateway.client.request("chat.abort", { sessionKey, runId: continued.runId }),
-        ).toMatchObject({ aborted: true });
+        await expect(
+          gateway.client.request("chat.abort", { sessionKey, runId: continued.runId }),
+        ).resolves.toEqual({ ok: true, aborted: true, runIds: [continued.runId] });
+        expect(abortedRuns.has(continued.runId)).toBe(true);
         expect(exitGate.child.exitCode).toBeNull();
         expect(exitGate.child.signalCode).toBeNull();
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);

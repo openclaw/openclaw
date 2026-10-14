@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
@@ -27,8 +28,9 @@ import {
 import {
   PreparedModelRuntimePublicationSupersededError,
   hasSameLifecycleInput,
-  normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
+  normalizeOptionalDir,
+  prepareModelRuntimeInput,
   ownerKey,
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
@@ -266,27 +268,26 @@ export async function publishPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
   options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  captureModelRuntimeLifetime();
-  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const assertLifetime = captureModelRuntimeLifetime();
+  const acquisitionSignal = refreshCancellation.signal;
+  const input = getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)
+    ? normalizePreparedModelRuntimeInput(rawInput)
+    : await prepareModelRuntimeInput(rawInput);
+  assertLifetime();
+  acquisitionSignal.throwIfAborted();
   const existing = owners.get(ownerKey(input));
-  if (existing?.pending) {
-    if (!options.force && hasSameLifecycleInput(existing.input, input)) {
+  if (existing?.buildCompletion && !existing.pending) {
+    throw (
+      existing.refreshError ??
+      new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
+    );
+  }
+  if (existing && !options.force && hasSameLifecycleInput(existing.input, input)) {
+    if (existing.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(existing);
       return await existing.pending;
     }
-  } else {
-    if (existing?.buildCompletion) {
-      throw (
-        existing.refreshError ??
-        new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
-      );
-    }
-    if (
-      existing?.snapshot &&
-      !existing.needsRefresh &&
-      !options.force &&
-      hasSameLifecycleInput(existing.input, input)
-    ) {
+    if (existing.snapshot && !existing.needsRefresh) {
       return existing.snapshot;
     }
   }
@@ -316,7 +317,8 @@ export async function activateStandalonePreparedModelRuntime(
   > = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
-  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const input = await prepareModelRuntimeInput(rawInput);
+  assertLifetime();
   const key = ownerKey(input);
   const previous = standaloneActivationTails.get(key) ?? Promise.resolve();
   // One writer per owner key prevents conflicting config activations from alternately
@@ -535,11 +537,12 @@ export function refreshPreparedModelRuntimeSnapshots(
   const initialAgentIds =
     typeof config === "function" ? undefined : resolveSafeRefreshAgentIds(config, options, owners);
   const forceFullRefresh = requestedScopedRefresh && initialAgentIds === undefined;
-  // Stale synchronously. Queued publication must never leave the prior generation request-visible.
+  // Admit replacement and Gateway lifetime synchronously before this task can be superseded.
   markPreparedModelRuntimeSnapshotsStale(undefined, {
     waitForReplacement: true,
     agentIds: initialAgentIds,
   });
+  gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const requestEpoch = refreshRequestEpoch;
   const acquisitionSignal = refreshCancellation.signal;
   const replacement = pendingModelRuntimeReplacement;
@@ -618,7 +621,6 @@ export function refreshPreparedModelRuntimeSnapshots(
         ? undefined
         : resolveSafeRefreshAgentIds(currentConfig, options, owners);
       retainedGatewayRunOwners.clear(owners);
-      gatewayLifecycleActive ||= options.gatewayLifecycle === true;
       await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
         currentConfig,
         { ...options, agentIds: publicationAgentIds },

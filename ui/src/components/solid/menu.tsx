@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
@@ -9,8 +9,13 @@ import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
 
 export type MenuItem = {
+  kind?: "item";
   id: string;
   label: string;
+  href?: string;
+  attributes?: JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
+    [name: `data-${string}`]: string | number | boolean | undefined;
+  };
   icon?: JSX.Element;
   details?: JSX.Element;
   disabled?: boolean;
@@ -18,29 +23,41 @@ export type MenuItem = {
   type?: "checkbox" | "radio";
   class?: string;
   variant?: "danger";
-  children?: readonly MenuItem[];
+  children?: readonly MenuEntry[];
   content?: JSX.Element;
   closeOnSelect?: boolean;
 };
+export type MenuEntry = MenuItem | { kind: "content"; id: string; content: JSX.Element };
 
 export type MenuHandle = { overlay: Overlay; open(): boolean; close(): boolean };
 export type MenuProps = {
   /** Stable for this mount; remount the menu to change its identity. */
   id: string;
   label: string;
-  items: readonly MenuItem[];
+  items: readonly MenuEntry[];
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: string;
   panelClass?: string;
   triggerClass?: string;
+  triggerAttributes?: Pick<
+    JSX.HTMLAttributes<HTMLButtonElement>,
+    "title" | "style" | "tabindex" | "aria-hidden" | "aria-busy"
+  > & {
+    /** Stable for this mount, like the menu id. */
+    id?: string;
+    [name: `data-${string}`]: string | number | boolean | undefined;
+  };
   placement?: OverlayPlacement;
   dir?: "ltr" | "rtl";
   open?: boolean;
   disabled?: boolean;
+  /** Override the destination when Tab exits the menu; dismissal stays owned here. */
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
+  onAfterShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
   ref?(handle: MenuHandle): void;
 };
@@ -68,6 +85,9 @@ export function Menu(props: BranchProps): JSX.Element {
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const identity = untrack(() => ({
     id: props.id,
+    triggerId: props.parent
+      ? `${props.id}:trigger`
+      : (props.triggerAttributes?.id ?? `${props.id}:trigger`),
     parent: props.parent,
     binding: props.parentBinding,
     root: props.root,
@@ -111,7 +131,7 @@ export function Menu(props: BranchProps): JSX.Element {
     (identity.parent ? (direction() === "rtl" ? "left-start" : "right-start") : "bottom-start");
   const activate = (value: string) => {
     const item = props.items.find((entry) => entry.id === value);
-    if (!item || item.disabled || item.children) {
+    if (!item || item.kind === "content" || item.disabled || item.children) {
       return;
     }
     const event = new CustomEvent("menu-select", { detail: item, bubbles: true, cancelable: true });
@@ -124,7 +144,9 @@ export function Menu(props: BranchProps): JSX.Element {
     }
   };
   onSettled(() => overlay.bindSurface(surface));
-  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service);
+  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service, {
+    ids: { trigger: identity.triggerId },
+  });
   const [opened, setOpened] = createSignal(false);
   let openPublication = 0;
   const syncOpen = (open: boolean) => {
@@ -200,7 +222,15 @@ export function Menu(props: BranchProps): JSX.Element {
         event.preventDefault();
         next.focus();
       } else {
-        menuRoot.request(false, "return");
+        const destination = untrack(() => props.tabFocusTarget?.(event.shiftKey));
+        if (destination) {
+          event.preventDefault();
+          if (menuRoot.request(false, "none")) {
+            destination.focus({ preventScroll: true });
+          }
+        } else {
+          menuRoot.request(false, "return");
+        }
       }
     };
     overlay.surface.addEventListener("overlay-show", beforeShow);
@@ -226,13 +256,14 @@ export function Menu(props: BranchProps): JSX.Element {
   return (
     <div class={props.class} dir={direction()}>
       <button
+        {...props.triggerAttributes}
         {...binding.trigger(identity.binding, props.disabled)}
         ref={(node) => {
           trigger = node;
           overlay.bindTrigger(node);
         }}
         type="button"
-        id={`${identity.id}:trigger`}
+        id={identity.triggerId}
         class={[
           identity.parent ? "oc-menu-item oc-menu-item--submenu" : "oc-menu-trigger",
           props.triggerClass,
@@ -262,65 +293,92 @@ export function Menu(props: BranchProps): JSX.Element {
         role="menu"
         aria-label={props.label}
         dir={direction()}
+        onOverlay-after-show={(event: Event) => {
+          if (event.target === surface) {
+            props.onAfterShow?.(event);
+          }
+        }}
       >
         {props.children}
-        <For each={props.items} keyed={(item) => item.id}>
-          {(item) => (
-            <Show
-              when={item().children}
-              fallback={
-                <button
-                  {...binding.item(
-                    item().id,
-                    item().disabled,
-                    item().type,
-                    item().checked,
-                    item().label,
-                  )}
-                  type="button"
-                  class={["oc-menu-item", item().class]}
-                  data-value={item().id}
-                  data-variant={item().variant}
-                  role={itemRole(item().type)}
-                  aria-label={item().label}
-                  aria-checked={item().type ? (item().checked ? "true" : "false") : undefined}
-                  aria-disabled={item().disabled ? "true" : undefined}
-                  disabled={item().disabled}
-                >
-                  <Show when={item().type}>
-                    <span class="oc-menu-item__check" aria-hidden="true">
-                      {item().checked ? "✓" : ""}
-                    </span>
-                  </Show>
-                  <Show when={item().icon}>
-                    <span class="oc-menu-item__icon">{item().icon}</span>
-                  </Show>
-                  <span class="oc-menu-item__label">{item().label}</span>
-                  <Show when={item().details}>
-                    <span class="oc-menu-item__details">{item().details}</span>
-                  </Show>
-                </button>
-              }
-            >
-              {(children) => (
-                <Menu
-                  id={`${identity.id}-${item().id}`}
-                  label={item().label}
-                  items={children()}
-                  trigger={item().label}
-                  parent={overlay}
-                  root={menuRoot}
-                  parentBinding={binding}
-                  dir={direction()}
-                  disabled={item().disabled}
-                  triggerClass={item().class}
-                  onSelect={props.onSelect}
-                >
-                  {item().content}
-                </Menu>
-              )}
-            </Show>
-          )}
+        <For each={props.items} keyed={(entry) => entry.id}>
+          {(entry) => {
+            const actionable = () => {
+              const current = entry();
+              return current.kind === "content" ? undefined : current;
+            };
+            const content = () => {
+              const current = entry();
+              return current.kind === "content" ? current.content : undefined;
+            };
+            return (
+              <Show when={actionable()} fallback={content()}>
+                {(item) => {
+                  const Item = dynamic(() => (item().href === undefined ? "button" : "a"));
+                  return (
+                    <Show
+                      when={item().children}
+                      fallback={
+                        <Item
+                          {...item().attributes}
+                          {...binding.item(
+                            item().id,
+                            item().disabled,
+                            item().type,
+                            item().checked,
+                            item().label,
+                          )}
+                          type={item().href === undefined ? "button" : undefined}
+                          href={item().disabled ? undefined : item().href}
+                          class={["oc-menu-item", item().class]}
+                          data-value={item().id}
+                          data-variant={item().variant}
+                          role={itemRole(item().type)}
+                          aria-label={item().label}
+                          aria-checked={
+                            item().type ? (item().checked ? "true" : "false") : undefined
+                          }
+                          aria-disabled={item().disabled ? "true" : undefined}
+                          disabled={item().href === undefined ? item().disabled : undefined}
+                        >
+                          <Show when={item().type}>
+                            <span class="oc-menu-item__check" aria-hidden="true">
+                              {item().checked ? "✓" : ""}
+                            </span>
+                          </Show>
+                          <Show when={item().icon}>
+                            <span class="oc-menu-item__icon">{item().icon}</span>
+                          </Show>
+                          <span class="oc-menu-item__label">{item().content ?? item().label}</span>
+                          <Show when={item().details}>
+                            <span class="oc-menu-item__details">{item().details}</span>
+                          </Show>
+                        </Item>
+                      }
+                    >
+                      {(children) => (
+                        <Menu
+                          id={`${identity.id}-${item().id}`}
+                          label={item().label}
+                          items={children()}
+                          trigger={item().label}
+                          parent={overlay}
+                          root={menuRoot}
+                          parentBinding={binding}
+                          tabFocusTarget={props.tabFocusTarget}
+                          dir={direction()}
+                          disabled={item().disabled}
+                          triggerClass={item().class}
+                          onSelect={props.onSelect}
+                        >
+                          {item().content}
+                        </Menu>
+                      )}
+                    </Show>
+                  );
+                }}
+              </Show>
+            );
+          }}
         </For>
       </div>
     </div>

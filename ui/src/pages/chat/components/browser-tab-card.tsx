@@ -1,4 +1,11 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  onCleanup,
+  untrack,
+} from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -6,8 +13,8 @@ import { postNativeExternalLink } from "../../../app/native-link-routing.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
 import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
-import "../../../components/web-awesome.ts";
 import { BrandIcon, Icon } from "../../../components/solid/icon.tsx";
+import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -31,6 +38,7 @@ type BrowserTabCardProps = {
 
 function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<BrowserTabCardProps>) {
   const application = useOptionalApplication();
+  const menuId = createUniqueId();
   const projection = projectSource<ApplicationContext | undefined, ApplicationContext | undefined>(
     untrack(() => props.context ?? application),
     {
@@ -181,19 +189,46 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     }
   };
   const open = () => (untrack(opensExternally) ? openExternal() : openPanel());
-  const onMenuSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
+  const onMenuSelect = (value: string) => {
     const url = host.preview?.url;
     if (!url) {
       return;
     }
-    if (event.detail.item.value === "copy-url") {
+    if (value === "copy-url") {
       void copyToClipboard(url, () => active && host.preview?.url === url);
-    } else if (event.detail.item.value === "open-new-tab") {
+    } else if (value === "open-new-tab") {
       openExternal();
-    } else if (event.detail.item.value === "open-within-openclaw") {
+    } else if (value === "open-within-openclaw") {
       openPanel();
     }
   };
+  const menuItems = createMemo<MenuItem[]>(() => [
+    {
+      id: "copy-url",
+      label: t("browser.copyUrl"),
+      class: "session-menu__item",
+      attributes: { value: "copy-url" },
+      icon: (
+        <span class="session-menu__icon" aria-hidden="true">
+          <Icon name="copy" />
+        </span>
+      ),
+    },
+    {
+      id: opensExternally() ? "open-within-openclaw" : "open-new-tab",
+      label: opensExternally() ? t("browser.openWithinOpenClaw") : t("browser.openNewTab"),
+      class: "session-menu__item",
+      attributes: {
+        value: opensExternally() ? "open-within-openclaw" : "open-new-tab",
+        "data-new-tab-action": !opensExternally() ? "" : undefined,
+      },
+      icon: (
+        <span class="session-menu__icon" aria-hidden="true">
+          <Icon name={opensExternally() ? "globe" : "externalLink"} />
+        </span>
+      ),
+    },
+  ]);
   const data = createMemo(() => {
     const loadedThumbnail = thumbnail();
     const loadedPage = pagePreview();
@@ -298,34 +333,17 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
               >
                 {t(data()!.tweet ? "browser.openPost" : "browser.open")}
               </button>
-              <wa-dropdown class="session-menu" placement="bottom-end" onWa-select={onMenuSelect}>
-                <button
-                  slot="trigger"
-                  type="button"
-                  class="more"
-                  aria-label={t("browser.moreActions")}
-                  aria-haspopup="menu"
-                  title={t("browser.moreActions")}
-                >
-                  <Icon name="moreHorizontal" />
-                </button>
-                <wa-dropdown-item class="session-menu__item" value="copy-url">
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                    <Icon name="copy" />
-                  </span>
-                  {t("browser.copyUrl")}
-                </wa-dropdown-item>
-                <wa-dropdown-item
-                  class="session-menu__item"
-                  value={opensExternally() ? "open-within-openclaw" : "open-new-tab"}
-                  data-new-tab-action={!opensExternally() ? "" : undefined}
-                >
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                    <Icon name={opensExternally() ? "globe" : "externalLink"} />
-                  </span>
-                  {opensExternally() ? t("browser.openWithinOpenClaw") : t("browser.openNewTab")}
-                </wa-dropdown-item>
-              </wa-dropdown>
+              <Menu
+                id={`browser-tab-card-${menuId}`}
+                class="session-menu"
+                placement="bottom-end"
+                triggerClass="more"
+                triggerAttributes={{ title: t("browser.moreActions") }}
+                label={t("browser.moreActions")}
+                trigger={<Icon name="moreHorizontal" />}
+                items={menuItems()}
+                onSelect={(item) => onMenuSelect(item.id)}
+              />
             </span>
           </div>
         </div>

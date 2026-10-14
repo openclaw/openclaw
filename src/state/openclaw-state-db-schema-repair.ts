@@ -21,6 +21,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -66,6 +67,7 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "github_publication_session_lifecycles",
     "github_repository_publication_requests",
   ],
+  "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -422,6 +424,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     )
   ) {
     migrations.push({ kind: "predicate-columns-v21", path: pathname });
+  }
+  if (
+    userVersion < 22 &&
+    ["acp_sessions", ...STATE_CURSOR_TABLES_V22].some((table) => tableExists(db, table))
+  ) {
+    migrations.push({ kind: "portable-identity-columns-v22", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

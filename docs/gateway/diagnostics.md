@@ -151,6 +151,17 @@ pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
 the scheduler does not replay missed ticks.
 
+Best-effort maintenance shares a ten-second phase. Its first pass may run up to
+ten seconds early; later passes stay on nominal slots instead of drifting with
+callback duration. Healthy idle event-loop sampling joins this phase, while active
+or degraded sampling keeps its one-second cadence. Expiry, retry, lease, and
+transport-liveness deadlines retain their own timing.
+
+Healthy native directory watches use a five-minute recovery sweep for missed
+events. Missing directories, ancestor watches, and failed watches retry within
+30 seconds. Auth, database-identity, and session-source observers retain their
+30-second recovery bound; delivered native events still invalidate immediately.
+
 The same heartbeat also samples liveness when the event loop or CPU looks
 saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
 event-loop utilization, CPU-core ratio, active/waiting/queued session counts,
@@ -268,6 +279,31 @@ the warning's `pid` and `workerThreadId` to an agent-database-open warning's
 not CPU attribution or a breakdown of the Worker's lifetime. A missing Worker
 ID does not establish that work ran on the main thread.
 
+From a source checkout, summarize an existing JSONL file without contacting the
+Gateway or opening its databases:
+
+```bash
+node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
+  --from 2026-10-13T14:10:00Z --until 2026-10-13T15:50:00Z
+```
+
+The report splits observed reservation and queue-wait intervals into UTC minutes,
+ranks operation categories, and lists the longest observed reservations. Native
+transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
+the host, while `sqlMs` is the remaining execution time, including JavaScript
+processing. Do not add transaction time to enclosing reservation time.
+
+This is a warning census, not complete writer utilization. Fast operations are
+absent, `direct` reservations do not identify their underlying command, and logs
+do not record physical queue depth. The maximum overlap of observed waits is
+scoped to a process/thread but can span different databases; it does not identify
+which holder blocked a particular waiter. Reentrant and session-lifecycle queue
+records are excluded from reservation totals. Interval reconstruction uses log
+emission time as a completion proxy and clips to the requested window, so include
+records emitted just after the window too. Supply each event once from one host,
+including rotated files through stdin when needed. Output retains fixed operation
+categories and numeric timing only, without paths, session identities, or content.
+
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
@@ -328,16 +364,36 @@ response limit does not bound the runtime's internal allocation during that dela
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
-On Node, starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture
-(about 3.5 seconds has been observed with a 3 GB heap),
-before regular sampling begins. Keeping the inspector domain enabled or sending
-the request from a Worker does not avoid that main-isolate work.
+On Node, CPU captures share the native profiler with the Gateway's stall flight
+recorder. While that recorder is active on Node 26, starting an operator capture
+reuses its code map without scanning the heap again. If no native profile is
+already active, starting a CPU profile synchronously scans V8's heap to build
+the code map. On a large Gateway this can block the main event loop for seconds
+(about 3.5 seconds has been observed with a 3 GB heap). Bun uses its inspector
+profiler. Keeping an inspector domain enabled or sending a request from a Worker
+does not avoid V8's main-isolate scan.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
 excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
 attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
+
+From a source checkout, attribute native self samples to their nearest JavaScript
+parent with:
+
+```bash
+node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
+```
+
+The script accepts saved RPC results or raw V8 profiles and prints the top 20
+parents for each capture. Add `--json` for all parent rows. Percentages use elapsed
+profile time, including idle and garbage collection, rather than active CPU time.
+Signed sample deltas remain intact. For RPC results, it separately reports a first
+native sample under the diagnostic profiler's inspector start call and shows
+workload percentages with that sample and its duration excluded. This prevents a
+large profiler-start sample from being mistaken for steady application work;
+it does not remove the actual stall or alter the saved profile. Raw profiles lack
+the `startBlockedMs` metadata and retain every sample in workload percentages.
 
 The RPC refuses a known active inspector listener, profiling flags, coverage
 collection, or any active Node tracing, including non-CPU categories. Stop tracing

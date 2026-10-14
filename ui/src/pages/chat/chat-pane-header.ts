@@ -9,6 +9,7 @@ import type { UiSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
+import { renderContextNewSessionAction } from "../../components/new-session-link.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -23,6 +24,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   canDeleteSessionRows,
+  isNativeCatalogAdoptionSessionKey,
   isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
@@ -231,7 +233,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       hello: this.context.gateway.snapshot.hello,
     });
     const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
-    const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
+    const deleteAllowed = Boolean(
+      row &&
+      !isNativeCatalogAdoptionSessionKey(row.key) &&
+      canDeleteSessionRows([row], configuredMainKey),
+    );
     const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
@@ -371,7 +377,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
               active: subagents ? subagentsVisible : processesVisible,
-              // Keep the selected intent if a live batch opens the panel while the menu hides.
               onActivate: () =>
                 this.requestBackgroundPanel(
                   slot,
@@ -540,6 +545,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
+      newSessionAction:
+        this.presented && this.mergedChrome && !this.navDrawerOpen
+          ? renderContextNewSessionAction(this.context, "header-new-session")
+          : nothing,
       title:
         (catalog ? this.catalogSession?.name?.trim() : undefined) ||
         this.resolveHeaderSessionTitle(row),

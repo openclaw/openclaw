@@ -42,7 +42,7 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     warningStarts: "2026-10-09",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Use createNativeSessionBindingLifecycleV2 and resolveNativeSessionBindingWithAuthorityV2 with the worker-backed binding store. Implement AgentHarness.resolveSessionRuntimeOwnershipAsync for preparation. Exact synchronous final-authority checks retain their native adapter until complete publication and the next Plugin SDK major.",
+      "Use createNativeSessionBindingLifecycleV2 and resolvePreparedNativeSessionBinding with the worker-backed binding store, and release the prepared capture after terminal cleanup. Implement AgentHarness.resolveSessionRuntimeOwnershipAsync for preparation. Released synchronous authority factories remain deprecated compatibility adapters.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings",
     surfaces: [
       "createNativeSessionBindingLifecycle",

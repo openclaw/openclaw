@@ -61,13 +61,17 @@ vi.mock("../infra/push-web.js", async (importOriginal) => ({
   // Keep every store operation real; only the prepared provider is deferred.
   prepareWebPushNotificationSender: async () => mocks.preparedSend,
 }));
+// mock-isolation: Hold synthetic pairing replies without starting the real SQLite worker.
 vi.mock("../infra/device-pairing-worker.js", () => ({
   withCurrentDevicePairingSnapshot: async <T>(
     _stateDir: string | undefined,
     prepare: (paired: PairedDevice[]) => { start: () => T } | undefined,
+    preparePublication?: () => Promise<void>,
   ) => {
     const read = mocks.listPairedDevices();
-    return prepare(read instanceof Promise ? await read : read)?.start();
+    const paired = read instanceof Promise ? await read : read;
+    await preparePublication?.();
+    return prepare(paired)?.start();
   },
 }));
 vi.mock("../infra/device-pairing.js", () => ({
@@ -306,6 +310,7 @@ it("keeps browser storage responsive while notification session facts load", asy
     entered.resolve();
     await release.promise;
     return {
+      prepareRead: () => undefined,
       readCurrent: () => ({ target: null, membership: new Set<string>() }),
       release: factsReleased,
     };

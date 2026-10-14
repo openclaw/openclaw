@@ -10,6 +10,8 @@ import {
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { assertPluginStatePublicationSettled } from "../../plugin-state/plugin-state-publication.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
 const delivery = vi.hoisted(() => ({
@@ -19,38 +21,43 @@ const delivery = vi.hoisted(() => ({
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              async execute(command, commandOptions) {
+                if (command.type === "session.nativeBindings.delete") {
+                  delivery.beforeExecution?.();
+                  delivery.dispatched++;
+                }
+                const result = await worker.execute(command, commandOptions);
+                if (command.type === "session.nativeBindings.delete") {
+                  delivery.afterExecution?.(result);
+                }
+                return result;
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                async execute(command, commandOptions) {
-                  if (command.type === "session.nativeBindings.delete") {
-                    delivery.beforeExecution?.();
-                    delivery.dispatched++;
-                  }
-                  const result = await worker.execute(command, commandOptions);
-                  if (command.type === "session.nativeBindings.delete") {
-                    delivery.afterExecution?.(result);
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 
@@ -214,6 +221,8 @@ it.each([
       }
       const original = fixture.readEntry();
       assert(original);
+      const identity = captureOpenClawStateWorkerContext({ env: fixture.scope.env }).admission
+        .identity.key;
       let terminateWorker: (() => Promise<number>) | undefined;
       let stopped: Promise<number> | undefined;
       // The interceptor forwards the original method with its exact Worker receiver below.
@@ -256,6 +265,9 @@ it.each([
         const deletion = fixture.remove();
         await expect(deletion).rejects.toBeInstanceOf(SqliteWorkerError);
         await expect(deletion).rejects.toMatchObject({ code: "outcome-unknown" });
+        expect(() => assertPluginStatePublicationSettled(identity)).toThrow(
+          "authority is unavailable",
+        );
         assert(stopped, "the test must reach the requested native commit checkpoint");
         await stopped;
         expect(delivery.dispatched).toBe(1);

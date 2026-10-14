@@ -468,7 +468,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
   it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
     const persisted = await patchEntry("ordinary", () => {
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
@@ -543,7 +543,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
         setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         return null;
       }),

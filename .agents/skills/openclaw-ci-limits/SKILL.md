@@ -291,12 +291,15 @@ These are intentionally guarded by the `ci-workflow-guards`,
   main/same-repository PRs add three assignments; fork PRs can add six because
   their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Automatic hybrid first-attempt `preflight` requests the existing
-  16-class after hosted assignment stalled across three nearby runs while
-  Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
-  and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
-  4-class; hybrid retries, manual dispatches, noncanonical contexts,
-  and the `github` override retain hosted routing. `security-fast` stays hosted
+  Automatic canonical hybrid and RunsOn first-attempt `preflight` uses the
+  existing 4-class, matching default Blacksmith preflight. The former 16-class
+  placement addressed hosted queue stalls. October 13 observations found 610
+  4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
+  also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
+  logical planner profile, cache trust, and 20-minute deadline. Hybrid/RunsOn
+  retries, manual dispatches, noncanonical contexts, and the `github` override
+  retain hosted routing. Monitor assignment latency before claiming rollout savings.
+  `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
   outage override remains intact. Budget three control-job registrations per eligible
@@ -356,10 +359,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   historical 16/32-class runs also differed in compiler optimization. See
   `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
   permissions, compiler checks, or hosted eligibility are added.
-  The package-boundary row has a 30-minute whole-job budget: three hosted
+  The package-boundary row has a 40-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
+  Two hosted release validations then passed both checks (128 plugins) and
+  were cancelled at the former 30-minute limit.
   Compiler concurrency, complete inventory, receipt guards, canary, and routing
   remain unchanged.
 - The Plugin SDK API diff row also has a 30-minute whole-job budget. Two hosted
@@ -588,12 +593,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI-only jobs use the 16-class when every group has
-  one or two explicit files and the existing two-worker fallback, without build,
-  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
-  inventories, runtime selection, timing identities, and process boundaries.
-  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
-  choice for retained Blacksmith CLI jobs.
+- Precisely selected serial CLI and Gateway client jobs use the 16-class when
+  every group belongs to either family, has one or two explicit files, and keeps
+  its two-worker fallback, without build, dist, memory, or large-runner anchors.
+  Gateway client groups must pair `agentic-gateway-core-2` with
+  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+  Apply capacity after packing; preserve inventories, runtime selection, timing
+  identities, and process boundaries. Full families retain their planned capacity.
+  RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -663,6 +670,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
+  Canonical `main` push/schedule first attempts on that plan use the 8-class
+  only with explicit non-frozen, non-compatibility classification. A cold private
+  runtime build and all 24 scenarios passed on two usable CPUs under a 7-GiB
+  no-swap cap (5.96-GiB peak, no OOMs). This does not qualify older backport
+  source: those targets may build with higher compiler concurrency. Other
+  contexts retain the shared 16-class/hosted/release-group routing.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
   retry/manual plans retain six. Failed-job-only retries retain their original
   matrix. Keep the complete scenario inventory, separate Matrix run, worker
@@ -690,6 +703,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   same rows: each validates the complete graph boundary and intersects selected
   consumers with its original stripe. Empty intersections stay empty; ambiguous
   selection falls back to every canonical graph across those same stripes.
+  Check existence only for compiler inputs: deleted Markdown and UI CSS paths
+  do not widen accompanying code changes; deleted compiler inputs retain full coverage.
   Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
   with stripe 5 in the central row. Keep at most two compiler children per
   stripe and one builder per child. A failing stripe stops its row; other

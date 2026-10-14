@@ -4,6 +4,7 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   listUsageCountedTranscriptStats as collectTranscriptStats,
   resolveUsageCostTranscriptFiles,
@@ -15,6 +16,7 @@ function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostColle
   return {
     env,
     materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
+    listSqliteMetadataStores: listDurableSqliteTargetPathsForSessionStorePath,
     readSqliteMetadata: async (_storePath, read) => read(),
     listSqliteInstances: async (agentId, storePath) =>
       listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),

@@ -184,6 +184,8 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
@@ -428,6 +430,9 @@ describe("renderChatComposer controls", () => {
     openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     vi.stubGlobal("AudioContext", DictationAudioContext);
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { transcription: { ready: true } };
       }
@@ -449,7 +454,9 @@ describe("renderChatComposer controls", () => {
       gatewayClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
     await vi.waitFor(() =>
       expect(container.querySelector('[data-chat-talk-capability="dictation"]')).toBeNull(),
     );
@@ -491,6 +498,9 @@ describe("renderChatComposer controls", () => {
     vi.useFakeTimers();
     discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: false } };
       }
@@ -501,7 +511,9 @@ describe("renderChatComposer controls", () => {
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
@@ -530,6 +542,9 @@ describe("renderChatComposer controls", () => {
     vi.useFakeTimers();
     openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: true } };
       }
@@ -539,7 +554,9 @@ describe("renderChatComposer controls", () => {
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
 
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 12));

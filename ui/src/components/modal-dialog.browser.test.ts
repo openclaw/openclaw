@@ -11,10 +11,10 @@ let container: HTMLDivElement;
 type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
 type ModalPhase = "opening" | "opened" | "closing" | "closed";
 const modalEvents = {
-  opening: "wa-show",
-  opened: "wa-after-show",
-  closing: "wa-hide",
-  closed: "wa-after-hide",
+  opening: "overlay-show",
+  opened: "overlay-after-show",
+  closing: "overlay-hide",
+  closed: "overlay-after-hide",
 } as const;
 
 function modalSurface(modal: Modal) {
@@ -107,7 +107,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     const dialog = modalDialog(modal);
     const opened = vi.fn();
     const cancelled = vi.fn(() => modal.remove());
-    modal.addEventListener("wa-show", opened);
+    modal.addEventListener("overlay-show", opened);
     modal.addEventListener("modal-cancel", cancelled);
     opener.addEventListener("click", () => modal.show());
 
@@ -164,7 +164,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       expect(dialog.open).toBe(true);
       expect(dialog.dataset.phase).toBe("opening");
       let completions = 0;
-      modal.addEventListener("wa-after-hide", () => {
+      modal.addEventListener("overlay-after-hide", () => {
         completions += 1;
       });
       const hidden = afterModalPhase(modal, "closed");

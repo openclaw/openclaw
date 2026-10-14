@@ -203,9 +203,6 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
           custody.add(custodian);
         },
         unknown: false,
-        async refreshCommittedFacts() {
-          await owner?.facts?.refresh();
-        },
         settle(outcome, error) {
           if (outcome === "unknown") {
             participant.unknown = true;

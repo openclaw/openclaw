@@ -30,10 +30,29 @@ export function createPreparedModelCatalogProjection(params: {
   ];
   return (
     inventory: Pick<PreparedModelCatalogInventory, "catalog"> &
-      Partial<Pick<PreparedModelCatalogInventory, "discoveryOrigins">>,
+      Partial<Pick<PreparedModelCatalogInventory, "discoveryOrigins" | "providers">>,
     configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
   ) => {
-    const { catalog, discoveryOrigins = [] } = inventory;
+    const { catalog, discoveryOrigins = [], providers: acquiredProviders } = inventory;
+    let sourceCatalog = catalog;
+    if (acquiredProviders) {
+      // Retained siblings cannot hide captured rows before this provider is acquired.
+      // Successful empty discovery still owns its inventory.
+      const unacquired = (entries: typeof catalog.entries) =>
+        entries.filter(
+          (entry) =>
+            !entry.nativeRuntime &&
+            !acquiredProviders.has(params.normalizeProvider(entry.provider)),
+        );
+      sourceCatalog = {
+        ...catalog,
+        entries: [...catalog.entries, ...unacquired(params.catalogFacts.modelCatalog.entries)],
+        routeVariants: [
+          ...catalog.routeVariants,
+          ...unacquired(params.catalogFacts.modelCatalog.routeVariants),
+        ],
+      };
+    }
     const configured = prepareConfiguredRuntimeFacts({
       agentFacts: params.agentFacts,
       workspaceFacts: params.pluginGeneration,
@@ -46,7 +65,7 @@ export function createPreparedModelCatalogProjection(params: {
     );
     // Retain source-owned rows before projecting native IDs onto their public provider.
     const nativeCatalog = projectClaudeCliNativeCatalog(
-      catalog,
+      sourceCatalog,
       !(getPreparedModelFullCatalogAuth(catalog)?.credentials ?? params.agentFacts.credentials)
         .anthropic,
     );

@@ -495,20 +495,24 @@ describe("model runtime generation scope", () => {
       const missingProvider = "generation-missing";
       const fallbackProvider = "generation-fallback";
       const children: ChildProcess[] = [];
-      const closed = new Set<ChildProcess>();
       let liveDuringFallback: ChildProcess[] = [];
       let liveAfterSelection: ChildProcess[] = [];
-      let prepared = false;
       let current = true;
       const controller = new AbortController();
-      const stopped = new Error("Model selection stopped during reader close");
+      const stopped = new Error("Model selection stopped during fallback preparation");
       const generation = generationFixture({
         label: "readonly-reuse",
         provider: fallbackProvider,
         requestProvider: fallbackProvider,
         prepareDynamicModel: async () => {
           liveDuringFallback = children.filter((child) => child.exitCode === null);
-          prepared = true;
+          await Promise.resolve();
+          if (invalidation === "abort") {
+            controller.abort(stopped);
+          }
+          if (invalidation === "authority") {
+            current = false;
+          }
         },
       });
       await state.writeAuthProfiles({
@@ -539,15 +543,6 @@ describe("model runtime generation scope", () => {
               args[1].includes("session")
             ) {
               children.push(child);
-              child.once("close", () => {
-                closed.add(child);
-                if (prepared && invalidation === "abort") {
-                  controller.abort(stopped);
-                }
-                if (prepared && invalidation === "authority") {
-                  current = false;
-                }
-              });
             }
             return child;
           });
@@ -587,19 +582,22 @@ describe("model runtime generation scope", () => {
           missingProvider,
           fallbackProvider,
         ]);
-        expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
-          expect.objectContaining({
-            authProfileId: `${fallbackProvider}:default`,
-            authProfileMode: "api_key",
-          }),
-        );
+        if (invalidation === "authority") {
+          expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+        } else {
+          expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+            expect.objectContaining({
+              authProfileId: `${fallbackProvider}:default`,
+              authProfileMode: "api_key",
+            }),
+          );
+        }
         expect(children).toHaveLength(1);
         expect(liveDuringFallback).toEqual(children);
-        expect(liveAfterSelection).toEqual(ambientScope ? children : []);
+        expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
         for (const child of children) {
-          expect(closed.has(child)).toBe(true);
-          expect(child.exitCode).toBe(0);
-          expect(child.connected).toBe(false);
+          expect(child.exitCode).toBeNull();
+          expect(child.connected).toBe(true);
         }
       } finally {
         vi.mocked(spawn).mockImplementation(actual.spawn);

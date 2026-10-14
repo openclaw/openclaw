@@ -517,6 +517,7 @@ describe("update recovery reporting", () => {
     expect(action).toContain("retained migration originals eligible for permanent cleanup");
     expect(action).toContain("`openclaw --profile work update cleanup --dry-run`");
     expect(action).toContain("state `/fixture/state`");
+    expect(action).toContain("stop the Gateway first (`openclaw --profile work gateway stop`)");
     expect(action).toContain("Use the same profile, state, and config settings.");
   });
 });

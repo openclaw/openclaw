@@ -26,6 +26,7 @@ import { retainTranscriptContextFacts } from "./session-transcript-context-facts
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
@@ -54,6 +55,7 @@ export type CurrentTranscriptProjection = {
   };
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
+  contextMetadata?: SessionTranscriptContextMetadata;
 };
 
 export type SessionTranscriptMessageEvent = {
@@ -394,12 +396,13 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
     return projectSessionTranscriptFacts(actor);
   }
   const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
-  if (retained) {
-    return retained;
+  if (retained && !retained.contextOnly) {
+    return retained.facts;
   }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
+    contextMetadata: retained?.facts.contextMetadata,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
@@ -479,6 +482,7 @@ export function readCurrentProjectionSnapshot<T>(
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,
         state,
+        contextMetadata: snapshot.contextMetadata,
       }),
     };
   };

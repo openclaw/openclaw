@@ -80,7 +80,7 @@
           "type": "string"
         },
         "final": {
-          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
           "type": "boolean"
         },
         "forceDocument": {
@@ -413,7 +413,7 @@
               "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
                 "declarationKey": {
-                  "description": "Idempotent declaration key (add only).",
+                  "description": "Key to avoid duplicate declarations (add only).",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
@@ -967,7 +967,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke (fs.listDir returns sub-directories only). File transfer is a separate capability.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1053,6 +1053,7 @@
               "type": "boolean"
             },
             "invokeCommand": {
+              "description": "Node command to relay. fs.listDir returns sub-directories only.",
               "type": "string"
             },
             "invokeParamsJson": {

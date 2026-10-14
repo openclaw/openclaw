@@ -1097,9 +1097,9 @@ describe("ollama plugin", () => {
       expect(payload).toEqual({ options: { temperature: 0.1, num_ctx: 32_768 } });
       return payloadResult;
     });
-    const baseStreamFn = vi.fn((_model, _context, options) => {
+    const baseStreamFn = vi.fn(async (_model, _context, options) => {
       const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      expect(options?.onPayload?.(payload, _model)).toBe(payloadResult);
+      await expect(options?.onPayload?.(payload, _model)).resolves.toBeUndefined();
       return {} as never;
     });
     const wrapped = provider.wrapStreamFn?.({

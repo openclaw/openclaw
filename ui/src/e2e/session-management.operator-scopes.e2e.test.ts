@@ -164,7 +164,7 @@ suite.define(() => {
         expect(await send.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
-        const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+        const create = page.locator(".sidebar-rail .sidebar-new-session");
         expect(await create.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await create.click({ force: true });

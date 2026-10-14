@@ -576,6 +576,18 @@ describe("worktree Git maintenance", () => {
       );
       await requireGit(repo, ["multi-pack-index", "verify"]);
       expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      // A repeated transfer below the rewrite threshold must still retire its
+      // redundant pack, without letting ordinary copies displace promises.
+      const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
+        input: `${objects[1]}\n`,
+      });
+      await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
+      await createWorktreeGitMaintenance(env)({});
+      const afterDuplicate = await fs.readdir(packDirectory);
+      expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+      expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+      expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
+      await requireGit(repo, ["multi-pack-index", "verify"]);
     } finally {
       vi.unstubAllEnvs();
     }

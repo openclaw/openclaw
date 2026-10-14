@@ -103,6 +103,47 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
+  describe("bare URLs with entity detection skipped (#171111)", () => {
+    it("emits a typed url node for a bare &-free URL", () => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        "Ruteoversikten: https://example.vercel.app/spa/",
+        {
+          skipEntityDetection: true,
+        },
+      );
+      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      expect(collectLinkTargets(text)).toEqual(["https://example.vercel.app/spa/"]);
+      expect(plainText).toBe("Ruteoversikten: https://example.vercel.app/spa/");
+    });
+
+    it("keeps URLs carrying a query separator (&) as plain text", () => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        "see https://example.com/flow?a=1&b=2",
+        {
+          skipEntityDetection: true,
+        },
+      );
+      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      expect(collectLinkTargets(text)).toEqual([]);
+      expect(plainText).toBe("see https://example.com/flow?a=1&b=2");
+    });
+
+    it("leaves bare URLs to Telegram detection when detection is not skipped", () => {
+      const { blocks } = markdownToTelegramRichBlocks("https://example.com/spa");
+      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      expect(collectLinkTargets(text)).toEqual([]);
+    });
+
+    it("keeps file refs plain with detection skipped", () => {
+      const { blocks } = markdownToTelegramRichBlocks("note: README.md", {
+        skipEntityDetection: true,
+      });
+      const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+      expect(collectLinkTargets(text)).toEqual([]);
+      expect(hasStyle(text, "code")).toBe(false);
+    });
+  });
+
   it("keeps image alternatives literal and Markdown links in tag-shaped text", () => {
     const result = markdownToTelegramRichBlocks(
       "&lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>](https://example.com/image.png) <b[r](https://example.com/qa)>tail",

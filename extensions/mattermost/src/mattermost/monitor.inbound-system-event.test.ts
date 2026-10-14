@@ -762,7 +762,7 @@ describe("mattermost inbound user posts", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
-  it("dispatches ordered attachments with a UTF-16-safe inbound preview", async () => {
+  it("dispatches ordered attachments without logging inbound content", async () => {
     const verboseDebug = vi.fn();
     mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
     const message = `${"a".repeat(199)}😀tail`;
@@ -795,9 +795,9 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.media).toEqual(media.map((attachment) => expect.objectContaining(attachment)));
     expect(ctx?.media?.[0]?.path).toBeUndefined();
     expect(ctx?.media?.[0]?.url).toBeUndefined();
-    expect(verboseDebug).toHaveBeenCalledWith(
-      `mattermost inbound: from=mattermost:channel:chan-1 len=${expectedBody.length} preview="${"a".repeat(199)}"`,
-    );
+    const diagnostics = verboseDebug.mock.calls.flat().join("\n");
+    expect(diagnostics).not.toContain("a".repeat(199));
+    expect(diagnostics).toContain(`id=post-regular len=${expectedBody.length}`);
   });
 
   it.each([

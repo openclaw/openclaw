@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -113,7 +114,7 @@ const resolveCompileCacheRespawnLauncher = () => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  if (!isSourceCheckoutLauncher()) {
+  if (!isSourceCheckoutLauncher() || isForegroundGatewayRunArgv(process.argv)) {
     return false;
   }
   if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -136,15 +137,20 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
-  const env = resolveOpenClawCompileCacheRespawnEnv({ directory });
+  const foregroundGateway = isForegroundGatewayRunArgv(process.argv);
+  const env = resolveOpenClawCompileCacheRespawnEnv({ directory, foregroundGateway });
   if (!env) {
     return false;
   }
-  return runRespawnedChild(
-    process.execPath,
-    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
-    env,
-  );
+  const args = [
+    ...process.execArgv,
+    resolveCompileCacheRespawnLauncher(),
+    ...process.argv.slice(2),
+  ];
+  if (foregroundGateway && process.platform !== "win32" && process.execve) {
+    process.execve(process.execPath, [process.execPath, ...args], env);
+  }
+  return runRespawnedChild(process.execPath, args, env);
 };
 
 const getErrorMessage = (err) =>
@@ -675,10 +681,12 @@ async function runLauncher() {
     }
   }
 
+  const foregroundGateway = isForegroundGatewayRunArgv(process.argv);
   const compileCacheDirectory =
-    !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
+    !waitingForNodeUpdateRespawn && (foregroundGateway || !isSourceCheckoutLauncher())
       ? resolveOpenClawCompileCacheDirectory({
           installRoot: fileURLToPath(new URL(".", import.meta.url)),
+          foregroundGateway,
         })
       : undefined;
 
@@ -694,7 +702,7 @@ async function runLauncher() {
 
   // https://nodejs.org/api/module.html#module-compile-cache
   if (!waitingForCompileCacheRespawn && module.enableCompileCache) {
-    enableOpenClawCompileCache({ directory: compileCacheDirectory });
+    enableOpenClawCompileCache({ directory: compileCacheDirectory, foregroundGateway });
   }
 
   if (!waitingForCompileCacheRespawn) {

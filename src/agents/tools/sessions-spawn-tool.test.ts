@@ -144,6 +144,63 @@ describe("sessions_spawn tool", () => {
     mocks: hoisted,
   });
 
+  it("reuses equivalent spawn schemas while retaining each attempt's execution context", async () => {
+    const first = makeTool({
+      requesterRunId: "first-run",
+      config: { tools: { swarm: false } },
+    });
+    const second = makeTool({
+      requesterRunId: "second-run",
+      config: { tools: { swarm: { enabled: false, maxConcurrent: 8 } } },
+    });
+
+    expect(second.parameters).toBe(first.parameters);
+    expect(second.execute).not.toBe(first.execute);
+    await first.execute("first", { task: "inspect first" });
+    await second.execute("second", { task: "inspect second" });
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "first")).toMatchObject({
+      requesterRunId: "first-run",
+    });
+    expect(mockCallArg(hoisted.spawnSubagentDirectMock, 1, 1, "second")).toMatchObject({
+      requesterRunId: "second-run",
+    });
+  });
+
+  it("selects cached schema variants from current ACP, thread, and swarm availability", () => {
+    const config = { tools: { swarm: false } };
+    const baseline = makeTool({ config });
+    expect(baseline.parameters).toMatchObject({
+      properties: { runtime: { enum: ["subagent"] }, mode: { enum: ["run"] } },
+    });
+
+    registerAcpBackendForTest();
+    const acp = makeTool({ config });
+    expect(acp.parameters).not.toBe(baseline.parameters);
+    expect(acp.parameters).toMatchObject({
+      properties: { runtime: { enum: ["subagent", "acp"] }, streamTo: { enum: ["parent"] } },
+    });
+    expect(makeTool({ config }).parameters).toBe(acp.parameters);
+
+    const threaded = makeTool({ config, agentChannel: "discord" });
+    expect(threaded.parameters).not.toBe(acp.parameters);
+    expect(threaded.parameters).toMatchObject({
+      properties: { mode: { enum: ["run", "session"] }, thread: { type: "boolean" } },
+    });
+    const disabledThreads = makeTool({
+      config: { ...config, session: { threadBindings: { enabled: false } } },
+      agentChannel: "discord",
+    });
+    expect(disabledThreads.parameters).toBe(acp.parameters);
+
+    const swarm = makeTool({ config: { tools: { swarm: true } } });
+    expect(swarm.parameters).not.toBe(acp.parameters);
+    expect(makeTool({ config: { tools: { swarm: true } } }).parameters).toBe(swarm.parameters);
+    expect(swarm.parameters).toHaveProperty("properties.fastMode");
+    expect(acp.parameters).not.toHaveProperty("properties.fastMode");
+    acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
+    expect(makeTool({ config }).parameters).toBe(baseline.parameters);
+  });
+
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
     const tool = makeTool({
       config: { tools: { swarm: false } },

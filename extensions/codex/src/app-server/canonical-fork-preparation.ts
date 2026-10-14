@@ -67,7 +67,7 @@ export async function prepareCanonicalCodexFork(params: {
   assertCurrent();
   if (!initialization.prepareNativeToolPolicy) {
     throw new Error(
-      "Canonical Codex forks require host native tool policy preparation. Update the Gateway before retrying.",
+      "Forking an OpenClaw Codex session requires host native tool policy preparation. Update the Gateway before retrying.",
     );
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, created.agentId);

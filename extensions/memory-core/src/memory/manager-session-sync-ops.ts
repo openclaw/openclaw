@@ -31,12 +31,14 @@ import {
 import { inspectMemorySourceState } from "./manager-source-state.js";
 import {
   hasTargetedSessionSyncParams,
+  MemoryBackgroundRebuildInterruptedError,
   memorySessionSyncTargetKey,
 } from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
 const SESSION_QUIET_PERIOD_MS = 30_000;
 const SESSION_MAX_DEFERRAL_MS = 5 * 60_000;
+const SESSION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = Parameters<
@@ -47,6 +49,9 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   private sessionPendingSince: number | undefined;
   private sessionLastActivity = 0;
   private sessionFullSyncPending = false;
+  private sessionRetryAttempt = 0;
+  private sessionRetryAt = 0;
+  private sessionIndexRetryRequested = false;
   protected async inspectDiagnosticSourceState(): Promise<void> {
     if (this.sources.has("memory")) {
       try {
@@ -145,12 +150,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     const unsubscribeActivity = observeAgentRunActivity(this.agentId, (busy) => {
       this.runInBackgroundContext(() => {
-        const wasBusy = this.sessionAgentBusy;
         this.sessionAgentBusy = busy;
-        this.sessionLastActivity = Date.now();
-        if (wasBusy && !busy && this.sessionPendingSince !== undefined) {
-          this.sessionPendingSince = this.sessionLastActivity;
-        }
+        this.noteSessionIndexActivity();
         this.scheduleSessionIndexPass();
       });
     });
@@ -335,8 +336,27 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
     }
     this.sessionPendingSince ??= Date.now();
-    this.sessionLastActivity = Date.now();
+    this.noteSessionIndexActivity();
     this.scheduleSessionIndexPass();
+  }
+
+  private noteSessionIndexActivity(): void {
+    this.sessionLastActivity = Date.now();
+    if (this.sessionRetryAt === Infinity) {
+      this.sessionRetryAttempt = 0;
+      this.sessionRetryAt = 0;
+    }
+  }
+
+  protected requestSessionIndexRetry(providerChanged = false): void {
+    if (this.sessionBackgroundIndexing) {
+      this.sessionIndexRetryRequested = true;
+      if (providerChanged) {
+        // A new embedding identity must rebuild the index before targeted writes can resume.
+        this.sessionFullSyncPending = true;
+        this.sessionsFullRetryDirty = true;
+      }
+    }
   }
 
   protected deferSessionIndexFiles(
@@ -369,6 +389,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (
       this.sessionPendingSince === undefined ||
+      this.sessionRetryAt === Infinity ||
       this.sessionAgentBusy ||
       this.sessionBackgroundIndexing ||
       this.closing ||
@@ -376,9 +397,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     ) {
       return;
     }
-    const deadline = Math.min(
-      this.sessionLastActivity + SESSION_QUIET_PERIOD_MS,
-      this.sessionPendingSince + SESSION_MAX_DEFERRAL_MS,
+    const deadline = Math.max(
+      this.sessionRetryAt,
+      Math.min(
+        this.sessionLastActivity + SESSION_QUIET_PERIOD_MS,
+        this.sessionPendingSince + SESSION_MAX_DEFERRAL_MS,
+      ),
     );
     this.sessionWatchTimer = setTimeout(
       () => {
@@ -418,6 +442,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     this.sessionFullSyncPending = false;
     const pending = Array.from(this.sessionPendingFiles);
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
+    const pendingSince = this.sessionPendingSince;
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
     this.sessionPendingSince = undefined;
@@ -428,23 +453,49 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionsDirty = true;
       // Resolve identities once in the sync owner, after queued work can proceed.
       this.sessionBackgroundIndexing = true;
+      this.sessionIndexRetryRequested = false;
+      let completed = false;
+      let interrupted = false;
       try {
         await this.sync(
           fullSync
             ? { reason: "session-startup-catchup" }
             : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
         );
+        completed = !this.sessionIndexRetryRequested;
       } catch (error) {
-        this.sessionFullSyncPending ||= fullSync;
-        this.sessionPendingFiles = new Set([...pending, ...this.sessionPendingFiles]);
-        this.sessionPendingTargets = new Map([
-          ...pendingTargets.map((target) => [memorySessionSyncTargetKey(target), target] as const),
-          ...this.sessionPendingTargets,
-        ]);
-        this.sessionLastActivity = Date.now();
-        this.sessionPendingSince = this.sessionLastActivity;
-        throw error;
+        if (!(error instanceof MemoryBackgroundRebuildInterruptedError)) {
+          throw error;
+        }
+        interrupted = true;
+        this.sessionFullSyncPending = true;
       } finally {
+        if (completed) {
+          this.sessionRetryAttempt = 0;
+          this.sessionRetryAt = 0;
+        } else {
+          this.sessionFullSyncPending ||= fullSync;
+          this.sessionPendingFiles = new Set([...pending, ...this.sessionPendingFiles]);
+          this.sessionPendingTargets = new Map([
+            ...pendingTargets.map(
+              (target) => [memorySessionSyncTargetKey(target), target] as const,
+            ),
+            ...this.sessionPendingTargets,
+          ]);
+          this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? Date.now();
+          if (!interrupted) {
+            const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
+            // After three automatic retries, fresh activity can start another bounded series.
+            this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+            if (this.sessionRetryAttempt === SESSION_RETRY_DELAYS_MS.length) {
+              // Keep the last retry until a full rebuild is allowed to run.
+              this.sessionRetryAt = Math.max(
+                this.sessionRetryAt,
+                this.fullReindexRetryBackoff.retryAt,
+              );
+            }
+          }
+        }
         this.sessionBackgroundIndexing = false;
         this.scheduleSessionIndexPass();
       }

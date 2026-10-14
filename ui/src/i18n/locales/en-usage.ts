@@ -4,6 +4,8 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    unavailable:
+      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
     presets: {
       today: "Today",
       last7d: "7d",

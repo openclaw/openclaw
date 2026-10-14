@@ -30,7 +30,7 @@ type IdbDatabaseSnapshot = {
 
 const LEGACY_SNAPSHOT_DIAGNOSTIC = {
   code: "matrix-idb-snapshot-requires-doctor",
-  message: "Matrix IndexedDB snapshot exists outside canonical SQLite state",
+  message: "Matrix IndexedDB snapshot exists outside the current SQLite state",
   remediation: RETIRED_MATRIX_STATE_REMEDIATION,
 } as const;
 
