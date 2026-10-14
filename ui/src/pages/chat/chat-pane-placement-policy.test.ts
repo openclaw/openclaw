@@ -89,7 +89,7 @@ it("waits for workspace settlement before offering a move", async () => {
   expect(state.lastError).toContain("Finalizing worker workspace");
   expect(request).not.toHaveBeenCalled();
 
-  row.placement.workspaceResultReconciling = false;
+  delete row.placement.workspaceResultReconciling;
   const moving = run();
   await chooseProfile();
   submit();
