@@ -17,6 +17,7 @@ import {
   runSubagentAnnounceFlow,
 } from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryState from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -241,19 +242,32 @@ describe("subagent registry archive behavior", () => {
     const endedAt = Date.now();
     const lifecycleHandler = vi.mocked(onAgentEvent).mock.calls.at(-1)?.[0];
     expect(lifecycleHandler).toBeTypeOf("function");
-    lifecycleHandler?.({
-      runId: "run-delete-completed",
-      stream: "lifecycle",
-      seq: 1,
-      ts: endedAt,
-      data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
+    // The terminal commit crosses the SQLite worker, whose real latency is
+    // unbounded on slow hosts; wait for its publication instead of polling.
+    const terminalPublished = createDeferred();
+    const stop = subscribeSubagentRunChanges(() => {
+      const run = subagentRuns.get("run-delete-completed");
+      if (run?.execution.status === "terminal" && run.execution.endedAt === endedAt) {
+        terminalPublished.resolve();
+      }
     });
-
-    await vi.waitFor(() => {
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
-        execution: { status: "terminal", endedAt },
-        archiveAtMs: endedAt + 60_000,
+    try {
+      lifecycleHandler?.({
+        runId: "run-delete-completed",
+        stream: "lifecycle",
+        seq: 1,
+        ts: endedAt,
+        data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
       });
+      await terminalPublished.promise;
+    } finally {
+      stop();
+    }
+
+    await settleRootWork(true);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      execution: { status: "terminal", endedAt },
+      archiveAtMs: endedAt + 60_000,
     });
   });
 
