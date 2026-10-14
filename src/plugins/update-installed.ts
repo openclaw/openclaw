@@ -1,5 +1,4 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -18,7 +17,6 @@ import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { formatSourceBundledPluginNotice } from "./dev-source-root.js";
 import {
-  isUnavailablePluginSource,
   NpmChannelResolutionError,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
@@ -59,7 +57,6 @@ import {
   runPluginUpdateWithClawHubLease,
 } from "./update-claw-lifecycle.js";
 import {
-  hasRunnableInstalledNpmPayload,
   migratePluginConfigId,
   repairRegisteredOpenClawHostLink,
   resolveRecordedExtensionsDir,
@@ -88,6 +85,7 @@ import {
   recordPluginUpdateFailure,
   recordPluginUpdateTransaction,
 } from "./update-summary.js";
+import { resolveUnavailableNpmTarget } from "./update-unavailable-target.js";
 import { reconcileUnchangedUpdate } from "./update-unchanged.js";
 
 export async function updateNpmInstalledPlugins(
@@ -358,44 +356,34 @@ async function runInstalledPluginUpdate(
         })) || changed;
     }
     const recordNpmFailure = async (message: string, code?: string): Promise<void> => {
-      let installedPayloadRunnable = false;
-      if (
-        (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
-          (retainOnUnavailable && isUnavailablePluginSource("npm", { ok: false, code }))) &&
-        (params.disableOnFailure || retainOnUnavailable) &&
-        !params.dryRun &&
-        currentVersion
-      ) {
-        const compatible =
-          !retainOnUnavailable ||
-          isNpmMetadataCompatibleWithCurrentHost(
-            { packageOpenClaw: installedManifest?.openclaw },
-            { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
-          );
-        try {
-          installedPayloadRunnable =
-            compatible &&
-            (await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest }));
-        } catch {
-          // Damaged or unreadable payloads do not qualify for retention.
-        }
-      }
-      if (retainOnUnavailable && installedPayloadRunnable) {
-        const retainedMessage =
-          `Retained "${pluginId}" at ${currentVersion}: target ${effectiveSpec}` +
-          `${params.coreVersion ? ` for OpenClaw ${params.coreVersion}` : ""} is unavailable. ${message} ` +
-          `Retry "${formatCliCommand(`openclaw plugins update ${pluginId}`)}" after the target is published or registry access recovers.`;
-        logger.warn?.(retainedMessage);
+      const decision = await resolveUnavailableNpmTarget({
+        disableOnFailure: params.disableOnFailure,
+        dryRun: params.dryRun,
+        coreVersion: params.coreVersion,
+        pluginId,
+        message,
+        code,
+        retainOnUnavailable,
+        currentVersion,
+        installedManifest,
+        installPath,
+        effectiveSpec,
+      });
+      if (decision.retained) {
+        logger.warn?.(decision.message);
         outcomes.push({
           pluginId,
           status: "unchanged",
           code: "plugin-target-unavailable",
           currentVersion,
-          message: retainedMessage,
+          message: decision.message,
         });
         return;
       }
-      recordFailure(pluginId, message, { code, installedPayloadRunnable });
+      recordFailure(pluginId, decision.message, {
+        code,
+        installedPayloadRunnable: decision.installedPayloadRunnable,
+      });
     };
     if (npmResolutionError) {
       await recordNpmFailure(npmResolutionError.message, npmResolutionError.code);

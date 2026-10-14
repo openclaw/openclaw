@@ -1025,6 +1025,10 @@ installed version and its recorded selector. The summary, warning log, and run
 history name the plugin, requested target, resolution failure, and
 `openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
 with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
+An official `@openclaw/*` plugin is not retained when its installed files import
+`openclaw/plugin-sdk/*` subpaths the new core no longer exports, because it
+would fail to load. Plugin sync reports it as a failed plugin update that names
+the missing subpaths and the `openclaw plugins update <id>` retry instead.
 
 Before mutation, OpenClaw checks installed compatibility metadata and skips
 registry queries for compatible plugins. If a plugin's declared
