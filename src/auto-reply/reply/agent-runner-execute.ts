@@ -1,7 +1,5 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -21,7 +19,6 @@ import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-ru
 import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
@@ -38,13 +35,7 @@ import {
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { resolveReplySourceTurnId } from "./source-turn-id.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
 
 export function prependCompactionNotices(
@@ -377,138 +368,4 @@ export async function executePreparedReplyAgentRun(
   return result
     ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
     : result;
-}
-
-export function createReplyAgentRestartRecoveryController(
-  context: Pick<
-    RunReplyAgentParams,
-    "followupRun" | "opts" | "runtimePolicySessionKey" | "sessionCtx" | "sessionKey" | "storePath"
-  > & {
-    activeSessionStore: Record<string, SessionEntry> | undefined;
-    cfg: OpenClawConfig;
-    getActiveSessionEntry: () => SessionEntry | undefined;
-    replyOperation: ReplyOperation;
-    restartRecoverySourceTurnId: string | undefined;
-    setActiveSessionEntry: (entry: SessionEntry) => void;
-  },
-) {
-  const {
-    activeSessionStore,
-    cfg,
-    followupRun,
-    getActiveSessionEntry,
-    opts,
-    replyOperation,
-    restartRecoverySourceTurnId,
-    runtimePolicySessionKey,
-    sessionCtx,
-    sessionKey,
-    setActiveSessionEntry,
-    storePath,
-  } = context;
-
-  const restartRecoverySameChannelThreadRequired = restartRecoverySourceTurnId
-    ? buildThreadingToolContext({
-        sessionCtx,
-        config: cfg,
-        hasRepliedRef: undefined,
-      }).sameChannelThreadRequired
-    : undefined;
-  const admissionRunId =
-    normalizeOptionalString(sessionCtx.MessageSid) ??
-    normalizeOptionalString(sessionCtx.MessageSidFull);
-  const recovery = createReplyRestartRecoveryClaimController({
-    agentId: followupRun.run.agentId,
-    acquireSessionActor: async () => {
-      const actor = await acquireReplyOperationSessionActor(replyOperation);
-      if (!actor) {
-        return undefined;
-      }
-      const target = getReplyOperationSessionTarget(replyOperation);
-      if (!target) {
-        throw new Error("Reply operation has no session actor target");
-      }
-      return { actor, target };
-    },
-    operatorAuthority: followupRun.operatorAuthority,
-    inputProvenance: followupRun.run.inputProvenance,
-    lifecycleGeneration: replyOperation.lifecycleGeneration,
-    admissionRunId,
-    executionRunId: opts?.runId,
-    getEntry: () =>
-      sessionKey
-        ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
-        : getActiveSessionEntry(),
-    getSessionId: () => replyOperation.sessionId,
-    isRestartAbort: () =>
-      replyOperation.result?.kind === "aborted" &&
-      replyOperation.result.code === "aborted_for_restart",
-    resolveDeliveryContext: (entry) =>
-      sessionKey
-        ? resolveReplyRunDeliveryContext({
-            cfg,
-            sessionCtx,
-            sessionEntry: entry,
-            sessionKey,
-            runtimePolicySessionKey,
-            opts,
-          })
-        : undefined,
-    requesterAccountId:
-      followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
-    requesterSenderId: sessionCtx.SenderId,
-    resolveUserTurnTarget: ({
-      entry,
-      sessionId,
-      sessionKey: targetSessionKey,
-      storePath: targetStorePath,
-    }) => ({
-      sessionId,
-      sessionKey: targetSessionKey,
-      sessionEntry: entry,
-      ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
-      storePath: targetStorePath,
-      agentId: followupRun.run.agentId,
-      cwd: followupRun.run.workspaceDir,
-      config: cfg,
-    }),
-    ...(sessionKey ? { sessionKey } : {}),
-    setEntry: (entry) => {
-      setActiveSessionEntry(entry);
-      if (activeSessionStore && sessionKey) {
-        activeSessionStore[sessionKey] = entry;
-      }
-    },
-    sameChannelThreadRequired: restartRecoverySameChannelThreadRequired,
-    sourceTurnId: restartRecoverySourceTurnId,
-    sourceReplyDeliveryMode: sessionKey
-      ? resolveSourceReplyPolicy({
-          cfg,
-          sessionCtx,
-          sessionEntry: getActiveSessionEntry(),
-          sessionKey,
-          runtimePolicySessionKey,
-          opts,
-        }).sourceReplyDeliveryMode
-      : opts?.sourceReplyDeliveryMode,
-    ...(storePath ? { storePath } : {}),
-  });
-  return {
-    ...recovery,
-    admitUserTurn: async (...args: Parameters<typeof recovery.admitUserTurn>) => {
-      const result = await recovery.admitUserTurn(...args);
-      if (result === "admitted") {
-        const sourceTurnId = resolveReplySourceTurnId({
-          sourceTurnId: restartRecoverySourceTurnId,
-          admissionRunId,
-          ingressProvider: sessionCtx.Provider ?? sessionCtx.Surface,
-          entry: getActiveSessionEntry(),
-        });
-        if (sourceTurnId) {
-          replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
-        }
-      }
-      return result;
-    },
-  };
 }
