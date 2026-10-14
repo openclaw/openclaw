@@ -183,6 +183,7 @@ describe("consented event Web Push content", () => {
       release: () => {},
     });
     prepareSessionMutationFactsMock.mockResolvedValue({
+      prepareRead: () => undefined,
       readCurrent: () => ({ target: null, membership: new Set<string>() }),
       release: () => {},
     });
