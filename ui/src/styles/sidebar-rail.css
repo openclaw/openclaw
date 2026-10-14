@@ -78,7 +78,9 @@
 
 .sidebar-rail__button:hover,
 .sidebar-rail__button[aria-pressed="true"],
-.sidebar-rail__button[aria-current="page"] {
+.sidebar-rail__button[aria-current="page"],
+.sidebar-rail .nav-item:hover,
+.sidebar-rail .nav-item--active {
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -119,6 +121,21 @@
 .sidebar-rail__button svg {
   width: 20px;
   height: 20px;
+}
+
+/* Pinned pages reuse list nav links; in the rail they match the view buttons. */
+.sidebar-rail .nav-item .nav-item__icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  opacity: 1;
+  color: inherit;
+}
+
+.sidebar-rail .nav-item .nav-item__icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2px;
 }
 
 .sidebar-rail .nav-item__text,
