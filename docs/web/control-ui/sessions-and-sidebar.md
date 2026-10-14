@@ -42,6 +42,11 @@ buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Users again keeps
 its list open; use the collapse button or keyboard shortcut to hide it.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
+Open your account menu and choose **Updates** to go directly to **Settings → Updates**.
+This opens the update settings page without starting an update. For the `stable` and
+`beta` update channels, an **Available** badge appears beside **Updates** when a new
+release is ready. The Inbox also shows an update notice; dismissing it does not hide
+the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 On desktop, opening Home or a pinned session, page, plugin, or person collapses
 the list while leaving the rail available. The mobile drawer keeps its normal

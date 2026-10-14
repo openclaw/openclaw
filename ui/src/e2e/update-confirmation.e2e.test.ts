@@ -80,7 +80,7 @@ suite.define(() => {
           });
           const status = (sha: string, behind: number) => ({
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -88,7 +88,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -238,7 +238,7 @@ suite.define(() => {
             activeRun: null,
             lastRun: run,
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -247,7 +247,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -344,12 +344,12 @@ suite.define(() => {
     },
   );
 
-  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
+  it("refreshes the Git release target when opening the update card and again before confirmation", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const available = (sha: string, behind: number): UpdateAvailable => ({
-          channel: "dev",
+          channel: "beta",
           currentVersion: "1.0.0",
           latestVersion: "1.0.0",
           currentSha: "a".repeat(40),
@@ -364,7 +364,7 @@ suite.define(() => {
         ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
           updateAvailable: available(sha, behind),
           schedule: {
-            channel: "dev",
+            channel: "beta",
             autoEnabled: false,
             target: {
               kind: "git",
@@ -471,7 +471,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps Inbox snoozes and the account-menu update chip with their authenticated account", async () => {
+  it("keeps Inbox snoozes account-scoped without hiding release availability", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -525,9 +525,9 @@ suite.define(() => {
           await page.locator(".sidebar-identity-menu").waitFor({ state: "visible" });
           await expect
             .poll(() =>
-              page.locator(".sidebar-identity-menu .sidebar-footer-build__update").count(),
+              page.locator(".sidebar-identity-menu .sidebar-identity-menu__update-badge").count(),
             )
-            .toBe(snoozed ? 1 : 0);
+            .toBe(1);
           await page.keyboard.press("Escape");
           await page.locator(".sidebar-identity-menu").waitFor({ state: "detached" });
         }

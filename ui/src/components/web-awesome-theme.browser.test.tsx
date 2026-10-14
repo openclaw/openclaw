@@ -124,7 +124,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
             canPairDevice: true,
             basePath: "",
             gatewayVersion: "test",
-            updateAttentionDismissed: true,
+            updateAvailable: true,
             canRetryConnection: false,
             themeMode: "dark",
             triggerWidth: 250,
