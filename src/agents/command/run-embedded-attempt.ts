@@ -376,6 +376,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           });
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
+        // Live model-switch retries reuse this runId; the turn's lifecycle owner clears the
+        // send budget once at the turn terminal.
+        retainTurnSendLedgerScope: deferredLifecycle.retainTurnSendLedgerScope,
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
           clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
@@ -509,6 +512,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 fastMode === "auto"
                   ? (params.opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
                   : fastModeState.fastAutoOnSeconds,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+              onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,

@@ -594,6 +594,8 @@ const MessageToolConfigSchema = z
         enabled: z.boolean().optional(),
       })
       .optional(),
+    maxMessagesPerTurnPerTarget: z.number().int().positive().optional(),
+    turnSendNudge: z.boolean().optional(),
   })
   .optional();
 

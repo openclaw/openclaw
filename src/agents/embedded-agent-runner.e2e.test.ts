@@ -190,6 +190,7 @@ let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionM
 let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
 let upsertSessionEntryCore: typeof import("../config/sessions/session-accessor.js").upsertSessionEntryCore;
 let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
+let turnSendLedger: typeof import("./tools/turn-send-ledger.js");
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -219,6 +220,7 @@ beforeAll(async () => {
   ({ loadTranscriptEvents, upsertSessionEntryCore } =
     await import("../config/sessions/session-accessor.js"));
   ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
+  turnSendLedger = await import("./tools/turn-send-ledger.js");
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
   sessionStorePath = path.join(e2eWorkspace.tempRoot, "sessions.json");
@@ -1176,3 +1178,120 @@ describe("runEmbeddedAgent", () => {
   );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("runEmbeddedAgent per-turn send ledger ownership", () => {
+  const targetKey = "imessage default +15550001111";
+
+  beforeEach(() => {
+    turnSendLedger.resetTurnSendLedgerForTest();
+  });
+
+  // Stands in for a native message-tool send: commits one send under the exact
+  // (agent, session, run) slot the attempt's tools key the ledger by.
+  function commitNativeSend(attempt: { agentId: string; sessionKey: string; runId: string }) {
+    const key = {
+      sessionKey: turnSendLedger.buildTurnSendLedgerSessionKey(
+        attempt.agentId,
+        attempt.sessionKey,
+      )!,
+      runId: attempt.runId,
+      targetKey,
+    };
+    const reserved = turnSendLedger.reserveTurnSend(key, {});
+    if (reserved.status !== "reserved") {
+      throw new Error(`expected a reserved send, got "${reserved.status}"`);
+    }
+    turnSendLedger.commitTurnSend(reserved.reservation);
+    return key;
+  }
+
+  function runDirect(params: {
+    runId: string;
+    sessionKey: string;
+    onDeferredTurnSendLedgerScope?: Parameters<TestRunEmbeddedAgent>[0]["onDeferredTurnSendLedgerScope"];
+  }) {
+    const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+    setRuntimeConfigSnapshot(config);
+    return runEmbeddedAgent({
+      // A shared session id would resolve to whichever session key an earlier test stored.
+      sessionId: `session:${params.runId}`,
+      sessionKey: params.sessionKey,
+      sessionFile: nextSessionCompatibilityKey(),
+      workspaceDir,
+      config,
+      prompt: "send it",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: params.runId,
+      enqueue: immediateEnqueue,
+      ...(params.onDeferredTurnSendLedgerScope
+        ? { onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope }
+        : {}),
+    });
+  }
+
+  it("clears the native send slot when a direct run with no enclosing owner settles", async () => {
+    let key: ReturnType<typeof commitNativeSend> | undefined;
+    runEmbeddedAttemptMock.mockImplementationOnce(async (attempt) => {
+      key = commitNativeSend(attempt);
+      expect(turnSendLedger.peekTurnSendCount(key)).toBe(1);
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "ok" }] }),
+      });
+    });
+
+    await runDirect({ runId: nextRunId("ledger-direct"), sessionKey: nextSessionKey() });
+
+    expect(turnSendLedger.peekTurnSendCount(key!)).toBe(0);
+    expect(turnSendLedger.inspectTurnSendLedger()).toEqual([]);
+  });
+
+  it("clears the native send slot when a direct run with no enclosing owner fails", async () => {
+    let key: ReturnType<typeof commitNativeSend> | undefined;
+    runEmbeddedAttemptMock.mockImplementationOnce(async (attempt) => {
+      key = commitNativeSend(attempt);
+      return makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error: new Error("boom") },
+      });
+    });
+
+    await expect(
+      runDirect({ runId: nextRunId("ledger-direct-error"), sessionKey: nextSessionKey() }),
+    ).rejects.toThrow("boom");
+
+    expect(turnSendLedger.peekTurnSendCount(key!)).toBe(0);
+    expect(turnSendLedger.inspectTurnSendLedger()).toEqual([]);
+  });
+
+  it("reports the native scope to an enclosing owner and leaves its slot live", async () => {
+    // run-entry.ts and the turn owners behind it keep the budget across fallback candidates
+    // that reuse this runId, so the candidate must not clear on its own terminal.
+    const runId = nextRunId("ledger-owned");
+    const sessionKey = nextSessionKey();
+    const reported: Array<{ agentId?: string; sessionKey: string; runId: string }> = [];
+    let key: ReturnType<typeof commitNativeSend> | undefined;
+    runEmbeddedAttemptMock.mockImplementationOnce(async (attempt) => {
+      key = commitNativeSend(attempt);
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "ok" }] }),
+      });
+    });
+
+    await runDirect({
+      runId,
+      sessionKey,
+      onDeferredTurnSendLedgerScope: (scope) => reported.push(scope),
+    });
+
+    expect(turnSendLedger.peekTurnSendCount(key!)).toBe(1);
+    expect(reported).toEqual([{ agentId: "test", sessionKey, runId }]);
+    for (const scope of reported) {
+      turnSendLedger.clearTurnSendLedgerForRun(scope);
+    }
+    expect(turnSendLedger.peekTurnSendCount(key!)).toBe(0);
+  });
+});

@@ -48,6 +48,7 @@ import type { ReplyExpectation } from "../reply-completion.js";
 import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
@@ -71,6 +72,8 @@ export type RunCliAgentParams = {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Verified in-process completion authority; never supplied by native CLI input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Gives the logical-run owner the exact prepared scope to clear at its terminal. */
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   sessionTarget?: SessionTranscriptRuntimeTarget;
@@ -148,6 +151,8 @@ export type RunCliAgentParams = {
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
+  /** Trusted routable delivery target for send-ledger keying; distinct from the native channel id. */
+  currentMessagingTarget?: string;
   chatId?: string;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
   execOverrides?: ExecPolicyOverrides;
@@ -294,4 +299,11 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  // Exact per-turn send ledger slot the loopback message/conversations_send tools
+  // write under on this run (buildCliMcpGrantContext forwards these verbatim to the
+  // tools). The settlement terminal deletes this precise slot so a reused runId — the
+  // isolated cron durable-session-id-as-runId case — does not inherit a prior turn's
+  // committed counts or seen operationIds. Absent when no loopback grant was minted
+  // (no OpenClaw tools ran, so nothing was written).
+  turnSendLedgerScope?: TurnSendLedgerScope;
 };

@@ -168,7 +168,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       };
       const stopObserving = subscribeSubagentRunChanges("persistence", inspectTerminal);
       const loop = await import("../../embedded-agent-runner/run-loop.js");
-      const native = await import("../../embedded-agent-runner/run-orchestrator.js");
+      const native = await import("../../embedded-agent-runner/run.js");
       const model = vi
         .spyOn(loop, "runPreparedEmbeddedLoop")
         .mockImplementationOnce(async (_refresh, input) => {

@@ -283,6 +283,7 @@ export function createCronPromptExecutor(
       behavior: { kind: "command-rpc", hasCommittedSideEffect: currentAttemptCommittedMedia },
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
+      retainTurnSendLedgerScope: params.retainTurnSendLedgerScope,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
@@ -432,6 +433,7 @@ export function createCronPromptExecutor(
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
             modelRoutingProvenance: runOptions.modelRoutingProvenance,
+            onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,

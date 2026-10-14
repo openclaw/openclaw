@@ -13,6 +13,15 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import {
+  buildTurnSendLedgerSessionKey,
+  clearTurnSendLedgerForRun,
+  commitTurnSend,
+  peekTurnSendCount,
+  reserveTurnSend,
+  resetTurnSendLedgerForTest,
+  type TurnSendLedgerScope,
+} from "../tools/turn-send-ledger.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -103,5 +112,99 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       expectedWriterRunId: params.runId,
       expectedLifecycleRevision: sessionEntry.lifecycleRevision,
     });
+  });
+});
+
+describe("runEmbeddedAgent CLI dispatch per-turn send ledger ownership", () => {
+  const targetKey = "imessage default +15550001111";
+  // A loopback grant may canonicalize and agent-shift the slot identity, so the dispatched
+  // candidate reports this prepared scope rather than letting the owner rebuild it.
+  const grantScope = (runId: string): TurnSendLedgerScope => ({
+    agentId: "reef",
+    sessionKey: "agent:reef:main",
+    runId,
+  });
+
+  function slotKey(scope: TurnSendLedgerScope) {
+    return {
+      sessionKey: buildTurnSendLedgerSessionKey(scope.agentId, scope.sessionKey)!,
+      runId: scope.runId,
+      targetKey,
+    };
+  }
+
+  // Stands in for the dispatched CLI run: a loopback send commits under the grant scope and
+  // CLI settlement reports that scope to the run's owner callback.
+  function mockDispatchedSend(outcome: "success" | "error") {
+    runEmbeddedAgentViaCliBackendIfEligible.mockImplementation(
+      async (params: {
+        runId: string;
+        onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
+      }) => {
+        const scope = grantScope(params.runId);
+        const reserved = reserveTurnSend(slotKey(scope), {});
+        if (reserved.status !== "reserved") {
+          throw new Error(`expected a reserved send, got "${reserved.status}"`);
+        }
+        commitTurnSend(reserved.reservation);
+        params.onDeferredTurnSendLedgerScope?.(scope);
+        if (outcome === "error") {
+          throw new Error("dispatched cli run failed");
+        }
+        return dispatchResult;
+      },
+    );
+  }
+
+  async function seedSession(params: ReturnType<typeof laneRunParams>) {
+    setRuntimeConfigSnapshot(params.config);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    await upsertSessionEntryCore(params.sessionTarget, {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "cli-dispatch-lifecycle",
+    });
+  }
+
+  beforeEach(() => {
+    runEmbeddedAgentViaCliBackendIfEligible.mockReset();
+    resetTurnSendLedgerForTest();
+  });
+
+  it("clears the dispatched candidate's exact scope when no owner encloses the run", async () => {
+    mockDispatchedSend("success");
+    const params = laneRunParams();
+    await seedSession(params);
+
+    await runEmbeddedAgent(params);
+
+    expect(peekTurnSendCount(slotKey(grantScope(params.runId)))).toBe(0);
+  });
+
+  it("clears the dispatched candidate's exact scope when an ownerless run fails", async () => {
+    mockDispatchedSend("error");
+    const params = laneRunParams();
+    await seedSession(params);
+
+    await expect(runEmbeddedAgent(params)).rejects.toThrow("dispatched cli run failed");
+
+    expect(peekTurnSendCount(slotKey(grantScope(params.runId)))).toBe(0);
+  });
+
+  it("hands the dispatched scope to an enclosing owner without clearing it", async () => {
+    mockDispatchedSend("success");
+    const params = laneRunParams();
+    await seedSession(params);
+    const reported: TurnSendLedgerScope[] = [];
+
+    await runEmbeddedAgent({
+      ...params,
+      onDeferredTurnSendLedgerScope: (scope) => reported.push(scope),
+    });
+
+    expect(peekTurnSendCount(slotKey(grantScope(params.runId)))).toBe(1);
+    expect(reported).toEqual([grantScope(params.runId)]);
+    clearTurnSendLedgerForRun(reported[0]!);
+    expect(peekTurnSendCount(slotKey(grantScope(params.runId)))).toBe(0);
   });
 });

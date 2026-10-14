@@ -19,6 +19,7 @@ import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
+import { resolveNativeTurnSendLedgerScope } from "../../tools/turn-send-ledger.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
@@ -218,6 +219,17 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     fallbackReason: params.modelRoutingProvenance?.fallbackReason,
   });
   const { sessionId, sessionFile, suppressNextUserMessagePersistence } = sessionPromptState;
+  // Report the exact scope this attempt's native send tools key by (its prepared agent id
+  // and session, attempt-tool-prepare.ts) to the logical-run owner, which a caller's raw
+  // identity may not reproduce; runEmbeddedAgent always installs one.
+  params.onDeferredTurnSendLedgerScope?.(
+    resolveNativeTurnSendLedgerScope({
+      cfg: params.config,
+      agentId: workspaceResolution.agentId,
+      sessionKey: resolvedSessionKey.trim() || sessionId,
+      runId: params.runId,
+    }),
+  );
   const skipPreparedUserTurnMessage = sessionPromptState.activePrompt.internal;
   const { sessionManager } = params;
   const { nativeSessionRuntime } = preparedRuntime;

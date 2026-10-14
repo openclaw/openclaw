@@ -43,6 +43,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
+import type { TurnSendLedgerScope } from "../../tools/turn-send-ledger.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -169,6 +170,11 @@ export type RunEmbeddedAgentParams = {
   authProfileIdSource?: "auto" | "user";
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /**
+   * Enclosing logical-run owner of the per-turn send ledger; candidates report their exact
+   * scopes here instead of clearing. When omitted, runEmbeddedAgent owns and clears them.
+   */
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
