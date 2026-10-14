@@ -251,10 +251,15 @@ function createStandardNativeApprovalRouting(
   };
 }
 
-/** Build the canonical approval capability for approver-restricted native delivery channels. */
+/** @deprecated Use createApproverRestrictedNativeApprovalCapabilityAsync with awaited account eligibility. */
 export function createApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ): ChannelApprovalCapability {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createApproverRestrictedNativeApprovalCapability",
+    replacement: "createApproverRestrictedNativeApprovalCapabilityAsync",
+  });
   const availabilityState = (enabled: boolean) =>
     enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
   const normalizePreferredSurface = (

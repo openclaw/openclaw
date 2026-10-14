@@ -190,6 +190,33 @@ it.for([
     );
     const releaseModel = createDeferred();
     const modelStarted = createDeferred();
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const startCommitted = createDeferred();
+    // Start persistence is detached from model readiness and can still change sharing facts.
+    void startCommitted.promise.catch(() => undefined);
+    const prepareLifecycle = sessionLifecycleState.prepareGatewaySessionLifecycleEvent;
+    const lifecycleSpy = vi
+      .spyOn(sessionLifecycleState, "prepareGatewaySessionLifecycleEvent")
+      .mockImplementation((params) => {
+        const persist = prepareLifecycle(params);
+        if (
+          params.sessionKey !== sessionKey ||
+          params.event.runId !== runId ||
+          params.event.data?.phase !== "start"
+        ) {
+          return persist;
+        }
+        return async () => {
+          try {
+            await persist();
+            startCommitted.resolve();
+          } catch (error) {
+            startCommitted.reject(error);
+            throw error;
+          }
+        };
+      });
+    onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
       handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
@@ -354,10 +381,10 @@ it.for([
       }
       const { attempt, handle } = await withinTest(
         Promise.race([
-          ownerReady.promise,
+          Promise.all([ownerReady.promise, startCommitted.promise]).then(([owner]) => owner),
           original.then((response) => {
             throw new Error(
-              `Direct command finished before publishing its steering owner: ${JSON.stringify(response)}`,
+              `Direct command finished before its steering owner and lifecycle start were ready: ${JSON.stringify(response)}`,
             );
           }),
         ]),
@@ -396,7 +423,9 @@ it.for([
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
-      expect(response.ok).toBe(true);
+      expect(response.ok, JSON.stringify({ response, diagnostics: diagnostics.mock.calls })).toBe(
+        true,
+      );
       const captured = capture.mock.results.find(
         (result) => result.type === "return" && result.value?.runId === runId,
       );

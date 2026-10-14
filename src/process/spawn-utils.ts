@@ -27,7 +27,7 @@ export function spawnProcess(
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
-  recordChildProcessSpawn(command, child);
+  recordChildProcessSpawn(command, child, undefined, args);
   return child;
 }
 

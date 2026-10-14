@@ -32,8 +32,6 @@ export function waitForGatewayClient(
     return Promise.resolve(current);
   }
   return new Promise((resolve, reject) => {
-    let unsubscribe: () => void = () => undefined;
-    let settled = false; // A synchronous replay must not retain its abort listener.
     const cleanup = () => {
       unsubscribe();
       signal.removeEventListener("abort", onAbort);
@@ -42,16 +40,13 @@ export function waitForGatewayClient(
       cleanup();
       reject(abortError(signal));
     };
-    signal.addEventListener("abort", onAbort, { once: true });
-    unsubscribe = gateway.subscribe((snapshot) => {
+    // The Gateway owner registers listeners without synchronous replay.
+    const unsubscribe = gateway.subscribe((snapshot) => {
       if (snapshot.phase === "connected" && snapshot.client) {
-        settled = true;
         cleanup();
         resolve(snapshot.client);
       }
     });
-    if (settled || signal.aborted) {
-      unsubscribe();
-    }
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }

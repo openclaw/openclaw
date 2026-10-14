@@ -117,7 +117,7 @@ export type PluginRuntimeChannel = {
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
-    /** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
+    /** @deprecated Await readSessionUpdatedAtAsync. Retained during stable deprecation. */
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     readSessionUpdatedAtAsync: (
       ...params: Parameters<ReadSessionUpdatedAt>
@@ -182,14 +182,14 @@ export type PluginRuntimeChannel = {
     setMaxAgeBySessionKeyAsync: (
       params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
     ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
-    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
+    /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
-    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
+    /** @deprecated Use setMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
     setMaxAgeBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;

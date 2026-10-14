@@ -41,7 +41,11 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -877,6 +881,102 @@ describe("runReplyAgent inline tool verbosity", () => {
 });
 
 describe("runReplyAgent Active Memory inline debug", () => {
+  it.each([
+    {
+      selection: "turn",
+      override: "raw",
+      live: "off",
+      authorized: true,
+      returned: true,
+      raw: true,
+    },
+    {
+      selection: "live",
+      override: undefined,
+      live: "raw",
+      authorized: true,
+      returned: false,
+      raw: true,
+    },
+    {
+      selection: "off",
+      override: "off",
+      live: "raw",
+      authorized: true,
+      returned: true,
+      raw: false,
+    },
+    {
+      selection: "unauthorized",
+      override: "raw",
+      live: "raw",
+      authorized: false,
+      returned: false,
+      raw: false,
+    },
+  ] as const)(
+    "keeps selected trace after native final delivery: $selection",
+    async ({ override, live, authorized, returned, raw }) => {
+      const storePath = path.join(tempDirs.make("openclaw-delivered-trace-"), "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1, traceLevel: "off" };
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const onPreparedBlockReply = vi.fn(async () => {});
+      const reply = "Delivered native answer";
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          await replaceSessionEntry(
+            { storePath, sessionKey },
+            { ...sessionEntry, traceLevel: live },
+          );
+          await params.onAgentEvent?.({
+            stream: "lifecycle",
+            data: { phase: "start" },
+            transcriptStart: null,
+          });
+          await params.onBlockReply?.({ text: reply });
+          return {
+            payloads: returned ? [{ text: reply }] : [],
+            meta: { finalPromptText: "Trace input", finalAssistantRawText: reply },
+          };
+        },
+      );
+      const result = await createBaseRun({
+        context: { Provider: "webchat", Surface: "webchat", MessageSid: "trace-message" },
+        run: {
+          agentId: "main",
+          sessionKey,
+          messageProvider: "webchat",
+          traceAuthorized: authorized,
+          traceLevelOverride: override,
+        },
+        reply: {
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+          blockStreamingEnabled: true,
+          opts: { onPreparedBlockReply },
+        },
+      }).run();
+      expect(onPreparedBlockReply).toHaveBeenCalledOnce();
+      expect(firstMockCallArg(onPreparedBlockReply, "native final")).toMatchObject({
+        payload: { text: reply },
+      });
+      const payloads = Array.isArray(result) ? result : result ? [result] : [];
+      expect(payloads.filter(isReplyPayloadTerminalContent)).toEqual([]);
+      const diagnosticsText = payloads.map((payload) => payload.text).join("\n");
+      expect(diagnosticsText.includes("Model Input (User Role)")).toBe(raw);
+      expect(diagnosticsText.includes("Model Output (Assistant Role)")).toBe(raw);
+      expect(payloads).toHaveLength(raw ? 1 : 0);
+      expect(payloads.every((payload) => payload.isStatusNotice === true)).toBe(true);
+      if (!raw) {
+        expect(result).toBeUndefined();
+      }
+      expect(loadSessionEntry({ storePath, sessionKey })?.traceLevel).toBe(live);
+    },
+  );
+
   // Seeds the plugin-owned debug rows through the canonical session accessor.
   async function writeActiveMemoryDebugEntry(params: {
     sessionEntry: SessionEntry;

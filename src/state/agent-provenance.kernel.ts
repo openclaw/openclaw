@@ -1,17 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 
 export function recordAgentProvenanceInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   provenance: AgentProvenance,
 ): void {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
@@ -34,6 +35,7 @@ export function recordAgentProvenanceInDatabase(
         }),
       ),
   );
+  agentProvenancePublication.stagePostimages(database, [provenance]);
 }
 
 export function agentProvenanceFromRow(
@@ -50,7 +52,7 @@ export function agentProvenanceFromRow(
   };
 }
 
-export function listAgentProvenanceInDatabase(database: DatabaseSync): AgentProvenance[] {
+export function listAgentProvenanceInDatabase(database: EngineConnection): AgentProvenance[] {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -60,7 +62,7 @@ export function listAgentProvenanceInDatabase(database: DatabaseSync): AgentProv
 
 /** Decode only requested provenance, in the caller's order, including its first error. */
 export function readAgentProvenanceBatchInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentIds: readonly string[],
 ): AgentProvenance[] {
   if (agentIds.length === 0) {

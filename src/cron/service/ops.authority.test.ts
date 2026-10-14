@@ -125,6 +125,7 @@ describe("scheduled tool policy provenance", () => {
       expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
       if (existing) {
         expect(state.store?.jobs[0]?.name).toBe("updated");
+        expect((await loadCronStore(storePath)).jobs[0]).toEqual(state.store?.jobs[0]);
       } else {
         expect(state.store?.jobs).toHaveLength(1);
         expect(job.state.nextRunAtMs).toBeGreaterThan(state.deps.nowMs());

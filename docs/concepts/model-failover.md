@@ -20,6 +20,20 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+An output-token limit is separate from a transient provider outage. The embedded
+runtime permits at most one continuation for a truncated Responses tool call or
+an empty length stop that still needs an answer. It records an output-limit
+notice and continues the saved transcript, preserving completed actions. A
+second output limit surfaces the unfinished result. Raw model runs and
+`promptMode: "none"` cannot carry that history, so they surface the output limit
+without replaying the original request. Visible partial answers remain visible.
+
+For Responses, `max_output_tokens` includes reasoning and visible output. The
+request uses the configured `maxTokens` override or the model's output cap;
+service tier does not independently change that cap. A long generation with
+ongoing progress can exceed the stream's idle timeout. The separate run deadline
+still applies; see [Agent loop timeouts](/concepts/agent-loop#timeouts).
+
 ChatGPT Responses WebSocket connection expiry and a normal close before the
 terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.
@@ -403,6 +417,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
+    - an incomplete embedded reply ending with a normal `stop` after bounded same-model recovery, unless the harness explicitly classifies the result as a fallback failure. If the host requires an answer, OpenClaw surfaces the incomplete-turn error; optional internal turns may finish silently. Replay safety does not establish that a different model would answer
     - context overflow after committed tool effects or delivered replies that cannot safely be replayed
     - a provider request-size ceiling inside an embedded run (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which remains terminal rather than compacting
     - a final unknown error when there are no candidates left

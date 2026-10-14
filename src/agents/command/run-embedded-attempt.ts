@@ -230,9 +230,11 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   const fallbackTrajectoryRecorder = await createTrajectoryRuntimeRecorder({
     cfg,
     runId,
-    sessionId,
-    sessionKey,
+    sessionId: attemptSessionTarget?.sessionId ?? sessionId,
+    sessionKey: attemptSessionTarget?.sessionKey ?? sessionKey,
     sessionFile: attemptSessionFile,
+    sessionTarget: attemptSessionTarget,
+    assertCommitAllowed: assertTrajectoryCurrent,
     provider,
     modelId: model,
     workspaceDir,

@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -775,7 +779,8 @@ Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
 and starting or restarting the Gateway. A new eligible remote node also refreshes
 skill eligibility. Remote workspace discovery stays with the host that owns
-those files.
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
 The worker publishes a complete snapshot after discovery. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective

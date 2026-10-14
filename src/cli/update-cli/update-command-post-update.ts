@@ -34,6 +34,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
+  withUpdateStateRead,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
@@ -64,16 +65,17 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
+type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};
 
 export async function finishUpdate(
   params: FinishUpdateParams,
-  {
-    beforeFinalization,
-    ...options
-  }: FinishUpdateOptions & {
-    beforeFinalization?: () => Promise<void>;
-  } = {},
+  { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
   return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
@@ -85,6 +87,7 @@ async function finishSettledUpdate(
   params: FinishUpdateParams,
   {
     candidateRuntime = false,
+    adoptedFinalization,
     onGatewayStartAttempted: observeGatewayStartAttempted,
   }: FinishUpdateOptions,
   captured: ReturnType<typeof captureUpdateFinalization>,
@@ -460,7 +463,9 @@ async function finishSettledUpdate(
       const runsPostActivationInspections =
         shouldRestart &&
         (!params.coreAlreadyCurrent || deferPluginConvergence) &&
-        (!candidateRuntime || isUpdateDoctorInspectionReportMode(process.env));
+        (!candidateRuntime ||
+          adoptedFinalization ||
+          isUpdateDoctorInspectionReportMode(process.env));
       const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
         const pluginParams = {
           ...params,
@@ -503,17 +508,25 @@ async function finishSettledUpdate(
       const restartConfigSnapshot =
         postUpdateConfigSnapshot ??
         (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-          readConfigFileSnapshot({
-            observe: false,
-            skipPluginValidation: true,
-            suppressFutureVersionWarning: true,
-          }),
+          withUpdateStateRead(
+            () =>
+              readConfigFileSnapshot({
+                observe: false,
+                skipPluginValidation: true,
+                suppressFutureVersionWarning: true,
+              }),
+            params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
+          ),
         ));
       let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
       try {
-        restartContext = await prepareUpdateRestart(
-          { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
-          restartConfigSnapshot,
+        restartContext = await withUpdateStateRead(
+          () =>
+            prepareUpdateRestart(
+              { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
+              restartConfigSnapshot,
+            ),
+          params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
         );
       } catch (error) {
         const message =

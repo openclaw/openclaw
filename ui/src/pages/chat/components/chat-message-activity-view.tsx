@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { type ToolCallGroup, groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -25,12 +25,12 @@ import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+import { ChatToolCard, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import {
-  renderBrowserTabPreviews,
-  renderToolCard,
-  syncToolDisclosureOverflow,
-} from "./chat-tool-cards.ts";
-import { renderToolOutcomeSummary, renderToolReviewOutcome } from "./chat-tool-outcome-summary.ts";
+  ChatToolOutcomeSummary,
+  ChatToolReviewOutcome,
+} from "./chat-tool-outcome-summary.solid.tsx";
 
 type ToolContexts = ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
 
@@ -44,34 +44,54 @@ function descendantCards(group: ToolCallGroup<ToolCard>) {
   return cards;
 }
 
-function renderActivityOperation(
-  group: ToolCallGroup<ToolCard>,
-  options: NativeMessageGroupOptions,
-  contexts: ToolContexts,
-): unknown {
-  const context = contexts.get(group.card)!;
-  const expanded = options.isToolExpanded?.(context.disclosureId) ?? false;
-  return renderToolCard(group.card, {
-    ...options,
-    messageKey: context.messageKey,
-    expanded,
-    onToggleExpanded: () => options.onToggleToolExpanded?.(context.disclosureId, expanded),
-    activityCards: [group.card, ...descendantCards(group)],
-    // The card bridge owns this deferred range; nested Solid roots can be retired while it parks.
-    children: group.children.length
-      ? expanded
-        ? group.children.map((child) => renderActivityOperation(child, options, contexts))
-        : []
-      : undefined,
-  });
-}
-
 function ActivityOperation(props: {
   group: ToolCallGroup<ToolCard>;
   options: NativeMessageGroupOptions;
   contexts: ToolContexts;
 }) {
-  return <LitContent value={renderActivityOperation(props.group, props.options, props.contexts)} />;
+  const context = () => props.contexts.get(props.group.card)!;
+  const expanded = () => props.options.isToolExpanded?.(context().disclosureId) ?? false;
+  return (
+    <ChatToolCard
+      card={props.group.card}
+      options={{
+        ...props.options,
+        messageKey: context().messageKey,
+        expanded: expanded(),
+        onToggleExpanded: () =>
+          props.options.onToggleToolExpanded?.(context().disclosureId, expanded()),
+        activityCards: [props.group.card, ...descendantCards(props.group)],
+      }}
+      hasChildren={props.group.children.length > 0}
+    >
+      <ActivityOperationChildren
+        groups={props.group.children}
+        options={props.options}
+        contexts={props.contexts}
+        expanded={expanded()}
+      />
+    </ChatToolCard>
+  );
+}
+
+function ActivityOperationChildren(props: {
+  groups: ToolCallGroup<ToolCard>[];
+  options: NativeMessageGroupOptions;
+  contexts: ToolContexts;
+  expanded: boolean;
+}) {
+  return (
+    <Show when={props.expanded}>
+      <For
+        each={props.groups}
+        keyed={(group) => group.card.callId ?? props.contexts.get(group.card)!.disclosureId}
+      >
+        {(group) => (
+          <ActivityOperation group={group()} options={props.options} contexts={props.contexts} />
+        )}
+      </For>
+    </Show>
+  );
 }
 
 function prepareActivityGroup(
@@ -239,21 +259,19 @@ function ActivityGroupBody(props: {
               .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
               .map(({ label }) => label)}
           />{" "}
-          <LitContent
-            value={renderToolReviewOutcome(
-              state().reviewOutcome,
-              state().approvalReviews[0]?.label,
-            )}
+          <ChatToolReviewOutcome
+            outcome={state().reviewOutcome}
+            reviewer={state().approvalReviews[0]?.label}
+            style={{ display: "contents" }}
           />
           <Show when={!state().activityExpanded}>
-            <LitContent
-              value={renderToolOutcomeSummary(
-                state().cards.filter(
-                  (card) => card.callId && state().visibleCalls.has(card.callId),
-                ),
-                true,
-                state().visibleActivity,
+            <ChatToolOutcomeSummary
+              cards={state().cards.filter(
+                (card) => card.callId && state().visibleCalls.has(card.callId),
               )}
+              includeCount={true}
+              activity={state().visibleActivity}
+              style={{ display: "contents" }}
             />
           </Show>
           <span class="chat-tool-row__chevron" aria-hidden="true">

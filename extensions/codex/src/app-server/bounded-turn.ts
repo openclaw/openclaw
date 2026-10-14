@@ -85,7 +85,10 @@ type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode:
 class CodexBoundedTurnTimeoutError extends Error {
   override name = "TimeoutError";
 
-  constructor(taskLabel: string, timeoutMs: number) {
+  constructor(
+    taskLabel: string,
+    readonly timeoutMs: number,
+  ) {
     const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
     super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
   }

@@ -470,6 +470,9 @@ messages, without user-message delimiters. OpenClaw sends
 transcript but consume no input tokens after the next user message. Persistent
 prompt updates need no beta header. Operator system messages follow all other
 context for their user turn, including tool results.
+When replay excludes a Talk consult prompt, OpenClaw inserts a neutral user
+anchor (`.`) before any stranded system updates. This preserves their content,
+order, and lifetime without changing the pinned system prompt.
 Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 

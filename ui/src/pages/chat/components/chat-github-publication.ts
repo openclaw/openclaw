@@ -1,9 +1,6 @@
-import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import {
@@ -11,6 +8,9 @@ import {
   selectedGitHubPublisher,
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-controller.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
 
 registerGitHubEnglish();
 
@@ -43,7 +43,10 @@ function sharedUnavailableMessage(
   }
 }
 
-export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
+export function renderGitHubPublicationAction(
+  publication: GitHubPublicationView,
+  presented: PresentationValue = true,
+) {
   if (publication.result?.status === "published") {
     return html`<a
         class="chat-pr__create"
@@ -85,47 +88,18 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
   ];
   return html`
     ${renderPublicationButton(publication)}
-    <wa-dropdown
-      class="chat-pr__accounts"
-      placement="top-end"
-      aria-label=${t("githubPublication.account")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const source = event.detail.item.value;
-        if (source === "shared" || source === "personal") {
-          publication.onSelect?.(source);
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        class="btn btn--ghost btn--icon chat-icon-btn"
-        type="button"
-        aria-label=${t("githubPublication.account")}
-        ?disabled=${publication.activity !== null}
-      >
-        ${icons.chevronDown}
-      </button>
-      ${choices.map(({ source, account, label }) => {
-        const selected = publication.selection?.source === source;
-        return html`
-          <wa-dropdown-item
-            class="session-menu__item"
-            value=${source}
-            role="menuitemradio"
-            aria-checked=${String(selected)}
-            ?disabled=${publication.activity !== null}
-            ${ref((element) => syncDropdownItemRadio(element, selected))}
-          >
-            <span class="session-menu__text"
-              >@${account.login}${shared.login === personal.account.login ? html` · ${label}` : nothing}</span
-            >
-            <span slot="details" class="session-menu__icon" aria-hidden="true">
-              ${selected ? icons.check : nothing}
-            </span>
-          </wa-dropdown-item>
-        `;
-      })}
-    </wa-dropdown>
+    ${solidContent(GitHubPublicationMenu, {
+      choices: choices.map(({ source, account, label }) => ({
+        source,
+        login: account.login,
+        label,
+      })),
+      selected: publication.selection?.source,
+      duplicateLogin: shared.login === personal.account.login,
+      busy: publication.activity !== null,
+      presented,
+      onSelect: (source: "shared" | "personal") => publication.onSelect?.(source),
+    })}
   `;
 }
 

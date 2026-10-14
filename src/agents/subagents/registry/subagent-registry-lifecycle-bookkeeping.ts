@@ -157,7 +157,7 @@ export async function completeCleanupBookkeeping(
           (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
       retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
-      cleanupParams.discardDelivery?.(draft);
+      cleanupParams.finalizeDelivery?.(draft);
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {

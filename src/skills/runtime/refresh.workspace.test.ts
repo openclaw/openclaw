@@ -10,7 +10,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,

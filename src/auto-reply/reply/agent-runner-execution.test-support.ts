@@ -246,11 +246,17 @@ vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
   recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    error: vi.fn(),
-  },
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      error: vi.fn(),
+      log: vi.fn(),
+    },
+  };
+});
 
 vi.mock("../../utils/message-channel.js", async () => ({
   ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(

@@ -137,6 +137,19 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Child-process spawn samples use bounded command families and operation labels.
+Known owners distinguish agent exec launches (`agent.exec`), shell environment
+snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Relays launched for agent exec retain `agent.exec` as their owner.
+Native PTY exec launches use the same counter after successful admission.
+Windows PTYs publish their PID asynchronously, so attribution waits for the first
+output or exit without delaying the terminal.
+Unscoped launches use fixed classifications such as `unscoped.shell-command`,
+`unscoped.runtime`, or `unscoped.gh`; arguments, script text,
+and paths never become labels. Linux OOM-protection exec wrappers report the
+logical target command, since the spawn broker can omit the wrapper shell.
+Counts represent successful admitted launches, not a census of grandchildren.
+
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
 names fold into `other` (dedicated worker ingress uses `unknown`). The method
@@ -150,6 +163,17 @@ The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earlies
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
 the scheduler does not replay missed ticks.
+
+Best-effort maintenance shares a ten-second phase. Its first pass may run up to
+ten seconds early; later passes stay on nominal slots instead of drifting with
+callback duration. Healthy idle event-loop sampling joins this phase, while active
+or degraded sampling keeps its one-second cadence. Expiry, retry, lease, and
+transport-liveness deadlines retain their own timing.
+
+Healthy native directory watches use a five-minute recovery sweep for missed
+events. Missing directories, ancestor watches, and failed watches retry within
+30 seconds. Auth, database-identity, and session-source observers retain their
+30-second recovery bound; delivered native events still invalidate immediately.
 
 The same heartbeat also samples liveness when the event loop or CPU looks
 saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
@@ -267,6 +291,31 @@ the warning's `pid` and `workerThreadId` to an agent-database-open warning's
 `pid` and `threadId` to identify the awaited Worker. This establishes association,
 not CPU attribution or a breakdown of the Worker's lifetime. A missing Worker
 ID does not establish that work ran on the main thread.
+
+From a source checkout, summarize an existing JSONL file without contacting the
+Gateway or opening its databases:
+
+```bash
+node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
+  --from 2026-10-13T14:10:00Z --until 2026-10-13T15:50:00Z
+```
+
+The report splits observed reservation and queue-wait intervals into UTC minutes,
+ranks operation categories, and lists the longest observed reservations. Native
+transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
+the host, while `sqlMs` is the remaining execution time, including JavaScript
+processing. Do not add transaction time to enclosing reservation time.
+
+This is a warning census, not complete writer utilization. Fast operations are
+absent, `direct` reservations do not identify their underlying command, and logs
+do not record physical queue depth. The maximum overlap of observed waits is
+scoped to a process/thread but can span different databases; it does not identify
+which holder blocked a particular waiter. Reentrant and session-lifecycle queue
+records are excluded from reservation totals. Interval reconstruction uses log
+emission time as a completion proxy and clips to the requested window, so include
+records emitted just after the window too. Supply each event once from one host,
+including rotated files through stdin when needed. Output retains fixed operation
+categories and numeric timing only, without paths, session identities, or content.
 
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
@@ -486,7 +535,7 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
-openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeCollected":true}' --timeout 30000 --json
 ```
 
 The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
@@ -498,7 +547,8 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
-The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeCollected: true` enables both collected-object flags. Explicit per-GC
+flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.

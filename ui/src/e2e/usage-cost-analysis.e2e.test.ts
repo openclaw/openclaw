@@ -594,7 +594,7 @@ suite.define(() => {
           has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
         });
         await providerFilter.locator(".usage-filter-trigger").click();
-        await providerFilter.locator('wa-dropdown-item[value="command:select-all"]').click();
+        await providerFilter.locator('[data-value="command:select-all"]').click();
         await expect.poll(() => providerFilter.locator(".settings-count").textContent()).toBe("2");
         await expect
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
@@ -605,8 +605,8 @@ suite.define(() => {
               path.join(suite.artifactDir, "usage-filter-repair"),
               "01-provider-alternatives.png",
             ),
-            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
-              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
+            await takeControlUiViewportScreenshot(page, providerFilter.locator('[role="menu"]'), [
+              providerFilter.locator('[data-value="option:openai"]'),
             ]),
           );
         }
@@ -620,7 +620,7 @@ suite.define(() => {
             .poll(async () => (await sessionLabels.allTextContents()).toSorted())
             .toEqual(["Research Review", "Team Planning"]);
           await providerFilter.locator(".usage-filter-trigger").click();
-          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
+          const openai = providerFilter.locator('[data-value="option:openai"]');
           await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
           await openai.click();
           await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
@@ -877,7 +877,7 @@ suite.define(() => {
         const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
         await agentScope.locator(".agent-select__trigger").click();
         await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .click();
         await expect

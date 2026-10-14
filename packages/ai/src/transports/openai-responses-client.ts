@@ -406,6 +406,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                     : trackedResponseStream,
                   model,
                   requestStartedAt,
+                  attempt.request,
                 ),
                 signal: firstEvent.signal,
                 abort: firstEvent.abort,
@@ -486,9 +487,15 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 `headersHash=${redactIdentifier(JSON.stringify(Object.entries(websocketHeaders ?? {}).toSorted(([a], [b]) => a.localeCompare(b))))}`,
             );
             responseStream = createRecoverableResponsesWebSocketStream({
-              trackedWebSocketStream: v2Compaction
-                ? v2Compaction.observe(responseModelTracker.track(undefined, websocket.stream))
-                : responseModelTracker.track(undefined, websocket.stream),
+              trackedWebSocketStream: observeResponsesStream(
+                v2Compaction
+                  ? v2Compaction.observe(responseModelTracker.track(undefined, websocket.stream))
+                  : responseModelTracker.track(undefined, websocket.stream),
+                model,
+                requestStartedAt,
+                websocket.request,
+                "websocket",
+              ),
               websocket,
               websocketSignal,
               options,

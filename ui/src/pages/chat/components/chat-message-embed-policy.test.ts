@@ -6,7 +6,10 @@ import { solidContent } from "../../../lit/solid-content.tsx";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup, renderMessageGroupContent } from "./chat-message-group.ts";
+import {
+  renderMessageGroup,
+  renderMessageGroupContent,
+} from "./chat-message-group.test-support.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 

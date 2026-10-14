@@ -1,6 +1,7 @@
 import path from "node:path";
 import { vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../../server-methods/types.js";
 
@@ -121,4 +122,24 @@ export function createDelegatedBrowserProviderFixture(
       broadcastToConnIds: vi.fn(),
     },
   };
+}
+
+/** Wait for the requested event while surfacing any earlier handler failure. */
+export function observeTalkVoiceChangeRequest(
+  broadcast: ReturnType<
+    typeof createDelegatedBrowserProviderFixture
+  >["context"]["broadcastToConnIds"],
+) {
+  const requested = createDeferred();
+  broadcast.mockImplementation((event) => {
+    if (event === "talk.voice.change") {
+      requested.resolve();
+    }
+  });
+  return (operation: PromiseLike<unknown>) =>
+    awaitGateBeforeSettlement(
+      requested.promise,
+      operation,
+      "Voice change finished before requesting a replacement",
+    );
 }

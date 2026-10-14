@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -20,7 +20,7 @@ type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
 export function acquireOpenClawStateLeaseInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   payloadJson: string | null = null,
@@ -70,7 +70,7 @@ export function acquireOpenClawStateLeaseInTransaction(
 }
 
 export function readOpenClawStateLease(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: Pick<OpenClawStateLeaseIdentity, "scope" | "key">,
 ) {
   return executeSqliteQueryTakeFirstSync(
@@ -91,7 +91,7 @@ export function readOpenClawStateLease(
 
 /** Reclaim only a same-host owner whose process identity is provably gone. */
 export function reclaimDeadOpenClawStateLeaseInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: Pick<OpenClawStateLeaseIdentity, "scope" | "key">,
 ) {
   const existing = readOpenClawStateLease(db, identity);
@@ -106,7 +106,7 @@ export function reclaimDeadOpenClawStateLeaseInTransaction(
 }
 
 export function readOpenClawStateLeaseExpiry(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   nowMs?: number,
 ): number | undefined {
@@ -124,7 +124,7 @@ export function readOpenClawStateLeaseExpiry(
 }
 
 function repairMissingProcessStartTime(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   processOwner: StateLeaseProcessOwner | undefined,
 ): string | undefined {
@@ -154,7 +154,7 @@ function repairMissingProcessStartTime(
 
 /** The caller owns the write transaction; expired or replaced owners cannot renew. */
 export function renewOpenClawStateLeaseInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   processOwner?: StateLeaseProcessOwner,
@@ -183,7 +183,7 @@ export function renewOpenClawStateLeaseInTransaction(
 
 /** The caller owns the write transaction; a replaced owner cannot release its successor. */
 export function releaseOpenClawStateLeaseInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
 ): void {
   executeSqliteQuerySync(

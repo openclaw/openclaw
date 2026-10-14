@@ -1,7 +1,8 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
-import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -18,10 +19,20 @@ import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
 
+const reservationDiagnostics = channel("openclaw.agent-database.reservation");
+type DirectReservationCaller =
+  | "session-manager.write"
+  | "session-manager.note"
+  | "session-actor.command"
+  | "history.cold-read"
+  | "history.model-context"
+  | "history.hydration";
+
 function observeWriteAdmission<T>(
   operation: "direct" | "worker" | "ordered-read",
   timing: StoreWriterTiming | undefined,
   run: (timing: StoreWriterTiming) => Promise<T>,
+  caller?: DirectReservationCaller,
 ): Promise<T> {
   // Supplied timing belongs to the session-write diagnostic owner, or to an
   // enclosing observer here. Neither route should emit a second holder warning.
@@ -35,25 +46,33 @@ function observeWriteAdmission<T>(
       observed.reentrant !== false ||
       observed.startedAt === undefined ||
       observed.finishedAt === undefined ||
-      observed.finishedAt - observed.startedAt < 1_000
+      (observed.finishedAt - observed.startedAt < 1_000 && !reservationDiagnostics.hasSubscribers)
     ) {
       return;
     }
     const completedAt = performance.now();
+    const fields = {
+      operation,
+      ...(caller ? { caller } : {}),
+      outcome,
+      pid: process.pid,
+      threadId,
+      isMainThread,
+      reentrant: false,
+      elapsedMs: Math.round(completedAt - enqueuedAt),
+      queueWaitMs: Math.round(observed.startedAt - enqueuedAt),
+      writerExecutionMs: Math.round(observed.finishedAt - observed.startedAt),
+      completionDelayMs: Math.round(completedAt - observed.finishedAt),
+    };
+    if (reservationDiagnostics.hasSubscribers) {
+      reservationDiagnostics.publish(fields);
+    }
+    if (observed.finishedAt - observed.startedAt < 1_000) {
+      return;
+    }
     try {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
-        {
-          operation,
-          outcome,
-          pid: process.pid,
-          threadId,
-          isMainThread,
-          reentrant: false,
-          elapsedMs: Math.round(completedAt - enqueuedAt),
-          queueWaitMs: Math.round(observed.startedAt - enqueuedAt),
-          writerExecutionMs: Math.round(observed.finishedAt - observed.startedAt),
-          completionDelayMs: Math.round(completedAt - observed.finishedAt),
-        },
+        fields,
         "slow agent database reservation",
       );
     } catch {
@@ -78,6 +97,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   reentrant = false,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
+  caller?: DirectReservationCaller,
 ): Promise<T> {
   return runOpenClawAgentPathWriteAdmission(
     resolveOpenClawAgentSqlitePath(options),
@@ -85,6 +105,7 @@ export function runOpenClawAgentWriteAdmission<T>(
     reentrant,
     timing,
     signal,
+    caller,
   );
 }
 
@@ -95,6 +116,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
   reentrant = false,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
+  caller?: DirectReservationCaller,
 ): Promise<T> {
   const identity = readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
@@ -109,39 +131,47 @@ export function runOpenClawAgentPathWriteAdmission<T>(
       throw new Error("Agent database target changed before write admission");
     }
   };
-  return observeWriteAdmission("direct", timing, (observed) =>
-    runQueuedStoreWrite({
-      queues: admission.queues,
-      storePath,
-      label: "agent database write admission",
-      // Worker callbacks inherit their parent's async context, but not its native
-      // writer lock. Their foreground writes must queue, never reenter that owner.
-      reentrant: reentrant && !admission.workers.has(storePath),
-      fn: async () => {
-        assertCurrent();
-        return await run(identity, assertCurrent);
-      },
-      timing: observed,
-      signal,
-    }),
+  return observeWriteAdmission(
+    "direct",
+    timing,
+    (observed) =>
+      // Cold tasks may need a host write before releasing their admission turn.
+      runWithSqliteDatabaseAdmissionTurn(
+        [pathname],
+        () =>
+          runQueuedStoreWrite({
+            queues: admission.queues,
+            storePath,
+            label: "agent database write admission",
+            // Worker callbacks inherit their parent's async context, but not its native
+            // writer lock. Their foreground writes must queue, never reenter that owner.
+            reentrant: reentrant && !admission.workers.has(storePath),
+            fn: async () => {
+              assertCurrent();
+              return await run(identity, assertCurrent);
+            },
+            timing: observed,
+            signal,
+          }),
+        [],
+        signal,
+      ),
+    caller,
   );
 }
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
 export async function runOpenClawAgentWorkerWrite<T>(
-  options:
-    | OpenClawAgentDatabaseOptions
-    | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
+  options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
   priority?: "background",
 ): Promise<T> {
   if (priority === "background") {
-    const storePath =
-      "target" in options
-        ? `ephemeral:${options.target.handle}:${options.target.incarnation}`
-        : readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath;
+    const storePath = readDatabasePathIdentitySync(
+      resolveOpenClawAgentSqlitePath(options),
+    ).canonicalPath;
     // Rebuildable work waits outside the FIFO until existing foreground work drains.
     // Once admitted, its bounded transaction settles under the ordinary writer rules.
     let draining: Promise<void> | null | undefined;
@@ -150,21 +180,6 @@ export async function runOpenClawAgentWorkerWrite<T>(
     }
   }
   return observeWriteAdmission("worker", timing, (observed) => {
-    if ("target" in options) {
-      const { handle, incarnation } = options.target;
-      return runQueuedStoreWrite({
-        queues: admission.queues,
-        storePath: `ephemeral:${handle}:${incarnation}`,
-        label: "incognito agent database write admission",
-        reentrant: false,
-        fn: async () => {
-          options.assertCurrent();
-          return run();
-        },
-        timing: observed,
-        signal,
-      });
-    }
     return runOpenClawAgentWriteAdmission(
       options,
       async ({ canonicalPath: storePath }) => {
@@ -213,12 +228,18 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");
   }
-  return await runStoreWriterAcquisitions((index, next) => {
-    const pathname = paths[index];
-    return pathname === undefined
-      ? Promise.resolve().then(run)
-      : observeWriteAdmission("ordered-read", undefined, (timing) =>
-          runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
-        );
-  });
+  return await runWithSqliteDatabaseAdmissionTurn(
+    paths,
+    () =>
+      runStoreWriterAcquisitions((index, next) => {
+        const pathname = paths[index];
+        return pathname === undefined
+          ? Promise.resolve().then(run)
+          : observeWriteAdmission("ordered-read", undefined, (timing) =>
+              runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
+            );
+      }),
+    [],
+    signal,
+  );
 }

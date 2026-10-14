@@ -34,6 +34,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureEnv } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -485,7 +486,7 @@ describe("doctor lint state isolation", () => {
               observed.push(
                 withExistingOpenClawStateDatabaseReadOnly(
                   ({ db }) => {
-                    locations.push(db.location()!);
+                    locations.push(requireNativeSqliteDatabase(db).location()!);
                     return db.prepare("SELECT value FROM marker").all();
                   },
                   { env: ctx.env },

@@ -147,6 +147,14 @@ export const physicalDatabaseCapabilities = {
 } as const;
 
 export function requireNativeDatabaseFile(
+  engine: "postgres",
+  operation: "integrity" | "repair" | "file-snapshot",
+): never;
+export function requireNativeDatabaseFile(
+  engine: "sqlite" | "postgres",
+  operation: "integrity" | "repair" | "file-snapshot",
+): void;
+export function requireNativeDatabaseFile(
   engine: "sqlite" | "postgres",
   operation: "integrity" | "repair" | "file-snapshot",
 ): void {

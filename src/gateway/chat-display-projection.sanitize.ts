@@ -410,11 +410,18 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
   const openClawMeta = readRecord(entry["__openclaw"]);
-  if (openClawMeta && ("upstreamUserText" in openClawMeta || "media" in openClawMeta)) {
+  if (
+    openClawMeta &&
+    ("upstreamUserText" in openClawMeta ||
+      "sessionSendDelivery" in openClawMeta ||
+      "media" in openClawMeta)
+  ) {
     // Codex retains the decorated upstream prompt for transcript reconstruction.
     // It is not display data and can otherwise evict the visible row from history.
     const projectedMeta = { ...openClawMeta };
     delete projectedMeta.upstreamUserText;
+    // Durable delivery facts contain private endpoint bindings, not display data.
+    delete projectedMeta.sessionSendDelivery;
     if ("media" in projectedMeta) {
       projectedMeta.media = projectChatHistoryMediaFacts(projectedMeta.media);
       if (projectedMeta.media === undefined) {

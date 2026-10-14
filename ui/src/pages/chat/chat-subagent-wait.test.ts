@@ -1,9 +1,11 @@
 import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
-import { renderUnplacedSubagentWait } from "./components/chat-message-stream.ts";
+import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
 import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
 import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
 
@@ -364,15 +366,24 @@ describe("chat waiting on subagents", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const container = document.createElement("div");
     document.body.append(container);
+    let view: ReturnType<typeof mountSolid> | undefined;
     try {
-      render(renderUnplacedSubagentWait(parent.key, wait, { waitingSubagents: wait }), container);
+      view = mountSolid(
+        () =>
+          createComponent(UnplacedSubagentWait, {
+            sessionKey: parent.key,
+            wait,
+            options: { waitingSubagents: wait },
+          }),
+        { container },
+      );
       flush();
       const elapsed = container.querySelector("openclaw-elapsed-time");
       await elapsed?.updateComplete;
       flush();
       expect(elapsed?.textContent?.trim()).toBe("1m 5s");
     } finally {
-      render(null, container);
+      view?.unmount();
       container.remove();
       clock.mockRestore();
     }

@@ -185,6 +185,49 @@ describe("session index scheduling", () => {
     sync.mockRestore();
   });
 
+  it("keeps the final automatic retry until a long rebuild cooldown expires", async () => {
+    const target = append("cooldown");
+    const index = vi.fn(async () => {});
+    index.mockRejectedValueOnce(
+      createMemoryEmbeddingOperationError({
+        operation: "batch",
+        cause: "embedding backend failed",
+      }),
+    );
+    harness["syncArchiveFiles"] = index;
+    harness["activateFallbackProvider"] = vi.fn(async () => true);
+    // Earlier rebuild failures have reached the existing thirty-minute cap.
+    for (let attempt = 0; attempt < 7; attempt++) {
+      harness["recordFullReindexFailure"](false);
+    }
+    harness["sync"] = async (params) => {
+      harness.syncCalls.push(params ?? {});
+      if (params?.reason === "session-delta") {
+        await harness["syncTargetedSessions"](new Set(["/tmp/cooldown.jsonl"]));
+      } else {
+        await harness.runSyncForTest(params);
+      }
+    };
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(index).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000 + 300_000);
+    expect(harness.syncCalls).toEqual([
+      { reason: "session-delta", sessions: [target], archiveFiles: [] },
+      { reason: "session-startup-catchup" },
+      { reason: "session-startup-catchup" },
+    ]);
+    await vi.advanceTimersByTimeAsync(1_800_000 - 390_000 - 1);
+    expect(index).toHaveBeenCalledTimes(1);
+    expect(harness.syncCalls).toHaveLength(3);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(index).toHaveBeenCalledTimes(2);
+    expect(harness.syncCalls).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(index).toHaveBeenCalledTimes(2);
+  });
+
   it("backs off handled fallback failures, yields to turns, and stops retrying until new activity", async () => {
     const target = append("fallback");
     const sessionFile = "/tmp/fallback.jsonl";

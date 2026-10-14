@@ -11,8 +11,8 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -253,7 +253,9 @@ describe("renderChatComposer controls", () => {
         onToggleRealtimeTalk,
         submitDisabledReason: t("chat.thread.loading"),
       });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+      );
       const microphone = button(container, t("chat.composer.startVoiceInput"));
       const talk = button(container, t("chat.composer.realtimeTalkCapability"));
       microphone.click();

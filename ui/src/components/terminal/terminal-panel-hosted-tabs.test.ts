@@ -45,6 +45,7 @@ async function mount(embedded = true, tabsInHeader = true) {
   if (!embedded) {
     panel.toggle();
   }
+  await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));

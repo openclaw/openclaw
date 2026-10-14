@@ -12,9 +12,13 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
-When the latest history page has no visible messages, for example because tool
-activity is hidden, the pane loads earlier history automatically. An incomplete
-history page does not show the new-chat welcome screen.
+When the visible conversation does not fill the chat pane, including when the
+latest history page is empty or tool activity is hidden, earlier history loads
+automatically after the layout settles. Loading stops when the pane is filled,
+history ends, or a request fails. Scroll upward or select **Show earlier** to
+load more or retry. Hidden panes and programmatic scroll placement do not trigger
+automatic loading. An incomplete history page does not show the new-chat welcome
+screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
@@ -49,8 +53,9 @@ the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they
-finish. Selecting the count opens the **Subagents** panel on its list. Child
-sessions that are not subagents are not part of that count.
+finish. Selecting the count opens the **Subagents** panel on its list. Starting
+or discovering subagents does not open the panel automatically or change your
+selected panel. Child sessions that are not subagents are not part of that count.
 
 Under the reply, each unfinished subagent has its own row
 showing its name and current activity headline. Rows stay in launch order as
@@ -137,9 +142,10 @@ another agent's history. Select that pane, then choose **Home** or a conversatio
 in the sidebar. Home works even when you are already on its route; the other
 panes stay unchanged.
 
-When the macOS app embeds a single conversation beside its native sidebar, the
-chat header fills the window's titlebar row. Drag an empty area of the header to
-move the window; its buttons keep their normal actions.
+When the macOS app embeds a single conversation beside its native sidebar, the chat header fills the window's titlebar row.
+In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
+Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
+Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
 ## Collaborator drafts
 
@@ -614,6 +620,8 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Document cards show a labeled **Download** action without hovering, both in the
+transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents

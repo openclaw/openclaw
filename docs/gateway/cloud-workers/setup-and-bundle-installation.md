@@ -14,7 +14,7 @@ Linux x64 and arm64 workers need no Node installation in `settings.setup`. Befor
 
 Prepared repositories select their Node requirement in this order: `.nvmrc`, `.node-version`, `.tool-versions` (`nodejs` or `node`), `mise.toml` (`[tools] node`), then `package.json` `engines.node`. Release versions, major versions, SemVer ranges, `node`/`latest`, and `lts/*` or named LTS aliases resolve to the latest matching official Linux release. `system` retains the bootstrap Node. Repository releases are verified against that release's HTTPS `SHASUMS256.txt` before installation. Invalid declarations and missing releases fail preparation with a repair hint.
 
-Toolchains live below the machine HOME's `~/.openclaw-worker/toolchains/node/`, keyed by release, platform, architecture and archive SHA-256. An existing installation passes its file checksums and version check before reuse; warm image forks retain those files. Repository setup and session commands use shims in the prepared HOME's `.local/bin` first on `PATH`. When `package.json` declares `packageManager`, OpenClaw runs `corepack enable --install-directory` there without sudo. The worker runtime continues to use its own supported Node by absolute path, even for repositories requesting an older Node. Crabbox retains that executable in a machine-level link so later diagnostics and snapshot capture commands can use it in fresh shells.
+Toolchains live below the machine HOME's `~/.openclaw-worker/toolchains/node/`, keyed by release, platform, architecture and archive SHA-256. An existing installation passes its file checksums and version check before reuse; warm image forks retain those files. Repository setup and session commands use shims in the prepared HOME's `.local/bin` first on `PATH`. When `package.json` declares `packageManager`, OpenClaw runs `corepack enable --install-directory` there without sudo. A repository Node release that does not bundle Corepack uses the worker's Corepack. When that Corepack's `engines` exclude the repository Node, the prepared HOME receives a copy pinned to the worker Node, so Corepack, its package manager shims, and later `corepack enable` runs work. The package manager then also runs on the worker Node, while `node` on `PATH` stays the repository release. The worker runtime continues to use its own supported Node by absolute path, even for repositories requesting an older Node. Crabbox retains that executable in a machine-level link so later diagnostics and snapshot capture commands can use it in fresh shells.
 
 Existing profiles keep their optional setup scripts, including custom Node installs. Updating the Gateway applies this bootstrap to new Linux provisions; snapshots reuse verified toolchains. macOS and Windows retain their existing image/setup-provided Node and npm behavior. OpenClaw does not install Node on those targets.
 
@@ -27,6 +27,38 @@ Crabbox coordinator transport timeouts before profile setup, node runtime prepar
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
 When an agent tool waits for a bounded in-process Gateway request, stalled-run recovery honors the active response deadline, including nested Crabbox creation calls. Completing, failing, canceling, or timing out the wait removes its allowance; a prior run's pending request cannot extend the current run's budget. A response timeout does not by itself cancel provisioning. Inspect the environment's state before retrying an uncertain creation request.
+
+### Protected setup secrets
+
+Use `settings.setupSecrets` to map environment names to protected shared-store
+SecretRefs. Profile setup, repository preparation, and post-create/start commands
+receive opaque sentinels. A job-scoped HTTPS proxy substitutes the value only for
+the store entry's exact allowed hosts, including Bearer headers and Basic
+credentials. The upstream proxy credential and CA private key stay on the Gateway.
+Public HTTPS package downloads remain available through the bridge.
+Plain HTTP downloads, including Ubuntu's default apt mirrors, go directly from
+the lease and never receive substituted secrets. The runner unsets inherited
+`HTTP_PROXY` and `http_proxy` values so they cannot redirect that traffic.
+
+This requires an exclusively owned coordinator Linux lease and Crabbox 0.77.0 or
+newer with its matching egress runtime helper. Missing support, unavailable proxy,
+unbound store entries, and unmapped repository requests fail visibly before
+repository code runs. There is no plaintext fallback. No-secret jobs keep their
+existing runner. HTTPS clients must honor the supplied proxy and CA variables;
+detached processes lose protected access when the lifecycle command finishes.
+
+The runner removes its temporary public CA bundle and revokes its grant on exit,
+failure, or cancellation. Snapshot capture also removes runner-owned temp files
+and Crabbox command staging. Setup secrets do not disable snapshots; values and
+sentinel bytes never enter snapshot compatibility keys. Keep credentials out of
+generated files and logs. See [setup jobs](/gateway/secrets/secret-store-and-egress#job-scoped-setup-grants)
+and [cloud environment secrets](/gateway/cloud-workers/environment-file).
+
+Updating retires `settings.setupEnv`. Run `openclaw doctor --fix` to migrate only
+existing protected store entries with destination bindings. Doctor reports missing,
+unbound, or conflicting entries for repair, without changing their values or
+inventing destinations. Unrepaired profiles cannot provision. Existing leases
+remain inspectable and releasable, but cannot capture a legacy plaintext image.
 
 ### Native Windows prerequisites
 

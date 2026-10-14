@@ -239,6 +239,7 @@ export function createMemoryWikiTestHarness() {
       source: "test",
       config: {},
       runtime: {
+        config: { current: () => ({}) },
         state: {
           openKeyedStore: vi.fn(<T>() => createMemoryKeyedStore<T>()),
           openBlobStore: vi.fn(<T>() => createMemoryBlobStore<T>()),

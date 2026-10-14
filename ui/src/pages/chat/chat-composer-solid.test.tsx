@@ -14,7 +14,7 @@ import {
 import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import { LitContent } from "./components/chat-composer-interop.tsx";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 

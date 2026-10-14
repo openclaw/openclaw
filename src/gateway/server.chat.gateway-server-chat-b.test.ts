@@ -1701,9 +1701,9 @@ describe("gateway server chat", () => {
                   },
                 },
               });
-              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const { loadGatewaySessionEntryReadOnlyAsync } = await import("./session-utils.js");
               setRuntimeConfigSnapshot(initialConfig);
-              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              const loaded = await loadGatewaySessionEntryReadOnlyAsync("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
               expect(loaded.canonicalKey).toBe("agent:work:main");
@@ -2725,12 +2725,12 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntryAsync: loadGatewaySessionEntry }] =
         await Promise.all([
           import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
+          import("./session-entry-load.test-support.js"),
         ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const seededSession = await loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -2743,7 +2743,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = await loadGatewaySessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",
@@ -4910,7 +4910,8 @@ describe("gateway server chat", () => {
         createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
         makeTranscriptTextEvent("NO_REPLY", {
           message: {
-            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            // Exceed the response budget while staying below raw-page admission.
+            padding: "x".repeat(historyMaxBytes + 1024),
             timestamp: Date.now() + 1,
           },
         }),

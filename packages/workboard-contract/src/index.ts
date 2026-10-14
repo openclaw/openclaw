@@ -1,5 +1,15 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
+export type WorkboardDatabasePortApi<Database, Input> = {
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",

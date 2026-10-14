@@ -4,12 +4,12 @@ export const TRANSCRIPT_STATS_COMPAT_RECORD = {
   code: "session-transcript-sync-statistics",
   status: "deprecated",
   owner: "sdk",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   introduced: "2026-07-11",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
   replacement:
-    "Await readTranscriptStatsAsync from session-store-runtime, or readTranscriptStatsBatchReadOnlyAsync and statSessionEntry from memory-core-host-engine-sessions. Batch reads preserve input order, duplicate IDs, and null results for unavailable stores through the existing history worker. Worker-local kernels and supplied statistics may retain direct synchronous reads; legacy main-thread SDK calls remain compatible until the next Plugin SDK major.",
+    "Await readTranscriptStatsAsync from session-store-runtime, or readTranscriptStatsBatchReadOnlyAsync and statSessionEntry from memory-core-host-engine-sessions. Batch reads preserve input order, duplicate IDs, and null results for unavailable stores through the existing history worker. Worker-local kernels and supplied statistics may retain direct synchronous reads; legacy main-thread SDK calls remain compatible until an announced later stable release.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#await-transcript-statistics",
   surfaces: [
     "openclaw/plugin-sdk/session-store-runtime.readTranscriptStatsSync",
@@ -25,5 +25,5 @@ export const TRANSCRIPT_STATS_COMPAT_RECORD = {
     "packages/memory-host-sdk/src/host/session-files.test.ts",
   ],
   releaseNote:
-    "Plugins can await single or batched transcript statistics without running durable SQLite on the Gateway thread. Existing synchronous signatures remain available until the next Plugin SDK major. Stored data, retention, and update behavior are unchanged.",
+    "Plugins can await single or batched transcript statistics without running durable SQLite on the Gateway thread. Existing synchronous signatures remain available until an announced later stable release. Stored data, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

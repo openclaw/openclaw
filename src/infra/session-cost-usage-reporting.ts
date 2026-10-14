@@ -21,7 +21,10 @@ import {
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
@@ -33,12 +36,6 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
-import {
-  withUsageCostIncognitoScope,
-  captureUsageCostIncognitoBinding,
-  readIncognitoUsageTranscript,
-  type UsageCostIncognitoBinding,
-} from "./session-cost-usage-incognito.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -66,46 +63,46 @@ type SessionUsageDiagnosticParams = {
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
-  incognito?: UsageCostIncognitoBinding;
 };
 
-function withSessionUsageDiagnosticSource<Params extends SessionUsageDiagnosticParams, Result>(
+async function withSessionUsageDiagnosticSource<
+  Params extends SessionUsageDiagnosticParams,
+  Result,
+>(
   params: Params,
   read: (scoped: Params, sessionFile: string) => Promise<Result>,
 ): Promise<Result | null> {
-  return withUsageCostIncognitoScope(
-    captureUsageCostIncognitoBinding(params),
-    async (incognito) => {
-      const scoped = { ...params, incognito };
-      const source = await resolveUsageSessionSource(scoped);
-      if (
-        !source ||
-        (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
-      ) {
-        return null;
-      }
-      return read(scoped, source.sessionFile);
-    },
-  );
+  const source = await resolveUsageSessionSource(params);
+  if (
+    !source ||
+    (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
+  ) {
+    return null;
+  }
+  const signal = getAsyncWorkSignal();
+  const marker = parseSqliteSessionFileMarker(source.sessionFile);
+  const memory =
+    marker &&
+    captureSessionActorStorageOwner(marker, {
+      assertCurrent: () => signal?.throwIfAborted(),
+      authorize() {},
+    });
+  const result = await read(params, source.sessionFile);
+  // Recheck the live caller at disclosure, after awaited pricing and transcript work.
+  memory?.owner?.assertCurrent();
+  memory?.authority.assertCurrent();
+  return result;
 }
 
 export async function discoverAllSessions(params: {
   agentId: string;
-  incognito?: UsageCostIncognitoBinding;
   startMs?: number;
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
-  const result = await runUsageCostWorker(
-    prepareUsageCostWorker({
-      ...params,
-      storePath: params.incognito?.actor.path,
-    }),
-    {
-      kind: "inventory",
-      minMtimeMs: params.startMs,
-    },
-    params.incognito,
-  );
+  const result = await runUsageCostWorker(prepareUsageCostWorker(params), {
+    kind: "inventory",
+    minMtimeMs: params.startMs,
+  });
   if (result.kind !== "inventory") {
     throw new Error("Usage worker returned an invalid session inventory");
   }
@@ -147,7 +144,6 @@ export async function loadSessionCostSummary(params: {
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
-  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -159,68 +155,55 @@ export async function loadSessionCostSummary(params: {
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
-  const binding = captureUsageCostIncognitoBinding(params);
-  const captured = binding ? prepareUsageCostWorker({ ...params, incognito: binding }) : undefined;
-  return withUsageCostIncognitoScope(binding, async (incognito) => {
-    const scoped = { ...params, incognito };
-    const source = await resolveUsageSessionSource(scoped);
-    if (!source) {
-      return null;
-    }
-    const { sessionFile } = source;
-    const prepared = captured ?? prepareUsageCostWorker({ ...scoped, sessionFiles: [sessionFile] });
-    const inventory = await runUsageCostWorker(
-      prepared,
-      {
-        kind: "inventory",
-        sessionFiles: [sessionFile],
-      },
-      scoped.incognito,
-    );
-    if (inventory.kind !== "inventory") {
-      throw new Error("Usage worker returned an invalid session inventory");
-    }
-    if (inventory.files.length === 0) {
-      return null;
-    }
-    while (
-      (await refreshCostUsageCacheForAgent({
-        config: scoped.config,
-        agentId: scoped.agentId,
-        agentDir: prepared.agentDir,
-        databasePath: prepared.location.databasePath,
-        storePath: prepared.location.storePath,
-        env: prepared.location.env,
-        sessionFiles: [sessionFile],
-        incognito: scoped.incognito,
-      })) === "busy"
-    ) {
-      // Direct detail callers require the requested session, unlike background
-      // summary refreshes. Wait for the agent-wide writer to release, then retry.
-      await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-    }
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      prepared.config,
-      prepared.agentDir,
-    );
-    const result = await runUsageCostWorker(
-      prepared,
-      {
-        kind: "sessions",
-        pricingFingerprint,
-        sessions: [{ sessionId: scoped.sessionId, sessionFile }],
-        startMs: scoped.startMs,
-        endMs: scoped.endMs,
-        includeUntimestamped: scoped.includeUntimestamped,
-        dayBucket: resolveUsageCostWorkerDayBucket(scoped.dayBucket),
-      },
-      scoped.incognito,
-    );
-    if (result.kind !== "sessions") {
-      throw new Error("Usage worker returned an invalid session summary");
-    }
-    return result.summaries[0] ?? null;
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
+    return null;
+  }
+  const { sessionFile } = source;
+  const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
+  const inventory = await runUsageCostWorker(prepared, {
+    kind: "inventory",
+    sessionFiles: [sessionFile],
   });
+  if (inventory.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
+  if (inventory.files.length === 0) {
+    return null;
+  }
+  while (
+    (await refreshCostUsageCacheForAgent({
+      config: params.config,
+      agentId: params.agentId,
+      agentDir: prepared.agentDir,
+      databasePath: prepared.location.databasePath,
+      storePath: prepared.location.storePath,
+      env: prepared.location.env,
+      sessionFiles: [sessionFile],
+      sessionActor: prepared.sessionActor,
+    })) === "busy"
+  ) {
+    // Direct detail callers require the requested session, unlike background
+    // summary refreshes. Wait for the agent-wide writer to release, then retry.
+    await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
+  }
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+    prepared.config,
+    prepared.agentDir,
+  );
+  const result = await runUsageCostWorker(prepared, {
+    kind: "sessions",
+    pricingFingerprint,
+    sessions: [{ sessionId: params.sessionId, sessionFile }],
+    startMs: params.startMs,
+    endMs: params.endMs,
+    includeUntimestamped: params.includeUntimestamped,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
+  });
+  if (result.kind !== "sessions") {
+    throw new Error("Usage worker returned an invalid session summary");
+  }
+  return result.summaries[0] ?? null;
 }
 
 export async function loadSessionUsageTimeSeries(
@@ -238,7 +221,7 @@ export async function loadSessionUsageTimeSeries(
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-    for await (const record of readTranscriptRecords(sessionFile, scoped.incognito)) {
+    for await (const record of readTranscriptRecords(sessionFile)) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
@@ -317,7 +300,7 @@ export async function loadSessionLogs(
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-    for await (const parsed of readTranscriptRecordsBestEffort(sessionFile, scoped.incognito)) {
+    for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
       let role: SessionLogEntry["role"];
       let content: string;
       try {
@@ -437,40 +420,46 @@ export async function loadSessionLogs(
   });
 }
 
-async function* readTranscriptRecords(
-  filePath: string,
-  incognito?: UsageCostIncognitoBinding,
-): AsyncGenerator<Record<string, unknown>> {
+async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
-  if (incognito && !marker) {
-    throw new Error("Usage actor transcript requires its captured SQLite marker");
-  }
   if (marker) {
-    const memory = getSessionActorStorageBinding(marker);
+    const signal = getAsyncWorkSignal();
+    const authority = {
+      assertCurrent: () => signal?.throwIfAborted(),
+      authorize() {},
+    };
+    const memory = captureSessionActorStorageOwner(marker, authority);
     let events: unknown[];
     if (memory) {
-      const rows = await memory.actor.storage!.read(
-        {
-          type: "session.usage.snapshot",
-          input: { sessionIds: [marker.sessionId], includeEvents: true },
-        },
-        memory.authority,
-      );
-      events = (rows[0]?.events ?? []).map(({ eventJson }): unknown => JSON.parse(eventJson));
-    } else if (incognito) {
-      events = await readIncognitoUsageTranscript(incognito, marker);
+      events =
+        (await withSessionActorStorage(
+          marker,
+          {
+            authority: memory.authority,
+            lifetime: {
+              assertCurrent: () => memory.authority.assertCurrent(),
+              assertReadable: () => memory.authority.assertCurrent(),
+            },
+          },
+          async (binding) => {
+            const rows = await binding.actor.storage.read(
+              {
+                type: "session.usage.snapshot",
+                input: { sessionIds: [marker.sessionId], includeEvents: true },
+              },
+              binding.authority,
+            );
+            return (rows[0]?.events ?? []).map(({ eventJson }): unknown => JSON.parse(eventJson));
+          },
+        )) ?? [];
     } else {
       events = await loadSessionTranscriptEvents(marker);
     }
     for (const event of selectVisibleTranscriptEvents(events)) {
-      incognito?.actor.assertCurrent();
-      incognito?.authority.assertCurrent();
       if (isRecord(event)) {
         yield event;
       }
     }
-    incognito?.actor.assertCurrent();
-    incognito?.authority.assertCurrent();
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
@@ -490,10 +479,9 @@ async function* readTranscriptRecords(
 
 async function* readTranscriptRecordsBestEffort(
   filePath: string,
-  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   try {
-    yield* readTranscriptRecords(filePath, incognito);
+    yield* readTranscriptRecords(filePath);
   } catch (error) {
     if (parseSqliteSessionFileMarker(filePath)) {
       throw error;
@@ -507,7 +495,6 @@ export async function resolveUsageSessionSource(input: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
-  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -515,7 +502,7 @@ export async function resolveUsageSessionSource(input: {
     storePath: string;
   };
 }): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
-  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
+  const params = input;
   const signal = getAsyncWorkSignal();
   const assertCurrent = () => signal?.throwIfAborted();
   assertCurrent();
@@ -537,48 +524,33 @@ export async function resolveUsageSessionSource(input: {
     ) {
       return undefined;
     }
-    const memory = getSessionActorStorageBinding({ agentId, sessionKey, storePath });
+    const authority = { assertCurrent, authorize() {} };
+    const memory = captureSessionActorStorageOwner({ agentId, sessionKey, storePath }, authority);
     if (memory) {
-      const entry = await memory.actor.storage!.read(
-        { type: "session.entry.read", input: {} },
-        memory.authority,
+      return withSessionActorStorage(
+        { agentId, sessionKey, storePath },
+        {
+          authority: memory.authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+        },
+        async (binding) => {
+          const entry = await binding.actor.storage.read(
+            { type: "session.entry.read", input: {} },
+            binding.authority,
+          );
+          if (entry && entry.sessionId !== targetSessionId) {
+            return undefined;
+          }
+          return {
+            entry,
+            sessionFile: formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: targetSessionId,
+              storePath: binding.path,
+            }),
+          };
+        },
       );
-      if (entry && entry.sessionId !== targetSessionId) {
-        return undefined;
-      }
-      return {
-        entry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: targetSessionId,
-          storePath: memory.path,
-        }),
-      };
-    }
-    if (params.incognito) {
-      const { actor, authority } = params.incognito;
-      const selected = params.incognito.target;
-      if (
-        actor.agentId !== agentId ||
-        actor.path !== path.resolve(storePath) ||
-        (selected && (selected.sessionKey !== sessionKey || selected.sessionId !== targetSessionId))
-      ) {
-        throw new Error("Usage session source belongs to another actor");
-      }
-      params.incognito.retainSource?.(sessionKey);
-      const read = await actor.sessions.read(authority, { sessionKey }, signal);
-      if (read.entry && read.entry.sessionId !== targetSessionId) {
-        return undefined;
-      }
-      read.claim.assertCurrent();
-      return {
-        entry: read.entry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: targetSessionId,
-          storePath: actor.path,
-        }),
-      };
     }
     return withSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath, projection: "list" },

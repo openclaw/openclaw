@@ -6,16 +6,7 @@ import type {
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeMessageStop() {
   return claudeStreamEvent({ type: "message_stop" });
@@ -26,14 +17,6 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
     type: "content_block_start",
     ...(index === undefined ? {} : { index }),
     content_block: contentBlock,
-  });
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
   });
 }
 
@@ -361,6 +344,8 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(parser.getOutput()).toEqual({
       text: "Checking tools. Done.",
+      // Diagnostics record only the post-tool message as the final answer.
+      rawFinalText: "Done.",
       sessionId: "gemini-session-stream",
       usage: {
         input: 4,
@@ -480,6 +465,41 @@ describe("createCliJsonlStreamingParser events", () => {
       sessionId: "custom-successor",
       usage: { input: 3, output: 2, total: 5 },
     });
+  });
+
+  it("replaces an earlier final message when a later custom result supplies the answer", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl" },
+      providerId: "acme-cli",
+      parseJsonlEvent: (line) => {
+        const event = JSON.parse(line) as { type: string; text?: string };
+        if (event.type === "text") {
+          return { kind: "text", text: event.text ?? "" };
+        }
+        if (event.type === "tool-start") {
+          return { kind: "toolStart", toolCallId: "call-1", name: "search", args: {} };
+        }
+        return { kind: "result", text: event.text };
+      },
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        { type: "text", text: "Checking. " },
+        { type: "tool-start" },
+        { type: "text", text: "Done." },
+        { type: "result" },
+      )}\n`,
+    );
+    expect(parser.getOutput()?.rawFinalText).toBe("Done.");
+
+    parser.push(`${joinJsonlFrames({ type: "result", text: "Replacement answer" })}\n`);
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.text).toBe("Replacement answer");
+    expect(output?.rawFinalText).toBeUndefined();
   });
 
   it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {

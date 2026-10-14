@@ -1,6 +1,5 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatCliCommand,
   formatDocsLink,
@@ -52,19 +51,6 @@ function setZalouserAccountScopedConfig(
     accountId,
     patch: defaultPatch,
     accountPatch,
-  });
-}
-
-function setZalouserDmPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  policy: DmPolicy,
-): OpenClawConfig {
-  const resolvedAccountId = normalizeAccountId(accountId);
-  const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
-    dmPolicy: policy,
-    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
   });
 }
 
@@ -215,7 +201,7 @@ async function promptZalouserQuickstartDmPolicy(params: {
       accountId,
     });
   }
-  return setZalouserDmPolicy(cfg, accountId, policy);
+  return zalouserDmPolicy.setPolicy(cfg, policy, accountId);
 }
 
 export { zalouserSetupAdapter } from "./setup-core.js";

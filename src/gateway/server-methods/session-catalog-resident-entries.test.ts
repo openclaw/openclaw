@@ -126,7 +126,9 @@ async function withCatalog(
 }
 
 it("reads clean local catalog entries from the resident owner without SQLite", async () => {
-  await withCatalog(async ({ list }) => {
+  await withCatalog(async ({ list, setList }) => {
+    const retainedHosts = hosts([session({ pullRequest: { numbers: [1], state: "open" } })]);
+    setList(async () => retainedHosts);
     const first = await list();
     expect(first.mock.calls[0]?.[1]).toMatchObject({
       catalogs: [{ hosts: [{ sessions: [{ sessionKey: key }] }] }],
@@ -136,6 +138,12 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
     );
     const second = await list();
     expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+    const firstHost = first.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    const secondHost = second.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    expect(secondHost).toBe(firstHost);
+    expect(Object.isFrozen(firstHost)).toBe(true);
+    expect(Object.isFrozen(firstHost.sessions)).toBe(true);
+    expect(Object.isFrozen(firstHost.sessions[0])).toBe(true);
     expect(
       reads.flatMap((read) =>
         read.mock.contexts.map((statement) =>
@@ -143,6 +151,45 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
         ),
       ),
     ).toEqual([]);
+    retainedHosts[0]!.label = "Updated provider label";
+    retainedHosts[0]!.sessions[0]!.pullRequest!.numbers.push(2);
+    const mutatedSource = await list();
+    const mutatedHost = mutatedSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    expect(mutatedHost).not.toBe(firstHost);
+    expect(mutatedHost.label).toBe("Updated provider label");
+    expect(mutatedHost.sessions[0]?.pullRequest?.numbers).toEqual([1, 2]);
+    expect(firstHost.label).toBe("Fixture");
+    expect(firstHost.sessions[0]?.pullRequest?.numbers).toEqual([1]);
+    setList(async () => {
+      const freshHosts = hosts([session({ pullRequest: { numbers: [1, 2], state: "open" } })]);
+      freshHosts[0]!.label = "Updated provider label";
+      return freshHosts;
+    });
+    const freshSource = await list();
+    expect(freshSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toBe(mutatedHost);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        ...original,
+        updatedAt: 2,
+        sessionId: "replacement-instance",
+      },
+    );
+    const replaced = await list();
+    expect(replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(mutatedHost);
+    expect(
+      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.createdActor,
+    ).toMatchObject(original.createdActor);
+    expect(firstHost.sessions[0]?.createdActor).toMatchObject(original.createdActor);
+    setList(async () => hosts([session({ name: "Updated provider title" })]));
+    const renamed = await list();
+    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(
+      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0],
+    );
+    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.name).toBe(
+      "Updated provider title",
+    );
+    expect(firstHost.sessions[0]?.name).toBeUndefined();
   });
 });
 

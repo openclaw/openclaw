@@ -239,18 +239,15 @@ describe("Reef SQLite state", () => {
     },
   );
 
-  it.each(["worker", "legacy"] as const)(
-    "does not create a database for missing identity reads or store admission (%s)",
-    async (host) => {
-      const runtime = createRuntime(stateDir, host);
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  it("does not create a database for missing identity reads or store admission", async () => {
+    const runtime = createRuntime(stateDir);
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
-      await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(fs.existsSync(databasePath)).toBe(false);
-      await openStores(runtime, reefKeys());
-      expect(fs.existsSync(databasePath)).toBe(false);
-    },
-  );
+    await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(fs.existsSync(databasePath)).toBe(false);
+    await openStores(runtime, reefKeys());
+    expect(fs.existsSync(databasePath)).toBe(false);
+  });
 
   it("persists keys and registration state without creating Reef files", async () => {
     const runtime = createRuntime(stateDir);
@@ -279,49 +276,6 @@ describe("Reef SQLite state", () => {
     expect(fs.existsSync(path.join(stateDir, "data", "reef"))).toBe(false);
   });
 
-  it("retains native key and review semantics on released hosts without operations", async () => {
-    const runtime = createRuntime(stateDir, "legacy");
-    const creation = generateAndStoreKeys(runtime);
-    const rawKeys = runtime.state.openSyncKeyedStore({
-      namespace: "identity",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    });
-    expect(rawKeys.lookup("keys")).toBeDefined();
-    const keys = await creation;
-    await expect(loadKeys(runtime)).resolves.toEqual(keys);
-    await expect(loadKeys(createRuntime(stateDir))).resolves.toEqual(keys);
-
-    const reviews = new ReviewApprovalStore(runtime, 1);
-    const first = reviewRequest("first", "1".repeat(64));
-    const second = reviewRequest("second", "2".repeat(64));
-    await reviews.request(first);
-    const revoked = new Error("owner revoked");
-    await expect(
-      reviews.decide(first.approvalDigest, true, () => {
-        throw revoked;
-      }),
-    ).rejects.toBe(revoked);
-    await expect(reviews.lookupDecision(first.approvalDigest)).resolves.toBe("pending");
-    await reviews.decide(first.approvalDigest, false);
-    await reviews.request(second);
-    await expect(new ReviewApprovalStore(createRuntime(stateDir), 1).list()).resolves.toEqual([
-      second,
-    ]);
-
-    runtime.state
-      .openSyncKeyedStore({
-        namespace: "durable-migration",
-        maxEntries: 1,
-        overflowPolicy: "reject-new",
-      })
-      .register("legacy-files", { pending: true });
-    await expect(loadKeys(runtime)).rejects.toThrow("durable state migration is incomplete");
-    await expect(openStores(runtime, keys)).rejects.toThrow(
-      "durable state migration is incomplete",
-    );
-  });
-
   it.each(["keys", "review", "cursor"] as const)(
     "never switches %s to native storage after a current-host operation failure",
     async (operation) => {
@@ -346,30 +300,27 @@ describe("Reef SQLite state", () => {
     },
   );
 
-  it.each(["worker", "legacy"] as const)(
-    "atomically rejects redirecting stored identity keys to another handle (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      await bindIdentity(runtime, "molty");
+  it("atomically rejects redirecting stored identity keys to another handle", async () => {
+    const runtime = createRuntime(stateDir);
+    await bindIdentity(runtime, "molty");
 
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      expect(await loadReefIdentityBinding(runtime)).toEqual({
-        handle: "molty",
+    await expect(
+      reserveReefIdentityBinding(runtime, {
+        handle: "other",
         relayUrl: "https://reefwire.ai",
-      });
-      await expect(
-        assertReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-    },
-  );
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    await expect(
+      assertReefIdentityBinding(runtime, {
+        handle: "other",
+        relayUrl: "https://reefwire.ai",
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+  });
 
   it("does not generate replacement keys when an identity is bound during the worker write", async () => {
     const runtime = createRuntime(stateDir);
@@ -386,104 +337,90 @@ describe("Reef SQLite state", () => {
     });
   });
 
-  it.each(["worker", "legacy"] as const)(
-    "conditionally releases or finalizes an identity reservation (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      const released = await reserveReefIdentityBinding(runtime, {
-        handle: "first",
-        relayUrl: "https://reefwire.ai",
-      });
-      await releaseReefIdentityReservation(runtime, released);
-      expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
+  it("conditionally releases or finalizes an identity reservation", async () => {
+    const runtime = createRuntime(stateDir);
+    const released = await reserveReefIdentityBinding(runtime, {
+      handle: "first",
+      relayUrl: "https://reefwire.ai",
+    });
+    await releaseReefIdentityReservation(runtime, released);
+    expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
 
-      const finalized = await reserveReefIdentityBinding(runtime, {
-        handle: "second",
-        relayUrl: "https://reefwire.ai",
-      });
-      await finalizeReefIdentityBinding(runtime, finalized);
-      await releaseReefIdentityReservation(runtime, finalized);
-      expect(await loadReefIdentityBinding(runtime)).toEqual({
-        handle: "second",
-        relayUrl: "https://reefwire.ai",
-      });
-    },
-  );
+    const finalized = await reserveReefIdentityBinding(runtime, {
+      handle: "second",
+      relayUrl: "https://reefwire.ai",
+    });
+    await finalizeReefIdentityBinding(runtime, finalized);
+    await releaseReefIdentityReservation(runtime, finalized);
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
+      handle: "second",
+      relayUrl: "https://reefwire.ai",
+    });
+  });
 
-  it.each(["worker", "legacy"] as const)(
-    "does not transfer a live reservation to a concurrent retry (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      const reservation = await reserveReefIdentityBinding(runtime, {
+  it("does not transfer a live reservation to a concurrent retry", async () => {
+    const runtime = createRuntime(stateDir);
+    const reservation = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+
+    await expect(
+      reserveReefIdentityBinding(runtime, {
         handle: "molty",
         relayUrl: "https://reefwire.ai",
-      });
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    await finalizeReefIdentityBinding(runtime, reservation);
+    expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
+  });
 
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "molty",
+  it("allows only the same binding to take over an expired reservation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
+    const runtime = createRuntime(stateDir);
+    const original = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+
+    await expect(
+      reserveReefIdentityBinding(runtime, {
+        handle: "other",
+        relayUrl: "https://reefwire.ai",
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    const retry = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    await releaseReefIdentityReservation(runtime, original);
+    await expect(finalizeReefIdentityBinding(runtime, original)).rejects.toThrow(
+      "reservation was replaced",
+    );
+    await finalizeReefIdentityBinding(runtime, retry);
+    expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
+  });
+
+  it("reserves only one identity when registrations overlap", async () => {
+    const outcomes = await Promise.allSettled(
+      ["first", "second"].map((handle) =>
+        reserveReefIdentityBinding(createRuntime(stateDir), {
+          handle,
           relayUrl: "https://reefwire.ai",
         }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      await finalizeReefIdentityBinding(runtime, reservation);
-      expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "allows only the same binding to take over an expired reservation (%s)",
-    async (registrationHost) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
-      const runtime = createRuntime(stateDir, registrationHost);
-      const original = await reserveReefIdentityBinding(runtime, {
-        handle: "molty",
-        relayUrl: "https://reefwire.ai",
-      });
-      vi.advanceTimersByTime(10 * 60_000 + 1);
-
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      const retry = await reserveReefIdentityBinding(runtime, {
-        handle: "molty",
-        relayUrl: "https://reefwire.ai",
-      });
-      await releaseReefIdentityReservation(runtime, original);
-      await expect(finalizeReefIdentityBinding(runtime, original)).rejects.toThrow(
-        "reservation was replaced",
-      );
-      await finalizeReefIdentityBinding(runtime, retry);
-      expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "reserves only one identity when registrations overlap (%s)",
-    async (registrationHost) => {
-      const outcomes = await Promise.allSettled(
-        ["first", "second"].map((handle) =>
-          reserveReefIdentityBinding(createRuntime(stateDir, registrationHost), {
-            handle,
-            relayUrl: "https://reefwire.ai",
-          }),
-        ),
-      );
-      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-      const winner = outcomes.find((outcome) => outcome.status === "fulfilled");
-      if (winner?.status !== "fulfilled") {
-        throw new Error("expected one registration to reserve the identity");
-      }
-      await finalizeReefIdentityBinding(createRuntime(stateDir, registrationHost), winner.value);
-      expect(await loadReefIdentityBinding(createRuntime(stateDir, registrationHost))).toEqual(
-        winner.value.binding,
-      );
-    },
-  );
+      ),
+    );
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    const winner = outcomes.find((outcome) => outcome.status === "fulfilled");
+    if (winner?.status !== "fulfilled") {
+      throw new Error("expected one registration to reserve the identity");
+    }
+    await finalizeReefIdentityBinding(createRuntime(stateDir), winner.value);
+    expect(await loadReefIdentityBinding(createRuntime(stateDir))).toEqual(winner.value.binding);
+  });
 
   it.each(["observe", "compareAndApply"] as const)(
     "does not switch to native callbacks when worker %s fails",
@@ -680,69 +617,6 @@ describe("Reef SQLite state", () => {
             ? reviews.lookupDecision(reviewRequest().approvalDigest)
             : reviews.list(),
       ).rejects.toBe(refusal);
-    },
-  );
-
-  it.each(["lookup", "entries"] as const)(
-    "rejects borrowed review %s results after channel revocation",
-    async (method) => {
-      const runtime = createRuntime(stateDir);
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const read = vi.fn(async () => {
-        entered.resolve();
-        await finish.promise;
-        return method === "lookup" ? { approved: true } : [];
-      });
-      runtime.state.openKeyedStore = vi.fn().mockReturnValue({ [method]: read });
-      const controller = new AbortController();
-      const authority = createReefRuntimeAuthority(controller.signal);
-      const reviews = new ReviewApprovalStore(runtime, undefined, authority.signal);
-      activateReviewStore(authority, runtime, reviews);
-      const listReviews = registerReviewListCommand();
-      const pending = method === "lookup" ? reviews.lookupDecision("digest") : listReviews();
-      const revoked = new Error("review account revoked");
-      const rejected = expect(pending).rejects.toBe(revoked);
-      try {
-        await entered.promise;
-        controller.abort(revoked);
-        finish.resolve();
-        await rejected;
-        await expect(
-          method === "lookup" ? reviews.lookupDecision("digest") : reviews.list(),
-        ).rejects.toBe(revoked);
-        expect(read).toHaveBeenCalledOnce();
-      } finally {
-        finish.resolve();
-        authority.release();
-        await pending.catch(() => {});
-      }
-    },
-  );
-
-  it.each(["lookup", "entries"] as const)(
-    "uses the required async %s contract without optional capabilities or native fallback",
-    async (method) => {
-      const runtime = createRuntime(stateDir);
-      const native = runtime.state.openSyncKeyedStore({
-        namespace: REEF_REVIEWS_NAMESPACE,
-        maxEntries: 2_000,
-        overflowPolicy: "reject-new",
-      });
-      const nativeLookup = vi.spyOn(native, "lookup");
-      const nativeEntries = vi.spyOn(native, "entries");
-      runtime.state.openSyncKeyedStore = vi.fn().mockReturnValue(native);
-      const value = method === "lookup" ? { approved: false } : [];
-      const read = vi.fn().mockResolvedValue(value);
-      runtime.state.openKeyedStore = vi.fn().mockReturnValue({ [method]: read });
-      const reviews = new ReviewApprovalStore(runtime);
-      const run = () => (method === "lookup" ? reviews.lookupDecision("digest") : reviews.list());
-      await expect(run()).resolves.toEqual(method === "lookup" ? { approved: false } : []);
-      const failed = new Error("review read failed");
-      read.mockRejectedValueOnce(failed);
-      await expect(run()).rejects.toBe(failed);
-      expect(nativeLookup).not.toHaveBeenCalled();
-      expect(nativeEntries).not.toHaveBeenCalled();
     },
   );
 
