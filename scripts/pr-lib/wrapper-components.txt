@@ -1033,6 +1033,7 @@ src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
+src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
