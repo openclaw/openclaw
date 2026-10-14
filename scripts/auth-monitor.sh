@@ -3,7 +3,6 @@
 # Run via cron or systemd timer to get native login alerts and
 # proactive notifications before OpenClaw-managed credentials expire.
 #
-# For cron, set PATH to include the openclaw and node executable directories.
 # Suggested cron: */30 * * * * /path/to/openclaw/scripts/auth-monitor.sh
 #
 # Environment variables:

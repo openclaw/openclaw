@@ -128,8 +128,6 @@ if [ "$STATUS_AVAILABLE" -eq 1 ]; then
         openclaw_status="OK:native"
     elif [ "$claude_status" = "MISSING" ]; then
         openclaw_status="MISSING"
-    elif [ "$(echo "$STATUS_JSON" | jq -r '(.auth.missingProvidersInUse // []) | index("anthropic") != null')" = "true" ]; then
-        openclaw_status="MISSING"
     fi
 fi
 
@@ -196,7 +194,7 @@ case "$openclaw_status" in
     UNKNOWN) echo -e "  Status: ${YELLOW}UNKNOWN${NC}" ;;
     MISSING)
         echo -e "  Status: ${RED}NOT FOUND${NC}"
-        if [ "$best_profile" != "none" ] || [ "$claude_status" != "MISSING" ]; then
+        if [ "$best_profile" != "none" ]; then
             echo "  Action needed: Configure managed Anthropic authentication with 'openclaw models auth'."
         fi
         ;;

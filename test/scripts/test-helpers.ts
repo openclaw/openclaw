@@ -62,8 +62,6 @@ if (args.includes("-n")) {
 } else if (query.includes(".auth.runtimeAuthRoutes")) {
   print(JSON.stringify((input.auth?.runtimeAuthRoutes ?? []).find((route) =>
     route.nativeAuth?.runtimeId === "claude-cli" && route.nativeAuth?.mode === "oauth") ?? {}));
-} else if (query.includes(".auth.missingProvidersInUse")) {
-  print((input.auth?.missingProvidersInUse ?? []).includes("anthropic"));
 } else if (query.includes(".nativeAuth.readiness")) {
   print(input.nativeAuth?.readiness ?? "unknown");
 } else if (query.includes(".nativeAuth.message")) {
