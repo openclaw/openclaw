@@ -5,7 +5,8 @@ const CLI_BACKEND_PROVIDER = "proof-cli";
 
 // isCliProvider resolves CLI backends from the plugin runtime registry, which
 // is empty in a unit test, so the direct-CLI route case needs one registered.
-vi.mock("../plugins/cli-backends.runtime.js", () => ({
+vi.mock("../plugins/cli-backends.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/cli-backends.runtime.js")>()),
   resolveRuntimeCliBackends: () => [{ id: CLI_BACKEND_PROVIDER, pluginId: "proof-plugin" }],
 }));
 import type { AuthProfileStore } from "./auth-profiles/types.js";
