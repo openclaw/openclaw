@@ -385,6 +385,38 @@ describe("persistPluginInstall enablement", () => {
     ).toMatchObject({ "needs-config": npmInstall("needs-config@1.0.0") });
   });
 
+  it("enables a mixed-case plugin id whose settings use the lowercase policy key", async () => {
+    const warn = vi.fn();
+    const baseConfig = {
+      plugins: { entries: { myplug: { enabled: true, config: { token: "abc" } } } },
+    } as OpenClawConfig;
+    setManifests(createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }));
+
+    const next = await persistNpm("MyPlug", baseConfig, { persistenceLogger: { warn } });
+
+    expect(next.plugins?.entries).toEqual({
+      myplug: { enabled: true, config: { token: "abc" } },
+    });
+    expect(enablePluginInConfigMock).toHaveBeenCalledWith(expect.anything(), "MyPlug", {
+      updateChannelConfig: false,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("stages a mixed-case plugin id disabled under its lowercase policy key", async () => {
+    const baseConfig = {
+      plugins: { deny: ["myplug"], entries: { myplug: { hooks: { timeoutMs: 5_000 } } } },
+    } as OpenClawConfig;
+    setManifests(createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }));
+
+    const next = await persistNpm("MyPlug", baseConfig);
+
+    expect(next).toEqual({
+      plugins: { entries: { myplug: { enabled: false, hooks: { timeoutMs: 5_000 } } } },
+    });
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+  });
+
   it.each(["schema", "disabled config"] as const)("rejects invalid %s", async (kind) => {
     const malformedSchema = kind === "schema";
     const pluginId = malformedSchema ? "broken-schema" : "needs-config";
