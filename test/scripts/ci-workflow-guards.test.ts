@@ -2904,7 +2904,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             key: "barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}",
           });
           expect(step.if).toBe(
-            "${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}",
+            "${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}",
           );
           const workflow = readWorkflow(file);
           expect(workflow.jobs["stale-pull-requests"].concurrency).toEqual({
