@@ -22,6 +22,10 @@ existing behavior, separate from the native macOS app. See
 
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
 
+To compile OpenClaw into an executable with a companion runtime directory, see
+[Standalone builds](/install/standalone). That build uses the production-pinned
+OpenClaw Bun fork and supports JIT and bytecode modes.
+
 ## Install
 
 <Steps>

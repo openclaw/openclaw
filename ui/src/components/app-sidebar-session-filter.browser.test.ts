@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -83,9 +83,52 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const { sidebar, page } = await mountFilters(width);
       sidebar.dir = direction;
       const occlusion: boolean[] = [];
+      const started = performance.now();
+      const surfaceSelector = ".picker-select__menu,.oc-overlay,.tooltip-popup";
+      const diagnostics: {
+        event: string;
+        elapsed: number;
+        occluded?: boolean;
+        id?: string;
+        phase?: string;
+      }[] = [];
+      const record = (event: string, occluded?: boolean, surface?: Element) => {
+        if (diagnostics.length < 32) {
+          diagnostics.push({
+            event,
+            elapsed: Math.round(performance.now() - started),
+            occluded,
+            id: surface?.id,
+            phase: surface?.getAttribute("data-phase") ?? undefined,
+          });
+        }
+      };
+      const lifecycle = (event: Event) => {
+        if (event.target instanceof Element && event.target.matches(surfaceSelector)) {
+          record(event.type, undefined, event.target);
+        }
+      };
+      const events = ["overlay-show", "overlay-hide", "overlay-after-show", "overlay-after-hide"];
+      for (const event of events) {
+        document.addEventListener(event, lifecycle, true);
+      }
+      onTestFinished(() => {
+        for (const event of events) {
+          document.removeEventListener(event, lifecycle, true);
+        }
+      });
+      onTestFailed(() => {
+        console.info(
+          "sidebar overlay diagnostics",
+          JSON.stringify({ width, direction, diagnostics }),
+        );
+      });
       onTestFinished(
         subscribeNativeOverlayOcclusion(
-          (value) => occlusion.push(value),
+          (value) => {
+            occlusion.push(value);
+            record("occlusion", value);
+          },
           () => new DOMRect(0, 0, innerWidth, innerHeight),
         ),
       );
@@ -126,6 +169,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
+      // Keep a previous case's pointer from opening hover surfaces during keyboard navigation.
+      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       (owners.element() as HTMLElement).focus();
       await userEvent.keyboard("{Enter}");
       await expect

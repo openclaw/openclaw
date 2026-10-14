@@ -4,12 +4,18 @@ import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+// Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
+// the chat footer shows it alone, so it starts with a capital ("Just now").
+function capitalizeStandaloneLabel(value: string): string {
+  return value.charAt(0).toLocaleUpperCase(getLocale()) + value.slice(1);
+}
 
 function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
@@ -38,11 +44,11 @@ function prepareTimestamp(timestamp: number) {
     : label;
   const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
-  // Slightly-future messages clamp to "just now"; older or distant-future ones use a date.
+  // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
   const relativeLabel = !valid
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
-      ? formatTimeAgo(Math.max(0, ageMs))
+      ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
       : date.toLocaleDateString([], {
           month: "short",
           day: "numeric",
