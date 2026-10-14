@@ -438,6 +438,15 @@ already has the same terminal status is reused unchanged. Completion proof witho
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
 
+Completion validates its proof, artifacts, and notification before saving the card.
+A validation failure leaves the card unchanged. Completion notifications preserve
+the full execution run ID, including IDs longer than 120 characters. Run IDs are limited
+to 512 characters across execution admission, launch metadata, worker logs, and
+notification subscriptions. Use a shorter ID if admission rejects it; IDs are never
+truncated. Metadata trimming preserves the completion's new notification and proof,
+discarding older history as needed. If those records cannot fit, completion fails
+without saving the card.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`

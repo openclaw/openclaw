@@ -53,8 +53,7 @@ export class DraftPlaceBrowser {
   private debouncedProjectQuery = "";
   private browserOpenValue = false;
   private browserProjectPathValue: string | null = null;
-  private browserRegistrationId: number | null = null;
-  private browserRegistrationCounter = 0;
+  private browserRegistration: object | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
   // Independent hide animations can overlap; keep every trigger fenced until its own completes.
@@ -268,7 +267,7 @@ export class DraftPlaceBrowser {
   }
 
   get browserRegistering(): boolean {
-    return this.browserRegistrationId !== null;
+    return this.browserRegistration !== null;
   }
 
   popoverOpen(kind: DraftPickerKind): boolean {
@@ -451,15 +450,12 @@ export class DraftPlaceBrowser {
     ) {
       return;
     }
-    const generation = this.browser.listingGeneration;
-    const id = ++this.browserRegistrationCounter;
-    this.browserRegistrationId = id;
-    // Navigation/loading/errors hide the project path; IDs retire reset or superseded work.
-    // Plain filtering preserves both, so a valid registration can finish.
-    // A replaced listing retires registration even when the same folder is loaded again.
+    const listing = this.browser.listing;
+    const operation = {};
+    this.browserRegistration = operation;
     const isCurrentRegistration = () =>
-      this.browserRegistrationId === id &&
-      this.browser.listingGeneration === generation &&
+      this.browserRegistration === operation &&
+      this.browser.listing === listing &&
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
@@ -480,8 +476,8 @@ export class DraftPlaceBrowser {
         this.browser.error = formatUiError(error);
       }
     } finally {
-      if (this.browserRegistrationId === id) {
-        this.browserRegistrationId = null;
+      if (this.browserRegistration === operation) {
+        this.browserRegistration = null;
         this.callbacks.requestUpdate();
       }
     }
@@ -548,7 +544,7 @@ export class DraftPlaceBrowser {
     this.browser.reset();
     this.browserOpenValue = false;
     this.browserProjectPathValue = null;
-    this.browserRegistrationId = null;
+    this.browserRegistration = null;
     if (closePopover) {
       this.openPopoverValue = null;
     }

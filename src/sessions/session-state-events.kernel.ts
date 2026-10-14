@@ -303,7 +303,7 @@ export function recordSessionStateEventInDatabase(
       .insertInto("session_state_events")
       .values(bindSessionStateEvent(input, occurredAt))
       .onConflict((conflict) => conflict.column("dedupe_key").doNothing())
-      .returning("sequence"),
+      .returningAll(),
   );
   const insertedSequence = insert?.sequence;
   if (insertedSequence === undefined) {
@@ -405,14 +405,7 @@ export function recordSessionStateEventInDatabase(
     });
   }
 
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSessionStateKysely(db)
-      .selectFrom("session_state_events")
-      .selectAll()
-      .where("sequence", "=", insertedSequence),
-  );
-  return { row, notices };
+  return { row: insert, notices };
 }
 
 /** The caller owns the transaction and schedules retention after notice publication. */

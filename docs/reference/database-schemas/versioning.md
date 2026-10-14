@@ -659,7 +659,9 @@ Older same-schema readers ignore the new tables but cannot provide managed-libra
 
 Recent version migrations are separate from same-version repair. Agent schema
 25 and later advances leave unrelated additive indexes to the writable repair
-owner. Shared-state schema 20 and 21 advances run only their pending version
+owner. Missing startup columns required by current session readers are still
+installed before an upgraded store is exposed; their tables belong in the
+complete migration scope. Shared-state schema 20 and 21 advances run only their pending version
 steps and install indexes for those tables when the source needs no unrelated
 schema repair. Older sources and sources requiring repair retain the historical
 runner and full backup.

@@ -151,6 +151,28 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
+    ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
+    [
+      "SQLite source did not stabilize",
+      " after 3 read-only inspection attempts: /private/x.sqlite",
+    ],
+    ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
+    ["SQLite WAL commit publication could not be verified", ": /private/example/a.sqlite"],
+    [
+      "SQLite snapshot hash mismatch",
+      ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
+    ],
+  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
+        env: {},
+        stateDir: tempDir,
+      }),
+    ).toBe(cause);
+  });
+
+  it.each([
     "ERR_PNPM_PRIVATE_CUSTOMER",
     "ERR_OSSL_PRIVATE_CUSTOMER",
     "EPRIVATE_CUSTOMER",

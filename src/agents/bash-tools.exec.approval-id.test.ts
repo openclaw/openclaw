@@ -23,6 +23,8 @@ const createExecTool = (
 ): ReturnType<typeof createExecToolImpl> =>
   createExecToolImpl({ agentId: "main", approvalRunningNoticeMs: 0, ...defaults });
 
+const localSpawn = vi.hoisted(() => vi.fn());
+
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
   readGatewayCallOptions: vi.fn(() => ({})),
@@ -123,6 +125,7 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
+// mock-isolation: Keep the shared supervisor isolated while routing fixtures capture local spawns.
 vi.mock("../process/supervisor/index.js", async () => {
   const { createProcessSupervisor } = await import("../process/supervisor/supervisor.js");
   const nativeSupervisor = createProcessSupervisor();
@@ -142,6 +145,7 @@ vi.mock("../process/supervisor/index.js", async () => {
   return {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
+        localSpawn(input);
         const command = "argv" in input ? input.argv.join(" ") : "";
         const inlineOutput = ["delayed-ok", "approval-one", "approval-two", "allow-always"].find(
           (value) => command.includes(value),
@@ -315,6 +319,47 @@ describe("exec approvals", () => {
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
+  });
+
+  it.each([undefined, "node"] as const)(
+    "routes a named node with host=%s through node execution",
+    async (host) => {
+      const node = nodeFixture("node-ok");
+      mockGateway({ "node.invoke": node.handle });
+      const tool = createExecTool({ security: "full", ask: "off" });
+      const result = await tool.execute("named-node", {
+        command: "echo node-ok",
+        node: "node-1",
+        host,
+      });
+      expect(result.details).toMatchObject({ status: "completed", nodeId: "node-1" });
+      expect(getResultText(result)).toContain("node-ok");
+      expect(node.runs).toHaveLength(1);
+      expect(localSpawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["gateway", "sandbox", "auto"] as const)(
+    "rejects a named node with conflicting host=%s before execution",
+    async (host) => {
+      const tool = createExecTool({ security: "full", ask: "off" });
+      await expect(
+        tool.execute("conflicting-node", { command: "echo ok", node: "node-1", host }),
+      ).rejects.toThrow(
+        `exec node="node-1" conflicts with host="${host}"; omit host or use host="node" to run on this node.`,
+      );
+      expect(localSpawn).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps default gateway execution when no node is named", async () => {
+    const tool = createExecTool({ security: "full", ask: "off" });
+    const result = await tool.execute("default-host", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(result.details).not.toHaveProperty("nodeId");
+    expect(localSpawn).toHaveBeenCalledOnce();
+    expect(gatewayParams("node.invoke")).toEqual([]);
   });
 
   it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
