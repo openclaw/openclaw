@@ -25,6 +25,7 @@ import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { createChatErrorState } from "./chat-error-state.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
@@ -208,7 +209,7 @@ export function createPageState(
       })
       ? appConfig.assistantIdentity
       : null;
-  const state = {
+  const state = Object.assign(createChatErrorState(), {
     uploadConfig: context.config,
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
@@ -265,8 +266,6 @@ export function createPageState(
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
-    lastError: null,
-    chatError: null,
     chatRunError: null,
     agentsError: null,
     chatStreamSegments: [],
@@ -357,7 +356,7 @@ export function createPageState(
       ),
     sessionWorkspaceState: undefined,
     querySelector: page.querySelector.bind(page),
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
