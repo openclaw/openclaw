@@ -192,8 +192,28 @@ it("settles scoped writes without host metadata round trips after peer registrat
       databasePath: location,
       input: undefined,
     });
+    const predecessor = store!.execute({ type: "admitted", input: undefined });
     let first = readSqliteDatabaseScopedWriteToken(database, "first");
     const second = readSqliteDatabaseScopedWriteToken(database, "second");
+    let current = true;
+    const refused = new Error("Queued scope lost authority");
+    const rejected = broker.runOperation(
+      store!,
+      (scope) =>
+        scope.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (-1)" } }),
+      undefined,
+      () => {
+        if (!current) {
+          throw refused;
+        }
+      },
+    );
+    current = false;
+    const outcomes = await Promise.allSettled([predecessor, rejected]);
+    expect(outcomes[0]!.status).toBe("fulfilled");
+    expect(outcomes[1]).toEqual({ status: "rejected", reason: refused });
+    // A new publication must not acknowledge scopes captured by a refused dispatch.
+    readSqliteDatabaseScopedWriteToken(database, "after-rejection");
     await store!.execute({
       type: "writeRows",
       input: { sql: "INSERT INTO original VALUES (2)", sessionKeys: ["second"] },

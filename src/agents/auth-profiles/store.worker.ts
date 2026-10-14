@@ -15,7 +15,6 @@ import { personalCredentialPublication } from "../../state/user-model-account-au
 import {
   encodeUserModelAuthProfile,
   readUserModelAuthProfile,
-  readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
@@ -33,7 +32,7 @@ import type {
   AuthProfileUsageResult,
   AuthStoreUpdateInput,
 } from "./store.worker-contract.js";
-import type { AuthProfileCredential, AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
+import type { AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 import type {
   PersonalAuthProfileUsageReduction,
@@ -59,28 +58,6 @@ export const authProfileOperations = {
     );
   },
   "authProfiles.bootstrap": bootstrapSharedAuthStoreInWorker,
-  "authProfiles.personalAccept": (
-    input: { profileId: string; credential: AuthProfileCredential },
-    { stateOptions },
-  ): boolean => {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        if (
-          !isDeepStrictEqual(
-            readUserModelAuthProfileInDatabase(db, input.profileId)?.credential,
-            input.credential,
-          )
-        ) {
-          return false;
-        }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return true;
-      },
-      stateOptions(),
-      { operationLabel: "auth-profiles.personal-accept" },
-    );
-  },
   "authProfiles.personalReplace": (
     input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile },
     { open, stateOptions },
