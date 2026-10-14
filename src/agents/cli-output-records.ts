@@ -380,26 +380,12 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
-// Stop-hook feedback arrives between the rejected message and its rewrite.
-// Tool-result records and subagent traffic must retain their ordinary boundaries.
+// User text can be replayed stdin; only the hook's rejection notification is a boundary.
 export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
-  if (parsed.type === "system") {
-    return (
-      parsed.subtype === "notification" &&
-      typeof parsed.key === "string" &&
-      parsed.key.startsWith("stop-hook")
-    );
-  }
-  if (parsed.type !== "user" || !isRecord(parsed.message)) {
-    return false;
-  }
-  const content = parsed.message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
   return (
-    content.some((block) => isRecord(block) && block.type === "text") &&
-    !content.some((block) => isRecord(block) && isClaudeToolResultBlockType(block.type))
+    parsed.type === "system" &&
+    parsed.subtype === "notification" &&
+    parsed.key === "stop-hook-error"
   );
 }
 

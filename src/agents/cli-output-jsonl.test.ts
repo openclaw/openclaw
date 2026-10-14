@@ -124,10 +124,15 @@ describe("parseCliJsonl", () => {
   ];
 
   it.each([
-    { name: "user feedback", feedback: [stopHookFeedback], rewrite: "B", expected: "B" },
+    {
+      name: "Stop-hook rejection before a tool",
+      feedback: [stopHookFeedback, stopHookNotification],
+      rewrite: "B",
+      expected: "B",
+    },
     {
       name: "rewrite without a tool",
-      feedback: [stopHookFeedback],
+      feedback: [stopHookFeedback, stopHookNotification],
       rewrite: "B",
       expected: "B",
       tool: false,
@@ -146,9 +151,29 @@ describe("parseCliJsonl", () => {
       expected: "A\n\nB",
     },
     {
+      name: "replayed user steering",
+      feedback: [
+        {
+          type: "user",
+          isReplay: true,
+          parent_tool_use_id: null,
+          message: { role: "user", content: [{ type: "text", text: "Check README.md too." }] },
+        },
+      ],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+    {
+      name: "user text without a rejection notification",
+      feedback: [stopHookFeedback],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+    {
       name: "subagent feedback and unrelated notification",
       feedback: [
         { ...stopHookFeedback, parent_tool_use_id: "subagent-1" },
+        { ...stopHookNotification, parent_tool_use_id: "subagent-1" },
         { ...stopHookNotification, key: "tool-progress" },
       ],
       rewrite: "B",
@@ -182,11 +207,13 @@ describe("parseCliJsonl", () => {
         claudeTextDelta("A"),
         claudeStreamEvent({ type: "message_stop" }),
         stopHookFeedback,
+        stopHookNotification,
         ...toolRoundTrip("read-1"),
         claudeMessageStart("second-draft"),
         claudeTextDelta("B"),
         claudeStreamEvent({ type: "message_stop" }),
         stopHookFeedback,
+        stopHookNotification,
         ...toolRoundTrip("read-2"),
         claudeMessageStart("rewrite"),
         claudeTextDelta("C"),
