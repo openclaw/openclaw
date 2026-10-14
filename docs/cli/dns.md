@@ -8,12 +8,13 @@ title: "DNS"
 
 # `openclaw dns`
 
-DNS helpers for wide-area discovery (Tailscale + CoreDNS). Currently macOS + Homebrew CoreDNS only.
+DNS helpers for wide-area discovery (Tailscale + CoreDNS). `openclaw dns setup` prints its plan on any platform; applying that plan with `--apply` requires macOS with Homebrew CoreDNS.
 
 Related:
 
 - Gateway discovery: [Discovery](/gateway/discovery)
-- Wide-area discovery config: [Configuration](/gateway/configuration)
+- Wide-area publishing behavior: [Bonjour discovery](/gateway/bonjour)
+- Wide-area discovery config: [`discovery.wideArea`](/gateway/config-runtime#wide-area-dns-sd)
 
 ## `dns setup`
 

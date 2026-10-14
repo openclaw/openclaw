@@ -1,16 +1,15 @@
-// Skill security scanner inspects skill files and manifests for unsafe patterns.
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 type SkillScanSeverity = "info" | "warn" | "critical";
 
@@ -33,19 +32,10 @@ type SkillScanSummary = {
 };
 
 export type SkillScanOptions = {
-  excludeTestFiles?: boolean;
-  includeHiddenDirectories?: boolean;
-  includeNestedNodeModulesTestFiles?: boolean;
-  includeNodeModules?: boolean;
   includeFiles?: string[];
-  onlyIncludeFiles?: boolean;
   maxFiles?: number;
   maxFileBytes?: number;
 };
-
-// ---------------------------------------------------------------------------
-// Scannable extensions
-// ---------------------------------------------------------------------------
 
 const SCANNABLE_EXTENSIONS = new Set([
   ".js",
@@ -62,71 +52,46 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
-const DIR_ENTRY_CACHE_MAX = 5000;
-const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
-const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
+const MAX_SCAN_DIRECTORY_ENTRIES = 100_000;
+
+type FileScanIdentity = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
 
 type FileScanCacheEntry = {
-  size: number;
-  mtimeMs: number;
+  identity: FileScanIdentity;
   maxFileBytes: number;
   scanned: boolean;
   findings: SkillScanFinding[];
 };
 
 const FILE_SCAN_CACHE = new Map<string, FileScanCacheEntry>();
-type CachedDirEntry = {
-  name: string;
-  kind: "file" | "dir";
-};
 type CollectedScannableFiles = {
   files: string[];
   truncated: boolean;
 };
-type DirEntryCacheEntry = {
-  mtimeMs: number;
-  entries: CachedDirEntry[];
-};
-const DIR_ENTRY_CACHE = new Map<string, DirEntryCacheEntry>();
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-function getCachedFileScanResult(params: {
-  filePath: string;
-  size: number;
-  mtimeMs: number;
-  maxFileBytes: number;
-}): FileScanCacheEntry | undefined {
-  const cached = FILE_SCAN_CACHE.get(params.filePath);
-  if (!cached) {
-    return undefined;
-  }
-  if (
-    cached.size !== params.size ||
-    cached.mtimeMs !== params.mtimeMs ||
-    cached.maxFileBytes !== params.maxFileBytes
-  ) {
-    FILE_SCAN_CACHE.delete(params.filePath);
-    return undefined;
-  }
-  return cached;
+function fileScanIdentity({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileScanIdentity {
+  return { dev, ino, size, mtimeMs, ctimeMs };
 }
 
-function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
+function sameFileScanIdentity(left: FileScanIdentity, right: FileScanIdentity): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry) {
   pruneMapToMaxSize(FILE_SCAN_CACHE, FILE_SCAN_CACHE_MAX - 1);
   FILE_SCAN_CACHE.set(filePath, entry);
+  return { scanned: entry.scanned, findings: entry.findings };
 }
-
-function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
-  pruneMapToMaxSize(DIR_ENTRY_CACHE, DIR_ENTRY_CACHE_MAX - 1);
-  DIR_ENTRY_CACHE.set(dirPath, entry);
-}
-
-// ---------------------------------------------------------------------------
-// Rule definitions
-// ---------------------------------------------------------------------------
 
 type LineRule = {
   ruleId: string;
@@ -137,14 +102,7 @@ type LineRule = {
   requiresContext?: RegExp;
 };
 
-type SourceRule = {
-  ruleId: string;
-  severity: SkillScanSeverity;
-  message: string;
-  /** Primary pattern tested against the full source. */
-  pattern: RegExp;
-  /** Secondary context pattern; both must match for the rule to fire. */
-  requiresContext?: RegExp;
+type SourceRule = LineRule & {
   /** If set, secondary context must be within this many lines of the primary match. */
   requiresContextWindowLines?: number;
 };
@@ -154,11 +112,7 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dangerous-exec",
     severity: "critical",
     message: "Shell command execution detected (child_process)",
-    // Two call shapes both expose the bare command name in a capture group
-    // (group 1 for direct, group 2 for computed) so the downstream benign-member
-    // filter can normalize via `match[1] ?? match[2]`:
-    //   - direct:    exec(  |  cp.exec(  |  cp.spawn(
-    //   - computed:  cp["spawn"](  |  proc["exec"](
+    // Capture the method in group 1 for direct calls and group 2 for computed calls.
     pattern:
       /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(|["'](exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\s*\]\s*\(/,
     requiresContext: /child_process/,
@@ -220,25 +174,6 @@ const SOURCE_RULES: SourceRule[] = [
 const SKILL_CONTENT_RULES: SourceRule[] = [
   LITERAL_SECRET_SKILL_CONTENT_RULE,
   {
-    ruleId: "prompt-injection-ignore-instructions",
-    severity: "critical",
-    message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
-  },
-  {
-    ruleId: "prompt-injection-system",
-    severity: "critical",
-    message: "Skill text references hidden prompt layers",
-    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
-  },
-  {
-    ruleId: "prompt-injection-tool",
-    severity: "critical",
-    message: "Skill text encourages bypassing tool approval",
-    pattern:
-      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
-  },
-  {
     ruleId: "shell-pipe-to-shell",
     severity: "critical",
     message: "Skill text includes pipe-to-shell install pattern",
@@ -264,11 +199,6 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Core scanner
-// ---------------------------------------------------------------------------
-
-// Methods exported by node:child_process that the dangerous-exec rule watches.
 const CHILD_PROCESS_EXEC_METHODS = new Set([
   "exec",
   "execSync",
@@ -278,27 +208,14 @@ const CHILD_PROCESS_EXEC_METHODS = new Set([
   "execFileSync",
 ]);
 
-/**
- * Provenance-aware child_process binding collection.
- *
- * The scanner is intentionally regex-based (no AST). This helper derives call
- * bindings ONLY from actual `child_process` imports/requires so that an
- * unrelated alias bound from another module (e.g. `import { spawn as launch }
- * from "./other"`) does not become a false positive — this is the issue's
- * "avoid source-wide token correlation false positives" constraint.
- *
- * Returns two views of the same provenance:
- * - `methodAliases`: renamed method bindings (`spawn -> launch`, `exec -> run`)
- * - `namespaceAliases`: whole-namespace bindings (`cp`, `proc`, …) used for
- *   both dot calls (`cp.exec()`) and computed calls (`proc["exec"]()`).
- */
 type ChildProcessBindings = {
-  methodAliases: Map<string, string>;
+  methodAliases: Set<string>;
   namespaceAliases: Set<string>;
 };
 
+// Only imports/requires establish provenance; unrelated aliases must not match.
 function collectChildProcessBindings(source: string): ChildProcessBindings {
-  const methodAliases = new Map<string, string>();
+  const methodAliases = new Set<string>();
   const namespaceAliases = new Set<string>();
 
   // ESM named imports: import { spawn as launch, execFile } from "child_process"
@@ -317,16 +234,11 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   const collectSpecifiers = (specText: string): void => {
     for (const rawSpec of specText.split(",")) {
       const spec = rawSpec.trim();
-      if (!spec) {
-        continue;
-      }
       // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
       const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
       if (asMatch?.[1] && asMatch[2]) {
-        const original = asMatch[1];
-        const alias = asMatch[2];
-        if (CHILD_PROCESS_EXEC_METHODS.has(original)) {
-          methodAliases.set(alias, original);
+        if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
+          methodAliases.add(asMatch[2]);
         }
       }
       // Bare imported method name (`execFile`) is already matched by the
@@ -334,58 +246,33 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
     }
   };
 
-  let match: RegExpExecArray | null;
-  while ((match = esmNamed.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process esm named import specifiers"));
+  for (const pattern of [esmNamed, cjsDestructured]) {
+    for (const match of source.matchAll(pattern)) {
+      collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
+    }
   }
-  while ((match = cjsDestructured.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process cjs destructured specifiers"));
-  }
-  while ((match = esmDefault.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm default namespace"));
-  }
-  while ((match = esmNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm namespace import"));
-  }
-  while ((match = cjsNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process cjs namespace"));
+  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
+    for (const match of source.matchAll(pattern)) {
+      namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
+    }
   }
 
   return { methodAliases, namespaceAliases };
 }
 
-/**
- * Detects every call to a renamed child_process method alias on a single line
- * (e.g. `launch("node", [...])` for `spawn as launch`, `run("...")` for
- * `exec: run`). Only matches stand-alone calls (not member calls like
- * `obj.launch(`) so an unrelated `.launch()` on another object is not flagged.
- * The alias name is already provenance-scoped to child_process by the caller.
- * Returns one entry per proven alias call occurrence, ordered by position, so
- * a line with several calls (e.g. `run("a"); run("b")`) reports each of them
- * instead of only the first (ClawSweeper P1: report every aliased execution
- * call on a line).
- */
-function matchAliasedChildProcessCalls(
-  line: string,
-  methodAliases: Map<string, string>,
-): Array<{ alias: string; index: number }> {
-  const calls: Array<{ alias: string; index: number }> = [];
-  for (const alias of methodAliases.keys()) {
+// Report every standalone alias call in source order, excluding object members.
+function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>): number[] {
+  const calls: number[] = [];
+  for (const alias of methodAliases) {
     const pattern = new RegExp(`(?<![\\w.])${escapeRegExp(alias)}\\s*\\(`, "g");
     for (const callMatch of line.matchAll(pattern)) {
-      calls.push({ alias, index: callMatch.index ?? -1 });
+      calls.push(callMatch.index);
     }
   }
-  return calls.toSorted((a, b) => a.index - b.index);
+  return calls.toSorted((a, b) => a - b);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// The receiver names that, by long-standing convention, denote a direct
-// child_process namespace. Namespace aliases collected at scan time extend
-// this set so computed/exec calls through any proven binding are recognized.
+// Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
 function isBenignMemberExecMatch(
@@ -399,71 +286,31 @@ function isBenignMemberExecMatch(
     return false;
   }
 
-  const matchIndex = match.index ?? -1;
-  if (matchIndex < 0) {
+  const matchIndex = match.index;
+  const charAtMatch = line[matchIndex];
+  let receiver: string | undefined;
+  // Computed calls require a known receiver for every watched method;
+  // direct calls require it only for .exec, excluding RegExp.exec.
+  if (charAtMatch === '"' || charAtMatch === "'") {
+    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+  } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+  } else {
     return false;
   }
-
-  const charAtMatch = line[matchIndex];
-  // Computed-member call: `obj["spawn"](` / `obj["exec"](` — the match starts
-  // at the opening quote, so `line.slice(0, matchIndex)` ends at the `[`.
-  // Provenance is required for EVERY watched execution method, not only
-  // `exec`: an unrelated `worker["spawn"]()` or `bus["execSync"]()` must stay
-  // benign when the receiver is not a proven child_process namespace alias,
-  // even if `child_process` appears elsewhere in the file. Only once the
-  // receiver is a proven alias does the computed call get attributed to
-  // child_process. (This also preserves the `RegExp.exec` exclusion: a regex's
-  // `re["exec"](value)` receiver is not child_process-derived.)
-  if (charAtMatch === '"' || charAtMatch === "'") {
-    const receiverMatch = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/);
-    const receiver = receiverMatch?.[1];
-    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
-      return false;
-    }
-    return true;
-  }
-
-  // Direct dot-member call: `obj.exec(` — the match starts at `exec`. This
-  // branch only applies the long-standing `RegExp.exec` exclusion (a regex's
-  // `.exec()` is not child_process-derived) and the provenance-aware receiver
-  // check: a dot call through a collected namespace alias (e.g.
-  // `proc.exec(` for `const proc = require("child_process")` or
-  // `import * as proc from "node:child_process"`) is child_process-derived and
-  // must be reported. Other dot-member execution calls fall through and are
-  // reported as before.
-  if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
-    const receiverMatch = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/);
-    const receiver = receiverMatch?.[1];
-    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
-      return false;
-    }
-    return true;
-  }
-
-  return false;
+  return (
+    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+  );
 }
 
 function stripCommentsForHeuristics(source: string): string {
   let stripped = "";
   let quote: "'" | '"' | "`" | null = null;
   let escaped = false;
-  let inBlockComment = false;
 
   for (let i = 0; i < source.length; i++) {
     const ch = source[i] ?? "";
     const next = source[i + 1] ?? "";
-
-    if (inBlockComment) {
-      if (ch === "*" && next === "/") {
-        inBlockComment = false;
-        i++;
-        continue;
-      }
-      if (ch === "\n") {
-        stripped += "\n";
-      }
-      continue;
-    }
 
     if (quote) {
       stripped += ch;
@@ -483,19 +330,11 @@ function stripCommentsForHeuristics(source: string): string {
       continue;
     }
 
-    if (ch === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") {
-        i++;
-      }
-      if (source[i] === "\n") {
-        stripped += "\n";
-      }
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      inBlockComment = true;
-      i++;
+    if (ch === "/" && (next === "/" || next === "*")) {
+      const end = source.indexOf(next === "/" ? "\n" : "*/", i + 2);
+      const afterComment = end < 0 ? source.length : end + (next === "/" ? 1 : 2);
+      stripped += source.slice(i, afterComment).replace(/[^\n]/g, "");
+      i = afterComment - 1;
       continue;
     }
 
@@ -554,17 +393,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
-  const heuristicLines = heuristicSource.split("\n");
 
-  // Provenance-aware child_process bindings, collected once per source from
-  // the comment-stripped text. Used to attribute aliased execution calls and
-  // computed namespace calls back to their child_process origin. Cheap when
-  // the source has no child_process reference at all (all regexes no-op).
   const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
-  // --- Line rules ---
   for (const rule of LINE_RULES) {
-    // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
@@ -572,6 +404,22 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
+    const addFinding = (line: string, lineNumber: number): void => {
+      if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+        omittedMatches += 1;
+        lastOmittedLine = lineNumber;
+        return;
+      }
+      findings.push({
+        ruleId: rule.ruleId,
+        severity: rule.severity,
+        file: filePath,
+        line: lineNumber,
+        message: rule.message,
+        evidence: formatScanEvidence(line),
+      });
+      acceptedMatches += 1;
+    };
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
@@ -588,7 +436,6 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           continue;
         }
 
-        // Special handling for suspicious-network: check port
         if (rule.ruleId === "suspicious-network") {
           const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
           if (STANDARD_PORTS.has(port)) {
@@ -596,53 +443,19 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
-        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
-          omittedMatches += 1;
-          lastOmittedLine = i + 1;
-          continue;
-        }
-
-        // Retain distinct calls up to the cap, then aggregate every remaining match.
-        // This keeps hostile output bounded without hiding that later sites exist.
-        findings.push({
-          ruleId: rule.ruleId,
-          severity: rule.severity,
-          file: filePath,
-          line: i + 1,
-          message: rule.message,
-          evidence: formatScanEvidence(line),
-        });
-        acceptedMatches += 1;
+        addFinding(line, i + 1);
         if (rule.ruleId === "dangerous-exec") {
-          literalDangerousExecIndexes.add(match.index ?? -1);
+          literalDangerousExecIndexes.add(match.index);
         }
       }
 
-      // Attribute aliased child_process calls (`launch(...)`, `run(...)`) that
-      // the literal pattern cannot match. Only fires when the alias name was
-      // bound from an actual child_process import/require (provenance-scoped),
-      // so unrelated functions such as a locally-defined `launch()` do not.
-      // Every proven alias call on the line is reported (per-occurrence
-      // semantics), skipping any position the literal pattern already reported.
+      // Aliases follow literal matches; don't emit a call twice if both patterns match.
       if (rule.ruleId === "dangerous-exec" && methodAliases.size > 0) {
-        for (const aliasMatch of matchAliasedChildProcessCalls(line, methodAliases)) {
-          if (literalDangerousExecIndexes.has(aliasMatch.index)) {
+        for (const index of matchAliasedChildProcessCalls(line, methodAliases)) {
+          if (literalDangerousExecIndexes.has(index)) {
             continue;
           }
-          if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
-            omittedMatches += 1;
-            lastOmittedLine = i + 1;
-            continue;
-          }
-          findings.push({
-            ruleId: rule.ruleId,
-            severity: rule.severity,
-            file: filePath,
-            line: i + 1,
-            message: rule.message,
-            evidence: formatScanEvidence(line),
-          });
-          acceptedMatches += 1;
+          addFinding(line, i + 1);
         }
       }
     }
@@ -658,53 +471,25 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     }
   }
 
-  // --- Source rules ---
-  const matchedSourceRules = new Set<string>();
-  for (const rule of SOURCE_RULES) {
-    // Allow multiple findings for different messages with the same ruleId
-    // but deduplicate exact (ruleId+message) combos
-    const ruleKey = `${rule.ruleId}::${rule.message}`;
-    if (matchedSourceRules.has(ruleKey)) {
-      continue;
-    }
-
-    const match = findSourceRuleMatch({
-      rule,
-      source: heuristicSource,
-      lines: heuristicLines,
-    });
-    if (!match) {
-      continue;
-    }
-
-    findings.push({
-      ruleId: rule.ruleId,
-      severity: rule.severity,
-      file: filePath,
-      line: match.line,
-      message: rule.message,
-      evidence: formatScanEvidence(lines[match.line - 1] ?? match.evidence),
-    });
-    matchedSourceRules.add(ruleKey);
-  }
-
+  findings.push(...scanSourceRules(SOURCE_RULES, heuristicSource, filePath, lines));
   return findings;
 }
 
 export function scanSkillContent(content: string, filePath: string): SkillScanFinding[] {
-  const findings: SkillScanFinding[] = [];
-  const lines = content.split("\n");
-  const matchedRules = new Set<string>();
+  return scanSourceRules(SKILL_CONTENT_RULES, content, filePath);
+}
 
-  for (const rule of SKILL_CONTENT_RULES) {
-    if (matchedRules.has(rule.ruleId)) {
-      continue;
-    }
-    const match = findSourceRuleMatch({
-      rule,
-      source: content,
-      lines,
-    });
+function scanSourceRules(
+  rules: readonly SourceRule[],
+  source: string,
+  filePath: string,
+  evidenceLines?: string[],
+): SkillScanFinding[] {
+  const findings: SkillScanFinding[] = [];
+  const lines = source.split("\n");
+
+  for (const rule of rules) {
+    const match = findSourceRuleMatch({ rule, source, lines });
     if (!match) {
       continue;
     }
@@ -718,174 +503,49 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
       evidence:
         rule.ruleId === "literal-secret"
           ? "[REDACTED CREDENTIAL]"
-          : formatScanEvidence(lines[match.line - 1] ?? match.evidence),
+          : formatScanEvidence((evidenceLines ?? lines)[match.line - 1] ?? match.evidence),
     });
-    matchedRules.add(rule.ruleId);
   }
 
   return findings;
 }
 
-// ---------------------------------------------------------------------------
-// Directory scanner
-// ---------------------------------------------------------------------------
-
-function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
-  return {
-    excludeTestFiles: opts?.excludeTestFiles ?? false,
-    includeHiddenDirectories: opts?.includeHiddenDirectories ?? false,
-    includeNestedNodeModulesTestFiles: opts?.includeNestedNodeModulesTestFiles ?? false,
-    includeNodeModules: opts?.includeNodeModules ?? false,
-    includeFiles: opts?.includeFiles ?? [],
-    onlyIncludeFiles: opts?.onlyIncludeFiles ?? false,
-    maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
-    maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
-  };
-}
-
-function isExcludedTestDirectoryName(name: string): boolean {
-  return TEST_DIRECTORY_NAMES.has(name);
-}
-
-function isExcludedTestFileName(name: string): boolean {
-  return TEST_FILE_NAME_PATTERN.test(name);
-}
-
-function pathContainsNodeModulesSegment(relativePath: string): boolean {
-  return relativePath.split(/[\\/]+/u).includes("node_modules");
-}
-
-async function walkDirWithLimit(
-  rootDir: string,
-  dirPath: string,
-  candidateLimit: number,
-  excludeTestFiles: boolean,
-  includeHiddenDirectories: boolean,
-  includeNestedNodeModulesTestFiles: boolean,
-  includeNodeModules: boolean,
-): Promise<CollectedScannableFiles> {
-  const files: string[] = [];
-  const stack: string[] = [dirPath];
-
-  while (stack.length > 0 && files.length < candidateLimit) {
-    const currentDir = stack.pop();
-    if (!currentDir) {
-      break;
-    }
-
-    const entries = await readDirEntriesWithCache(currentDir);
-    for (const entry of entries) {
-      if (files.length >= candidateLimit) {
-        break;
-      }
-      if (
-        (!includeHiddenDirectories && entry.name.startsWith(".")) ||
-        (!includeNodeModules && entry.name === "node_modules")
-      ) {
-        continue;
-      }
-      const fullPath = path.join(currentDir, entry.name);
-      const isExcludedTestPath =
-        entry.kind === "dir"
-          ? isExcludedTestDirectoryName(entry.name)
-          : isExcludedTestFileName(entry.name);
-      if (
-        excludeTestFiles &&
-        isExcludedTestPath &&
-        !(
-          includeNestedNodeModulesTestFiles &&
-          pathContainsNodeModulesSegment(path.relative(rootDir, fullPath))
-        )
-      ) {
-        continue;
-      }
-      if (entry.kind === "dir") {
-        stack.push(fullPath);
-      } else if (entry.kind === "file" && isScannable(entry.name)) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  return { files, truncated: files.length >= candidateLimit };
-}
-
-async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
-  let st: Awaited<ReturnType<typeof fs.stat>> | null;
+async function statIfPresent(filePath: string): Promise<Stats | null> {
   try {
-    st = await fs.stat(dirPath);
+    return await fs.stat(filePath);
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
-      return [];
+      return null;
     }
     throw err;
   }
-  if (!st?.isDirectory()) {
-    return [];
-  }
-
-  const cached = DIR_ENTRY_CACHE.get(dirPath);
-  if (cached && cached.mtimeMs === st.mtimeMs) {
-    return cached.entries;
-  }
-
-  const dirents = await fs.readdir(dirPath, { withFileTypes: true });
-  const entries: CachedDirEntry[] = [];
-  for (const entry of dirents) {
-    if (entry.isDirectory()) {
-      entries.push({ name: entry.name, kind: "dir" });
-    } else if (entry.isFile()) {
-      entries.push({ name: entry.name, kind: "file" });
-    }
-  }
-  setCachedDirEntries(dirPath, {
-    mtimeMs: st.mtimeMs,
-    entries,
-  });
-  return entries;
 }
 
 async function resolveForcedFiles(params: {
   rootDir: string;
   includeFiles: string[];
 }): Promise<string[]> {
-  if (params.includeFiles.length === 0) {
-    return [];
-  }
-
   const seen = new Set<string>();
-  const out: string[] = [];
 
   for (const rawIncludePath of params.includeFiles) {
     const includePath = path.resolve(params.rootDir, rawIncludePath);
-    if (!isPathInside(params.rootDir, includePath)) {
-      continue;
-    }
-    if (!isScannable(includePath)) {
-      continue;
-    }
-    if (seen.has(includePath)) {
+    if (
+      !isPathInside(params.rootDir, includePath) ||
+      !isScannable(includePath) ||
+      seen.has(includePath)
+    ) {
       continue;
     }
 
-    let st: Awaited<ReturnType<typeof fs.stat>> | null;
-    try {
-      st = await fs.stat(includePath);
-    } catch (err) {
-      if (hasErrnoCode(err, "ENOENT")) {
-        continue;
-      }
-      throw err;
-    }
+    const st = await statIfPresent(includePath);
     if (!st?.isFile()) {
       continue;
     }
 
-    out.push(includePath);
     seen.add(includePath);
   }
 
-  return out;
+  return [...seen];
 }
 
 async function collectScannableFiles(
@@ -896,143 +556,122 @@ async function collectScannableFiles(
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
-  if (opts.onlyIncludeFiles) {
-    return {
-      files: forcedFiles.slice(0, opts.maxFiles),
-      truncated: forcedFiles.length > opts.maxFiles,
-    };
-  }
   if (forcedFiles.length > opts.maxFiles) {
     return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }
 
-  const walked = await walkDirWithLimit(
-    dirPath,
-    dirPath,
-    opts.maxFiles + 1,
-    opts.excludeTestFiles,
-    opts.includeHiddenDirectories,
-    opts.includeNestedNodeModulesTestFiles,
-    opts.includeNodeModules,
-  );
-  const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
-  const out = [...forcedFiles];
-  for (const walkedFile of walked.files) {
-    const resolved = path.resolve(walkedFile);
-    if (seen.has(resolved)) {
-      continue;
+  const files = new Set(forcedFiles);
+  const include = ({ name }: WalkDirectoryEntry) =>
+    !name.startsWith(".") && name !== "node_modules";
+  const walked = await walkDirectory(dirPath, {
+    maxEntries: Math.max(
+      MAX_SCAN_DIRECTORY_ENTRIES,
+      Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(opts.maxFiles) * 100),
+    ),
+    symlinks: "skip",
+    include: (entry) => {
+      if (
+        files.size <= opts.maxFiles &&
+        entry.kind === "file" &&
+        isScannable(entry.name) &&
+        include(entry) &&
+        !files.has(entry.path)
+      ) {
+        files.add(entry.path);
+      }
+      return false;
+    },
+    descend: (entry) => files.size <= opts.maxFiles && include(entry),
+  });
+  for (const { error } of walked.failedDirs) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
     }
-    if (out.length >= opts.maxFiles) {
-      return { files: out.slice(0, opts.maxFiles), truncated: true };
-    }
-    out.push(walkedFile);
-    seen.add(resolved);
   }
-  return { files: out, truncated: false };
+  return {
+    files: [...files].slice(0, opts.maxFiles),
+    truncated: walked.truncated || files.size > opts.maxFiles,
+  };
 }
 
-async function scanFileWithCache(params: {
-  filePath: string;
-  maxFileBytes: number;
-}): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
-  const { filePath, maxFileBytes } = params;
-  let st: Awaited<ReturnType<typeof fs.stat>> | null;
-  try {
-    st = await fs.stat(filePath);
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      return { scanned: false, findings: [] };
-    }
-    throw err;
-  }
+async function scanFileWithCache(
+  filePath: string,
+  maxFileBytes: number,
+): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
+  const st = await statIfPresent(filePath);
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }
-  const cached = getCachedFileScanResult({
-    filePath,
-    size: st.size,
-    mtimeMs: st.mtimeMs,
-    maxFileBytes,
-  });
-  if (cached) {
-    return {
-      scanned: cached.scanned,
-      findings: cached.findings,
-    };
+  const cached = FILE_SCAN_CACHE.get(filePath);
+  if (cached && sameFileScanIdentity(cached.identity, st) && cached.maxFileBytes === maxFileBytes) {
+    return cached;
   }
+  FILE_SCAN_CACHE.delete(filePath);
 
   if (st.size > maxFileBytes) {
-    const skippedEntry: FileScanCacheEntry = {
-      size: st.size,
-      mtimeMs: st.mtimeMs,
+    return setCachedFileScanResult(filePath, {
+      identity: fileScanIdentity(st),
       maxFileBytes,
       scanned: false,
       findings: [],
-    };
-    setCachedFileScanResult(filePath, skippedEntry);
-    return { scanned: false, findings: [] };
+    });
   }
 
-  let source: string;
   try {
-    source = await fs.readFile(filePath, "utf-8");
+    // Explicitly included entrypoints may be symlinked outside the scan directory.
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: await fs.realpath(filePath),
+      maxBytes: maxFileBytes,
+    });
+    const findings = scanSource(buffer.toString("utf8"), filePath);
+    return setCachedFileScanResult(filePath, {
+      identity: fileScanIdentity(stat),
+      maxFileBytes,
+      scanned: true,
+      findings,
+    });
   } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
+    if (
+      hasErrnoCode(err, "ENOENT") ||
+      (err instanceof FsSafeError &&
+        (err.code === "not-found" || err.code === "not-file" || err.code === "too-large"))
+    ) {
       return { scanned: false, findings: [] };
     }
     throw err;
   }
-  const findings = scanSource(source, filePath);
-  setCachedFileScanResult(filePath, {
-    size: st.size,
-    mtimeMs: st.mtimeMs,
-    maxFileBytes,
-    scanned: true,
-    findings,
-  });
-  return { scanned: true, findings };
 }
 
 export async function scanDirectoryWithSummary(
   dirPath: string,
   opts?: SkillScanOptions,
 ): Promise<SkillScanSummary> {
-  const scanOptions = normalizeScanOptions(opts);
+  const scanOptions = {
+    includeFiles: opts?.includeFiles ?? [],
+    maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
+    maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
+  };
   const { files, truncated } = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
   let scannedFiles = 0;
-  let critical = 0;
-  let warn = 0;
-  let info = 0;
+  const counts = { critical: 0, warn: 0, info: 0 };
 
   for (const file of files) {
-    const scanResult = await scanFileWithCache({
-      filePath: file,
-      maxFileBytes: scanOptions.maxFileBytes,
-    });
+    const scanResult = await scanFileWithCache(file, scanOptions.maxFileBytes);
     if (!scanResult.scanned) {
       continue;
     }
     scannedFiles += 1;
     for (const finding of scanResult.findings) {
       allFindings.push(finding);
-      if (finding.severity === "critical") {
-        critical += 1;
-      } else if (finding.severity === "warn") {
-        warn += 1;
-      } else {
-        info += 1;
-      }
+      counts[finding.severity] += 1;
     }
   }
 
   return {
     scannedFiles,
-    critical,
-    warn,
-    info,
+    ...counts,
     truncated,
     findings: allFindings,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

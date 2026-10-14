@@ -2,7 +2,6 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.takeUtf16Safe
 import android.os.Build
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
@@ -37,8 +36,6 @@ internal object NodePresenceAliveBeacon {
     val handled: Boolean?,
     val reason: String?,
   )
-
-  private val json = Json { ignoreUnknownKeys = true }
 
   /** Skips sends after a recent successful presence update. */
   fun shouldSkipRecentSuccess(
@@ -90,12 +87,7 @@ internal object NodePresenceAliveBeacon {
     // Bound log/IPC responses before JSON parsing to avoid memory spikes from
     // malformed gateway replies.
     if (raw.length > MAX_RESPONSE_JSON_CHARS) return null
-    val obj =
-      try {
-        json.parseToJsonElement(raw).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val obj = parseJsonParamsObject(raw) ?: return null
     return ResponsePayload(
       ok = parseJsonBooleanFlag(obj, "ok"),
       event = parseJsonString(obj, "event"),

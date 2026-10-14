@@ -11,7 +11,8 @@ function applyToolsAllowPatch(
   existing?: CronPayloadToolAllow,
 ): void {
   if (Array.isArray(patch.toolsAllow)) {
-    payload.toolsAllow = patch.toolsAllow;
+    const toolsAllow = patch.toolsAllow;
+    payload.toolsAllow = toolsAllow;
     // Same-kind edits keep the marker whenever the default-stamped list is
     // unchanged — even when the patch omits toolsAllowIsDefault, because the
     // cron tool's model-facing schema never sends it. Dropping the marker on an
@@ -20,7 +21,10 @@ function applyToolsAllowPatch(
     // runtime toolsAllow. Kind replacements (no existing payload) still require
     // the cron-tool-stamped marker on the patch itself.
     const existingDefaultUnchanged =
-      existing?.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch);
+      existing?.toolsAllowIsDefault === true &&
+      Array.isArray(existing.toolsAllow) &&
+      existing.toolsAllow.length === toolsAllow.length &&
+      existing.toolsAllow.every((toolName, index) => toolName === toolsAllow[index]);
     const installsDefault =
       patch.toolsAllowIsDefault === true && existing?.toolsAllowIsDefault !== true;
     const keepDefaultMarker = existingDefaultUnchanged || installsDefault;
@@ -33,19 +37,6 @@ function applyToolsAllowPatch(
     delete payload.toolsAllow;
     delete payload.toolsAllowIsDefault;
   }
-}
-
-function toolsAllowEqual(
-  left: Pick<CronPayloadToolAllow, "toolsAllow">,
-  right: Pick<CronPayloadToolAllowPatch, "toolsAllow">,
-): boolean {
-  const rightToolsAllow = right.toolsAllow;
-  return (
-    Array.isArray(left.toolsAllow) &&
-    Array.isArray(rightToolsAllow) &&
-    left.toolsAllow.length === rightToolsAllow.length &&
-    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
-  );
 }
 
 export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
@@ -62,20 +53,14 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
-  if (patch.kind === "systemEvent") {
-    if (existing.kind !== "systemEvent") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "systemEvent" && existing.kind === "systemEvent") {
     const text = typeof patch.text === "string" ? patch.text : existing.text;
     const next: Extract<CronPayload, { kind: "systemEvent" }> = { ...existing, text };
     applyToolsAllowPatch(next, patch, existing);
     return next;
   }
 
-  if (patch.kind === "command") {
-    if (existing.kind !== "command") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "command" && existing.kind === "command") {
     const next: Extract<CronPayload, { kind: "command" }> = { ...existing };
     if (Array.isArray(patch.argv)) {
       next.argv = patch.argv;
@@ -91,6 +76,8 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     }
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
+    } else if (patch.timeoutSeconds === null) {
+      delete next.timeoutSeconds;
     }
     if (typeof patch.noOutputTimeoutSeconds === "number") {
       next.noOutputTimeoutSeconds = patch.noOutputTimeoutSeconds;
@@ -101,16 +88,15 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     applyToolsAllowPatch(next, patch, existing);
     return next;
   }
-  if (patch.kind === "script") {
-    if (existing.kind !== "script") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "script" && existing.kind === "script") {
     const next: Extract<CronPayload, { kind: "script" }> = { ...existing };
     if (typeof patch.script === "string") {
       next.script = patch.script;
     }
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
+    } else if (patch.timeoutSeconds === null) {
+      delete next.timeoutSeconds;
     }
     if (typeof patch.toolBudget === "number") {
       next.toolBudget = patch.toolBudget;
@@ -119,13 +105,9 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
-  if (patch.kind !== "agentTurn") {
+  if (patch.kind !== "agentTurn" || existing.kind !== "agentTurn") {
     // System-owned payloads carry no fields; the service boundary already
     // rejects client patches for them.
-    return { kind: patch.kind };
-  }
-
-  if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
 
@@ -151,6 +133,8 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
+  } else if (patch.timeoutSeconds === null) {
+    delete next.timeoutSeconds;
   }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
@@ -181,12 +165,14 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     const next: Extract<CronPayload, { kind: "command" }> = {
       kind: "command",
       argv: patch.argv,
-      cwd: patch.cwd,
-      env: patch.env,
-      input: patch.input,
-      timeoutSeconds: patch.timeoutSeconds,
-      noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
-      outputMaxBytes: patch.outputMaxBytes,
+      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      ...(patch.env !== undefined ? { env: patch.env } : {}),
+      ...(patch.input !== undefined ? { input: patch.input } : {}),
+      ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(patch.noOutputTimeoutSeconds !== undefined
+        ? { noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds }
+        : {}),
+      ...(patch.outputMaxBytes !== undefined ? { outputMaxBytes: patch.outputMaxBytes } : {}),
     };
     applyToolsAllowPatch(next, patch);
     return next;
@@ -199,8 +185,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     const next: Extract<CronPayload, { kind: "script" }> = {
       kind: "script",
       script: patch.script,
-      timeoutSeconds: patch.timeoutSeconds,
-      toolBudget: patch.toolBudget,
+      ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(patch.toolBudget !== undefined ? { toolBudget: patch.toolBudget } : {}),
     };
     applyToolsAllowPatch(next, patch);
     return next;
@@ -217,12 +203,14 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
-    model: typeof patch.model === "string" ? patch.model : undefined,
-    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
-    timeoutSeconds: patch.timeoutSeconds,
-    lightContext: patch.lightContext,
-    allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+    ...(typeof patch.model === "string" ? { model: patch.model } : {}),
+    ...(Array.isArray(patch.fallbacks) ? { fallbacks: patch.fallbacks } : {}),
+    ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
+    ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+    ...(patch.lightContext !== undefined ? { lightContext: patch.lightContext } : {}),
+    ...(patch.allowUnsafeExternalContent !== undefined
+      ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }
+      : {}),
   };
   applyToolsAllowPatch(next, patch);
   return next;

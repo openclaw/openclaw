@@ -11,6 +11,7 @@ import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "../plugin-sdk/channel-contract.js";
+import { normalizeChannelConfigEntries } from "./channel-doctor-helpers.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Detects the retired flat `allowPrivateNetwork` key before doctor migration. */
@@ -34,15 +35,13 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
   const currentNetwork = currentNetworkRecord ? { ...currentNetworkRecord } : {};
   const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
 
-  let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
-  if (typeof currentDangerousAllowPrivateNetwork === "boolean") {
-    // The canonical key wins when both shapes are present.
-    resolvedDangerousAllowPrivateNetwork = currentDangerousAllowPrivateNetwork;
-  } else if (typeof legacyAllowPrivateNetwork === "boolean") {
-    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
-  } else if (currentDangerousAllowPrivateNetwork === undefined) {
-    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
-  }
+  // An authored boolean wins; a legacy boolean can replace a malformed value.
+  const resolvedDangerousAllowPrivateNetwork =
+    typeof currentDangerousAllowPrivateNetwork !== "boolean" &&
+    (typeof legacyAllowPrivateNetwork === "boolean" ||
+      currentDangerousAllowPrivateNetwork === undefined)
+      ? legacyAllowPrivateNetwork
+      : currentDangerousAllowPrivateNetwork;
 
   delete currentNetwork.dangerouslyAllowPrivateNetwork;
   if (resolvedDangerousAllowPrivateNetwork !== undefined) {
@@ -65,12 +64,7 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
 
 function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = asNullableRecord(value);
-  return Boolean(
-    accounts &&
-    Object.values(accounts).some((account) =>
-      hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(account) ?? {}),
-    ),
-  );
+  return Boolean(accounts && Object.values(accounts).some(hasLegacyFlatAllowPrivateNetworkAlias));
 }
 
 /** Build doctor rules that migrate legacy private-network aliases for one channel config. */
@@ -84,7 +78,7 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       {
         path: ["channels", params.channelKey],
         message: `${pathPrefix}.allowPrivateNetwork is legacy; use ${pathPrefix}.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
-        match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(value) ?? {}),
+        match: hasLegacyFlatAllowPrivateNetworkAlias,
       },
       {
         path: ["channels", params.channelKey, "accounts"],
@@ -93,63 +87,15 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       },
     ],
     normalizeCompatibilityConfig: ({ cfg }) => {
-      const channels = asNullableRecord(cfg.channels);
-      const channelEntry = asNullableRecord(channels?.[params.channelKey]);
-      if (!channelEntry) {
+      // A channel array can expose numeric keys but must remain invalid config.
+      if (!asNullableRecord(cfg.channels)) {
         return { config: cfg, changes: [] };
       }
-
-      const changes: string[] = [];
-      let updatedChannel = channelEntry;
-      let changed = false;
-
-      const topLevel = migrateLegacyFlatAllowPrivateNetworkAlias({
-        entry: updatedChannel,
-        pathPrefix,
-        changes,
+      return normalizeChannelConfigEntries({
+        cfg,
+        channelId: params.channelKey,
+        normalizeEntry: migrateLegacyFlatAllowPrivateNetworkAlias,
       });
-      updatedChannel = topLevel.entry;
-      changed = changed || topLevel.changed;
-
-      const accounts = asNullableRecord(updatedChannel.accounts);
-      if (accounts) {
-        let accountsChanged = false;
-        const nextAccounts: Record<string, unknown> = { ...accounts };
-        for (const [accountId, accountValue] of Object.entries(accounts)) {
-          const account = asNullableRecord(accountValue);
-          if (!account) {
-            continue;
-          }
-          const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
-            entry: account,
-            pathPrefix: `${pathPrefix}.accounts.${accountId}`,
-            changes,
-          });
-          if (!migrated.changed) {
-            continue;
-          }
-          nextAccounts[accountId] = migrated.entry;
-          accountsChanged = true;
-        }
-        if (accountsChanged) {
-          updatedChannel = { ...updatedChannel, accounts: nextAccounts };
-          changed = true;
-        }
-      }
-
-      if (!changed) {
-        return { config: cfg, changes: [] };
-      }
-      return {
-        config: {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            [params.channelKey]: updatedChannel,
-          } as OpenClawConfig["channels"],
-        },
-        changes,
-      };
     },
   };
 }

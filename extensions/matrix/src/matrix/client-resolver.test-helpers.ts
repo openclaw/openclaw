@@ -9,7 +9,6 @@ type MatrixClientResolverMocks = {
   acquireSharedMatrixClientMock: Mock<(...args: unknown[]) => Promise<SharedMatrixClientLease>>;
   sharedLeaseReleaseMock: Mock<(...args: unknown[]) => Promise<void>>;
   sharedLeaseStartMock: Mock<(...args: unknown[]) => Promise<void>>;
-  isBunRuntimeMock: Mock<() => boolean>;
   resolveMatrixAuthContextMock: Mock<
     (params: { cfg: unknown; accountId?: string | null }) => unknown
   >;
@@ -21,7 +20,6 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   acquireSharedMatrixClientMock: vi.fn(),
   sharedLeaseReleaseMock: vi.fn(),
   sharedLeaseStartMock: vi.fn(),
-  isBunRuntimeMock: vi.fn(() => false),
   resolveMatrixAuthContextMock: vi.fn(),
 };
 
@@ -81,7 +79,6 @@ export function primeMatrixClientResolverMocks(params?: {
     acquireSharedMatrixClientMock,
     sharedLeaseReleaseMock,
     sharedLeaseStartMock,
-    isBunRuntimeMock,
     resolveMatrixAuthContextMock,
   } = matrixClientResolverMocks;
 
@@ -104,7 +101,6 @@ export function primeMatrixClientResolverMocks(params?: {
       current: loadConfigMock,
     },
   });
-  isBunRuntimeMock.mockReturnValue(false);
   sharedLeaseReleaseMock.mockReset().mockResolvedValue(undefined);
   sharedLeaseStartMock.mockReset();
   resolveMatrixAuthContextMock.mockImplementation(
@@ -142,7 +138,7 @@ export async function expectOneOffSharedMatrixClient(params?: {
   const accountId = params?.accountId ?? "default";
   const prepareForOneOffCalls = params?.prepareForOneOffCalls ?? 1;
   const startCalls = params?.startCalls ?? 0;
-  const releaseMode = params?.releaseMode ?? "stop";
+  const releaseMode = params?.releaseMode ?? "persist";
 
   expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
   expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({

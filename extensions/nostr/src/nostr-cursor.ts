@@ -64,7 +64,6 @@ export function createNostrCursorStateWriter(options: {
   debounceMs: number;
   write: (cursor: number) => Promise<void>;
   onBackgroundError?: (error: Error) => void;
-  recoveryRetryMs?: number;
 }) {
   let desiredCursor = Math.max(options.minimumCursor, options.initialCursor);
   let dirty = false;
@@ -123,13 +122,10 @@ export function createNostrCursorStateWriter(options: {
     if (activeFlush) {
       return activeFlush;
     }
-    const tracked = runFlush().finally(() => {
-      if (activeFlush === tracked) {
-        activeFlush = undefined;
-      }
+    activeFlush = runFlush().finally(() => {
+      activeFlush = undefined;
     });
-    activeFlush = tracked;
-    return tracked;
+    return activeFlush;
   };
 
   const setDesiredCursor = (cursor: number): void => {
@@ -160,9 +156,7 @@ export function createNostrCursorStateWriter(options: {
             return;
           } catch (error) {
             options.onBackgroundError?.(error as Error);
-            await new Promise((resolve) => {
-              setTimeout(resolve, options.recoveryRetryMs ?? CURSOR_RECOVERY_RETRY_MS);
-            });
+            await sleepWithAbort(CURSOR_RECOVERY_RETRY_MS);
           }
         }
       })().finally(() => {

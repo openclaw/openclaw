@@ -2,16 +2,15 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   summarizeSessionPullRequests,
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 type IndicatorEntry = {
@@ -27,7 +26,7 @@ type SessionPullRequestIndicatorsOptions = {
   getSessions: () => SessionCapability | undefined;
 };
 
-/** Projects pushed PR snapshots for the currently visible worktree rows. */
+/** Projects last-known PR snapshots without making sidebar rows poll their checkouts. */
 export class SessionPullRequestIndicatorsController implements ReactiveController {
   private readonly states = new Map<string, IndicatorEntry>();
   private gateway: ApplicationGateway | null = null;
@@ -36,7 +35,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   private store: SessionPullRequestSnapshotStore | null = null;
   private stopStoreUpdates: (() => void) | null = null;
   private connected = false;
-  private refreshScheduled = false;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -50,7 +48,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   hostUpdated(): void {
-    this.scheduleRefresh();
+    // Reuse the projection before the host releases it in updated(). Changes
+    // here can still schedule a follow-up render to clear stale PR summaries.
+    if (this.connected) {
+      this.refreshVisible();
+    }
   }
 
   hostDisconnected(): void {
@@ -64,22 +66,20 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     worktreeId: string,
     initial?: SessionCatalogPullRequestSummary,
   ): SessionCatalogPullRequestSummary | undefined {
+    const gateway = this.options.getGateway();
+    if (
+      !gateway ||
+      !canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+    ) {
+      return undefined;
+    }
     const entry = this.states.get(sessionKey);
     // A ready empty snapshot is authoritative; only seed a row before its first snapshot.
     return entry?.worktreeId === worktreeId ? entry.summary : initial;
-  }
-
-  private scheduleRefresh(): void {
-    if (this.refreshScheduled) {
-      return;
-    }
-    this.refreshScheduled = true;
-    globalThis.setTimeout(() => {
-      this.refreshScheduled = false;
-      if (this.connected) {
-        this.refreshVisible();
-      }
-    }, 0);
   }
 
   private releaseStore(): void {
@@ -107,19 +107,19 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   private scopedKey(sessionKey: string): string {
-    return scopedSessionPullRequestKey(
+    return scopedSessionArtifactKey(
       sessionKey,
       parseAgentSessionKey(sessionKey)?.agentId ?? this.options.getSelectedAgentId(),
     );
   }
 
-  private applySnapshots(): void {
+  private applySnapshots(rows?: readonly SidebarRecentSession[]): void {
     const store = this.store;
     if (!store) {
       return;
     }
     let changed = false;
-    for (const session of this.eligibleRows()) {
+    for (const session of rows ?? this.eligibleRows()) {
       if (!session.worktreeId) {
         continue;
       }
@@ -168,7 +168,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     if (
       !gateway ||
       !this.options.getConnected() ||
-      isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !== true
+      !canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
     ) {
       this.releaseStore();
       this.reset(true);
@@ -205,7 +209,8 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     this.store?.watch(
       this,
       eligibleRows.map((session) => this.scopedKey(session.key)),
+      { passive: true },
     );
-    this.applySnapshots();
+    this.applySnapshots(eligibleRows);
   }
 }

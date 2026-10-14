@@ -17,7 +17,7 @@ import { readResponseTextSnippet } from "../infra/http-body.js";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { sleep } from "../utils.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
@@ -138,16 +138,17 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 }
 
 /** Mint the Control-UI-scoped one-time device grant immediately before actual delivery. */
-export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
-  browserUrl: string;
-  expiresAtMs: number;
-}> {
+export async function issueControlUiBrowserHandoff({
+  httpUrl,
+  wsUrl,
+}: ControlUiHandoffTarget["links"]) {
   const issued = await issueDeviceBootstrapToken({
     profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   });
   const fragment = new URLSearchParams({
     bootstrapToken: issued.token,
     [CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM]: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+    gatewayUrl: wsUrl,
   });
   return {
     browserUrl: `${httpUrl}#${fragment.toString()}`,
@@ -159,13 +160,6 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
-type ControlUiDocumentReadinessDeps = {
-  fetch?: typeof fetchConfiguredLocalOriginWithSsrFGuard;
-  loadTls?: typeof loadGatewayTlsRuntime;
-  now?: () => number;
-  sleep?: (timeoutMs: number) => Promise<void>;
-};
-
 /** Wait only for an explicitly preparing dashboard; fail immediately for terminal HTTP states. */
 export async function waitForControlUiDocument(params: {
   url: string;
@@ -173,36 +167,26 @@ export async function waitForControlUiDocument(params: {
   timeoutMs?: number;
   waitForPending?: boolean;
   onPending?: () => void;
-  deps?: ControlUiDocumentReadinessDeps;
 }): Promise<ControlUiDocumentReadiness> {
-  const now = params.deps?.now ?? Date.now;
-  const sleepFor = params.deps?.sleep ?? sleep;
-  const deadline = now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
+  const deadline = Date.now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
   let tlsFingerprint: string | undefined;
   let tlsConnect: Record<string, unknown> | undefined;
 
   if (params.tlsConfig?.enabled === true) {
     try {
-      const tls = await (params.deps?.loadTls ?? loadGatewayTlsRuntime)({
-        ...params.tlsConfig,
-        autoGenerate: false,
-      });
-      tlsFingerprint = normalizeTlsFingerprint(tls.fingerprintSha256 ?? "");
-      const serverCertificate = tls.tlsOptions?.cert;
-      if (!tls.enabled || !tlsFingerprint || !serverCertificate) {
-        return {
-          ready: false,
-          reason: tls.error || "Gateway TLS certificate fingerprint is unavailable.",
-        };
+      const certificate = await inspectGatewayTlsCertificate(params.tlsConfig);
+      if (!certificate.ok) {
+        return { ready: false, reason: certificate.error };
       }
+      tlsFingerprint = certificate.value.fingerprintSha256;
       const expectedFingerprint = tlsFingerprint;
-      const configuredCa = tls.tlsOptions?.ca;
-      // The Gateway CA may verify clients rather than issue its server cert;
-      // retain both trust anchors before checking the actual peer fingerprint.
+      // Trust the configured public certificate even when it is CA-signed;
+      // peer pinning still binds the connection to that exact leaf certificate.
       tlsConnect = {
-        ca: configuredCa ? [serverCertificate, configuredCa].flat() : serverCertificate,
-        checkServerIdentity: (_hostname: string, certificate: PeerCertificate) =>
-          normalizeTlsFingerprint(certificate.fingerprint256 ?? "") === expectedFingerprint
+        ca: certificate.value.cert,
+        allowPartialTrustChain: true,
+        checkServerIdentity: (_hostname: string, peerCertificate: PeerCertificate) =>
+          normalizeTlsFingerprint(peerCertificate.fingerprint256 ?? "") === expectedFingerprint
             ? undefined
             : new Error("Gateway TLS certificate fingerprint mismatch."),
       };
@@ -217,7 +201,7 @@ export async function waitForControlUiDocument(params: {
   let pendingReported = false;
   const origin = new URL(params.url).origin;
   const requestDocument = async (method: "HEAD" | "GET", remainingMs: number) =>
-    await (params.deps?.fetch ?? fetchConfiguredLocalOriginWithSsrFGuard)({
+    await fetchConfiguredLocalOriginWithSsrFGuard({
       url: params.url,
       configuredLocalOriginBaseUrl: origin,
       policy: { allowedOrigins: [origin] },
@@ -232,7 +216,7 @@ export async function waitForControlUiDocument(params: {
       },
     });
   while (true) {
-    const remainingMs = deadline - now();
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       return { ready: false, reason: "Control UI assets did not finish preparing in time." };
     }
@@ -248,11 +232,12 @@ export async function waitForControlUiDocument(params: {
         if (request.response.status !== 503 || !retryAfter || params.waitForPending === false) {
           let detail: string | undefined;
           if (request.response.status === 503 && !retryAfter) {
-            // HEAD has no body; one bounded, credential-free GET preserves the
-            // Gateway owner's configured-root/build-failure repair diagnostic.
-            const diagnostic = await requestDocument("GET", Math.max(1, deadline - now())).catch(
-              () => undefined,
-            );
+            // One bounded, credential-free GET may add the Gateway owner's repair
+            // diagnostic; a failed request or body must preserve the HEAD result.
+            const diagnostic = await requestDocument(
+              "GET",
+              Math.max(1, deadline - Date.now()),
+            ).catch(() => undefined);
             if (diagnostic) {
               try {
                 const diagnosticType = diagnostic.response.headers
@@ -265,7 +250,7 @@ export async function waitForControlUiDocument(params: {
                     maxBytes: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     maxChars: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     timeoutMs: CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS,
-                  });
+                  }).catch(() => undefined);
                   detail = snippet ? sanitizeTerminalText(snippet) : undefined;
                 }
               } finally {
@@ -295,7 +280,7 @@ export async function waitForControlUiDocument(params: {
         pendingReported = true;
         params.onPending?.();
       }
-      await sleepFor(Math.min(pendingDelayMs, Math.max(0, deadline - now())));
+      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
     } catch (error) {
       return {
         ready: false,

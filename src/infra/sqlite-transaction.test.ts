@@ -1,14 +1,26 @@
 // Covers synchronous SQLite transaction helpers.
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
+import { DatabaseSync as NativeDatabaseSync } from "node:sqlite";
 import type { Readable } from "node:stream";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
+import {
   runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
+  withSqliteWriteAdmissionService,
 } from "./sqlite-transaction.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
@@ -98,6 +110,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([String.raw`C:\OpenClaw\agent.sqlite`, String.raw`\\Server\Share\agent.sqlite`])(
+  "services a held write lock across native namespace aliases of %s",
+  async (plain) => {
+    const filename = path.join(tempDirs.make("sqlite-windows-admission-"), "agent.sqlite");
+    const reader = new NativeDatabaseSync(filename);
+    const writer = new NativeDatabaseSync(filename);
+    try {
+      reader.exec("CREATE TABLE proof(value TEXT); PRAGMA busy_timeout=100");
+      writer.exec("BEGIN IMMEDIATE");
+      // Native SQLite locking stays real; supply the two measured Windows filename spellings.
+      vi.spyOn(reader, "location").mockReturnValue(plain);
+      vi.spyOn(writer, "location").mockReturnValue(path.win32.toNamespacedPath(plain));
+      mockProcessPlatform("win32");
+      const release = vi.fn(() => writer.exec("COMMIT"));
+      await withSqliteWriteAdmissionService(writer, release, async () => {
+        runSqliteImmediateTransactionSync(reader, () => {
+          reader.prepare("INSERT INTO proof VALUES (?)").run("committed");
+        });
+      });
+      expect(release).toHaveBeenCalledOnce();
+      expect(reader.prepare("SELECT value FROM proof").all()).toEqual([{ value: "committed" }]);
+      // Removing the last service must remove it for both spellings.
+      writer.exec("BEGIN IMMEDIATE");
+      expect(() => runSqliteImmediateTransactionSync(reader, () => undefined)).toThrow(
+        "database is locked",
+      );
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      writer.close();
+      reader.close();
+    }
+  },
+);
+
 describe("runSqliteDeferredTransactionSync", () => {
   it("keeps multiple reads on one snapshot while another connection commits", () => {
     const tempDir = tempDirs.make("openclaw-sqlite-read-snapshot-");
@@ -124,6 +173,50 @@ describe("runSqliteDeferredTransactionSync", () => {
 
     expect(counts).toEqual([1, 1]);
     expect(writer.prepare("SELECT COUNT(*) AS count FROM entries").get()).toEqual({ count: 2 });
+  });
+});
+
+describe("runSqliteReadSnapshotSync", () => {
+  it("shares one snapshot across nested reads without savepoints and sees the next commit afterward", () => {
+    const databasePath = path.join(
+      tempDirs.make("openclaw-sqlite-read-composition-"),
+      "read.sqlite",
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+    const reader = new DatabaseSync(databasePath);
+    const writer = new DatabaseSync(databasePath);
+    openDatabases.push(reader, writer);
+    reader.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE entries (id TEXT PRIMARY KEY); INSERT INTO entries VALUES ('first');",
+    );
+    const transactionSql = vi.spyOn(reader, "exec");
+
+    const rows = runSqliteReadSnapshotSync(reader, () => {
+      const before = readEntries(reader);
+      writer.prepare("INSERT INTO entries VALUES (?)").run("second");
+      const nested = runSqliteReadSnapshotSync(reader, () => readEntries(reader));
+      expect(reader.isTransaction).toBe(true);
+      return { before, nested };
+    });
+
+    expect(rows).toEqual({ before: ["first"], nested: ["first"] });
+    expect(transactionSql.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+    expect(reader.isTransaction).toBe(false);
+    expect(readEntries(reader)).toEqual(["first", "second"]);
+  });
+
+  it.each([false, true])("rejects asynchronous reads with an existing snapshot: %s", (nested) => {
+    const db = createDatabase();
+    const read = () => runSqliteReadSnapshotSync(db, () => Promise.resolve(readEntries(db)));
+    if (nested) {
+      runSqliteDeferredTransactionSync(db, () => {
+        expect(read).toThrow("Promise returns are not supported");
+        expect(db.isTransaction).toBe(true);
+      });
+    } else {
+      expect(read).toThrow("Promise returns are not supported");
+    }
+    expect(db.isTransaction).toBe(false);
   });
 });
 
@@ -157,6 +250,310 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(readEntries(db)).toEqual(["inner", "outer"]);
   });
 
+  it("preserves SQLITE_FULL and prevents caught nested failures from committing later writes", async () => {
+    const tempDir = tempDirs.make("openclaw-sqlite-full-");
+    const databasePath = path.join(tempDir, "full.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    openDatabases.push(db);
+    db.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value BLOB); PRAGMA max_page_count=3");
+    let primaryError: unknown;
+    let nestedError: unknown;
+    let continuationError: unknown;
+    let stagedValue = "before";
+    const published: string[] = [];
+    const stateEvents: string[] = [];
+    const stage = (value: string) => {
+      const previous = stagedValue;
+      expect(
+        stageSqliteTransactionState(db, {
+          stage: () => {
+            stagedValue = value;
+          },
+          rollback: () => {
+            stagedValue = previous;
+            stateEvents.push(`rollback:${value}`);
+          },
+          commit: () => {
+            stateEvents.push(`commit:${value}`);
+          },
+        }),
+      ).toBe(true);
+      expect(deferSqlitePostCommitPublication(db, () => published.push(value))).toBe(true);
+    };
+    let outerError: unknown;
+    try {
+      withSqlitePostCommitPublications(db, () =>
+        runSqliteImmediateTransactionSync(db, () => {
+          db.prepare("INSERT INTO entries VALUES ('outer', 'kept only on commit')").run();
+          stage("outer");
+          try {
+            withSqlitePostCommitPublications(db, () =>
+              runSqliteImmediateTransactionSync(db, () => {
+                stage("inner");
+                try {
+                  db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run();
+                } catch (error) {
+                  primaryError = error;
+                  throw error;
+                }
+              }),
+            );
+          } catch (error) {
+            nestedError = error;
+          }
+          // Even a caller that catches the failure cannot publish or autocommit
+          // a continuation after SQLite has aborted the enclosing transaction.
+          expect(stagedValue).toBe("before");
+          try {
+            db.prepare("INSERT INTO entries VALUES ('continuation', 'must not persist')").run();
+          } catch (error) {
+            continuationError = error;
+          }
+        }),
+      );
+    } catch (error) {
+      outerError = error;
+    }
+    expect(primaryError).toMatchObject({ errcode: 13 });
+    expect(nestedError).toBe(primaryError);
+    expect(outerError).toBe(primaryError);
+    expect(continuationError).toBeDefined();
+    expect(db.isOpen).toBe(false);
+    expect(stagedValue).toBe("before");
+    expect(stateEvents).toEqual(["rollback:inner", "rollback:outer"]);
+    expect(published).toEqual([]);
+    let reuseError: unknown;
+    try {
+      runSqliteImmediateTransactionSync(db, () => undefined);
+    } catch (error) {
+      reuseError = error;
+    }
+    expect(reuseError).toBe(primaryError);
+    const read = vi.fn(() => undefined);
+    let readError: unknown;
+    try {
+      runSqliteReadSnapshotSync(db, read);
+    } catch (error) {
+      readError = error;
+    }
+    expect(readError).toBe(primaryError);
+    expect(read).not.toHaveBeenCalled();
+    const prepare = vi.fn(async () => () => undefined);
+    await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toBe(primaryError);
+    expect(prepare).not.toHaveBeenCalled();
+
+    const reopened = new DatabaseSync(databasePath);
+    openDatabases.push(reopened);
+    expect(readEntries(reopened)).toEqual([]);
+    runSqliteImmediateTransactionSync(reopened, () => {
+      reopened.prepare("INSERT INTO entries VALUES ('recovered', 'ok')").run();
+    });
+    expect(readEntries(reopened)).toEqual(["recovered"]);
+    expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+
+  it("keeps the outer owner usable after automatic rollback when its observer fails", () => {
+    const db = createDatabase();
+    db.exec("PRAGMA max_page_count=3");
+    const observerError = new Error("rollback observer failed");
+    let primaryError: unknown;
+    const operation = vi.fn(() => {
+      db.prepare("INSERT INTO entries VALUES ('uncommitted', 'before failure')").run();
+      deferSqlitePostCommitPublication(db, publish);
+      stageSqliteTransactionState(db, {
+        stage: () => undefined,
+        rollback,
+        commit,
+      });
+      try {
+        db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run();
+      } catch (error) {
+        primaryError = error;
+        throw error;
+      }
+    });
+    const publish = vi.fn();
+    const rollback = vi.fn(() => {
+      throw observerError;
+    });
+    const commit = vi.fn();
+    let reportedError: unknown;
+    try {
+      withSqlitePostCommitPublications(db, () => runSqliteImmediateTransactionSync(db, operation));
+    } catch (error) {
+      reportedError = error;
+    }
+
+    expect(primaryError).toMatchObject({ errcode: 13 });
+    expect(reportedError).toBeInstanceOf(AggregateError);
+    if (!(reportedError instanceof AggregateError)) {
+      throw new Error("Expected transaction and rollback observer failures to be aggregated");
+    }
+    expect(reportedError.cause).toBe(primaryError);
+    expect(reportedError.errors).toHaveLength(2);
+    expect(reportedError.errors[0]).toBe(primaryError);
+    expect(reportedError.errors[1]).toBe(observerError);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(publish).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(db.isOpen).toBe(true);
+    expect(db.isTransaction).toBe(false);
+    expect(readEntries(db)).toEqual([]);
+    runSqliteImmediateTransactionSync(db, () => {
+      db.prepare("INSERT INTO entries VALUES ('recovered', 'ok')").run();
+    });
+    expect(readEntries(db)).toEqual(["recovered"]);
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+
+  it.each(["throw", "promise"] as const)(
+    "fences the connection when the commit owner fails after COMMIT (%s)",
+    (failure) => {
+      const databasePath = path.join(tempDirs.make("openclaw-commit-owner-"), "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(databasePath);
+      openDatabases.push(db);
+      db.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT)");
+      const ownerError = new Error("commit owner failed after commit");
+      const withCommit =
+        failure === "throw"
+          ? (commit: () => void) => {
+              commit();
+              throw ownerError;
+            }
+          : async (commit: () => void) => {
+              commit();
+            };
+      const publish = vi.fn();
+      const operation = vi.fn(() => {
+        db.prepare("INSERT INTO entries VALUES ('committed', 'durable')").run();
+        deferSqlitePostCommitPublication(db, publish);
+      });
+
+      expect(() =>
+        withSqlitePostCommitPublications(db, () =>
+          // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous commit-owner contract.
+          runSqliteImmediateTransactionSync(db, operation, { withCommit }),
+        ),
+      ).toThrow(failure === "throw" ? ownerError : "must be synchronous");
+      expect(operation).toHaveBeenCalledOnce();
+      expect(publish).not.toHaveBeenCalled();
+      expect(db.isOpen).toBe(false);
+      expect(() => runSqliteImmediateTransactionSync(db, operation)).toThrow(
+        failure === "throw" ? ownerError : "must be synchronous",
+      );
+      expect(operation).toHaveBeenCalledOnce();
+      const reopened = new DatabaseSync(databasePath);
+      openDatabases.push(reopened);
+      expect(readEntries(reopened)).toEqual(["committed"]);
+    },
+  );
+
+  it.each(["ROLLBACK", "ROLLBACK TO SAVEPOINT"])(
+    "disposes failed %s cleanup even when a rollback observer throws",
+    (failedStep) => {
+      const db = createDatabase();
+      const operationError = new Error("operation failed");
+      const observerError = new Error("rollback observer failed");
+      const nested = failedStep !== "ROLLBACK";
+      const events: string[] = [];
+      const rollbackErrors: unknown[] = [];
+      const facadeBeforeClose = getNodeSqliteKysely(db);
+      let facadeAtClose: unknown;
+      const close = db.close.bind(db);
+      vi.spyOn(db, "close").mockImplementation(() => {
+        events.push("close");
+        facadeAtClose = getNodeSqliteKysely(db);
+        close();
+      });
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql.startsWith(failedStep)) {
+          throw new Error("injected native cleanup failure");
+        }
+        exec(sql);
+      });
+      const stage = (label: string, fails: boolean) => {
+        stageSqliteTransactionState(db, {
+          stage: () => {
+            events.push(`stage:${label}`);
+          },
+          rollback: (error) => {
+            rollbackErrors.push(error);
+            events.push(`rollback:${label}`);
+            if (fails) {
+              throw observerError;
+            }
+          },
+          commit: () => {
+            events.push(`commit:${label}`);
+          },
+        });
+        deferSqlitePostCommitPublication(db, () => events.push(`publish:${label}`));
+      };
+      let nestedError: unknown;
+      let reportedError: unknown;
+      try {
+        withSqlitePostCommitPublications(db, () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            db.prepare("INSERT INTO entries VALUES ('outer', 'uncommitted')").run();
+            stage("outer", !nested);
+            if (!nested) {
+              throw operationError;
+            }
+            try {
+              withSqlitePostCommitPublications(db, () =>
+                runSqliteImmediateTransactionSync(db, () => {
+                  db.prepare("INSERT INTO entries VALUES ('inner', 'uncommitted')").run();
+                  stage("inner", true);
+                  throw operationError;
+                }),
+              );
+            } catch (error) {
+              nestedError = error;
+            }
+          }),
+        );
+      } catch (error) {
+        reportedError = error;
+      }
+
+      expect(db.isOpen).toBe(false);
+      expect(facadeAtClose).toBeDefined();
+      expect(facadeAtClose).not.toBe(facadeBeforeClose);
+      expect(events).toEqual(
+        nested
+          ? ["stage:outer", "stage:inner", "rollback:inner", "rollback:outer", "close"]
+          : ["stage:outer", "rollback:outer", "close"],
+      );
+      for (const error of rollbackErrors) {
+        expect(error).toBe(operationError);
+      }
+      expect(reportedError).toBeInstanceOf(AggregateError);
+      if (!(reportedError instanceof AggregateError)) {
+        throw new Error("Expected transaction and rollback observer failures to be aggregated");
+      }
+      expect(reportedError.cause).toBe(operationError);
+      expect(reportedError.errors).toHaveLength(2);
+      expect(reportedError.errors[0]).toBe(operationError);
+      expect(reportedError.errors[1]).toBe(observerError);
+      if (nested) {
+        expect(nestedError).toBe(reportedError);
+      }
+      const reuse = vi.fn();
+      let reuseError: unknown;
+      try {
+        runSqliteImmediateTransactionSync(db, reuse);
+      } catch (error) {
+        reuseError = error;
+      }
+      expect(reuseError).toBe(reportedError);
+      expect(reuse).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects Promise-returning operations and rolls back their synchronous writes", () => {
     const db = createDatabase();
 
@@ -174,197 +571,133 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(readEntries(db)).toEqual(["after"]);
   });
 
-  it("does not retry commit failures and rolls back the transaction", () => {
-    const execCalls: string[] = [];
-    const db = {
-      exec(sql: string) {
-        execCalls.push(sql);
-        if (sql === "COMMIT") {
-          throw Object.assign(new Error("database is busy"), { code: "SQLITE_BUSY" });
-        }
-      },
-      close() {},
-    } as import("node:sqlite").DatabaseSync;
-
-    expect(() => runSqliteImmediateTransactionSync(db, () => "not committed")).toThrow(
-      "database is busy",
+  function createContendedDatabase() {
+    const directory = tempDirs.make("openclaw-sqlite-service-diagnostics-");
+    const databasePath = path.join(directory, "admission.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    const writer = new DatabaseSync(databasePath);
+    openDatabases.push(db, writer);
+    db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE entries(id TEXT PRIMARY KEY)",
     );
-    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"]);
-  });
+    writer.exec("BEGIN IMMEDIATE");
+    return { db, writer };
+  }
 
-  it("clears cached state before closing after a rollback failure", () => {
-    const execCalls: string[] = [];
-    const operationError = new Error("operation failed");
-    const rollbackError = new Error("rollback failed");
-    let facadeAtClose: unknown;
-    const db = {
-      exec(sql: string) {
-        execCalls.push(sql);
-        if (sql === "ROLLBACK") {
-          throw rollbackError;
-        }
-      },
-      close() {
-        facadeAtClose = getNodeSqliteKysely(db);
-      },
-    } as import("node:sqlite").DatabaseSync;
-    const facadeBeforeClose = getNodeSqliteKysely(db);
-
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => {
-        throw operationError;
-      }),
-    ).toThrow(operationError);
-    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
-    expect(facadeAtClose).toBeDefined();
-    expect(facadeAtClose).not.toBe(facadeBeforeClose);
-  });
-
-  it("logs one structured warning for a terminal lock failure", () => {
-    const execCalls: string[] = [];
+  it("counts no-op admission services separately from retried native BEGIN attempts", async () => {
+    const { db, writer } = createContendedDatabase();
     const logger = { warn: vi.fn() };
-    const lockError = Object.assign(new Error("database is locked"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 5,
+    // Advance diagnostic wall time at real operations; the native admission deadline stays real.
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const exec = db.exec.bind(db);
+    vi.spyOn(db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE") {
+        now += 10;
+      }
+      exec(sql);
     });
-    const db = {
-      exec(sql: string) {
-        execCalls.push(sql);
-        if (sql === "BEGIN IMMEDIATE") {
-          throw lockError;
-        }
-      },
-    } as import("node:sqlite").DatabaseSync;
+    const noWork = vi.fn(() => {
+      now += 25;
+    });
+    const releaseWriter = vi.fn(() => {
+      writer.exec("COMMIT");
+      now += 1_200;
+    });
+    const write = vi.fn(() => db.prepare("INSERT INTO entries VALUES ('committed')").run());
 
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => "blocked", {
-        busyTimeoutMs: 5_000,
-        databaseLabel: "agent.sqlite",
-        logger,
-        operationLabel: "session.patch",
+    await withSqliteWriteAdmissionService(db, noWork, () =>
+      withSqliteWriteAdmissionService(db, releaseWriter, async () => {
+        runSqliteImmediateTransactionSync(db, write, {
+          busyTimeoutMs: 5_000,
+          databaseLabel: "service-diagnostics",
+          logger,
+          operationLabel: "service-proof",
+        });
       }),
-    ).toThrow(lockError);
-    expect(execCalls).toEqual(["BEGIN IMMEDIATE"]);
+    );
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(noWork).toHaveBeenCalledOnce();
+    expect(releaseWriter).toHaveBeenCalledOnce();
+    expect(writer.isTransaction).toBe(false);
+    expect(db.isTransaction).toBe(false);
+    expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
+    expect(db.prepare("SELECT id FROM entries").all()).toEqual([{ id: "committed" }]);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
-      "SQLite transaction lock wait failed",
+      "slow SQLite transaction step",
       expect.objectContaining({
-        async: false,
-        busyTimeoutMs: 5_000,
-        code: "ERR_SQLITE_ERROR",
-        database: "agent.sqlite",
-        failureKind: "lock-contention",
-        operation: "session.patch",
-        pid: process.pid,
-        sqliteErrcode: 5,
-        sqlitePrimaryCode: 5,
+        operation: "service-proof",
         step: "begin",
+        elapsedMs: 1_245,
+        beginAdmission: { nativeAttempts: 2, nativeMs: 20, serviceCalls: 2, serviceMs: 1_225 },
       }),
     );
   });
 
-  it("does not warn for busyTimeoutMs: 0 with fast successful transactions (regression)", () => {
-    const logger = { warn: vi.fn() };
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => {
-      const value = now;
-      now += 5; // Fast: 5ms per step, well under the 1000ms default threshold
-      return value;
-    });
-    const db = {
-      exec() {},
-    } as unknown as import("node:sqlite").DatabaseSync;
+  it.each([true, false])(
+    "preserves partial admission measurements and a thrown service error (lock error: %s)",
+    async (lockError) => {
+      const { db, writer } = createContendedDatabase();
+      const logger = { warn: vi.fn() };
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql === "BEGIN IMMEDIATE") {
+          now += 11;
+        }
+        exec(sql);
+      });
+      const failure = lockError
+        ? Object.assign(new Error("service lock failure"), { code: "SQLITE_BUSY", errcode: 5 })
+        : new Error("service authority refused");
+      const service = vi.fn(() => {
+        now += 1_300;
+        throw failure;
+      });
+      const write = vi.fn();
+      let thrown: unknown;
+      try {
+        await withSqliteWriteAdmissionService(db, service, async () => {
+          runSqliteImmediateTransactionSync(db, write, {
+            busyTimeoutMs: 5_000,
+            databaseLabel: "service-diagnostics",
+            logger,
+            operationLabel: "service-proof",
+          });
+        });
+      } catch (error) {
+        thrown = error;
+      }
 
-    runSqliteImmediateTransactionSync(db, () => "committed", {
-      busyTimeoutMs: 0,
-      databaseLabel: "agent.sqlite",
-      logger,
-      slowTransactionHoldMs: 0,
-    });
-
-    // busyTimeoutMs: 0 should NOT collapse threshold to 1ms.
-    // With the default 1000ms threshold, 5ms steps are not slow.
-    // Before the fix, this would have produced false-positive warnings.
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.anything(),
-    );
-  });
-
-  it("still warns for busyTimeoutMs: 0 when transaction crosses the default 1000ms threshold", () => {
-    const logger = { warn: vi.fn() };
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => {
-      const value = now;
-      now += 1_500; // Genuinely slow: 1500ms per step
-      return value;
-    });
-    const db = {
-      exec() {},
-    } as unknown as import("node:sqlite").DatabaseSync;
-
-    runSqliteImmediateTransactionSync(db, () => "committed", {
-      busyTimeoutMs: 0,
-      databaseLabel: "agent.sqlite",
-      logger,
-      slowTransactionHoldMs: 0,
-    });
-
-    // The 1000ms default threshold still catches genuinely slow transactions.
-    expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.anything(),
-    );
-  });
-
-  it("logs slow successful transaction lock waits", () => {
-    const logger = { warn: vi.fn() };
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => {
-      const value = now;
-      now += 1_500;
-      return value;
-    });
-    const db = {
-      exec() {},
-    } as unknown as import("node:sqlite").DatabaseSync;
-
-    runSqliteImmediateTransactionSync(db, () => "committed", {
-      busyTimeoutMs: 5_000,
-      databaseLabel: "agent.sqlite",
-      logger,
-      slowTransactionHoldMs: 0,
-    });
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.objectContaining({
-        async: false,
-        database: "agent.sqlite",
-        elapsedMs: 1_500,
-        pid: process.pid,
-        step: "begin",
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.objectContaining({
-        async: false,
-        database: "agent.sqlite",
-        elapsedMs: 1_500,
-        pid: process.pid,
-        step: "commit",
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction hold",
-      expect.objectContaining({
-        async: false,
-        database: "agent.sqlite",
-        pid: process.pid,
-      }),
-    );
-  });
+      expect(thrown).toBe(failure);
+      expect(service).toHaveBeenCalledOnce();
+      expect(write).not.toHaveBeenCalled();
+      expect(writer.isTransaction).toBe(true);
+      expect(db.isTransaction).toBe(false);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
+      writer.exec("ROLLBACK");
+      runSqliteImmediateTransactionSync(db, () =>
+        db.prepare("INSERT INTO entries VALUES ('after-refusal')").run(),
+      );
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([{ id: "after-refusal" }]);
+      expect(logger.warn).toHaveBeenCalledTimes(lockError ? 1 : 0);
+      if (lockError) {
+        expect(logger.warn).toHaveBeenCalledWith(
+          "SQLite transaction lock wait failed",
+          expect.objectContaining({
+            code: "SQLITE_BUSY",
+            step: "begin",
+            elapsedMs: 1_311,
+            beginAdmission: { nativeAttempts: 1, nativeMs: 11, serviceCalls: 1, serviceMs: 1_300 },
+          }),
+        );
+      }
+    },
+  );
 
   it("waits for a separate writer and exposes the synchronous event-loop cost", async () => {
     const holdMs = 200;
@@ -438,10 +771,13 @@ describe("runSqliteImmediateTransactionSync", () => {
         busyTimeoutMs: 20,
         code: "ERR_SQLITE_ERROR",
         failureKind: "lock-contention",
+        isMainThread,
         operation: "contention-proof",
+        pid: process.pid,
         sqliteErrcode: 5,
         sqlitePrimaryCode: 5,
         step: "begin",
+        threadId,
       }),
     );
 
@@ -451,5 +787,270 @@ describe("runSqliteImmediateTransactionSync", () => {
         db.prepare("INSERT INTO entries(id) VALUES (?)").run("after-timeout");
       }),
     ).not.toThrow();
+  });
+});
+
+describe("runSqliteImmediateTransaction", () => {
+  it("preserves a failed nested rollback when preparation declines the write", async () => {
+    const db = createDatabase();
+    db.exec("PRAGMA max_page_count=3");
+    let primaryError: unknown;
+    const prepare = vi.fn(async () => {
+      await Promise.resolve();
+      try {
+        runSqliteImmediateTransactionSync(db, () =>
+          runSqliteImmediateTransactionSync(db, () =>
+            db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run(),
+          ),
+        );
+      } catch (error) {
+        primaryError = error;
+      }
+      return undefined;
+    });
+    let reportedError: unknown;
+    try {
+      await runSqliteImmediateTransaction(db, prepare);
+    } catch (error) {
+      reportedError = error;
+    }
+    expect(primaryError).toMatchObject({ errcode: 13 });
+    expect(reportedError).toBe(primaryError);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(db.isOpen).toBe(false);
+  });
+
+  it.each([false, true])(
+    "preserves a failed rollback during admission yield (deadline expired: %s)",
+    async (expireDeadline) => {
+      const dir = tempDirs.make("openclaw-sqlite-admission-abort-");
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(path.join(dir, "index.sqlite"));
+      const writer = new DatabaseSync(path.join(dir, "index.sqlite"));
+      openDatabases.push(db, writer);
+      const busyTimeoutMs = expireDeadline ? 100 : 1000;
+      db.exec(`CREATE TABLE entries(id INTEGER PRIMARY KEY, value BLOB);
+        PRAGMA max_page_count=2; PRAGMA busy_timeout=${busyTimeoutMs}`);
+      writer.exec("BEGIN IMMEDIATE");
+      let primaryError: unknown;
+      let reportedError: unknown;
+      let faultScheduled = false;
+      let faultDone = Promise.resolve();
+      const write = vi.fn(() =>
+        db.prepare("INSERT INTO entries(value) VALUES ('unexpected')").run(),
+      );
+      const prepare = vi.fn(async () => {
+        db.prepare("SELECT COUNT(*) FROM entries").get();
+        if (!faultScheduled) {
+          faultScheduled = true;
+          faultDone = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              try {
+                writer.exec("ROLLBACK");
+                runSqliteImmediateTransactionSync(db, () =>
+                  runSqliteImmediateTransactionSync(db, () =>
+                    db.prepare("INSERT INTO entries(value) VALUES (zeroblob(65536))").run(),
+                  ),
+                );
+              } catch (error) {
+                primaryError = error;
+              } finally {
+                // Keep the admission timer from resuming until its real deadline expires.
+                if (expireDeadline) {
+                  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, busyTimeoutMs + 20);
+                }
+                resolve();
+              }
+            });
+          });
+        }
+        return write;
+      });
+      try {
+        await runSqliteImmediateTransaction(db, prepare);
+      } catch (error) {
+        reportedError = error;
+      }
+      await faultDone;
+      expect(primaryError).toMatchObject({ errcode: 13 });
+      expect(reportedError).toBe(primaryError);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isOpen).toBe(false);
+      expect(writer.prepare("SELECT id FROM entries").all()).toEqual([]);
+    },
+  );
+
+  it("preserves a failed rollback caught while waiting for owner admission", async () => {
+    const db = createDatabase();
+    db.exec("PRAGMA max_page_count=3");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const write = vi.fn(() => "unexpected");
+    const pending = runSqliteImmediateTransaction(
+      db,
+      async () => write,
+      undefined,
+      async (admittedWrite) => {
+        entered.resolve();
+        await release.promise;
+        return admittedWrite();
+      },
+    );
+    let primaryError: unknown;
+    try {
+      await entered.promise;
+      try {
+        runSqliteImmediateTransactionSync(db, () =>
+          runSqliteImmediateTransactionSync(db, () =>
+            db.prepare("INSERT INTO entries VALUES ('full', zeroblob(65536))").run(),
+          ),
+        );
+      } catch (error) {
+        primaryError = error;
+      }
+      expect(primaryError).toMatchObject({ errcode: 13 });
+      expect(db.isOpen).toBe(false);
+      release.resolve();
+      await expect(pending).rejects.toBe(primaryError);
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it("waits for the owner's admission before beginning a prepared write", async () => {
+    const db = createDatabase();
+    const admissionStarted = createDeferredCore();
+    const releaseAdmission = createDeferredCore();
+    const pending = runSqliteImmediateTransaction(
+      db,
+      async () => () => {
+        db.prepare("INSERT INTO entries(id, value) VALUES ('admitted', 'value')").run();
+        return "committed";
+      },
+      undefined,
+      async (write) => {
+        admissionStarted.resolve();
+        await releaseAdmission.promise;
+        return write();
+      },
+    );
+    try {
+      const first = await Promise.race([
+        admissionStarted.promise.then(() => "admission"),
+        pending.then(() => "committed"),
+      ]);
+      expect(first).toBe("admission");
+      expect(db.isTransaction).toBe(false);
+      expect(readEntries(db)).toEqual([]);
+      releaseAdmission.resolve();
+      await expect(pending).resolves.toBe("committed");
+      expect(readEntries(db)).toEqual(["admitted"]);
+    } finally {
+      releaseAdmission.resolve();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it.each(["retired", "transaction"])(
+    "does not write after owner admission is %s",
+    async (state) => {
+      const db = createDatabase();
+      const write = vi.fn(() => "unexpected");
+      await expect(
+        runSqliteImmediateTransaction(
+          db,
+          async () => write,
+          undefined,
+          async (admittedWrite) => {
+            if (state === "retired") {
+              throw new Error("owner retired");
+            }
+            db.exec("BEGIN");
+            return admittedWrite();
+          },
+        ),
+      ).rejects.toThrow(state === "retired" ? "owner retired" : /transaction/);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isTransaction).toBe(state === "transaction");
+    },
+  );
+
+  it("repeats preparation and can decline a write while another writer remains active", async () => {
+    const dir = tempDirs.make("openclaw-sqlite-preparation-");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(dir, "index.sqlite"));
+    const writer = new DatabaseSync(path.join(dir, "index.sqlite"));
+    openDatabases.push(db, writer);
+    db.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; CREATE TABLE entries(id TEXT PRIMARY KEY);",
+    );
+    writer.exec("BEGIN IMMEDIATE");
+    let eligible = true;
+    let preparations = 0;
+    const write = vi.fn(() => db.prepare("INSERT INTO entries VALUES ('unexpected')").run());
+    const pending = runSqliteImmediateTransaction(db, async () => {
+      preparations += 1;
+      expect(db.isTransaction).toBe(false);
+      return eligible ? write : undefined;
+    });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(preparations).toBeGreaterThan(1));
+      eligible = false;
+      await expect(pending).resolves.toBeUndefined();
+      expect(writer.isTransaction).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([]);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    } finally {
+      writer.exec("ROLLBACK");
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it.each(["existing", "preparation"])(
+    "rejects a transaction from %s before admitting writes",
+    async (owner) => {
+      const db = createDatabase();
+      const write = vi.fn();
+      const prepare = vi.fn(async () => {
+        db.exec("BEGIN");
+        return write;
+      });
+      if (owner === "existing") {
+        db.exec("BEGIN");
+      }
+      await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toThrow(/transaction/);
+      expect(prepare).toHaveBeenCalledTimes(owner === "existing" ? 0 : 1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isTransaction).toBe(true);
+      db.exec("ROLLBACK");
+    },
+  );
+
+  it("prepares without holding a transaction and never replays an admitted write", async () => {
+    const db = createDatabase();
+    db.exec("PRAGMA busy_timeout = 50");
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+    let calls = 0;
+    await expect(
+      runSqliteImmediateTransaction(db, async () => {
+        await Promise.resolve();
+        expect(db.isTransaction).toBe(false);
+        return () => {
+          calls += 1;
+          expect(db.isTransaction).toBe(true);
+          expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(50);
+          db.prepare("INSERT INTO entries(id, value) VALUES ('aborted', 'value')").run();
+          throw lockError;
+        };
+      }),
+    ).rejects.toBe(lockError);
+    expect(calls).toBe(1);
+    expect(readEntries(db)).toEqual([]);
+    expect(db.isTransaction).toBe(false);
   });
 });

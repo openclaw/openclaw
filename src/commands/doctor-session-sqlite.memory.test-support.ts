@@ -3,11 +3,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { withSuppressedNotes } from "../../packages/terminal-core/src/note.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import { getNodeSqliteKysely, prepareSqliteQueryIterator } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 export const sqliteImportMemorySupportUrl = import.meta.url;
 
@@ -17,8 +22,10 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
-  const eventCount = scenario === "deep" ? 100_000 : scenario === "batch" ? 64 : 8;
-  const payloadBytes = scenario === "deep" ? 4096 : scenario === "batch" ? 32768 : 256;
+  // Keep 390.625 MiB of public payload above the child heap cap, with a deep
+  // ancestry chain but fewer per-event SQLite writes and projection entries.
+  const eventCount = scenario === "public" ? 25_000 : scenario === "batch" ? 64 : 8;
+  const payloadBytes = scenario === "public" ? 16_384 : scenario === "batch" ? 32768 : 256;
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -79,25 +86,46 @@ async function main() {
   fs.writeFileSync(storePath, JSON.stringify(store));
   process.stderr.write(`seeded ${sessionCount} sessions x ${eventCount} events; importing\n`);
   const started = performance.now();
+  if (scenario === "public") {
+    await withSuppressedNotes(() =>
+      noteSessionTranscriptHealth({
+        cfg: { agents: { entries: { main: {} } } },
+        env: process.env,
+        shouldRepair: true,
+      }),
+    );
+    assert(!fs.readdirSync(sessionsDir).some((name) => name.includes(".pre-doctor-")));
+  }
   const report = await runDoctorSessionSqlite({
     mode: "import",
     store: storePath,
     env: process.env,
   });
   assert.equal(report.totals.issues, 0, JSON.stringify(report.targets.map((t) => t.issues)));
-  assert.equal(report.totals.importedEntries, sessionCount);
-  assert.equal(report.totals.importedTranscriptEvents, sessionCount * (eventCount + 2));
+  assert.equal(report.totals.importedEntries, scenario === "public" ? 0 : sessionCount);
+  assert.equal(
+    report.totals.importedTranscriptEvents,
+    scenario === "public" ? 0 : sessionCount * (eventCount + 2),
+  );
   const db = openNodeSqliteDatabase(resolveTargetSqlitePath({ agentId: "main", storePath }), {
     readOnly: true,
   });
   try {
-    const read = db.prepare(
-      "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
+    const read = prepareSqliteQueryIterator<string, { event_json: string }>(db, (parameter) =>
+      getNodeSqliteKysely<Pick<DB, "transcript_events">>(db)
+        .selectFrom("transcript_events")
+        .select(transcriptEventJsonSql(db).as("event_json"))
+        .where(
+          "session_id",
+          "=",
+          parameter((sessionId) => sessionId),
+        )
+        .orderBy("seq"),
     );
     for (const [sessionId, digest] of expected) {
       const hash = createHash("sha256");
-      for (const row of read.iterate(sessionId)) {
-        hash.update(String(row.event_json)).update("\n");
+      for (const row of read(sessionId)) {
+        hash.update(row.event_json).update("\n");
       }
       assert.equal(hash.digest("hex"), digest);
       assert.deepEqual(

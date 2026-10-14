@@ -46,7 +46,7 @@ class SystemHandlerTest {
 
   @Test
   fun handleSystemNotify_rejectsEmptyNotification() {
-    val handler = SystemHandler.forTesting(poster = FakePoster())
+    val handler = SystemHandler(poster = FakePoster())
 
     val result = handler.handleSystemNotify("""{"title":"   ","body":"  "}""")
 
@@ -56,7 +56,7 @@ class SystemHandlerTest {
 
   @Test
   fun handleSystemNotify_rejectsInvalidRequestObject() {
-    val handler = SystemHandler.forTesting(poster = FakePoster())
+    val handler = SystemHandler(poster = FakePoster())
 
     val result = handler.handleSystemNotify("""{"title":"OpenClaw"}""")
 
@@ -67,7 +67,7 @@ class SystemHandlerTest {
   @Test
   fun handleSystemNotify_postsNotification() {
     val poster = FakePoster()
-    val handler = SystemHandler.forTesting(poster = poster)
+    val handler = SystemHandler(poster = poster)
 
     val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done","priority":"active"}""")
 
@@ -117,9 +117,31 @@ class SystemHandlerTest {
   }
 
   @Test
+  @Config(sdk = [31, 34])
+  fun handleSystemNotify_usesChannelImportanceForEachPriority() {
+    val context: Application = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val handler = SystemHandler(context)
+
+    for ((priority, importance) in listOf(
+      "active" to NotificationManager.IMPORTANCE_DEFAULT,
+      "passive" to NotificationManager.IMPORTANCE_LOW,
+      "timeSensitive" to NotificationManager.IMPORTANCE_HIGH,
+    )) {
+      val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done","priority":"$priority"}""")
+
+      assertTrue(result.ok)
+      val channelId = "openclaw.system.notify.${priority.lowercase()}"
+      assertEquals(importance, manager.getNotificationChannel(channelId).importance)
+      assertTrue(manager.activeNotifications.any { it.notification.channelId == channelId })
+    }
+  }
+
+  @Test
   fun handleSystemNotify_trimsAndPassesOptionalFields() {
     val poster = FakePoster()
-    val handler = SystemHandler.forTesting(poster = poster)
+    val handler = SystemHandler(poster = poster)
 
     val result =
       handler.handleSystemNotify(
@@ -155,7 +177,7 @@ class SystemHandlerTest {
 
   @Test
   fun handleSystemNotify_returnsUnauthorizedWhenPostFailsPermission() {
-    val handler = SystemHandler.forTesting(poster = ThrowingPoster(error = SecurityException("denied")))
+    val handler = SystemHandler(poster = ThrowingPoster(error = SecurityException("denied")))
 
     val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done"}""")
 
@@ -165,7 +187,7 @@ class SystemHandlerTest {
 
   @Test
   fun handleSystemNotify_returnsUnavailableWhenPostFailsUnexpectedly() {
-    val handler = SystemHandler.forTesting(poster = ThrowingPoster(error = IllegalStateException("boom")))
+    val handler = SystemHandler(poster = ThrowingPoster(error = IllegalStateException("boom")))
 
     val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done"}""")
 

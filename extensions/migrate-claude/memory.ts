@@ -1,19 +1,19 @@
-// Migrate Claude plugin module implements memory behavior.
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
+  readMemoryDir,
   type ClaudeSource,
 } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
 
@@ -21,10 +21,7 @@ async function lstatIfExists(filePath: string) {
   try {
     return await fs.lstat(filePath);
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
+    const code = extractErrorCode(error);
     if (code === "ENOENT" || code === "ENOTDIR") {
       return undefined;
     }
@@ -57,16 +54,6 @@ async function addInstructionItem(params: {
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-async function readMemoryDir(dir: string): Promise<Dirent[]> {
-  try {
-    return await fs.readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    throw new Error(`Unable to read Claude Code auto-memory directory: ${dir}`, {
-      cause: error,
-    });
-  }
 }
 
 type MarkdownFileScan = {
@@ -152,7 +139,7 @@ async function assertSafeMemoryDestination(
 
 async function buildAutoMemoryItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
@@ -222,33 +209,35 @@ async function buildAutoMemoryItems(params: {
 
 export async function buildMemoryItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
   includeInstructions?: boolean;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
   if (params.includeInstructions !== false) {
-    await addInstructionItem({
-      items,
-      id: "workspace:CLAUDE.md",
-      source: params.source.projectMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "workspace:.claude/CLAUDE.md",
-      source: params.source.projectDotClaudeMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project .claude/CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "memory:user-CLAUDE.md",
-      source: params.source.userMemoryPath,
-      target: path.join(params.targets.workspaceDir, "USER.md"),
-      sourceLabel: "user ~/.claude/CLAUDE.md",
-    });
+    for (const [id, source, target, sourceLabel] of [
+      ["workspace:CLAUDE.md", params.source.projectMemoryPath, "AGENTS.md", "project CLAUDE.md"],
+      [
+        "workspace:.claude/CLAUDE.md",
+        params.source.projectDotClaudeMemoryPath,
+        "AGENTS.md",
+        "project .claude/CLAUDE.md",
+      ],
+      [
+        "memory:user-CLAUDE.md",
+        params.source.userMemoryPath,
+        "USER.md",
+        "user ~/.claude/CLAUDE.md",
+      ],
+    ] as const) {
+      await addInstructionItem({
+        items,
+        id,
+        source,
+        target: path.join(params.targets.workspaceDir, target),
+        sourceLabel,
+      });
+    }
   }
   items.push(...(await buildAutoMemoryItems(params)));
   return items;

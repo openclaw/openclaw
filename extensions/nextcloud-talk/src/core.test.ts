@@ -1,4 +1,5 @@
 // Nextcloud Talk tests cover core plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   looksLikeNextcloudTalkTargetId,
@@ -12,14 +13,6 @@ import {
   generateNextcloudTalkSignature,
   verifyNextcloudTalkSignature,
 } from "./signature.js";
-
-function requireFirstTimingSafeEqualCall(mock: ReturnType<typeof vi.fn>): [unknown, unknown] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected timingSafeEqual call");
-  }
-  return call as [unknown, unknown];
-}
 
 describe("nextcloud talk core", () => {
   it("marks ambiguous room-token session routes as best-effort", () => {
@@ -112,9 +105,9 @@ describe("nextcloud talk core", () => {
 
     expect(
       extractNextcloudTalkHeaders({
-        "x-nextcloud-talk-signature": "sig",
-        "x-nextcloud-talk-random": "rand",
-        "x-nextcloud-talk-backend": "backend",
+        "x-nextcloud-talk-signature": ["sig", "ignored"],
+        "x-nextcloud-talk-random": ["rand", "ignored"],
+        "x-nextcloud-talk-backend": ["backend", "ignored"],
       }),
     ).toEqual({
       signature: "sig",
@@ -161,22 +154,9 @@ describe("nextcloud talk core", () => {
     ).toBe(false);
   });
 
-  it("takes the first value from array-backed headers", () => {
-    expect(
-      extractNextcloudTalkHeaders({
-        "x-nextcloud-talk-signature": ["sig1", "sig2"],
-        "x-nextcloud-talk-random": ["rand1", "rand2"],
-        "x-nextcloud-talk-backend": ["backend1", "backend2"],
-      }),
-    ).toEqual({
-      signature: "sig1",
-      random: "rand1",
-      backend: "backend1",
-    });
-  });
-
   it("still runs timingSafeEqual when the supplied signature length mismatches", async () => {
-    const timingSafeEqualMock = vi.fn();
+    const timingSafeEqualMock =
+      vi.fn<(left: NodeJS.ArrayBufferView, right: NodeJS.ArrayBufferView) => void>();
 
     vi.resetModules();
     vi.doMock("node:crypto", async (importOriginal) => {
@@ -212,7 +192,10 @@ describe("nextcloud talk core", () => {
       ).toBe(false);
 
       expect(timingSafeEqualMock).toHaveBeenCalledOnce();
-      const [leftBuffer, rightBuffer] = requireFirstTimingSafeEqualCall(timingSafeEqualMock);
+      const [leftBuffer, rightBuffer] = expectDefined(
+        timingSafeEqualMock.mock.calls[0],
+        "timingSafeEqual call",
+      );
       expect(Buffer.isBuffer(leftBuffer)).toBe(true);
       expect(Buffer.isBuffer(rightBuffer)).toBe(true);
       if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {

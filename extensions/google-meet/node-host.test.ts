@@ -1,7 +1,8 @@
 // Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 
 type MockChild = EventEmitter & {
   exitCode: number | null;
@@ -13,8 +14,17 @@ type MockChild = EventEmitter & {
   stdin?: EventEmitter & { write: ReturnType<typeof vi.fn> };
 };
 
+function finishMockChild(child: MockChild, code: number | null, signal: NodeJS.Signals | null) {
+  child.exitCode = code;
+  child.signalCode = signal;
+  child.emit("exit", code, signal);
+  // Capture EOF follows exit; otherwise a finite fake waits for the real drain deadline.
+  child.stdout?.emit("end");
+  child.stdout?.emit("close");
+  child.emit("close", code, signal);
+}
+
 const children: MockChild[] = [];
-let handleGoogleMeetNodeHostCommand: typeof import("./src/node-host.js").handleGoogleMeetNodeHostCommand;
 let originalPlatform: NodeJS.Platform;
 
 const MEET_URL = "https://meet.google.com/xyz-abcd-uvw";
@@ -65,8 +75,7 @@ vi.mock("node:child_process", async (importOriginal) => {
           return true;
         }
         queueMicrotask(() => {
-          child.signalCode = resolvedSignal;
-          child.emit("exit", null, resolvedSignal);
+          finishMockChild(child, null, resolvedSignal);
         });
         return true;
       });
@@ -77,10 +86,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 describe("google-meet node host bridge sessions", () => {
-  beforeAll(async () => {
-    ({ handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js"));
-  });
-
   beforeEach(() => {
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
@@ -366,8 +371,7 @@ describe("google-meet node host bridge sessions", () => {
     expect(typeof activeList.bridges[0]?.createdAt).toBe("string");
 
     if (children[1]) {
-      children[1].exitCode = 0;
-      children[1].emit("exit", 0, null);
+      finishMockChild(children[1], 0, null);
     }
 
     const afterExitList = await invokeNodeHostJson(listParams);

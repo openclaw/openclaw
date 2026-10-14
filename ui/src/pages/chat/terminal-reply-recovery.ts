@@ -6,11 +6,14 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText, shouldHideAssistantChatMessage } from "./chat-history.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { getChatSessionProjection, readChatSessionProjectionScope } from "./history-merge.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 
 function terminalReplyDisplaySignature(message: unknown): string | null {
   if (shouldHideAssistantChatMessage(message)) {
@@ -54,8 +57,7 @@ export function readTerminalReplyRecoveryState(
   acceptedFinal: boolean;
   terminalReplySignatures: ReadonlySet<string>;
 } {
-  const scope = readChatSessionProjectionScope(state);
-  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  const projection = getChatSessionProjection(state);
   const run = projection.runs[runId];
   const candidates: unknown[] = run?.message === undefined ? [] : [run.message];
   for (const message of projection.messages) {

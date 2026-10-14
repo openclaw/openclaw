@@ -20,6 +20,7 @@ type TabGroupSnapshot = { id: number; title?: string };
 
 export type TabAccessEpoch = Readonly<{
   revision: number;
+  groupRevision: number;
   tabRevision: number;
   documentRevision?: number;
 }>;
@@ -54,6 +55,7 @@ export type TabAccessChromeApi = {
 export type TabAccessPolicy = {
   initialize(initialMode?: TabAccessMode, initialEnabled?: boolean): Promise<void>;
   readonly mode: TabAccessMode;
+  readonly discoveryRevision: number;
   setMode(nextMode: TabAccessMode): TabAccessMode;
   setEnabled(nextEnabled: boolean): void;
   beginTransition(): void;
@@ -77,13 +79,14 @@ export type TabAccessPolicy = {
     isConnectionCurrent: () => boolean,
     sendCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>,
   ): Promise<unknown>;
-  invalidateDocumentGroup(group?: TabGroupSnapshot): void;
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
+    change: { url?: string; groupId?: number; status?: string },
   ): TabAccessEpoch | undefined;
-  invalidateAll(group?: TabGroupSnapshot): void;
+  invalidateGroup(group?: TabGroupSnapshot, removed?: boolean): void;
+  invalidateAll(): void;
   observeTabUpdate(
     tabId: number,
     change: { url?: string; groupId?: number; status?: string },
@@ -95,10 +98,10 @@ export type TabAccessPolicy = {
     operation: CreatedTabOperation,
   ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
-  requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
-  requireTabAfterNavigation(
+  requireTab(
     tabId: number,
-    epoch: TabAccessEpoch,
+    epoch?: TabAccessEpoch,
+    afterNavigation?: boolean,
   ): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;

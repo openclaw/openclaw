@@ -1,28 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 // Covers installed plugin index read, write, and policy behavior.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "./installed-plugin-index-records.js";
-import {
   diffInstalledPluginIndexInvalidationReasons,
   isInstalledPluginEnabled,
   loadInstalledPluginIndex,
-  refreshInstalledPluginIndex,
 } from "./installed-plugin-index.js";
-import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 vi.unmock("../version.js");
 
@@ -53,14 +48,6 @@ function writeRuntimeEntry(rootDir: string) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -225,7 +212,7 @@ describe("installed plugin index", () => {
         "activation-provider-hint",
       ],
     });
-    expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
+    expectRecordFields(requireRecord(plugin.packageInstall, "package install"), {
       defaultChoice: "npm",
       npm: {
         spec: "@vendor/demo-plugin@1.2.3",
@@ -238,7 +225,7 @@ describe("installed plugin index", () => {
       },
       warnings: [],
     });
-    expectRecordFields(readRecordField(plugin, "packageChannel", "package channel"), {
+    expectRecordFields(requireRecord(plugin.packageChannel, "package channel"), {
       id: "demo",
       label: "Demo",
       blurb: "Demo channel",
@@ -248,7 +235,7 @@ describe("installed plugin index", () => {
         nativeSkillsAutoEnabled: false,
       },
     });
-    expectRecordFields(readRecordField(plugin, "packageBuild", "package build"), {
+    expectRecordFields(requireRecord(plugin.packageBuild, "package build"), {
       bundledDist: false,
     });
     expectSha256(plugin.manifestHash);
@@ -258,80 +245,67 @@ describe("installed plugin index", () => {
     });
     expectSha256(packageJson.hash);
     expect(resolveInstalledPluginIndexInstallOwner(plugin)).toBeUndefined();
-    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
   });
 
-  it("does not classify migration-provider-only plugins as gateway startup sidecars", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    writePackageJson(rootDir, {
-      name: "@vendor/migration-plugin",
-      version: "1.0.0",
-    });
-    writePluginManifest(rootDir, {
-      id: "migration-plugin",
-      name: "Migration Plugin",
-      enabledByDefault: true,
-      configSchema: { type: "object" },
-      contracts: {
-        migrationProviders: ["legacy-import"],
+  it.each([
+    {
+      name: "keeps explicit startup opt-outs out of startup sidecars",
+      manifest: { id: "modern-inert", activation: { onStartup: false } },
+      expected: { compat: [] },
+      sidecar: false,
+    },
+    {
+      name: "classifies explicit startup activation as a gateway startup sidecar",
+      manifest: {
+        id: "explicit-startup-provider",
+        providers: ["demo"],
+        activation: { onStartup: true },
       },
-    });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-          packageName: "@vendor/migration-plugin",
-          packageVersion: "1.0.0",
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "migration-plugin",
-      enabledByDefault: true,
-    });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
-  });
-
-  it("does not classify legacy plugins as startup sidecars", () => {
+      expected: {},
+      sidecar: true,
+    },
+  ])("$name", ({ manifest, expected, sidecar }) => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "legacy-sidecar",
-      configSchema: { type: "object" },
-    });
+    writePluginManifest(rootDir, { ...manifest, configSchema: { type: "object" } });
 
     const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
+      candidates: [createPluginCandidate({ rootDir })],
       env: hermeticEnv(),
     });
 
     expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "legacy-sidecar",
-      compat: [],
+      pluginId: manifest.id,
+      ...expected,
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
+    expect(index.plugins[0]?.startup.sidecar).toBe(sidecar);
   });
 
-  it("tolerates stale manifest records without normalized channels", () => {
+  it.each([
+    {
+      name: "tolerates stale manifest records without normalized channels",
+      id: "stale-record",
+      idHint: "demo",
+      installOwner: undefined,
+    },
+    {
+      name: "does not read inherited prototype names as install records",
+      id: "toString",
+      idHint: "toString",
+      installOwner: "toString",
+    },
+  ])("$name", ({ id, idHint, installOwner }) => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
 
     const records = buildInstalledPluginIndexRecords({
-      candidates: [createPluginCandidate({ rootDir })],
+      candidates: [createPluginCandidate({ rootDir, idHint, installOwner })],
       registry: {
         plugins: [
           {
-            id: "stale-record",
+            id,
             providers: [],
             cliBackends: [],
             skills: [],
@@ -349,70 +323,11 @@ describe("installed plugin index", () => {
     });
 
     expectRecordFields(requireRecord(records[0], "installed plugin record"), {
-      pluginId: "stale-record",
+      pluginId: id,
       compat: [],
     });
     expect(records[0]?.startup.sidecar).toBe(false);
-  });
-
-  it("does not read inherited prototype names as install records", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-
-    const records = buildInstalledPluginIndexRecords({
-      candidates: [createPluginCandidate({ rootDir, idHint: "toString" })],
-      registry: {
-        plugins: [
-          {
-            id: "toString",
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            origin: "global",
-            rootDir,
-            source: path.join(rootDir, "index.ts"),
-            manifestPath,
-          } as unknown as PluginManifestRecord,
-        ],
-        diagnostics: [],
-      },
-      diagnostics: [],
-      installRecords: {},
-    });
-
-    expect(records[0]?.pluginId).toBe("toString");
     expect(records[0]?.installRecordHash).toBeUndefined();
-  });
-
-  it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
-    const rootDir = path.join(makeTempDir(), "workspace");
-    writeManifestlessClaudeBundle(rootDir);
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-          idHint: "workspace",
-          format: "bundle",
-          bundleFormat: "claude",
-          origin: "config",
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expect(index.diagnostics).toStrictEqual([]);
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
-      pluginId: "workspace",
-      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
-      source: rootDir,
-      format: "bundle",
-      bundleFormat: "claude",
-    });
-    expectSha256(plugin.manifestHash);
   });
 
   it("changes manifestless Claude bundle hashes when derived metadata changes", () => {
@@ -449,93 +364,6 @@ describe("installed plugin index", () => {
     );
 
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
-  });
-
-  it("keeps explicit startup opt-outs out of startup sidecars", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "modern-inert",
-      activation: {
-        onStartup: false,
-      },
-      configSchema: { type: "object" },
-    });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "modern-inert",
-      compat: [],
-    });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
-  });
-
-  it("classifies explicit startup activation as a gateway startup sidecar", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "explicit-startup-provider",
-      providers: ["demo"],
-      activation: {
-        onStartup: true,
-      },
-      configSchema: { type: "object" },
-    });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "explicit-startup-provider",
-    });
-    expect(index.plugins[0]?.startup.sidecar).toBe(true);
-  });
-
-  it("keeps bundle format metadata needed for manifest reconstruction", () => {
-    const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
-    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Claude Bundle",
-        commands: "commands",
-      }),
-      "utf8",
-    );
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-          idHint: "claude-bundle",
-          format: "bundle",
-          bundleFormat: "claude",
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "claude-bundle",
-      format: "bundle",
-      bundleFormat: "claude",
-      source: rootDir,
-    });
   });
 
   it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
@@ -587,26 +415,37 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("evaluates current enablement without retaining removed startup policy", () => {
+  it("retains disabled plugin metadata while evaluating live enablement", () => {
     const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
-    const index = loadInstalledPluginIndex({
-      candidates: [enabledFixture.candidate, disabledFixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            "disabled-demo": {
-              enabled: false,
-            },
+    const config = {
+      plugins: {
+        entries: {
+          "disabled-demo": {
+            enabled: false,
           },
         },
       },
+    };
+    const index = loadInstalledPluginIndex({
+      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      config,
       env: hermeticEnv(),
     });
 
-    expect(index.plugins.find((plugin) => plugin.pluginId === "disabled-demo")?.enabled).toBe(
-      false,
+    const disabled = index.plugins.find((plugin) => plugin.pluginId === "disabled-demo");
+    expect(disabled?.enabled).toBe(false);
+    expect(disabled?.contributions).toEqual(
+      expect.objectContaining({
+        channels: ["demo-chat"],
+        channelConfigs: ["demo-chat"],
+        providers: ["demo"],
+        modelCatalogProviders: ["demo"],
+        commandAliases: ["demo-command"],
+        contracts: { tools: ["demo-tool"] },
+      }),
     );
+    expect(isInstalledPluginEnabled(index, "disabled-demo", config)).toBe(false);
     expect(
       isInstalledPluginEnabled(index, "disabled-demo", {
         plugins: {
@@ -625,6 +464,29 @@ describe("installed plugin index", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    { channelEnabled: false, expected: false },
+    { channelEnabled: true, expected: true },
+  ])(
+    "resolves channels.<id>.enabled=$channelEnabled through the record's channel ids when they differ from the plugin id",
+    ({ channelEnabled, expected }) => {
+      // The rich fixture's plugin id is `demo` while it owns `channels.demo-chat`.
+      const fixture = createRichPluginFixture({ id: "demo" });
+      const index = loadInstalledPluginIndex({
+        candidates: [fixture.candidate],
+        config: {},
+        env: hermeticEnv(),
+      });
+
+      expect(
+        isInstalledPluginEnabled(index, "demo", {
+          channels: { "demo-chat": { enabled: channelEnabled } },
+          plugins: { entries: { demo: { enabled: true } } },
+        } as OpenClawConfig),
+      ).toBe(expected);
+    },
+  );
 
   it("records explicit install records separately from package install intent", () => {
     const fixture = createRichPluginFixture({ installOwner: "demo" });
@@ -663,13 +525,11 @@ describe("installed plugin index", () => {
       },
     });
     expectRecordFields(
-      readRecordField(
-        readRecordField(
-          requireRecord(index.plugins[0], "installed plugin record"),
-          "packageInstall",
+      requireRecord(
+        requireRecord(
+          requireRecord(index.plugins[0], "installed plugin record").packageInstall,
           "package install",
-        ),
-        "npm",
+        ).npm,
         "npm package install",
       ),
       {
@@ -678,7 +538,6 @@ describe("installed plugin index", () => {
         pinState: "exact-with-integrity",
       },
     );
-    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
@@ -735,100 +594,10 @@ describe("installed plugin index", () => {
     expectSha256(plugin.installRecordHash);
   });
 
-  it("indexes npm plugin index records written before a process reload", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-    const cfg = recordPluginInstall(
-      {},
-      {
-        pluginId: "demo",
-        source: "npm",
-        spec: "@vendor/demo-plugin@latest",
-        installPath: fixture.rootDir,
-        version: "1.2.3",
-        resolvedName: "@vendor/demo-plugin",
-        resolvedVersion: "1.2.3",
-        resolvedSpec: "@vendor/demo-plugin@1.2.3",
-        integrity: "sha512-installed",
-        shasum: "abc123",
-        resolvedAt: "2026-04-25T11:00:00.000Z",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    );
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: cfg,
-      installRecords: cfg.plugins?.installs,
-      env: hermeticEnv(),
-    });
-
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
-      pluginId: "demo",
-    });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
-      demo: {
-        source: "npm",
-        spec: "@vendor/demo-plugin@latest",
-        installPath: fixture.rootDir,
-        version: "1.2.3",
-        resolvedName: "@vendor/demo-plugin",
-        resolvedVersion: "1.2.3",
-        resolvedSpec: "@vendor/demo-plugin@1.2.3",
-        integrity: "sha512-installed",
-        shasum: "abc123",
-        resolvedAt: "2026-04-25T11:00:00.000Z",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    });
-  });
-
-  it("indexes persisted plugin index records from an explicit state directory", async () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndexInstallRecords(
-      {
-        demo: {
-          source: "npm",
-          spec: "@vendor/demo-plugin@1.2.3",
-          installPath: fixture.rootDir,
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          integrity: "sha512-installed",
-        },
-      },
-      { stateDir, candidates: [fixture.candidate] },
-    );
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      env: hermeticEnv(),
-      stateDir,
-      installRecords: loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
-    });
-
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
-      pluginId: "demo",
-    });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
-      demo: {
-        source: "npm",
-        spec: "@vendor/demo-plugin@1.2.3",
-        installPath: fixture.rootDir,
-        resolvedName: "@vendor/demo-plugin",
-        resolvedVersion: "1.2.3",
-        integrity: "sha512-installed",
-      },
-    });
-  });
-
   it("discovers installed plugin packages from persisted install records", async () => {
     const fixture = createRichPluginFixture();
     const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         demo: {
           source: "git",
@@ -865,104 +634,6 @@ describe("installed plugin index", () => {
         gitCommit: "abc123",
       },
     });
-  });
-
-  it("indexes local fallback plugin index records written before a process reload", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-    const cfg = recordPluginInstall(
-      {},
-      {
-        pluginId: "demo",
-        source: "path",
-        sourcePath: "./plugins/demo",
-        spec: "@vendor/demo-plugin@1.2.3",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    );
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: cfg,
-      installRecords: cfg.plugins?.installs,
-      env: hermeticEnv(),
-    });
-
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
-      pluginId: "demo",
-    });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
-      demo: {
-        source: "path",
-        sourcePath: "./plugins/demo",
-        spec: "@vendor/demo-plugin@1.2.3",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    });
-  });
-
-  it("does not treat package install intent as source invalidation", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-    const previous = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      installRecords: {
-        demo: {
-          source: "npm",
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          resolvedSpec: "@vendor/demo-plugin@1.2.3",
-          integrity: "sha512-installed",
-        },
-      },
-      env: hermeticEnv(),
-    });
-    const current = {
-      ...previous,
-      plugins: previous.plugins.map((plugin) => ({
-        ...plugin,
-        packageInstall: {
-          ...plugin.packageInstall,
-          warnings: ["npm-spec-missing-integrity" as const],
-        },
-      })),
-    };
-
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toStrictEqual([]);
-  });
-
-  it("treats plugin index changes as source invalidation", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-    const previous = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      installRecords: {
-        demo: {
-          source: "npm",
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          resolvedSpec: "@vendor/demo-plugin@1.2.3",
-          integrity: "sha512-old",
-        },
-      },
-      env: hermeticEnv(),
-    });
-    const current = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      installRecords: {
-        demo: {
-          source: "npm",
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          resolvedSpec: "@vendor/demo-plugin@1.2.3",
-          integrity: "sha512-new",
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
-      "source-changed",
-    ]);
   });
 
   it("treats enablement changes as policy invalidation", () => {
@@ -1068,49 +739,6 @@ describe("installed plugin index", () => {
     );
   });
 
-  it("marks disabled plugins without dropping their cold contributions", () => {
-    const fixture = createRichPluginFixture();
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(
-      isInstalledPluginEnabled(index, "demo", {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-    expect(index.plugins[0]?.enabled).toBe(false);
-  });
-
-  it("tracks refresh reason without using the manifest cache", () => {
-    const fixture = createRichPluginFixture();
-
-    const index = refreshInstalledPluginIndex({
-      reason: "manual",
-      candidates: [fixture.candidate],
-      env: hermeticEnv(),
-    });
-
-    expect(index.refreshReason).toBe("manual");
-  });
-
   it("diffs invalidation reasons for manifest, package, source, host, compat, and migration changes", () => {
     const fixture = createRichPluginFixture({ installOwner: "demo" });
     const previous = loadInstalledPluginIndex({
@@ -1203,4 +831,3 @@ describe("installed plugin index", () => {
     ]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

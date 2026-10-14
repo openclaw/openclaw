@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
@@ -86,6 +85,15 @@ export async function writeDockerCandidateManifest(
   return { exitCode: 0, stdout: "", stderr: "" };
 }
 
+export function resolveScriptAttemptOutputDir(command: QaScenarioCommandExecution) {
+  const index = command.args.indexOf("--artifact-base");
+  const artifactBase = command.args[index + 1];
+  if (index < 0 || !artifactBase) {
+    throw new Error("script fixture did not receive its owned artifact directory");
+  }
+  return path.dirname(artifactBase);
+}
+
 export async function writeNativeVitestReport(
   command: QaScenarioCommandExecution,
   counts: {
@@ -94,6 +102,7 @@ export async function writeNativeVitestReport(
     passed: number;
     testFilePath?: string;
     testName?: string;
+    ancestorTitles?: string[];
   },
 ) {
   const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
@@ -122,7 +131,16 @@ export async function writeNativeVitestReport(
           name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
           status: counts.passed > 0 ? "passed" : "skipped",
           assertionResults:
-            counts.passed > 0 ? [{ fullName: testName, title: testName, status: "passed" }] : [],
+            counts.passed > 0
+              ? [
+                  {
+                    ancestorTitles: counts.ancestorTitles ?? [],
+                    fullName: [...(counts.ancestorTitles ?? []), testName].join(" "),
+                    title: testName,
+                    status: "passed",
+                  },
+                ]
+              : [],
         },
       ],
     }),
@@ -151,7 +169,7 @@ export function buildScriptProducerEvidence(
 ): QaEvidenceSummaryJson {
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
-    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
     evidenceMode: "full",
     ...(params.profile ? { profile: params.profile } : {}),

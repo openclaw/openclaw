@@ -3,10 +3,11 @@ import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
@@ -15,7 +16,6 @@ const suite = createSidebarCustomizationSuite(
   "Control UI transient surface tokens mocked Gateway E2E",
 );
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/transient-surfaces");
 
 const themes = [
   { colorScheme: "light", resolvedTheme: "light", theme: "claw" },
@@ -78,7 +78,7 @@ suite.define(() => {
         const session = page.locator(`openclaw-app-sidebar [data-session-key="${sessionKey}"]`);
         await session.waitFor();
         await session.hover();
-        await session.locator("[data-session-menu]").click();
+        await session.click({ button: "right" });
         const menuSurface = page.getByRole("menu", {
           name: "Actions for Release notes",
           exact: true,
@@ -86,25 +86,31 @@ suite.define(() => {
         await menuSurface.waitFor({ state: "visible" });
         const menuTokens = await surfaceTokens(menuSurface);
         if (captureProof && theme === "claw") {
-          await mkdir(proofDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "transient-surfaces"), { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, `session-menu-${colorScheme}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "transient-surfaces"),
+              `session-menu-${colorScheme}.png`,
+            ),
           });
         }
 
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await waitForControlUiSettingsTakeover(page);
-        const languageSelect = page.locator("#settings-language wa-select");
-        await languageSelect.click();
-        const listbox = languageSelect.locator('[part="listbox"]');
+        const languageSelect = page.locator("#settings-language openclaw-select-picker");
+        await openPicker(languageSelect);
+        const listbox = languageSelect.locator(".picker-select__menu");
         await listbox.waitFor({ state: "visible" });
         if (captureProof && theme === "claw") {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, `settings-listbox-${colorScheme}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "transient-surfaces"),
+              `settings-listbox-${colorScheme}.png`,
+            ),
           });
         }
 

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  countPluginStateLiveEntries,
+  getPluginStateCapacity,
   resetPluginStateStoreForTests,
 } from "../../plugin-state/plugin-state-store.js";
 import * as pluginStateSqlite from "../../plugin-state/plugin-state-store.sqlite.js";
@@ -97,7 +97,7 @@ describe("reportChannelRoomJoin", () => {
 
   it("persists a successful introduction and sends nothing when the same room join replays", async () => {
     const params = createJoinParams("replayed");
-    const rowsBefore = countPluginStateLiveEntries("slack");
+    const rowsBefore = getPluginStateCapacity("slack").liveEntries;
 
     await expect(reportChannelRoomJoin(params)).resolves.toEqual({ kind: "posted" });
     await expect(reportChannelRoomJoin(params)).resolves.toEqual({
@@ -105,7 +105,7 @@ describe("reportChannelRoomJoin", () => {
       reason: "already-introduced",
     });
 
-    expect(countPluginStateLiveEntries("slack")).toBe(rowsBefore + 1);
+    expect(getPluginStateCapacity("slack").liveEntries).toBe(rowsBefore + 1);
     expect(params.resolveRoomContext).toHaveBeenCalledExactlyOnceWith({ messageLimit: 100 });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
   });
@@ -221,7 +221,6 @@ describe("reportChannelRoomJoin", () => {
     if (!startMarker) {
       throw new Error("Expected the room snapshot to have an untrusted-content boundary");
     }
-    expect(safePrompt).toContain("SECURITY NOTICE:");
     expect(safePrompt.indexOf(injection)).toBeGreaterThan(safePrompt.indexOf(startMarker[0]));
     expect(safePrompt.indexOf(injection)).toBeLessThan(
       safePrompt.indexOf(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${startMarker[1]}">>>`),

@@ -61,6 +61,26 @@ function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
   }
 }
 
+function writeLegacyPrimaryAuthProfileStoreSqlite(home: string, store: unknown): void {
+  const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE auth_profile_store (
+        store_key TEXT NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    db.prepare(
+      "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+    ).run("primary", JSON.stringify(store), Date.now());
+  } finally {
+    db.close();
+  }
+}
+
 function runAssert(home: string, channel: string, ...tokens: string[]) {
   return spawnSync(
     process.execPath,
@@ -150,7 +170,7 @@ describe("npm onboard channel agent assertions", () => {
         JSON.stringify({
           agents: {
             defaults: { models: {} },
-            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+            entries: { main: { model: "openai/gpt-5.6" } },
           },
           models: { providers: {} },
         }),
@@ -164,7 +184,6 @@ describe("npm onboard channel agent assertions", () => {
           entries: Record<
             string,
             {
-              default?: boolean;
               model?: { primary?: string };
               models?: Record<string, { agentRuntime?: { id?: string } }>;
             }
@@ -172,7 +191,6 @@ describe("npm onboard channel agent assertions", () => {
         };
       };
       expect(cfg.agents.entries.main).toMatchObject({
-        default: true,
         model: { primary: "openai/gpt-5.6-luna" },
         models: {
           "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
@@ -194,7 +212,7 @@ describe("npm onboard channel agent assertions", () => {
         JSON.stringify({
           agents: {
             defaults: { models: {} },
-            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+            entries: { main: { model: "openai/gpt-5.6" } },
           },
           models: { providers: {} },
         }),
@@ -242,6 +260,30 @@ describe("npm onboard channel agent assertions", () => {
       expect(result.stderr).toBe("");
       expect(fs.existsSync(agentDir)).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("validates OpenAI env refs from a frozen release's primary agent store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+    try {
+      writeOnboardConfig(tempDir);
+      writeLegacyPrimaryAuthProfileStoreSqlite(tempDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
+
+      const result = runOnboardAssert(tempDir);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

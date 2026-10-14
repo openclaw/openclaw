@@ -63,6 +63,7 @@ suite.define(() => {
               {
                 score: 1,
                 slug: "pdf",
+                registry: "https://clawhub.ai",
                 installRef: "skills-sh:openai/skills/pdf",
                 installOnly: true,
                 trustState: "not-scanned-by-clawhub",
@@ -78,10 +79,11 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
 
-      await page.locator('input[name="clawhub-search"]').fill("pdf");
-      await gateway.waitForRequest("skills.search");
-      const row = page.locator(".plugins-item", { hasText: "skills-sh:openai/skills/pdf" });
-      const install = row.getByRole("button", { name: "Install", exact: true });
+      await page.getByRole("searchbox", { name: "Search skills", exact: true }).fill("pdf");
+      await gateway.waitForRequest("skills.search", { match: { query: "pdf" } });
+      const row = page.locator(".plugin-catalog-card", { hasText: "skills-sh:openai/skills/pdf" });
+      await row.getByText("Not scanned by ClawHub", { exact: true }).waitFor();
+      const install = row.getByRole("button", { name: "Install Pdf", exact: true });
       await install.waitFor();
 
       await gateway.deferNext("skills.install");
@@ -97,9 +99,9 @@ suite.define(() => {
       await gateway.setMethodResponse("skills.status", installedStatus);
       await gateway.resolveDeferred("skills.install", { message: "Installed pdf" });
 
-      const installed = row.getByRole("button", { name: "Installed", exact: true });
-      await installed.waitFor();
-      expect(await installed.isDisabled()).toBe(true);
+      await row.getByRole("img", { name: "Ready", exact: true }).waitFor();
+      expect(await row.count()).toBe(1);
+      expect(await row.getByRole("button", { name: /^Install / }).count()).toBe(0);
     });
   });
 });

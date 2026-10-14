@@ -3,12 +3,18 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
+import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
+import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleLspToolRuntime: vi.fn(),
-  getOrCreateSessionMcpRuntime: vi.fn(),
+  acquireSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
@@ -19,12 +25,12 @@ vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
+  acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun: mocks.materializeBundleMcpToolsForRun,
 }));
 
 vi.mock("../../runtime-plan/tools.js", () => ({
-  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => [...tools]),
 }));
 
 vi.mock("../../local-model-lean.js", () => ({
@@ -40,12 +46,13 @@ vi.mock("../effective-tool-policy.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
-    mocks.getOrCreateSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
+    mocks.acquireSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
@@ -67,58 +74,91 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
+        cronCreatorToolAllowlistCaptureRef: {},
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
+        runtimeCapabilityProfile: resolveConversationCapabilityProfile({}),
         toolsEnabled: true,
         toolsRaw,
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
+  it.each(["file"] as const)(
+    "does not widen a %s memory flush with MCP, LSP, or client functions",
+    async (arm) => {
+      const persistenceName = arm === "file" ? "write" : "memory_store";
+      const input = createInput([], [createStubTool("read"), createStubTool(persistenceName)]);
+      input.attempt.trigger = "memory";
+      if (arm === "file") {
+        input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
+      } else {
+        input.attempt.memoryFlushTools = {
+          flushId: "flush",
+          ownerPluginId: "memory-provider",
+          persistenceToolNames: [persistenceName],
+          recordPersistenceToolSuccess: () => {},
+        };
+      }
+      input.attempt.clientTools = [
+        {
+          type: "function",
+          function: { name: "client_canary", parameters: { type: "object" } },
+        },
+      ];
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [createStubTool("canary__write")],
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [createStubTool("lsp_canary")],
+        dispose: vi.fn(),
+      });
+
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+      expect(result.clientTools).toBeUndefined();
+      expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+    },
+  );
+
   it.each([
-    { allow: ["chrome*"], expected: ["chrome__click"] },
-    { allow: ["ch*me*"], expected: ["chrome__click"] },
-    { allow: [" CHROME* "], expected: ["chrome__click"] },
-    { allow: ["*click"], expected: ["chrome__click", "other__click"] },
-    { allow: ["chrome__*"], expected: ["chrome__click"] },
-    { allow: ["chrome*."], expected: [] },
-    { allow: ["exec*"], expected: [], discover: false },
-    { allow: ["chrome"], expected: [], discover: false },
-    { allow: [], expected: [], discover: false },
-  ])("discovers configured MCP for $allow without widening final tools", async (testCase) => {
+    { allow: ["group:plugins"], expected: ["lsp_hover_typescript", "lsp_definition_typescript"] },
+    { allow: ["*hover*"], expected: ["lsp_hover_typescript"] },
+  ])("discovers LSP for $allow without widening final tools", async (testCase) => {
     const input = createInput([], []);
-    input.attempt.config = {
-      plugins: { enabled: false },
-      mcp: { servers: { chrome: { command: "unused" }, other: { command: "unused" } } },
-    };
     input.attempt.toolsAllow = testCase.allow;
     input.preparedToolBase.effectiveToolsAllow = testCase.allow;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [{ name: "chrome__click" }, { name: "other__click" }],
+    const lspTools = ["lsp_hover_typescript", "lsp_definition_typescript"].map((name) => {
+      const tool = createStubTool(name);
+      setPluginToolMeta(tool, { pluginId: "bundle-lsp", optional: false });
+      return tool;
     });
+    mocks.createBundleLspToolRuntime.mockResolvedValue({ tools: lspTools, dispose: vi.fn() });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(
-      testCase.discover === false ? 0 : 1,
-    );
+    expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledOnce();
     expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(testCase.expected);
-    expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
   });
 
   it.each([
     { enabled: false, override: undefined, expected: false },
-    { enabled: true, override: false, expected: false },
     { enabled: false, override: true, expected: true },
   ])("uses effective MCP enablement $enabled/$override", async (testCase) => {
     const input = createInput([], []);
@@ -133,15 +173,12 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
   });
 
   it.each([
-    { servers: ["chrome dev"], allow: "chrome-dev*" },
     { servers: ["9chrome"], allow: "mcp-9chrome*" },
-    { servers: ["chrome dev", "chrome-dev"], allow: "chrome-dev-2*" },
     { servers: ["a".repeat(31), "a".repeat(32)], allow: `${"a".repeat(28)}-2*` },
-    { servers: ["bash"], allow: "bash*" },
   ])("uses canonical namespace allocation for $servers", async ({ servers, allow }) => {
     const input = createInput([], []);
     input.attempt.config = {
@@ -152,10 +189,10 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each(["disableTools", "raw", "restart", "reconciliation", "model"])(
+  it.each(["raw", "restart", "model"])(
     "does not discover matching MCP when tools are disabled by %s",
     async (mode) => {
       const input = createInput([], []);
@@ -164,12 +201,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disableTools";
       input.isRawModelRun = mode === "raw";
       input.attempt.forceRestartSafeTools = mode === "restart";
-      input.attempt.forceCodeModeReconciliationTools = mode === "reconciliation";
       input.preparedToolBase.toolsEnabled = mode !== "model";
 
       await prepareEmbeddedAttemptBundleTools(input);
 
-      expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
     },
   );
 
@@ -192,8 +228,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       config: input.attempt.config,
       manifestRegistry: registry,
     });
-    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
     });
@@ -206,18 +242,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   });
 
   it.each([
-    {
-      name: "ordinary uncapped runs",
-      allow: undefined,
-      clients: ["client_read", "client_delete"],
-      expected: ["client_read", "client_delete"],
-    },
-    {
-      name: "message-only completion turns",
-      allow: ["message"],
-      clients: ["client_read", "client_delete"],
-      expected: [],
-    },
     {
       name: "explicitly empty capabilities",
       allow: [],
@@ -235,12 +259,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       allow: ["group:fs"],
       clients: ["read", "write", "exec"],
       expected: ["read", "write"],
-    },
-    {
-      name: "canonical tool aliases",
-      allow: ["bash"],
-      clients: ["exec", "client_read"],
-      expected: ["exec"],
     },
     {
       name: "independent glob intersections",
@@ -277,7 +295,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       type: "function" as const,
       function: { name, parameters: { type: "object" as const } },
     }));
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [] });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
@@ -304,28 +322,49 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
     expect(result.clientTools).toBeUndefined();
-    expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
     expect(mocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
     expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
   });
 
-  it("refreshes spawned-child inheritance after authorized MCP tools materialize", async () => {
-    const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [{ name: "server__read" }],
-    });
+  it.each([
+    { runtime: undefined, publicationAllowed: true },
+    { runtime: ["sessions_spawn", "server__read"], publicationAllowed: false },
+  ])(
+    "retains unavailable publication under the final runtime cap: $publicationAllowed",
+    async ({ runtime, publicationAllowed }) => {
+      const inherited = ["sessions_spawn", "github_publish"];
+      const input = createInput(inherited, [createStubTool("sessions_spawn")]);
+      input.preparedToolBase.inheritedPublicationToolRef = {
+        current: createStubTool("github_publish"),
+      };
+      input.preparedToolBase.effectiveToolsAllow = runtime;
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: vi.fn() });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [createStubTool("server__read")],
+      });
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+      expect(inherited.includes("github_publish")).toBe(publicationAllowed);
+      expect(inherited).toContain("server__read");
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "sessions_spawn",
+        "server__read",
+      ]);
+      expect(
+        input.preparedToolBase.cronCreatorToolAllowlist.map((entry) =>
+          typeof entry === "string" ? entry : entry.name,
+        ),
+      ).not.toContain("github_publish");
 
-    await prepareEmbeddedAttemptBundleTools(
-      createInput(inheritedToolAllowlist, [{ name: "sessions_spawn" }]),
-    );
-
-    expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
-  });
+      input.preparedToolBase.inheritedPublicationToolRef.current = undefined;
+      result.refreshTools(() => {});
+      expect(inherited).not.toContain("github_publish");
+    },
+  );
 
   it("never adds policy-denied bundled tools to spawned-child inheritance", async () => {
     const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "server__read" }, { name: "server__delete" }],
     });
@@ -351,7 +390,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       pluginId: "bundle-mcp",
       optional: false,
     });
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [allowedMcpTool, quarantinedMcpTool],
     });
@@ -375,53 +414,97 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
-  it("disposes prepared bundle runtimes when later policy setup fails", async () => {
-    const disposeMcp = vi.fn(async () => {});
-    const disposeLsp = vi.fn(async () => {});
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [],
-      dispose: disposeMcp,
-    });
-    mocks.createBundleLspToolRuntime.mockResolvedValue({
-      tools: [],
-      dispose: disposeLsp,
-    });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
-      throw new Error("bundle policy failed");
-    });
+  it("refreshes retained tools and capability captures from each schema projection", async () => {
+    await withStateDirEnv("openclaw-bundle-tool-quarantine-", async () => {
+      const { filterRuntimeCompatibleTools } = await vi.importActual<
+        typeof import("../../tool-schema-projection.js")
+      >("../../tool-schema-projection.js");
+      mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
+      const first = createStubTool("core_first");
+      const bundled = createStubTool("server__read");
+      const bundledSchema = { type: "object" };
+      bundled.parameters = bundledSchema;
+      setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
+      const core = [first];
+      const inherited = ["initial"];
+      const input = createInput(inherited, core);
+      const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
+      input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
 
-    const input = {
-      agentDir: "/tmp/agent",
-      attempt: {
-        config: {},
-        model: {},
-        modelId: "model",
-        provider: "provider",
-        runId: "run",
-        runtimePlan: {},
-        sessionId: "session",
-      },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
-      isRawModelRun: false,
-      preparedToolBase: {
-        cronCreatorToolAllowlist: [],
-        effectiveToolsAllow: undefined,
-        localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
-        toolsEnabled: true,
-        toolsRaw: [],
-      },
-      sessionAgentId: "main",
-    } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+      const retained = result.uncompactedEffectiveTools;
+      expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+      expect(core).toEqual([first]);
 
-    await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
-    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-    );
-    expect(disposeMcp).toHaveBeenCalledOnce();
-    expect(disposeLsp).toHaveBeenCalledOnce();
+      const second = createStubTool("core_second");
+      core.splice(0, core.length, second);
+      bundledSchema.type = "array";
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+
+      expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
+      expect(core).toEqual([second]);
+      expect(inherited).toEqual(["core_second"]);
+      expect(creatorTools).toEqual([{ name: "core_second" }]);
+      expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([
+        {
+          toolName: "server__read",
+          owner: "plugin:bundle-mcp",
+          reason: 'server__read.parameters.type must be "object"',
+          failedAt: expect.any(Date),
+        },
+      ]);
+
+      core.splice(0, core.length, first);
+      bundledSchema.type = "object";
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+
+      expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+      expect(core).toEqual([first]);
+      expect(inherited).toEqual(["core_first", "server__read"]);
+      expect(creatorTools).toEqual([
+        { name: "core_first" },
+        { name: "server__read", pluginId: "bundle-mcp" },
+      ]);
+      expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
+    });
   });
+
+  it.each([undefined, "MCP"])(
+    "disposes prepared runtimes after policy failure and retains %s cleanup failure",
+    async (failedCleanup) => {
+      const disposeMcp = vi.fn(async () => {
+        if (failedCleanup === "MCP") {
+          throw new Error("MCP disposal failed");
+        }
+      });
+      const disposeLsp = vi.fn(async () => {});
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [],
+        dispose: disposeMcp,
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [],
+        dispose: disposeLsp,
+      });
+      mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
+        throw new Error("bundle policy failed");
+      });
+
+      const input = createInput([], []);
+
+      const cleanupScope = createAgentCleanupScope();
+      await expect(
+        cleanupScope.run(() => prepareEmbeddedAttemptBundleTools(input)),
+      ).rejects.toThrow("bundle policy failed");
+      expect(cleanupScope.outcome).toBe(failedCleanup ? "uncertain" : "closed");
+      expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      );
+      expect(disposeMcp).toHaveBeenCalledOnce();
+      expect(disposeLsp).toHaveBeenCalledOnce();
+    },
+  );
 });

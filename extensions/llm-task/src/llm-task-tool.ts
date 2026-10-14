@@ -1,20 +1,17 @@
-// Llm Task plugin module implements llm task tool behavior.
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  optionalFiniteNumberSchema,
-  optionalPositiveIntegerSchema,
-} from "openclaw/plugin-sdk/channel-actions";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asPositiveSafeInteger,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
-import type { OpenClawPluginApi } from "../api.js";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { llmTaskToolDefinition } from "./llm-task-tool-definition.js";
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -23,25 +20,6 @@ function stripCodeFences(s: string): string {
     return (m[1] ?? "").trim();
   }
   return trimmed;
-}
-
-function toModelKey(provider?: string, model?: string): string | undefined {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return undefined;
-  }
-  return `${p}/${m}`;
-}
-
-function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return m || undefined;
-  }
-  const prefix = `${p}/`;
-  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
 }
 
 function resolveLlmTaskModelRef(params: {
@@ -54,9 +32,13 @@ function resolveLlmTaskModelRef(params: {
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
   const rawModel = normalizeOptionalString(params.rawModel);
+  const providerPrefix = params.provider?.trim();
   const selectedModelRef = {
     provider: params.provider,
-    model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    model:
+      providerPrefix && rawModel?.startsWith(`${providerPrefix}/`)
+        ? rawModel.slice(providerPrefix.length + 1)
+        : rawModel,
   };
   if (!rawModel || !defaultProvider) {
     return selectedModelRef;
@@ -77,63 +59,18 @@ function resolveLlmTaskModelRef(params: {
   return resolved?.ref ?? selectedModelRef;
 }
 
-type PluginCfg = {
-  defaultProvider?: string;
-  defaultModel?: string;
-  defaultAuthProfileId?: string;
-  maxTokens?: number;
-  timeoutMs?: number;
-};
-
-type LlmTaskParams = {
-  prompt?: unknown;
-  input?: unknown;
-  schema?: unknown;
-  provider?: unknown;
-  model?: unknown;
-  thinking?: unknown;
-  authProfileId?: unknown;
-  temperature?: unknown;
-  maxTokens?: unknown;
-  timeoutMs?: unknown;
-};
-
-export const llmTaskToolDefinition = {
-  name: "llm-task",
-  label: "LLM Task",
-  description:
-    "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
-  parameters: Type.Object({
-    prompt: Type.String({ description: "Task instruction for the LLM." }),
-    input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
-    schema: Type.Optional(
-      Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
-    ),
-    provider: Type.Optional(
-      Type.String({ description: "Provider override (e.g. openai, anthropic)." }),
-    ),
-    model: Type.Optional(Type.String({ description: "Model id override." })),
-    thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
-    authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
-    temperature: optionalFiniteNumberSchema({ description: "Best-effort temperature override." }),
-    maxTokens: optionalPositiveIntegerSchema({
-      description: "Best-effort maxTokens override.",
-    }),
-    timeoutMs: optionalPositiveIntegerSchema({ description: "Timeout for the LLM run." }),
-  }),
-};
-
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     ...llmTaskToolDefinition,
 
-    async execute(_id: string, params: LlmTaskParams, signal?: AbortSignal) {
+    async execute(_id: string, args: unknown, signal?: AbortSignal) {
+      const params = args as Record<string, unknown>;
       const prompt = typeof params.prompt === "string" ? params.prompt : "";
       if (!prompt.trim()) {
         throw new Error("prompt required");
       }
 
-      const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
+      const pluginCfg = api.pluginConfig ?? {};
 
       const defaultsModel = api.config?.agents?.defaults?.model;
       const primary =
@@ -144,15 +81,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
 
-      const requestProvider =
-        typeof params.provider === "string" ? params.provider.trim() : undefined;
-      const configuredProvider =
-        typeof pluginCfg.defaultProvider === "string"
-          ? pluginCfg.defaultProvider.trim()
-          : undefined;
-      const requestModel = typeof params.model === "string" ? params.model.trim() : undefined;
-      const configuredModel =
-        typeof pluginCfg.defaultModel === "string" ? pluginCfg.defaultModel.trim() : undefined;
+      const requestProvider = normalizeOptionalString(params.provider);
+      const configuredProvider = normalizeOptionalString(pluginCfg.defaultProvider);
+      const requestModel = normalizeOptionalString(params.model);
+      const configuredModel = normalizeOptionalString(pluginCfg.defaultModel);
       const requestedProvider =
         requestProvider || configuredProvider || primaryProvider || undefined;
       const rawModel = requestModel || configuredModel || primaryModel || undefined;
@@ -167,40 +99,33 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       });
 
       const authProfileId =
-        (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||
-        (typeof pluginCfg.defaultAuthProfileId === "string" &&
-          pluginCfg.defaultAuthProfileId.trim()) ||
-        undefined;
+        normalizeOptionalString(params.authProfileId) ??
+        normalizeOptionalString(pluginCfg.defaultAuthProfileId);
 
-      const modelKey = toModelKey(provider, model);
-      if (!provider || !model || !modelKey) {
+      const providerId = provider?.trim();
+      const modelId = model?.trim();
+      if (!providerId || !modelId) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
       }
 
-      const thinkingRaw =
-        typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
-      let thinkLevel: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]> =
-        undefined;
-      if (thinkingRaw) {
-        thinkLevel = api.runtime.agent.normalizeThinkingLevel(thinkingRaw);
-        if (!thinkLevel) {
-          throw new Error(`Invalid thinking level "${thinkingRaw}".`);
-        }
+      const thinkingRaw = readNonBlankString(params.thinking);
+      const thinkLevel = thinkingRaw
+        ? api.runtime.agent.normalizeThinkingLevel(thinkingRaw)
+        : undefined;
+      if (thinkingRaw && !thinkLevel) {
+        throw new Error(`Invalid thinking level "${thinkingRaw}".`);
       }
 
       const timeoutMs =
-        readPositiveIntegerParam(params as Record<string, unknown>, "timeoutMs") ??
+        readPositiveIntegerParam(params, "timeoutMs") ??
         asPositiveSafeInteger(pluginCfg.timeoutMs) ??
         30_000;
 
-      const streamParams = {
-        temperature: readFiniteNumberParam(params as Record<string, unknown>, "temperature"),
-        maxTokens:
-          readPositiveIntegerParam(params as Record<string, unknown>, "maxTokens") ??
-          asPositiveSafeInteger(pluginCfg.maxTokens),
-      };
+      const temperature = readFiniteNumberParam(params, "temperature");
+      const maxTokens =
+        readPositiveIntegerParam(params, "maxTokens") ?? asPositiveSafeInteger(pluginCfg.maxTokens);
 
       const input = params.input;
       let inputJson: string;
@@ -226,10 +151,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           },
         ],
         systemPrompt: system,
-        model: hasModelOverride ? modelKey : undefined,
+        model: hasModelOverride ? `${providerId}/${modelId}` : undefined,
         reasoning: thinkLevel,
-        maxTokens: streamParams.maxTokens,
-        temperature: streamParams.temperature,
+        maxTokens,
+        temperature,
         signal,
         purpose: "llm-task",
         execution: {
@@ -261,10 +186,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         }
       }
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
-        details: { json: parsed, provider: result.provider, model: result.model },
-      };
+      return textResult(JSON.stringify(parsed, null, 2), {
+        json: parsed,
+        provider: result.provider,
+        model: result.model,
+      });
     },
-  };
+  } satisfies AnyAgentTool;
 }

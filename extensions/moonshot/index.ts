@@ -1,5 +1,4 @@
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-// Moonshot plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -41,6 +40,7 @@ export default defineSingleProviderPluginEntry({
       }),
     ],
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildMoonshotProvider,
       buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
@@ -68,7 +68,7 @@ export default defineSingleProviderPluginEntry({
         duplicateToolCallIdStyle: "openai",
         dropReasoningFromHistory: false,
       }),
-    wrapStreamFn: (ctx) => wrapMoonshotStream(ctx),
+    wrapStreamFn: wrapMoonshotStream,
     wrapSimpleCompletionStreamFn: (ctx) => wrapMoonshotStream(ctx, true),
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),

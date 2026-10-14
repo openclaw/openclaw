@@ -1,64 +1,34 @@
-// Media Core module implements inline image data url behavior.
 import { canonicalizeBase64 } from "./base64.js";
 
 /** Prefix used to distinguish inline data URLs from remote/local image references. */
 export const INLINE_IMAGE_DATA_URL_PREFIX = "data:";
-
-const IMAGE_SIGNATURES: Array<{
-  mime: string;
-  matches: (buffer: Buffer) => boolean;
-}> = [
-  {
-    mime: "image/png",
-    matches: (buffer) =>
-      buffer.length >= 8 &&
-      buffer[0] === 0x89 &&
-      buffer[1] === 0x50 &&
-      buffer[2] === 0x4e &&
-      buffer[3] === 0x47 &&
-      buffer[4] === 0x0d &&
-      buffer[5] === 0x0a &&
-      buffer[6] === 0x1a &&
-      buffer[7] === 0x0a,
-  },
-  {
-    mime: "image/jpeg",
-    matches: (buffer) =>
-      buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
-  },
-  {
-    mime: "image/webp",
-    matches: (buffer) =>
-      buffer.length >= 12 &&
-      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-      buffer.subarray(8, 12).toString("ascii") === "WEBP",
-  },
-  {
-    mime: "image/gif",
-    matches: (buffer) =>
-      buffer.length >= 6 &&
-      (buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
-        buffer.subarray(0, 6).toString("ascii") === "GIF89a"),
-  },
-  {
-    mime: "image/bmp",
-    matches: (buffer) => buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d,
-  },
-];
 
 const HEIC_BRANDS = new Set(["heic", "heix", "hevc", "hevx", "heis", "heim", "hevm", "hevs"]);
 const HEIF_BRANDS = new Set(["mif1", "msf1"]);
 const IMAGE_SIGNATURE_PREFIX_BASE64_CHARS = 128;
 const INLINE_IMAGE_DATA_URL_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
-function startsWithDataUrl(value: string): boolean {
-  return (
-    value.slice(0, INLINE_IMAGE_DATA_URL_PREFIX.length).toLowerCase() ===
-    INLINE_IMAGE_DATA_URL_PREFIX
-  );
-}
-
-function sniffIsoBmffImageMime(buffer: Buffer): string | undefined {
+/** Sniffs supported inline image formats from decoded bytes. */
+export function sniffInlineImageMime(buffer: Buffer): string | undefined {
+  if (buffer.length >= 8 && buffer.readBigUInt64BE(0) === 0x89504e470d0a1a0an) {
+    return "image/png";
+  }
+  if (buffer.length >= 3 && buffer.readUIntBE(0, 3) === 0xffd8ff) {
+    return "image/jpeg";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (buffer.length >= 6 && /^GIF8[79]a$/.test(buffer.toString("ascii", 0, 6))) {
+    return "image/gif";
+  }
+  if (buffer.length >= 2 && buffer.readUInt16BE(0) === 0x424d) {
+    return "image/bmp";
+  }
   if (buffer.length < 12 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
     return undefined;
   }
@@ -75,18 +45,6 @@ function sniffIsoBmffImageMime(buffer: Buffer): string | undefined {
   return undefined;
 }
 
-/** Sniffs supported inline image formats from decoded bytes. */
-export function sniffInlineImageMime(buffer: Buffer): string | undefined {
-  return (
-    IMAGE_SIGNATURES.find((signature) => signature.matches(buffer))?.mime ??
-    sniffIsoBmffImageMime(buffer)
-  );
-}
-
-function isImageMimeType(value: string): boolean {
-  return value.trim().toLowerCase().startsWith("image/");
-}
-
 export type SanitizedInlineImageBase64 = {
   mimeType: string;
   base64: string;
@@ -97,7 +55,7 @@ export function sanitizeInlineImageBase64(params: {
   mimeType: string;
   base64: string;
 }): SanitizedInlineImageBase64 | undefined {
-  if (!isImageMimeType(params.mimeType)) {
+  if (!params.mimeType.trim().toLowerCase().startsWith("image/")) {
     return undefined;
   }
   const canonicalPayload = canonicalizeBase64(params.base64);
@@ -116,56 +74,30 @@ export function sanitizeInlineImageBase64(params: {
   };
 }
 
-function parseInlineImageDataUrl(value: string):
-  | {
-      metadata: string[];
-      payload: string;
-    }
-  | undefined {
-  if (!startsWithDataUrl(value)) {
-    return { metadata: [], payload: value };
-  }
-  const commaIndex = value.indexOf(",");
-  if (commaIndex < 0) {
-    return undefined;
-  }
-  return {
-    metadata: value
-      .slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex)
-      .split(";")
-      .map((part) => part.trim()),
-    payload: value.slice(commaIndex + 1),
-  };
-}
-
-function metadataAllowsImageBase64(metadata: string[]): boolean {
-  const [mimeType, ...options] = metadata;
-  return (
-    mimeType !== undefined &&
-    isImageMimeType(mimeType) &&
-    options.some((part) => part.toLowerCase() === "base64")
-  );
-}
-
 function sanitizeInlineImageDataUrlWithAllowedMimes(
   imageUrl: string,
   allowedMimes?: Set<string>,
 ): string | undefined {
-  const parsed = parseInlineImageDataUrl(imageUrl);
-  if (!parsed) {
-    return undefined;
-  }
-  if (parsed.metadata.length === 0) {
+  if (
+    imageUrl.slice(0, INLINE_IMAGE_DATA_URL_PREFIX.length).toLowerCase() !==
+    INLINE_IMAGE_DATA_URL_PREFIX
+  ) {
     return imageUrl;
   }
-  if (!metadataAllowsImageBase64(parsed.metadata)) {
+  const commaIndex = imageUrl.indexOf(",");
+  if (commaIndex < 0) {
     return undefined;
   }
-
-  const [mimeType] = parsed.metadata;
+  const [mimeType, ...options] = imageUrl
+    .slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex)
+    .split(";")
+    .map((part) => part.trim());
+  if (!mimeType || !options.some((part) => part.toLowerCase() === "base64")) {
+    return undefined;
+  }
   const sanitized = sanitizeInlineImageBase64({
-    mimeType: mimeType ?? "",
-    base64: parsed.payload,
+    mimeType,
+    base64: imageUrl.slice(commaIndex + 1),
   });
   if (!sanitized) {
     return undefined;

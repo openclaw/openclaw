@@ -4,55 +4,108 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 
-// Retained for the deprecated plugin-sdk/infra-runtime compatibility barrel.
-export { stripInternalRuntimeScaffolding };
-
-// A tag name ends at whitespace, `/`, or `>`; `<user@example.com>` is prose, not markup.
+// A tag name ends at whitespace, `/`, or `>`; email addresses remain prose.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+// Bare unknown names can be placeholders or generic arguments, not HTML.
+const ANGLE_PLACEHOLDER_RE = /^<([a-z][a-z0-9_.:-]*)(?:\/[a-z][a-z0-9_.:-]*)?>$/i;
+// Disjoint whitespace/prose branches avoid quadratic backtracking on malformed tags.
+const COMPARISON_PROSE_RE = /^<([a-z][a-z0-9_]*\.?)\s+[^<>=/"'\s][^<>=/"']*>$/i;
+// Alternation avoids Node 26.10's end-anchored character-class failure on astral operands.
+const COMPARISON_LEFT_OPERAND_RE = /(?:\p{L}|\p{N}|_|\p{S})$/u;
+const COMPARISON_CLAUSE_RE = /\b(?:and|or)\s|[.!?;:]\s|且/iu;
+// Standard HTML element names are never comparison operands: retain main's
+// stripping even beside numeric text or prose-like bare attributes.
+const HTML_ELEMENT_NAME_RE =
+  /^(?:a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|picture|pre|progress|q|rp|rt|ruby|s|samp|script|search|section|select|selectedcontent|slot|small|source|span|strong|style|sub|summary|sup|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr)$/i;
+const LABELED_ANGLE_LINK_RE =
+  /<(?:https?:\/\/|mailto:)[^<>\s|]+\|([^<>\r\n|]*[^<>\s|][^<>\r\n|]*)>/gi;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
 const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
-  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li|p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+// br, p, and div own line structure, so they stay outside the inert-tree removal pass.
+const EMPTY_HTML_ELEMENT_RE =
+  /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
 
-function stripRemainingHtmlTags(text: string): string {
+function removeMatchesUntilStable(
+  input: string,
+  pattern: RegExp,
+  replacement?: (match: string, offset: number, source: string) => string,
+): string {
+  let text = input;
   let previous: string;
-  let current = text;
   do {
-    previous = current;
-    current = current.replace(HTML_TAG_RE, "");
-  } while (current !== previous);
-  return current;
+    previous = text;
+    text = replacement ? text.replace(pattern, replacement) : text.replace(pattern, "");
+  } while (text !== previous);
+  return text;
+}
+
+function stripHtmlTagUnlessComparison(
+  tag: string,
+  offset: number,
+  source: string,
+  closingTagNames: ReadonlySet<string>,
+): string {
+  const placeholderName = ANGLE_PLACEHOLDER_RE.exec(tag)?.[1];
+  if (
+    placeholderName !== undefined &&
+    !HTML_ELEMENT_NAME_RE.test(placeholderName) &&
+    !closingTagNames.has(placeholderName.toLowerCase())
+  ) {
+    return tag;
+  }
+  const rightOperand = source.charCodeAt(offset + tag.length);
+  if (
+    !(rightOperand >= 48 && rightOperand <= 57) ||
+    !COMPARISON_LEFT_OPERAND_RE.test(source.slice(Math.max(0, offset - 2), offset))
+  ) {
+    return "";
+  }
+  const comparisonName = COMPARISON_PROSE_RE.exec(tag)?.[1];
+  return comparisonName !== undefined &&
+    !HTML_ELEMENT_NAME_RE.test(comparisonName) &&
+    COMPARISON_CLAUSE_RE.test(tag) &&
+    !closingTagNames.has(comparisonName.toLowerCase())
+    ? tag
+    : "";
 }
 
 function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): string {
   const boldMarker = options.style === "markdown" ? "**" : "*";
   const strikeMarker = options.style === "markdown" ? "~~" : "~";
-  const converted = text
-    // Preserve angle-bracket autolinks as plain URLs before tag stripping.
-    .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
-    // Normalize attributes once; conversions below only need exact bare tag names.
-    .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>")
-    // Line breaks
+  // Remove inner elements first so an empty nested tree cannot synthesize markers.
+  const converted = removeMatchesUntilStable(
+    text
+      // `|` ends the autolink URL so `<url|Label>` reaches the label projection.
+      .replace(/<((?:https?:\/\/|mailto:)[^<>\s|]+)>/gi, "$1")
+      // Raw channel link syntax is not an input dialect; retain only its visible label.
+      .replace(LABELED_ANGLE_LINK_RE, "$1")
+      // Normalize attributes once; conversions below only need exact bare tag names.
+      .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>"),
+    EMPTY_HTML_ELEMENT_RE,
+  )
     .replace(/<br\s*\/?>/gi, "\n")
     // Block elements → newlines
     .replace(/<\/?(p|div)>/gi, "\n")
-    // Bold → selected lightweight markup
     .replace(/<(b|strong)>(.*?)<\/\1>/gi, `${boldMarker}$2${boldMarker}`)
-    // Italic → WhatsApp/Signal italic
     .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
-    // Strikethrough → selected lightweight markup
     .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, `${strikeMarker}$2${strikeMarker}`)
-    // Inline code
     .replace(/<code>(.*?)<\/code>/gi, "`$1`")
-    // Headings → bold text with newline
     .replace(/<h[1-6]>(.*?)<\/h[1-6]>/gi, `\n${boldMarker}$1${boldMarker}\n`)
-    // List items → bullet points
     .replace(/<li>(.*?)<\/li>/gi, "• $1\n");
 
-  return stripRemainingHtmlTags(converted).replace(/\n{3,}/g, "\n\n");
+  // A matching closer is positive markup evidence, even when its content is numeric.
+  const closingTagNames = new Set<string>();
+  for (const tag of converted.matchAll(/<\/[a-z][a-z0-9_.:-]*\s*>/gi)) {
+    closingTagNames.add(tag[0].slice(2, -1).trim().toLowerCase());
+  }
+  return removeMatchesUntilStable(converted, HTML_TAG_RE, (tag, offset, source) =>
+    stripHtmlTagUnlessComparison(tag, offset, source, closingTagNames),
+  ).replace(/\n{3,}/g, "\n\n");
 }
 
 /**
@@ -65,33 +118,30 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
  */
 export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
   const prepared = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text));
-  const conversionCanChangeCode = prepared.includes("<") || prepared.includes("\n\n\n");
-  const codeRegions =
-    conversionCanChangeCode && MAY_CONTAIN_MARKDOWN_CODE_RE.test(prepared)
-      ? findCodeRegions(prepared)
-      : [];
+  if (!prepared.includes("<") && !prepared.includes("\n\n\n")) {
+    return prepared;
+  }
+  const codeRegions = MAY_CONTAIN_MARKDOWN_CODE_RE.test(prepared) ? findCodeRegions(prepared) : [];
   if (codeRegions.length === 0) {
     return convertHtmlOutsideCode(prepared, options);
   }
-  const preservedCode: string[] = [];
+  const preservedText = new Map([[CODE_ESCAPE, "\u0000"]]);
   let masked = "";
   let cursor = 0;
   for (const region of codeRegions) {
     masked += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
-    masked += CODE_PLACEHOLDER;
-    preservedCode.push(prepared.slice(region.start, region.end));
+    const placeholder = `${CODE_PLACEHOLDER}${preservedText.size};`;
+    masked += placeholder;
+    preservedText.set(placeholder, prepared.slice(region.start, region.end));
     cursor = region.end;
   }
   masked += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
 
-  const converted = convertHtmlOutsideCode(masked, options);
-  let restored = "";
-  cursor = 0;
-  for (const code of preservedCode) {
-    const placeholder = converted.indexOf(CODE_PLACEHOLDER, cursor);
-    restored += converted.slice(cursor, placeholder).replaceAll(CODE_ESCAPE, "\u0000");
-    restored += code;
-    cursor = placeholder + CODE_PLACEHOLDER.length;
-  }
-  return restored + converted.slice(cursor).replaceAll(CODE_ESCAPE, "\u0000");
+  // HTML attributes can consume markers. Restore by identity in one pass so
+  // surviving code keeps its position and literal marker-shaped text stays inert.
+  return convertHtmlOutsideCode(masked, options).replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- Intentional NUL delimiters distinguish internal markers from escaped user text.
+    /\u0000(?:e|p\d+;)/g,
+    (marker) => preservedText.get(marker) ?? marker,
+  );
 }

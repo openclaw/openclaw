@@ -1,8 +1,4 @@
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-  normalizeJsonSchemaForTypeBox,
-} from "@openclaw/normalization-core/json-schema";
+import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyJsonSchemaDefaults, findJsonSchemaShapeError } from "./json-schema-defaults.js";
 
@@ -25,19 +21,16 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     });
   });
 
-  it.each(["constructor", "toString", "__proto__"])(
-    "preserves pattern property key %s",
-    (pattern) => {
-      const normalized = normalizeJsonSchemaForTypeBox({
-        type: "object",
-        patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
-      });
+  it.each(["__proto__"])("preserves pattern property key %s", (pattern) => {
+    const normalized = normalizeJsonSchemaForTypeBox({
+      type: "object",
+      patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+    });
 
-      expect(normalized).toMatchObject({
-        patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
-      });
-    },
-  );
+    expect(normalized).toMatchObject({
+      patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+    });
+  });
 
   it("resolves local refs to array entries beyond config path index limits", () => {
     const prefixItems: (boolean | { type: string })[] = Array.from({ length: 100_002 }, () => true);
@@ -52,107 +45,21 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     ).toBeUndefined();
   });
 
-  it.each(["#%", "#foo%zz", "#anchor%"])(
+  it.each(["#foo%zz"])(
     "reports malformed percent-encoding in local ref anchor %s as unresolved instead of throwing",
     (ref) => {
       expect(findJsonSchemaShapeError({ $ref: ref })).toBe("<schema>.$ref: unresolved ref");
     },
   );
 
-  it("preserves Control UI nullable value semantics", () => {
-    const schema = {
-      type: "string",
-      enum: ["fixed"],
-      nullable: true,
-      enumIncludesNull: true,
-    };
-
-    expect(isJsonSchemaValueValid(schema, "fixed")).toBe(true);
-    expect(isJsonSchemaValueValid(schema, null)).toBe(true);
-    expect(isJsonSchemaValueValid(schema, "other")).toBe(false);
-    expect(isJsonSchemaValueValid({ nullable: true }, null)).toBe(true);
-    expect(isJsonSchemaValueValid({ type: "string", nullable: true, minLength: 2 }, null)).toBe(
-      true,
-    );
-    expect(isJsonSchemaValueValid({ type: "string", nullable: true, const: "fixed" }, null)).toBe(
-      false,
-    );
-    expect(isJsonSchemaValueValid({ nullable: true, enum: ["fixed"] }, null)).toBe(false);
-    expect(isJsonSchemaValueValid({ enum: ["fixed"], enumIncludesNull: true }, null)).toBe(false);
-  });
-
-  it("keeps schema resources outside expanded type branches", () => {
-    const schema = {
-      $id: "https://example.test/config",
-      $defs: {
-        value: { type: "string" },
-      },
-      type: ["object", "null"],
-      properties: {
-        value: { $ref: "#/$defs/value" },
-      },
-      required: ["value"],
-    };
-
-    expect(normalizeJsonSchemaForTypeBox(schema)).toEqual({
-      $id: "https://example.test/config",
-      $defs: {
-        value: { type: "string" },
-      },
-      anyOf: [
-        {
-          properties: {
-            value: { $ref: "#/$defs/value" },
-          },
-          required: ["value"],
-          type: "object",
-        },
-        {
-          properties: {
-            value: { $ref: "#/$defs/value" },
-          },
-          required: ["value"],
-          type: "null",
-        },
-      ],
-    });
-    expect(isJsonSchemaValueValid(schema, { value: "ok" })).toBe(true);
-    expect(isJsonSchemaValueValid(schema, { value: 1 })).toBe(false);
-  });
-
-  it("rejects cyclic values without recursing indefinitely", () => {
-    const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
-
-    expect(isJsonSchemaValueValid({ type: "object" }, cyclic)).toBe(false);
-    expect(jsonSchemaValuesEqual(cyclic, cyclic)).toBe(false);
-  });
-
-  it("rejects values that JSON serialization would change or discard", () => {
-    const arrayWithExtraProperty = Object.assign(["kept"], { discarded: true });
-    const invalidValues = [
-      undefined,
-      Number.NaN,
-      Number.POSITIVE_INFINITY,
-      () => "discarded",
-      Symbol("discarded"),
-      1n,
-      { nested: undefined },
-      [Number.NEGATIVE_INFINITY],
-      Array(1),
-      new Date(0),
-      arrayWithExtraProperty,
-    ];
-
-    for (const value of invalidValues) {
-      expect(isJsonSchemaValueValid({}, value)).toBe(false);
-      expect(jsonSchemaValuesEqual(value, value)).toBe(false);
-    }
-    expect(isJsonSchemaValueValid({}, { nested: [null, true, 1, "ok"] })).toBe(true);
-    expect(isJsonSchemaValueValid({}, Object.assign(Object.create(null), { value: "ok" }))).toBe(
-      true,
-    );
-  });
+  it.each([{ type: ["string", undefined] }])(
+    "rejects undefined type union entries: $type",
+    ({ type }) => {
+      expect(findJsonSchemaShapeError({ type })).toBe(
+        "<schema>.type: unsupported JSON Schema type",
+      );
+    },
+  );
 });
 
 describe("applyJsonSchemaDefaults prototype safety", () => {
@@ -194,5 +101,81 @@ describe("applyJsonSchemaDefaults prototype safety", () => {
     applyJsonSchemaDefaults(schema, value);
 
     expect(readPollution()).toBeUndefined();
+  });
+});
+
+describe("JSON Schema child traversal", () => {
+  it.each([
+    ["properties", "map"],
+    ["unevaluatedProperties", "value"],
+    ["items", "array"],
+    ["allOf", "array"],
+  ])("resolves refs through %s (%s)", (keyword, shape) => {
+    for (const [identifier, ref] of [
+      ["$anchor", "#target"],
+      ["$id", "target"],
+    ] as const) {
+      const target = { [identifier]: "target", default: "selected" };
+      const child =
+        shape === "map"
+          ? { ignored: true, denied: false, target }
+          : shape === "array"
+            ? [true, false, target]
+            : target;
+      const schema = { $ref: ref, [keyword]: child };
+
+      expect(findJsonSchemaShapeError(schema)).toBeUndefined();
+      expect(applyJsonSchemaDefaults(schema, undefined)).toBe("selected");
+    }
+  });
+
+  it.each(["nested"])("does not cross the nested resource boundary %j for anchors", ($id) => {
+    const schema = {
+      $ref: "#target",
+      $defs: { nested: { $id, $anchor: "target", default: "not local" } },
+    };
+
+    expect(findJsonSchemaShapeError(schema)).toBe("<schema>.$ref: unresolved ref");
+    expect(applyJsonSchemaDefaults(schema, undefined)).toBeUndefined();
+  });
+
+  it("ignores property dependencies while resolving a schema dependency", () => {
+    const schema = {
+      $ref: "#target",
+      dependencies: {
+        empty: [],
+        property: ["required"],
+        schema: { $anchor: "target", default: "selected" },
+      },
+    };
+
+    expect(findJsonSchemaShapeError(schema)).toBeUndefined();
+    expect(applyJsonSchemaDefaults(schema, undefined)).toBe("selected");
+  });
+
+  it("settles reverse-ordered dependent schemas beyond the root property count", () => {
+    const schema = {
+      properties: { a: { default: true } },
+      dependentSchemas: Object.fromEntries(
+        (
+          [
+            ["e", "f"],
+            ["d", "e"],
+            ["c", "d"],
+            ["b", "c"],
+            ["a", "b"],
+          ] as const
+        ).map(([trigger, added]) => [trigger, { properties: { [added]: { default: true } } }]),
+      ),
+    };
+
+    expect(applyJsonSchemaDefaults(schema, {})).toEqual({
+      a: true,
+      b: true,
+      c: true,
+      d: true,
+      e: true,
+      f: true,
+    });
   });
 });

@@ -17,13 +17,24 @@ describe("stripModelSpecialTokens", () => {
     expect(stripModelSpecialTokens("<｜begin▁of▁sentence｜>Hello there")).toBe("Hello there");
   });
 
-  it("does not strip normal angle brackets or HTML", () => {
-    expect(stripModelSpecialTokens("a < b && c > d")).toBe("a < b && c > d");
-    expect(stripModelSpecialTokens("<div>hello</div>")).toBe("<div>hello</div>");
+  it.each([
+    ["closing punctuation", "Hello<|assistant|>.", "Hello."],
+    ["opening punctuation", "(<|assistant|>Hello", "(Hello"],
+    ["astral letters", "𐐀<|assistant|>𐐁", "𐐀 𐐁"],
+    ["Unicode digits", "١<|assistant|>٢", "١ ٢"],
+    ["left combining mark", "cafe\u0301<|assistant|>word", "cafe\u0301 word"],
+    ["right combining mark", "cafe<|assistant|>\u0301word", "cafe\u0301word"],
+    ["adjacent tokens", "first<|user|><|assistant|>second", "first second"],
+  ])("preserves %s when removing tokens", (_name, input, expected) => {
+    expect(stripModelSpecialTokens(input)).toBe(expected);
   });
 
-  it("passes through text without tokens unchanged", () => {
-    const text = "Just a normal response.";
+  it("keeps prose between pipe operators", () => {
+    const text = "Elm: use <| for application.\n\nLater: chain with |> instead.";
     expect(stripModelSpecialTokens(text)).toBe(text);
+    expect(stripModelSpecialTokens("In F#, <| pipes backward and |> pipes forward.")).toBe(
+      "In F#, <| pipes backward and |> pipes forward.",
+    );
+    expect(stripModelSpecialTokens("a <| b |> c<|im_end|><|endoftext|>")).toBe("a <| b |> c");
   });
 });

@@ -1,8 +1,3 @@
-/**
- * Channel gateway auth bypass loader.
- *
- * Reads optional public artifacts that declare unauthenticated Gateway callback paths.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "../../plugin-sdk/facade-runtime.js";
 

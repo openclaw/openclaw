@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { setBoundedCache } from "./session-catalog-scan.js";
+
+const groupCache = new Map<string, { signature: string; assignments: Map<string, string> }>();
 
 const LEVELDB_FOOTER_BYTES = 48;
 const LEVELDB_BLOCK_TRAILER_BYTES = 5;
@@ -223,21 +227,11 @@ function collectLevelDbValues(block: Uint8Array, values: Map<string, LevelDbValu
   });
 }
 
-function isPlainGroupName(name: string): boolean {
-  for (let index = 0; index < name.length; index += 1) {
-    const code = name.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
   const text = localStorageText(raw);
   for (const match of text.matchAll(/"id":"(cg-[a-f0-9-]+)","name":"([^"\\]{1,500})"/gi)) {
     const [, id, name] = match;
-    if (id && name && isPlainGroupName(name) && !parsed.groups.has(id)) {
+    if (id && name && !containsAsciiControlCharacter(name) && !parsed.groups.has(id)) {
       parsed.groups.set(id, name);
     }
   }
@@ -253,7 +247,10 @@ function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
  * Claude Desktop stores Code custom groups in Chromium Local Storage, not beside the session JSON.
  * This reads only labels and local-session assignments; it never mutates Desktop account state.
  */
-export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Map<string, string>> {
+export async function readClaudeDesktopCustomGroups(
+  homeDir: string,
+  forceRefresh = false,
+): Promise<Map<string, string>> {
   const root = path.join(
     homeDir,
     "Library",
@@ -265,6 +262,7 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   const files = await Promise.all(
     entries
+      .toSorted((a, b) => a.name.localeCompare(b.name))
       .filter((entry) => entry.isFile() && /\.(ldb|log)$/.test(entry.name))
       .map(async (entry) => {
         const filePath = path.join(root, entry.name);
@@ -274,14 +272,18 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
           : undefined;
       }),
   );
+  const signature = JSON.stringify(files);
+  const cached = groupCache.get(root);
+  if (!forceRefresh && cached?.signature === signature) {
+    setBoundedCache(groupCache, root, cached, 8);
+    return cached.assignments;
+  }
   const levelDbValues = new Map<string, LevelDbValue>();
-  const logRecords: ParsedGroups = { groups: new Map(), assignments: new Map() };
+  const parsed: ParsedGroups = { groups: new Map(), assignments: new Map() };
   let remainingBytes = MAX_LEVELDB_TOTAL_BYTES;
+  let complete = true;
   for (const file of files
-    .filter(
-      (candidate): candidate is { filePath: string; mtimeMs: number; size: number } =>
-        candidate !== undefined,
-    )
+    .filter((candidate) => candidate !== undefined)
     .toSorted(
       (left, right) => right.mtimeMs - left.mtimeMs || right.filePath.localeCompare(left.filePath),
     )
@@ -292,10 +294,11 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
     remainingBytes -= file.size;
     const raw = await fs.readFile(file.filePath).catch(() => undefined);
     if (!raw) {
+      complete = false;
       continue;
     }
     if (!file.filePath.endsWith(".ldb")) {
-      scanGroupRecords(raw, logRecords);
+      scanGroupRecords(raw, parsed);
       continue;
     }
     try {
@@ -304,15 +307,12 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
       }
     } catch {
       // Chromium can compact while discovery is reading its local store.
+      complete = false;
     }
   }
   // The write-ahead log holds writes that have not been flushed into an SSTable yet, so
   // it seeds the result first and wins on conflict. It is scanned raw rather than replayed,
   // so its own internal ordering stays best-effort; SSTables then fill in the rest.
-  const parsed: ParsedGroups = {
-    groups: new Map(logRecords.groups),
-    assignments: new Map(logRecords.assignments),
-  };
   for (const { value } of levelDbValues.values()) {
     scanGroupRecords(value, parsed);
   }
@@ -322,6 +322,11 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
     if (group) {
       assignments.set(sessionId, group);
     }
+  }
+  if (complete) {
+    setBoundedCache(groupCache, root, { signature, assignments }, 8);
+  } else {
+    groupCache.delete(root);
   }
   return assignments;
 }

@@ -248,6 +248,7 @@ final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private(set) var isStarted = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
     private var onFailure: (@MainActor (String) -> Void)?
 
     func start(
@@ -257,18 +258,39 @@ final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     {
         self.isStarted = true
         self.startCount += 1
+        self.onAudio = onAudio
         self.onFailure = onFailure
     }
 
     func stop() {
         self.isStarted = false
         self.stopCount += 1
+        self.onAudio = nil
         self.onFailure = nil
     }
 
     func fail(_ message: String) {
         self.onFailure?(message)
     }
+
+    func emit(_ frame: RealtimeTalkAudioFrame) {
+        self.onAudio?(frame)
+    }
+}
+
+func realtimeRelayCatalogData(supportsBargeIn: Bool = true) throws -> Data {
+    try JSONEncoder().encode(TalkCatalogResult(
+        modes: [],
+        transports: [],
+        brains: [],
+        speech: [:],
+        transcription: [:],
+        realtime: [
+            "activeProvider": AnyCodable("test-provider"),
+            "providers": AnyCodable([
+                ["id": AnyCodable("test-provider"), "supportsBargeIn": AnyCodable(supportsBargeIn)],
+            ]),
+        ]))
 }
 
 actor RealtimeRelayStartupBarrier {
@@ -473,15 +495,21 @@ func outputAudioEvent(
         stateversion: nil)
 }
 
-func outputClearEvent(turnId: String) -> EventFrame {
-    EventFrame(
+func outputClearEvent(
+    turnId: String? = nil,
+    talkEventType: String = "turn.cancelled") -> EventFrame
+{
+    var payload: [String: AnyCodable] = [
+        "relaySessionId": AnyCodable("relay-1"),
+        "type": AnyCodable("clear"),
+    ]
+    if let turnId {
+        payload["talkEvent"] = AnyCodable(["turnId": turnId, "type": talkEventType])
+    }
+    return EventFrame(
         type: "event",
         event: "talk.event",
-        payload: AnyCodable([
-            "relaySessionId": "relay-1",
-            "type": "clear",
-            "talkEvent": ["turnId": turnId],
-        ]),
+        payload: AnyCodable(payload),
         seq: nil,
         stateversion: nil)
 }

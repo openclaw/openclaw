@@ -26,7 +26,7 @@ afterEach(() => {
 
 function tavilyToolSecretConfig(commandPath: string) {
   return asConfig({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     tools: { web: { search: { enabled: false } } },
     plugins: {
       entries: {

@@ -77,6 +77,7 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
       // This fixture records the accepted activity before returning 504, modeling a gateway
       // timeout whose upstream side effect cannot safely be replayed by the Teams adapter.
       const acceptedButTimedOut =
+        activity.type === "message" &&
         typeof activity.text === "string" &&
         activity.text.includes(AMBIGUOUS_GATEWAY_TIMEOUT_MARKER);
       sendJson(
@@ -100,14 +101,4 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
       await once(server, "close");
     },
   };
-}
-
-export async function reserveMSTeamsQaWebhookPort(): Promise<number> {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const { port } = server.address() as AddressInfo;
-  server.close();
-  await once(server, "close");
-  return port;
 }

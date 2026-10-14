@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
@@ -39,18 +39,6 @@ describe("package docs map", () => {
     expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
     await expect(restorePackageDocsMap(root)).resolves.toBe(true);
     expect(existsSync(mapPath)).toBe(false);
-  });
-
-  it("restores a tracked source stub after packaging", async () => {
-    const root = makePackageRoot();
-    const mapPath = path.join(root, "docs", "docs_map.md");
-    const stub = "# Docs map source\n";
-    writeFileSync(mapPath, stub, "utf8");
-
-    await expect(preparePackageDocsMap(root)).resolves.toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
-    await expect(restorePackageDocsMap(root)).resolves.toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(stub);
   });
 
   it.each(["source stub", "generated map"])(
@@ -123,4 +111,28 @@ describe("package docs map", () => {
     expect(existsSync(changelogBackupPath)).toBe(false);
     expect(existsSync(receiptPath)).toBe(false);
   });
+
+  it.each([".openclaw-lifecycle-pending", "dist/openclaw-install-guard"])(
+    "retains the lifecycle lock when %s cannot be removed",
+    async (relativePath) => {
+      const root = makePackageRoot();
+      const markerPath = path.join(root, relativePath);
+      const receiptPath = path.join(root, ".artifacts/package-docs-map/receipt.json");
+      await preparePackageDocsMap(root);
+      await preparePackageChangelog(root);
+      mkdirSync(markerPath, { recursive: true });
+      writeFileSync(path.join(markerPath, "retain"), "filesystem fault fixture\n");
+
+      await expect(restorePrepackArtifacts(root)).rejects.toMatchObject({ code: "ERR_FS_EISDIR" });
+      expect(existsSync(receiptPath)).toBe(true);
+      await expect(preparePackageDocsMap(root)).rejects.toMatchObject({
+        code: "PACKAGE_DOCS_MAP_ACTIVE",
+      });
+
+      rmSync(markerPath, { recursive: true });
+      await restorePrepackArtifacts(root);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    },
+  );
 });

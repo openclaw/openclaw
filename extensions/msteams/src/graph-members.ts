@@ -1,25 +1,13 @@
-// Msteams plugin module implements graph members behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
-import { fetchGraphJson, resolveGraphToken } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
 
 type GetMemberInfoMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   currentRequesterId?: string | null;
-};
-
-type GetMemberInfoMSTeamsResult = {
-  user: {
-    id: string | undefined;
-    displayName: string | undefined;
-    mail: string | undefined;
-    jobTitle: string | undefined;
-    userPrincipalName: string | undefined;
-    officeLocation: string | undefined;
-    roles: string[];
-  };
 };
 
 type GraphConversationMember = {
@@ -27,11 +15,6 @@ type GraphConversationMember = {
   userId?: string;
   email?: string;
   roles?: string[];
-};
-
-type GraphConversationMembersPage = {
-  value?: GraphConversationMember[];
-  "@odata.nextLink"?: string;
 };
 
 const MAX_TEAM_MEMBER_PAGES = 100;
@@ -47,11 +30,10 @@ function normalizeUserId(value?: string | null): string {
 
 async function findStandardChannelMember(params: {
   token: string;
-  to: string;
+  conversation: ReturnType<typeof resolveConversationPath>;
   userId: string;
 }): Promise<GraphConversationMember | undefined> {
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conversation = resolveConversationPath(conversationId);
+  const { conversation } = params;
   if (conversation.kind !== "channel" || !conversation.teamId) {
     return undefined;
   }
@@ -66,37 +48,22 @@ async function findStandardChannelMember(params: {
   }
 
   const requestedUserId = normalizeUserId(params.userId);
-  let nextPath: string | undefined = `/teams/${encodeURIComponent(conversation.teamId)}/members`;
-  let pages = 0;
-  while (nextPath && pages < MAX_TEAM_MEMBER_PAGES) {
-    const response: GraphConversationMembersPage =
-      await fetchGraphJson<GraphConversationMembersPage>({
-        token: params.token,
-        path: nextPath,
-      });
-    const member = (response.value ?? []).find(
-      (candidate) =>
-        normalizeUserId(candidate.userId) === requestedUserId ||
-        normalizeUserId(candidate.email) === requestedUserId,
-    );
-    if (member) {
-      return member;
-    }
-    nextPath = response["@odata.nextLink"]?.replace("https://graph.microsoft.com/v1.0", "");
-    pages += 1;
-  }
-  if (nextPath) {
+  const result = await fetchAllGraphPages<GraphConversationMember>({
+    token: params.token,
+    path: `/teams/${encodeURIComponent(conversation.teamId)}/members`,
+    maxPages: MAX_TEAM_MEMBER_PAGES,
+    collectItems: false,
+    findOne: (candidate) =>
+      normalizeUserId(candidate.userId) === requestedUserId ||
+      normalizeUserId(candidate.email) === requestedUserId,
+  });
+  if (result.truncated) {
     throw new Error("Microsoft Teams team member pagination limit exceeded");
   }
-  return undefined;
+  return result.found;
 }
 
-/**
- * Fetch a user profile from Microsoft Graph by user ID.
- */
-export async function getMemberInfoMSTeams(
-  params: GetMemberInfoMSTeamsParams,
-): Promise<GetMemberInfoMSTeamsResult> {
+export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
   const isCurrentRequester =
     normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);
   if (isCurrentRequester && resolveConversationPath(params.to).kind === "chat") {
@@ -112,13 +79,16 @@ export async function getMemberInfoMSTeams(
       },
     };
   }
-  const conversationId = await resolveGraphConversationId(params.to);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conversation = resolveConversationPath(conversationId);
   const member =
     conversation.kind === "channel"
       ? await findStandardChannelMember({
-          token: await resolveGraphToken(params.cfg),
-          to: params.to,
+          token: await resolveGraphToken(params.cfg, { accountId: params.accountId }),
+          conversation,
           userId: params.userId,
         })
       : undefined;

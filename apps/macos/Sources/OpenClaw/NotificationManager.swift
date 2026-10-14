@@ -1,5 +1,6 @@
+import AppKit
 import Foundation
-import OpenClawIPC
+import OpenClawKit
 import Security
 import UserNotifications
 
@@ -14,15 +15,31 @@ struct NotificationManager {
         return (val as? Bool) == true
     }()
 
-    func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
+    func send(
+        title: String,
+        body: String,
+        sound: String?,
+        priority: OpenClawNotificationPriority? = nil,
+        identifier: String = UUID().uuidString,
+        requestPermission: Bool = true,
+        isCurrent: () -> Bool = { true }) async -> Bool
+    {
         guard PermissionManager.notificationCenterAvailable else {
             self.logger.warning("notification skipped: process has no bundle identity")
             return false
         }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
+        guard !Task.isCancelled else { return false }
         if status.authorizationStatus == .notDetermined {
+            guard requestPermission else { return false }
+            guard AppLaunchRuntimePlan.current.allowsActivation else {
+                self.logger.warning(
+                    "Notification permission deferred by --no-activate; relaunch without the flag and retry.")
+                return false
+            }
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            guard !Task.isCancelled else { return false }
             if granted != true {
                 self.logger.warning("notification permission denied (request)")
                 return false
@@ -39,7 +56,6 @@ struct NotificationManager {
             content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
         }
 
-        // Set interruption level based on priority
         if let priority {
             switch priority {
             case .passive:
@@ -57,9 +73,10 @@ struct NotificationManager {
             }
         }
 
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        guard isCurrent() else { return false }
+        let req = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         do {
-            try await center.add(req)
+            try await LiveNotificationCenter(center: center).add(req)
             self.logger.debug("notification queued")
             return true
         } catch {
@@ -69,16 +86,129 @@ struct NotificationManager {
     }
 }
 
+@MainActor
+struct BackgroundSessionNotificationActions {
+    private struct Action {
+        let identifier: String
+        let sourceIdentifier: String
+        let open: () -> Void
+    }
+
+    private var actions: [Action] = []
+    private let maximumActions = 64
+
+    mutating func begin(sourceIdentifier: String, open: @escaping () -> Void)
+        -> (identifier: String, retired: [String])?
+    {
+        guard !self.actions.contains(where: { $0.sourceIdentifier == sourceIdentifier }) else { return nil }
+        // Actions retain routes, not windows. Retire the matching OS notice when
+        // bounding this process-lifetime queue so eviction leaves no dead button.
+        let retired = self.actions.count >= self.maximumActions ? self.retire([self.actions[0].identifier]) : []
+        let requestIdentifier = "background-session-\(UUID().uuidString)"
+        self.actions.append(Action(identifier: requestIdentifier, sourceIdentifier: sourceIdentifier, open: open))
+        return (requestIdentifier, retired)
+    }
+
+    func contains(_ identifier: String) -> Bool {
+        self.actions.contains { $0.identifier == identifier }
+    }
+
+    func openAction(for identifier: String) -> (() -> Void)? {
+        self.actions.first { $0.identifier == identifier }?.open
+    }
+
+    mutating func finish(identifier: String, sent: Bool, sourceIsCurrent: Bool) -> [String] {
+        // add's completion can follow retirement. Each attempt owns a distinct
+        // OS identifier, so late cleanup cannot remove a replacement notice.
+        sent && self.contains(identifier) && sourceIsCurrent ? [] : self.retire([identifier])
+    }
+
+    mutating func retire(_ identifiers: [String]) -> [String] {
+        let removed = Set(identifiers)
+        self.actions.removeAll { removed.contains($0.identifier) }
+        return identifiers
+    }
+
+    mutating func stop() -> [String] {
+        self.retire(self.actions.map(\.identifier))
+    }
+}
+
+@MainActor
+final class BackgroundSessionNotifications: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = BackgroundSessionNotifications()
+
+    private var actions = BackgroundSessionNotificationActions()
+    private var isRunning = false
+
+    func start() {
+        guard PermissionManager.notificationCenterAvailable else { return }
+        UNUserNotificationCenter.current().delegate = self
+        self.isRunning = true
+    }
+
+    func stop() {
+        self.isRunning = false
+        self.remove(self.actions.stop())
+    }
+
+    func send(identifier: String, isCurrent: @escaping () -> Bool, open: @escaping () -> Void) async {
+        guard self.isRunning else { return }
+        guard let admission = self.actions.begin(sourceIdentifier: identifier, open: open) else { return }
+        self.remove(admission.retired)
+        let sent = await NotificationManager().send(
+            title: "OpenClaw",
+            body: "A background session finished. Open it to see the result.",
+            sound: nil,
+            identifier: admission.identifier,
+            requestPermission: false,
+            isCurrent: { self.actions.contains(admission.identifier) && isCurrent() })
+        self.remove(self.actions.finish(identifier: admission.identifier, sent: sent, sourceIsCurrent: isCurrent()))
+    }
+
+    private func remove(_ identifiers: [String]) {
+        guard !identifiers.isEmpty else { return }
+        guard PermissionManager.notificationCenterAvailable else { return }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    nonisolated func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
+    {
+        // This delegate is app-wide: an empty result would also silence existing
+        // system.notify and test notifications that previously used OS presentation.
+        completionHandler([.banner, .list, .sound, .badge])
+    }
+
+    nonisolated func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse) async
+    {
+        let identifier = response.notification.request.identifier
+        let shouldOpen = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        await MainActor.run {
+            if shouldOpen, identifier.hasPrefix("background-session-") {
+                if let open = self.actions.openAction(for: identifier) {
+                    open()
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "Background Session Notification Expired"
+                    alert.informativeText = "Open the session from its Gateway's session list."
+                    AppActivation.shared.presentAlert(alert)
+                }
+            }
+            self.remove(self.actions.retire([identifier]))
+        }
+    }
+}
+
 enum TestNotificationOutcome: Encodable, Equatable {
     case pending
     case sent
     case error(String)
-
-    private enum State: String, Encodable {
-        case pending
-        case sent
-        case error
-    }
 
     private enum CodingKeys: String, CodingKey {
         case state
@@ -89,11 +219,11 @@ enum TestNotificationOutcome: Encodable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .pending:
-            try container.encode(State.pending, forKey: .state)
+            try container.encode("pending", forKey: .state)
         case .sent:
-            try container.encode(State.sent, forKey: .state)
+            try container.encode("sent", forKey: .state)
         case let .error(message):
-            try container.encode(State.error, forKey: .state)
+            try container.encode("error", forKey: .state)
             try container.encode(message, forKey: .message)
         }
     }

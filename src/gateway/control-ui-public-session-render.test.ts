@@ -1,0 +1,392 @@
+import { describe, expect, it } from "vitest";
+import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
+import { computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
+  renderPublicSessionDocument,
+} from "./control-ui-public-session-render.js";
+
+function render(
+  messages: unknown[],
+  overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {},
+) {
+  return renderPublicSessionDocument({
+    messages,
+    title: "A shared conversation",
+    truncated: false,
+    latestUrl: "/share/session?token=v1.opaque",
+    canonicalUrl: "https://example.test/share/session/demo",
+    cardUrl: "https://example.test/share/card.png",
+    assetBasePath: "/control",
+    ...overrides,
+  });
+}
+
+describe("public session document", () => {
+  it("adds only a protected login handoff, including unavailable conversations", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const html = render([], { entryUrl });
+    expect(html).toContain(`href="${entryUrl}"`);
+    expect(html).toContain("Log in");
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('data-public-refresh="true"');
+    expect(html).toContain('redirect:"error"');
+    expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
+    const unavailable = render([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    expect(unavailable).toContain("not publicly available");
+    expect(unavailable).not.toContain("Public · Read-only");
+    expect(unavailable).not.toContain("Made with OpenClaw");
+    expect(unavailable).not.toContain('http-equiv="refresh"');
+  });
+  it("publishes only user and assistant conversation text without internal input or metadata", () => {
+    const html = render([
+      { role: "system", content: "private system instructions" },
+      { role: "developer", content: "private developer instructions" },
+      { role: "user", display: false, content: "hidden user input" },
+      { role: "user", provenance: { kind: "internal_system" }, content: "internal handoff" },
+      { role: "user", provenance: { kind: "inter_session" }, content: "private other session" },
+      { role: "user", provenance: { kind: "unknown" }, content: "unknown source" },
+      {
+        role: "user",
+        content: "[Inter-session message] sourceSession=private\nprivate legacy handoff",
+      },
+      { role: "toolResult", content: "private tool output" },
+      { role: "assistant", phase: "commentary", content: "Public progress" },
+      {
+        role: "assistant",
+        content: "<think>private tagged reasoning</think>Public visible answer",
+      },
+      { role: "assistant", content: "<think>private unfinished reasoning" },
+      {
+        role: "assistant",
+        content:
+          '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
+      },
+      {
+        role: "assistant",
+        content:
+          ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
+      },
+      { role: "assistant", content: "NO_REPLY" },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "user", content: "[OpenClaw heartbeat poll]" },
+      {
+        role: "user",
+        provenance: { kind: "external_user" },
+        content: [
+          { type: "input_text", text: "First public question" },
+          { type: "image", data: "private image bytes" },
+          { type: "text", text: "Second public question" },
+        ],
+        __openclaw: { senderIdentity: "private sender identity" },
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "private reasoning" },
+          {
+            type: "toolCall",
+            text: "private tool call",
+            arguments: { secret: "private tool arguments" },
+          },
+          {
+            type: "text",
+            text: "Public phased commentary",
+            textSignature: '{"v":1,"phase":"commentary"}',
+          },
+          {
+            type: "text",
+            text: "**Public final answer**",
+            textSignature: '{"v":1,"phase":"final_answer"}',
+          },
+          { type: "canvas", text: "private widget" },
+        ],
+      },
+    ]);
+    expect(html).toContain("First public question");
+    expect(html).toContain("Public visible answer");
+    expect(html).toContain("Public progress");
+    expect(html).toContain("Public phased commentary");
+    expect(html).toContain("Second public question");
+    expect(html).toContain("<strong>Public final answer</strong>");
+    expect(html).not.toMatch(
+      /private|Private|hidden user input|internal handoff|unknown source|NO_REPLY|HEARTBEAT_OK|heartbeat poll/,
+    );
+  });
+
+  it("groups tool work between every assistant message with bounded unmasked summaries", () => {
+    const secret = `sk-${"a".repeat(48)}`;
+    const html = render([
+      { role: "assistant", phase: "commentary", content: "Checking the files." },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "exec",
+            arguments: { command: `cat file ${secret} ${"x".repeat(300)} TAIL_MARKER` },
+          },
+        ],
+      },
+      { role: "toolResult", content: "RESULT_BODY_MUST_STAY_PRIVATE" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "THOUGHT_MUST_STAY_PRIVATE" },
+          { type: "tool_use", name: "read", input: { path: "src/example.ts" } },
+        ],
+      },
+      { role: "assistant", phase: "commentary", content: "The cause is clear." },
+      { role: "assistant", phase: "final_answer", content: "Fixed the issue." },
+    ]);
+    expect(html).toContain("Checking the files.");
+    expect(html).toContain("The cause is clear.");
+    expect(html).toContain("Fixed the issue.");
+    expect(html.match(/<details class="tools">/g)).toHaveLength(1);
+    expect(html).toContain("Ran 2 tools");
+    expect(html).toContain("src/example.ts");
+    expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
+    expect(html).toContain(secret);
+    expect(html).not.toContain('<details class="tools" open');
+    expect(html.indexOf("Checking the files.")).toBeLessThan(html.indexOf("Ran 2 tools"));
+    expect(html.indexOf("Ran 2 tools")).toBeLessThan(html.indexOf("The cause is clear."));
+  });
+
+  it("links user, assistant, and tool images only through entry-scoped public media", () => {
+    const fileName = `sk-${"a".repeat(48)}.png`;
+    const html = render(
+      [
+        {
+          role: "user",
+          __openclaw: { id: "user-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES", fileName },
+            { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
+          ],
+        },
+        {
+          role: "assistant",
+          __openclaw: { id: "assistant-entry" },
+          content: [{ type: "image", data: "PRIVATE_BYTES" }],
+        },
+        {
+          role: "toolResult",
+          __openclaw: { id: "tool-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES" },
+            { type: "text", text: "PRIVATE_RESULT" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "[Inter-session message] private input" },
+            { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
+          ],
+        },
+      ],
+      { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
+    );
+    expect(html.match(/<img /g)).toHaveLength(3);
+    expect(html).toContain(`alt="${fileName}"`);
+    for (const entry of ["user-entry", "assistant-entry", "tool-entry"]) {
+      expect(html).toContain(`&amp;entry=${entry}&amp;attachment=content-0`);
+    }
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('<span class="attachment">notes.pdf</span>');
+    expect(html).not.toMatch(/PRIVATE_BYTES|PRIVATE_RESULT|file:\/\/|HIDDEN_IMAGE/);
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("img-src 'self'");
+  });
+
+  it("retains audio-only and video-only messages as filename chips without publishing their media", () => {
+    const html = render(
+      [
+        {
+          role: "user",
+          __openclaw: { id: "audio-entry" },
+          content: [{ type: "audio", fileName: "voice-note.mp3", url: "/private/audio" }],
+        },
+        {
+          role: "assistant",
+          __openclaw: { id: "video-entry" },
+          content: [{ type: "video", fileName: "walkthrough.mp4", url: "/private/video" }],
+        },
+        {
+          role: "toolResult",
+          content: [
+            { type: "audio", fileName: "hidden-audio.mp3", url: "/private/tool-audio" },
+            { type: "video", fileName: "hidden-video.mp4", url: "/private/tool-video" },
+          ],
+        },
+      ],
+      { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
+    );
+    expect(html).toContain("2 messages");
+    expect(html.match(/<article class="message /g)).toHaveLength(2);
+    expect(html).toContain('<span class="attachment">voice-note.mp3</span>');
+    expect(html).toContain('<span class="attachment">walkthrough.mp4</span>');
+    expect(html).not.toMatch(
+      /hidden-audio|hidden-video|\/private\/|<(?:audio|video)\b|&amp;attachment=/,
+    );
+  });
+
+  it("strips generated envelopes while preserving conversation text", () => {
+    const token = `sk-${"a".repeat(48)}`;
+    const operatorSecret = "internal-ticket-8315";
+    applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
+    try {
+      const html = render(
+        [
+          {
+            role: "user",
+            content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
+          },
+          { role: "assistant", content: `Visible response ${token} ${operatorSecret}` },
+        ],
+        { title: `Shared ${token} ${operatorSecret}` },
+      );
+      expect(html).toContain("Visible user request");
+      expect(html).toContain("Visible response");
+      expect(html).not.toContain("private runtime context");
+      expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+      expect(html).toContain(token);
+      expect(html).toContain(operatorSecret);
+      expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  it("omits local and remote media directives while preserving fenced examples", () => {
+    const relativePath = "./Private/customer-board.pdf";
+    const signedUrl = "https://media.example.test/private.png?sig=private-signed-value";
+    const html = render([
+      {
+        role: "assistant",
+        content: [
+          "Visible response",
+          `MEDIA:${relativePath}`,
+          `MEDIA:${signedUrl}`,
+          "```text",
+          "MEDIA:./example.png",
+          "```",
+        ].join("\n"),
+      },
+    ]);
+    expect(html).toContain("Visible response");
+    expect(html).toContain("MEDIA:./example.png");
+    expect(html).not.toContain(relativePath);
+    expect(html).not.toContain(signedUrl);
+  });
+
+  it("renders inert Markdown without executable markup, automatic image loads, or unsafe links", () => {
+    const html = render(
+      [
+        {
+          role: "assistant",
+          content: [
+            "<script>alert('unsafe')</script>",
+            "![remote image](https://remote.test/tracker.png)",
+            "[Safe link](https://example.test/docs)",
+            "[Unsafe link](javascript:alert%281%29)",
+            "[Local link](/api/private)",
+            "```html\n<iframe src='https://remote.test/embed'></iframe>\n```",
+          ].join("\n\n"),
+        },
+      ],
+      { title: '<img src=x onerror="unsafe">' },
+    );
+    const transcript = html.slice(
+      html.indexOf('<section class="transcript"'),
+      html.indexOf("</section>"),
+    );
+    expect(transcript).toContain("&lt;script&gt;");
+    expect(transcript).toContain("&lt;iframe");
+    expect(transcript).toContain("[Image omitted]");
+    expect(transcript).toContain(
+      'href="https://example.test/docs" rel="noreferrer noopener nofollow"',
+    );
+    expect(transcript).not.toContain("tracker.png");
+    expect(transcript).not.toMatch(/<(script|iframe|img)\b/);
+    expect(transcript).not.toMatch(/href="(?:javascript:|\/api\/private)/);
+    expect(transcript).toContain('<div class="code"><pre><code class="language-html">');
+    // The page's only script is the fixed entry script, whose hash the shared policy carries.
+    expect(html.match(/<script\b/g)).toHaveLength(1);
+    for (const hash of computeInlineScriptHashes(html)) {
+      expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain(hash);
+    }
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
+    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
+  });
+
+  it("bounds the newest public messages and visibly marks omitted history or text", () => {
+    const messages = Array.from({ length: 105 }, (_, index) => ({
+      role: "user",
+      content: `Message number ${index}.`,
+    }));
+    messages.push({
+      role: "assistant",
+      content: `Long message ${"x".repeat(40_000)} private-overflow-marker`,
+    });
+    const html = render(messages);
+    expect(html).not.toContain("Message number 0.");
+    expect(html).toContain("Message number 104.");
+    expect(html).toContain("Long message");
+    expect(html).not.toContain("private-overflow-marker");
+    expect(html).toContain("Some messages or long text are omitted");
+    expect(html).toContain("Message shortened for this public view");
+    expect(html.indexOf("Message number 104.")).toBeLessThan(html.indexOf("Long message"));
+  });
+
+  it("keeps older pages still and offers chronological navigation back to the live view", () => {
+    const html = render([{ role: "user", content: "An earlier question" }], {
+      isLatest: false,
+      olderUrl: "/share/session?token=v1.opaque&offset=100",
+    });
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain("Earlier conversation");
+    expect(html).toContain("Back to latest");
+    expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
+    expect(html).toContain('href="/share/session?token=v1.opaque">Back to latest</a>');
+    expect(html).not.toContain("within its size limit");
+  });
+
+  it("keeps bearer navigation relative when no trusted absolute origin is available", () => {
+    const html = render([{ role: "user", content: "Public question" }], {
+      canonicalUrl: undefined,
+    });
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).not.toContain('property="og:url"');
+    expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
+  });
+
+  it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {
+    const title = `${"a".repeat(199)}😀 trailing`;
+    const html = render([{ role: "user", content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }], {
+      title,
+    });
+    expect(html).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
+    expect(html).toContain(`property="og:title" content="${"a".repeat(199)}"`);
+    expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(html).toContain("Message shortened for this public view.");
+    expect(html).toContain("b".repeat(32_767));
+    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
+    expect(html).not.toContain("😀");
+  });
+
+  it("keeps whole characters when the document budget leaves one code unit", () => {
+    const html = render([
+      { role: "user", content: "🙂 visible tail" },
+      { role: "user", content: "b".repeat(32_767) },
+      ...Array.from({ length: 7 }, () => ({ role: "user", content: "a".repeat(32_768) })),
+    ]);
+    expect(html.isWellFormed()).toBe(true);
+    expect(html).not.toContain("visible tail");
+    expect(html).toContain("Message shortened for this public view.");
+  });
+});

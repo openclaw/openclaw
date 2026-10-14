@@ -82,13 +82,6 @@ CREATE TABLE commitments (${RETIRED_COMMITMENTS_COLUMNS_SQL.slice(1, -1)}
 ${RETIRED_COMMITMENTS_BASE_INDEXES_SQL}
 `;
 
-const RETIRED_COMMITMENTS_INDEX_FINGERPRINTS = new Map(
-  getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
-    ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
-  ),
-);
-const RETIRED_COMMITMENTS_INDEX_NAMES = [...RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.keys()];
-
 const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.account_id",
   "commitments.recipient_id",
@@ -113,30 +106,40 @@ const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.expired_at_ms",
 ] as const;
 
-const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
-  // These defaults shipped as independent same-version additive repairs, so
-  // supported databases may mix canonical and defaulted definitions. The
-  // surrounding exact-object check still rejects every other schema change.
-  allowedColumnDefinitions: {
-    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
-    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
-    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
-    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
-    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
-    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
-    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
-    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
-    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
-  },
-  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
-  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
-};
+function deriveRetiredCommitmentsContract() {
+  // Derivation opens guarded SQLite. Diagnostics must be importable before that
+  // capability is available; the canonical schema cache owns reuse after admission.
+  const indexFingerprints = new Map(
+    getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
+      ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
+    ),
+  );
+  const compatibility: SqliteSchemaCompatibility = {
+    // These defaults shipped as independent same-version additive repairs, so
+    // supported databases may mix canonical and defaulted definitions. The
+    // surrounding exact-object check still rejects every other schema change.
+    allowedColumnDefinitions: {
+      "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
+      "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
+      "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+      "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
+      "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
+      "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
+      "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
+      "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
+      "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
+      "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+    },
+    allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
+    allowedMissingIndexes: [...indexFingerprints.keys()],
+  };
+  return { indexFingerprints, compatibility };
+}
 
 function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
-  compatibility: SqliteSchemaCompatibility,
+  { compatibility, indexFingerprints }: ReturnType<typeof deriveRetiredCommitmentsContract>,
 ): boolean {
   if (collectSqliteSchemaIssues(db, schemaSql, compatibility).length > 0) {
     return false;
@@ -156,7 +159,7 @@ function hasSupportedRetiredCommitmentsSchema(
     (object) =>
       object.type === "index" &&
       JSON.stringify(collectSqliteNamedIndexContract(db, object.name)) ===
-        RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.get(object.name),
+        indexFingerprints.get(object.name),
   );
 }
 
@@ -168,7 +171,7 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
     db,
     "retired OpenClaw commitments schema",
     RETIRED_COMMITMENTS_SCHEMA_SQL,
-    RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+    deriveRetiredCommitmentsContract().compatibility,
   );
   throw new Error(
     "Retired OpenClaw commitments schema has unsupported additional indexes; refusing destructive migration.",
@@ -176,17 +179,10 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
 }
 
 export function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
+  const contract = deriveRetiredCommitmentsContract();
   return (
-    hasSupportedRetiredCommitmentsSchema(
-      db,
-      RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    ) ||
-    hasSupportedRetiredCommitmentsSchema(
-      db,
-      SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    )
+    hasSupportedRetiredCommitmentsSchema(db, RETIRED_COMMITMENTS_SCHEMA_SQL, contract) ||
+    hasSupportedRetiredCommitmentsSchema(db, SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL, contract)
   );
 }
 
@@ -203,8 +199,7 @@ function assertNoRetiredCommitmentsForeignKeys(db: DatabaseSync): void {
   for (const table of tables) {
     const foreignKeys = db
       .prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(table.name)})`)
-      // SAFETY: PRAGMA foreign_key_list rows are widened to unknown before use.
-      .all() as Array<{ table?: unknown }>;
+      .all();
     if (
       foreignKeys.some(
         (foreignKey) =>
@@ -357,13 +352,47 @@ function migrateRetiredSkillCuratorTablesV11(db: DatabaseSync, previousVersion: 
     // the operator sees; say so rather than silently widening the collection.
     if (archivedCount > 0) {
       stateDbLog.info(
-        `${archivedCount} previously archived workshop skills return to the active collection; the weekly collection review will judge them`,
+        `${archivedCount} previously archived workshop skills are live again; archive any you no longer want`,
       );
     }
   }
   // Lifecycle rows are legacy v2026.7.1 sweep state; proposal origin runs were never read.
   for (const table of retiredTables) {
     db.exec(`DROP TABLE IF EXISTS ${table};`);
+  }
+  return true;
+}
+
+// Same-version retirement in state schema 20. Doctor drops these only after
+// exporting pending proposal drafts, so the ordinary open path never runs this.
+const RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES = [
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+  "skill_workshop_proposals",
+] as const;
+
+/** Drops the retired proposal tables, children first, inside the caller's write transaction. */
+export function dropRetiredSkillWorkshopProposalTables(db: DatabaseSync): boolean {
+  const present = RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES.filter((table) => tableExists(db, table));
+  if (present.length === 0) {
+    return false;
+  }
+  // Legacy builds left indexes naming retired columns; drop dependents before their tables.
+  const dependents = db
+    .prepare(
+      `SELECT type, name FROM sqlite_schema
+        WHERE type IN ('index', 'trigger') AND sql IS NOT NULL
+          AND tbl_name IN (${present.map(() => "?").join(", ")})`,
+    )
+    .all(...present);
+  for (const { type, name } of dependents) {
+    if ((type === "index" || type === "trigger") && typeof name === "string") {
+      db.exec(`DROP ${type.toUpperCase()} IF EXISTS ${quoteSqliteIdentifier(name)};`);
+    }
+  }
+  for (const table of present) {
+    db.exec(`DROP TABLE ${table};`);
   }
   return true;
 }

@@ -72,91 +72,157 @@ afterEach(async () => {
 });
 
 describe("physical tab creation authority", () => {
-  it.each([
-    "initial blank",
-    "committed then blank",
-    "removed",
-    "replaced",
-    "selected revocation",
-  ] as const)("honors %s observed before tabs.create resolves", async (observation) => {
-    const h = await setup(observation === "selected revocation" ? "selected" : "all");
-    const create = h.tabsCreate.getMockImplementation()!;
-    h.tabsCreate.mockImplementationOnce(async (properties) => {
-      const tab = await create(properties);
-      if (observation === "initial blank") {
-        h.updateTab(tab.id, { url: "about:blank" });
-      } else if (observation === "committed then blank") {
-        h.updateTab(tab.id, { url: "https://example.com/committed" });
-        h.updateTab(tab.id, { url: "about:blank" }, false);
-      } else if (observation === "selected revocation") {
-        h.updateTab(tab.id, { groupId: -1 });
-      } else if (observation === "removed") {
-        h.tabsRemovedListener?.(tab.id);
-      } else {
-        h.tabsReplacedListener(102, tab.id);
-      }
-      return tab;
-    });
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-      type: observation === "initial blank" ? "result" : "error",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { pendingUrl: "https://example.com/destination", response: "result" },
-    { pendingUrl: "chrome://settings", response: "error" },
-  ])(
-    "checks the pending $pendingUrl appearing during navigation response validation",
-    async ({ pendingUrl, response }) => {
-      const h = await setup("selected");
-      await h.create();
-      await h.attach();
-      h.debuggerSendCommand.mockImplementationOnce(async () => {
-        const get = h.tabsGet.getMockImplementation()!;
-        h.tabsGet.mockImplementationOnce(async (tabId) => {
-          const before = await get(tabId);
-          h.updateTab(tabId, { pendingUrl });
-          return before;
-        });
-        return { frameId: "main" };
+  it.each(["initial blank", "committed then blank", "removed"] as const)(
+    "honors %s observed before tabs.create resolves",
+    async (observation) => {
+      const h = await setup();
+      const create = h.tabsCreate.getMockImplementation()!;
+      h.tabsCreate.mockImplementationOnce(async (properties) => {
+        const tab = await create(properties);
+        if (observation === "initial blank") {
+          h.updateTab(tab.id, { url: "about:blank" });
+        } else if (observation === "committed then blank") {
+          h.updateTab(tab.id, { url: "https://example.com/committed" });
+          h.updateTab(tab.id, { url: "about:blank" }, false);
+        } else {
+          h.tabsRemovedListener?.(tab.id);
+        }
+        return tab;
       });
-      expect(
-        await h.request({
-          type: "cdp",
-          tabId: 101,
-          method: "Page.navigate",
-          params: { url: pendingUrl },
-        }),
-      ).toMatchObject({ type: response });
+      expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
+        type: observation === "initial blank" ? "result" : "error",
+      });
+      expect(h.tabsRemove).not.toHaveBeenCalled();
     },
   );
 
-  it("retires on a root document commit, but not an iframe commit", async () => {
-    const h = await setup();
+  it("keeps an HTTP creation revoked after group removal and restoration before its callback", async () => {
+    const h = await setup("selected");
+    const create = h.tabsCreate.getMockImplementation()!;
+    h.tabsCreate.mockImplementationOnce(async (properties) => {
+      const tab = await create(properties);
+      for (const groupId of [7, -1, 7]) {
+        h.updateTab(tab.id, { groupId });
+      }
+      return tab;
+    });
+    expect(
+      await h.request({ type: "createTab", url: "https://example.com/destination" }),
+    ).toMatchObject({ type: "error", message: "created tab is no longer available" });
+    expect(h.debuggerAttach).not.toHaveBeenCalled();
+    expect(h.tabsRemove).not.toHaveBeenCalled();
+  });
+
+  it.each(["initial loading snapshot", "same-group update"] as const)(
+    "preserves selected navigation when the %s arrives after its root commit",
+    async (event) => {
+      const h = await setup("selected");
+      await h.create();
+      await h.attach();
+      const url = "https://example.com/destination";
+      h.debuggerSendCommand.mockImplementationOnce(async () => {
+        h.updateTab(101, { pendingUrl: url }, false);
+        const initialLoadingTab = await h.tabsGet(101);
+        h.updateTab(101, { url, pendingUrl: undefined }, false);
+        h.debuggerEventListener?.({ tabId: 101 }, "Page.frameNavigated", {
+          frame: { id: "main", loaderId: "destination", url },
+        });
+        if (event === "initial loading snapshot") {
+          h.tabsUpdatedListener?.(101, { status: "loading" }, initialLoadingTab);
+        } else {
+          const tab = { ...initialLoadingTab, url, pendingUrl: undefined };
+          h.tabsUpdatedListener?.(101, { groupId: tab.groupId }, tab);
+        }
+        return { frameId: "main", loaderId: "destination" };
+      });
+      const response = await h.request({
+        type: "cdp",
+        tabId: 101,
+        method: "Page.navigate",
+        params: { url },
+      });
+      expect(response, JSON.stringify(response)).toMatchObject({
+        type: "result",
+        result: { frameId: "main", loaderId: "destination" },
+      });
+      expect(h.debuggerDetach).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps loading-snapshot authority revoked after group removal and restoration", async () => {
+    const h = await setup("selected");
     await h.create();
     await h.attach();
+    const url = "https://example.com/destination";
+    const initialLoadingTab = { ...(await h.tabsGet(101)), pendingUrl: url };
+    h.updateTab(101, { url }, false);
     h.debuggerEventListener?.({ tabId: 101 }, "Page.frameNavigated", {
-      frame: { id: "child", parentId: "main", url: "https://example.com/frame" },
+      frame: { id: "main", loaderId: "destination", url },
+    });
+    h.debuggerSendCommand.mockImplementationOnce(async () => {
+      h.updateTab(101, { groupId: -1 });
+      h.updateTab(101, { groupId: 7 });
+      h.tabsUpdatedListener?.(101, { status: "loading" }, initialLoadingTab);
+      return { frameId: "main", loaderId: "destination" };
+    });
+    const response = await h.request({
+      type: "cdp",
+      tabId: 101,
+      method: "Page.navigate",
+      params: { url },
+    });
+    expect(response, JSON.stringify(response)).toMatchObject({
+      type: "error",
+      message: expect.stringMatching(
+        /access was revoked|restricted or unavailable|Debugger attachment retired/,
+      ),
+    });
+    expect(h.debuggerSendCommand).toHaveBeenCalledWith({ tabId: 101 }, "Page.navigate", { url });
+  });
+
+  it("restores fresh attachment authority without reviving a command admitted before a title change", async () => {
+    const h = await setup("selected");
+    h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
+    await h.create();
+    await h.attach();
+    h.debuggerSendCommand.mockImplementationOnce(async () => {
+      h.tabGroupUpdatedListener?.({ id: 7, title: "Other" });
+      h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
+      return { frameId: "main" };
+    });
+
+    expect(
+      await h.request({
+        type: "cdp",
+        tabId: 101,
+        method: "Page.navigate",
+        params: { url: "https://example.com/destination" },
+      }),
+    ).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("access was revoked"),
+    });
+
+    await vi.waitFor(() => {
+      h.debuggerEventListener?.({ tabId: 101 }, "Runtime.consoleAPICalled", { value: 1 });
+      expect(
+        h
+          .frames()
+          .some(
+            (frame) => frame.type === "cdpEvent" && frame.method === "Runtime.consoleAPICalled",
+          ),
+      ).toBe(true);
     });
     expect(await h.request({ type: "cdp", tabId: 101, method: "Runtime.enable" })).toMatchObject({
       type: "result",
     });
-    h.debuggerEventListener?.({ tabId: 101 }, "Page.frameNavigated", {
-      frame: { id: "main", url: "https://example.com/committed" },
-    });
-    // Even before tabs.onUpdated catches up, that committed document has spent
-    // the one initial-blank exception; a stale blank observation cannot restore it.
-    expect(await h.request({ type: "cdp", tabId: 101, method: "Runtime.enable" })).toMatchObject({
-      type: "error",
-    });
   });
 
-  it("revokes a later empty group title during creation", async () => {
+  it("revokes group access during creation on removal", async () => {
     const h = await setup("selected");
     h.tabGroupsUpdate.mockImplementationOnce(async () => {
       h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
-      h.tabGroupUpdatedListener?.({ id: 7, title: "" });
+      h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
     });
     expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
       type: "error",
@@ -175,18 +241,7 @@ describe("physical tab creation authority", () => {
     expect(h.tabsRemove).not.toHaveBeenCalled();
   });
 
-  it("does not guess a cleanup tab when physical creation fails", async () => {
-    const h = await setup();
-    h.tabsCreate.mockRejectedValueOnce(new Error("create failed"));
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-      type: "error",
-      message: "create failed",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
-    expect(h.tabsGroup).not.toHaveBeenCalled();
-  });
-
-  it.each(["removed", "replaced", "pause"] as const)(
+  it.each(["removed", "pause"] as const)(
     "rechecks %s after the failure-cleanup lookup yields",
     async (reason) => {
       const h = await setup();
@@ -214,8 +269,6 @@ describe("physical tab creation authority", () => {
       let pausing: Promise<unknown> | undefined;
       if (reason === "removed") {
         h.tabsRemovedListener?.(101);
-      } else if (reason === "replaced") {
-        h.tabsReplacedListener(102, 101);
       } else {
         pausing = sendRuntimeMessage(h, {
           type: "toggleTabAccess",
@@ -232,7 +285,7 @@ describe("physical tab creation authority", () => {
     },
   );
 
-  it.each(["all", "selected"] as const)(
+  it.each(["selected"] as const)(
     "fences a %s revoke while grouping and leaves the user tab alone",
     async (mode) => {
       const h = await setup(mode);

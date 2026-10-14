@@ -1,6 +1,7 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseRetryAfterErrorSeconds } from "../internal/retry-after.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
@@ -11,6 +12,7 @@ export type ProviderErrorProjection = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  retryAfterMs?: number | null;
 };
 
 export type ProviderErrorRedactor = (value: unknown) => unknown;
@@ -47,7 +49,11 @@ function readCauseCode(error: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function stringifyField(value: unknown, maxLength: number): string | undefined {
+function truncateField(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${truncateUtf16Safe(text, maxLength)}... [truncated]`;
+}
+
+function stringifyField(value: unknown, maxLength?: number): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -57,19 +63,23 @@ function stringifyField(value: unknown, maxLength: number): string | undefined {
   if (!text) {
     return undefined;
   }
-  return text.length <= maxLength ? text : `${truncateUtf16Safe(text, maxLength)}... [truncated]`;
+  return maxLength === undefined ? text : truncateField(text, maxLength);
 }
 
 function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderErrorProjection {
   const error = asOptionalRecord(snapshot);
-  const nestedError = asOptionalRecord(error?.error);
   const response = asOptionalRecord(error?.response);
+  const nestedError =
+    asOptionalRecord(error?.error) ??
+    asOptionalRecord(response?.error) ??
+    asOptionalRecord(asOptionalRecord(error?.payload)?.error);
   const status = [error?.status, error?.statusCode, response?.status, response?.statusCode].find(
     (value): value is number => typeof value === "number" && Number.isFinite(value),
   );
   const bodyValue =
     error?.errorBody ?? error?.body ?? response?.body ?? response?.data ?? nestedError;
-  const body = stringifyField(bodyValue, MAX_ERROR_BODY_LENGTH);
+  // Redact complete structured data before clipping its message/body projections.
+  const body = stringifyField(bodyValue);
   const originalMessage =
     (typeof snapshot === "string" ? snapshot : undefined) ??
     readProviderErrorField(error, "message") ??
@@ -82,12 +92,7 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
         body ??
         stringifyField(snapshot, MAX_ERROR_BODY_LENGTH) ??
         "Unknown provider error");
-  if (
-    status !== undefined &&
-    !body &&
-    originalMessage &&
-    !originalMessage.startsWith(String(status))
-  ) {
+  if (status !== undefined && originalMessage && !originalMessage.startsWith(String(status))) {
     errorMessage = `${status}: ${errorMessage}`;
   }
   const metadata = asOptionalRecord(nestedError?.metadata);
@@ -110,7 +115,7 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
     errorMessage: stringifyField(errorMessage, 4096) ?? "Unknown provider error",
     ...(errorCode ? { errorCode: truncateUtf16Safe(errorCode, 256) } : {}),
     ...(errorType ? { errorType: truncateUtf16Safe(errorType, 256) } : {}),
-    ...(body ? { errorBody: stringifyField(bodyValue, 500) } : {}),
+    ...(body ? { errorBody: truncateField(body, 500) } : {}),
   };
 }
 
@@ -120,6 +125,9 @@ export function projectProviderError(
   signal?: AbortSignal,
 ): ProviderErrorProjection {
   try {
+    // Diagnostic projection intentionally discards non-display response headers.
+    // Capture only the safe timing scalar before that lossy boundary.
+    const retryAfterSeconds = parseRetryAfterErrorSeconds(error);
     const localSnapshot = projectDiagnosticValue(error);
     let snapshot = localSnapshot;
     try {
@@ -127,7 +135,19 @@ export function projectProviderError(
     } catch {
       // Package projection is independently safe when embedding-host strengthening fails.
     }
-    return buildProjection(snapshot, signal);
+    const projection = buildProjection(snapshot, signal);
+    if (retryAfterSeconds !== undefined) {
+      const retryAfterMs = Math.ceil(retryAfterSeconds * 1000);
+      if (Number.isSafeInteger(retryAfterMs)) {
+        projection.retryAfterMs = retryAfterMs;
+      } else {
+        // JSON cannot carry Infinity; null preserves the non-retryable timing floor.
+        projection.retryAfterMs = null;
+      }
+      const suffix = `; Retry-After: ${retryAfterSeconds} seconds`;
+      projection.errorMessage = `${truncateUtf16Safe(projection.errorMessage, 4096 - suffix.length)}${suffix}`;
+    }
+    return projection;
   } catch {
     return {
       stopReason: signal?.aborted ? "aborted" : "error",

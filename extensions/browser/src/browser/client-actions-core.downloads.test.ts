@@ -14,7 +14,7 @@ const clientFetchMocks = vi.hoisted(() => ({
 
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
-import { browserDownload, browserWaitForDownload } from "./client-actions-core.js";
+import { browserDownload, browserWaitForDownload } from "./client-actions.js";
 
 function lastFetchCall(): { url: string; options: { body?: string; timeoutMs?: number } } {
   const call = clientFetchMocks.fetchBrowserJson.mock.calls.at(-1);

@@ -1,23 +1,18 @@
-// Discord plugin module implements reply delivery behavior.
 import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
   listMessageReceiptPlatformIds,
   sendDurableMessageBatch,
-  type OutboundDeliveryFormattingOptions,
   type OutboundIdentity,
-  type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
@@ -40,18 +35,17 @@ export type DiscordThreadBindingLookup = {
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
+function formatDiscordReplyContext(target: string, sessionKey?: string): string {
+  return `target=${target}${sessionKey ? ` session=${sessionKey}` : ""}`;
+}
+
 export function formatDiscordReplyDeliveryFailure(params: {
   kind: string;
   err: unknown;
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
@@ -63,21 +57,8 @@ export function formatDiscordReplySkip(params: {
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
-}
-
-function resolveTargetChannelId(target: string): string | undefined {
-  if (!target.startsWith("channel:")) {
-    return undefined;
-  }
-  const channelId = target.slice("channel:".length).trim();
-  return channelId || undefined;
 }
 
 function resolveBoundThreadBinding(params: {
@@ -89,7 +70,9 @@ function resolveBoundThreadBinding(params: {
   if (!params.threadBindings || !sessionKey) {
     return undefined;
   }
-  const targetChannelId = resolveTargetChannelId(params.target);
+  const targetChannelId = params.target.startsWith("channel:")
+    ? params.target.slice("channel:".length).trim()
+    : undefined;
   if (!targetChannelId) {
     return undefined;
   }
@@ -106,7 +89,7 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
-  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
+  const displayName = `🤖 ${baseLabel}`.trim();
   const identity: OutboundIdentity = {
     name: truncateUtf16Safe(displayName, 80),
   };
@@ -119,82 +102,6 @@ function resolveBindingIdentity(
     // Avatar is cosmetic; delivery should not depend on local identity config.
   }
   return identity;
-}
-
-function createDiscordDeliveryDeps(params: {
-  cfg: OpenClawConfig;
-  token: string;
-  rest?: RequestClient;
-  allowedMentions?: DiscordAllowedMentions;
-}): OutboundSendDeps {
-  return {
-    // Discord webhooks default to user-only parsing; bot messages need this
-    // explicit policy to prevent a fresh preview final from broadcasting.
-    discord: (to: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
-      sendMessageDiscord(to, text, {
-        ...opts,
-        cfg: opts?.cfg ?? params.cfg,
-        token: params.token,
-        rest: params.rest,
-        ...(params.allowedMentions ? { allowedMentions: params.allowedMentions } : {}),
-      }),
-    discordVoice: (
-      to: string,
-      audioPath: string,
-      opts?: Parameters<typeof sendVoiceMessageDiscord>[2],
-    ) =>
-      sendVoiceMessageDiscord(to, audioPath, {
-        ...opts,
-        cfg: opts?.cfg ?? params.cfg,
-        token: params.token,
-        rest: params.rest,
-      }),
-  };
-}
-
-type DiscordDeliveryOptions = {
-  to: string;
-  threadId?: string;
-  agentId?: string;
-  identity?: OutboundIdentity;
-  mediaAccess?: OutboundMediaAccess;
-  replyToMode: ReplyToMode;
-  formatting: OutboundDeliveryFormattingOptions;
-};
-
-function resolveDiscordDeliveryOptions(params: {
-  cfg: OpenClawConfig;
-  target: string;
-  sessionKey?: string;
-  threadBindings?: DiscordThreadBindingLookup;
-  textLimit: number;
-  maxLinesPerMessage?: number;
-  tableMode?: MarkdownTableMode;
-  chunkMode?: ChunkMode;
-  replyToMode?: ReplyToMode;
-  mediaLocalRoots?: readonly string[];
-}): DiscordDeliveryOptions {
-  const binding = resolveBoundThreadBinding({
-    threadBindings: params.threadBindings,
-    sessionKey: params.sessionKey,
-    target: params.target,
-  });
-  return {
-    to: binding ? `channel:${binding.channelId}` : params.target,
-    threadId: binding?.threadId,
-    agentId: binding?.agentId,
-    identity: resolveBindingIdentity(params.cfg, binding),
-    mediaAccess: params.mediaLocalRoots?.length
-      ? { localRoots: params.mediaLocalRoots }
-      : undefined,
-    replyToMode: params.replyToMode ?? "all",
-    formatting: {
-      textLimit: params.textLimit,
-      maxLinesPerMessage: params.maxLinesPerMessage,
-      tableMode: params.tableMode,
-      chunkMode: params.chunkMode,
-    },
-  };
 }
 
 function formatDiscordReasoningPayload(payload: ReplyPayload): ReplyPayload {
@@ -217,7 +124,6 @@ export async function deliverDiscordReply(params: {
   token: string;
   accountId?: string;
   rest?: RequestClient;
-  runtime: RuntimeEnv;
   textLimit: number;
   maxLinesPerMessage?: number;
   replyToId?: string;
@@ -231,10 +137,10 @@ export async function deliverDiscordReply(params: {
   kind: "tool" | "block" | "final";
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }) {
-  void params.runtime;
-
-  const delivery = resolveDiscordDeliveryOptions(params);
+  const binding = resolveBoundThreadBinding(params);
+  const to = binding ? `channel:${binding.channelId}` : params.target;
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
     kind: params.kind,
   })
@@ -247,29 +153,55 @@ export async function deliverDiscordReply(params: {
     };
   }
 
+  const { cfg, token, rest, allowedMentions } = params;
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: "discord",
-    to: delivery.to,
+    to,
     accountId: params.accountId,
     payloads,
     replyToId: normalizeOptionalString(params.replyToId),
-    replyToMode: delivery.replyToMode,
-    formatting: delivery.formatting,
-    threadId: delivery.threadId,
-    identity: delivery.identity,
+    replyToMode: params.replyToMode ?? "all",
+    formatting: {
+      textLimit: params.textLimit,
+      maxLinesPerMessage: params.maxLinesPerMessage,
+      tableMode: params.tableMode,
+      chunkMode: params.chunkMode,
+    },
+    threadId: binding?.threadId,
+    identity: resolveBindingIdentity(params.cfg, binding),
     onPlatformSendDispatch: params.onPlatformSendDispatch,
-    deps: createDiscordDeliveryDeps({
-      cfg: params.cfg,
-      token: params.token,
-      rest: params.rest,
-      allowedMentions: params.allowedMentions,
-    }),
-    mediaAccess: delivery.mediaAccess,
+    assertDirectAdapterHandoff: params.assertPlatformSendAuthorized,
+    deps: {
+      // Discord webhooks default to user-only parsing; bot messages need this
+      // explicit policy to prevent a fresh preview final from broadcasting.
+      discord: (recipient: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
+        sendMessageDiscord(recipient, text, {
+          ...opts,
+          cfg: opts?.cfg ?? cfg,
+          token,
+          rest,
+          ...(allowedMentions ? { allowedMentions } : {}),
+        }),
+      discordVoice: (
+        recipient: string,
+        audioPath: string,
+        opts?: Parameters<typeof sendVoiceMessageDiscord>[2],
+      ) =>
+        sendVoiceMessageDiscord(recipient, audioPath, {
+          ...opts,
+          cfg: opts?.cfg ?? cfg,
+          token,
+          rest,
+        }),
+    },
+    mediaAccess: params.mediaLocalRoots?.length
+      ? { localRoots: params.mediaLocalRoots }
+      : undefined,
     session: buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
-      agentId: delivery.agentId,
+      agentId: binding?.agentId,
       requesterAccountId: params.accountId,
     }),
   });
@@ -290,7 +222,7 @@ export async function deliverDiscordReply(params: {
     };
   }
   if (send.results.length === 0) {
-    throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
+    throw new Error(`discord final reply produced no delivered message for ${to}`);
   }
   const deliveryResult = {
     messageIds: listMessageReceiptPlatformIds(send.receipt),

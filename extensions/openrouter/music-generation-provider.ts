@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
@@ -8,7 +7,7 @@ import type {
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -16,7 +15,12 @@ import {
   resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -28,11 +32,6 @@ const OPENROUTER_MUSIC_MODELS = [
   OPENROUTER_CLIP_MUSIC_MODEL,
 ] as const;
 
-type OpenRouterAudioStreamResult = {
-  audioBuffer: Buffer;
-  transcript: string;
-};
-
 type OpenRouterAudioStreamAccumulator = {
   audioBuffers: Buffer[];
   audioBytes: number;
@@ -42,18 +41,7 @@ type OpenRouterAudioStreamAccumulator = {
   maxBytes: number;
 };
 
-function resolveOpenRouterMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
-}
-
-function outputFormatToMimeType(format: "mp3" | "wav" | undefined): string {
-  return format === "mp3" ? "audio/mpeg" : "audio/wav";
-}
-
-function imageToContentPart(image: MusicGenerationSourceImage): {
-  type: "image_url";
-  image_url: { url: string };
-} {
+function imageToContentPart(image: MusicGenerationSourceImage) {
   const url =
     normalizeOptionalString(image.url) ??
     (image.buffer
@@ -83,37 +71,20 @@ function buildOpenRouterMusicPrompt(req: MusicGenerationRequest): string {
   return parts.join("\n\n");
 }
 
-function buildOpenRouterMessageContent(
-  req: MusicGenerationRequest,
-):
-  | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> {
+function buildOpenRouterMessageContent(req: MusicGenerationRequest) {
   const prompt = buildOpenRouterMusicPrompt(req);
   const images = req.inputImages ?? [];
   if (images.length === 0) {
     return prompt;
   }
-  return [{ type: "text", text: prompt }, ...images.map((image) => imageToContentPart(image))];
+  return [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
 }
 
-function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
-  if (!isRecord(part)) {
-    return undefined;
-  }
-  const choices = part.choices;
-  if (!Array.isArray(choices)) {
-    return undefined;
-  }
-  const first = choices[0];
-  if (!isRecord(first)) {
-    return undefined;
-  }
-  const delta = first.delta;
-  if (!isRecord(delta)) {
-    return undefined;
-  }
-  const audio = delta.audio;
-  if (!isRecord(audio)) {
+function readDeltaAudio(part: unknown) {
+  const choices = asOptionalRecord(part)?.choices;
+  const first = Array.isArray(choices) ? asOptionalRecord(choices[0]) : undefined;
+  const audio = asOptionalRecord(asOptionalRecord(first?.delta)?.audio);
+  if (!audio) {
     return undefined;
   }
   return {
@@ -151,11 +122,7 @@ function appendDecodedOpenRouterMusicAudio(
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
   }
   const buffer = Buffer.from(canonicalAudio, "base64");
-  const nextBytes = result.audioBytes + buffer.byteLength;
-  if (nextBytes > result.maxBytes) {
-    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
-  }
-  result.audioBytes = nextBytes;
+  result.audioBytes += buffer.byteLength;
   result.audioBuffers.push(buffer);
 }
 
@@ -230,31 +197,16 @@ async function readOpenRouterStreamChunk(
   deadline: ProviderOperationDeadline,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+  return await withTimeout(reader.read(), timeoutMs, {
+    createError: () => new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`),
+  });
 }
 
 async function readOpenRouterAudioStream(
   response: Response,
   deadline: ProviderOperationDeadline,
   maxBytes: number,
-): Promise<OpenRouterAudioStreamResult> {
+) {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
   }
@@ -269,9 +221,8 @@ async function readOpenRouterAudioStream(
     maxBytes,
   };
   const maxEventBytes = resolveOpenRouterSseEventMaxBytes(maxBytes);
-  let buffer = "";
+  const lineFragments: string[] = [];
   let pendingBytes = 0;
-  let doneSeen = false;
   try {
     for (;;) {
       const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
@@ -286,38 +237,39 @@ async function readOpenRouterAudioStream(
           );
         }
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/u);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
+      const chunk = decoder.decode(value, { stream: true });
+      let start = 0;
+      // Audio events can span many chunks; scan only new text and join each line once.
+      for (let end = chunk.indexOf("\n"); end !== -1; end = chunk.indexOf("\n", start)) {
+        let line = chunk.slice(start, end);
+        start = end + 1;
+        if (lineFragments.length > 0) {
+          lineFragments.push(line);
+          line = lineFragments.join("");
+          lineFragments.length = 0;
+        }
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          // Once [DONE] is observed, the generated result is authoritative.
-          // Cancellation is cleanup and must not replace it with a transport error.
-          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
           };
         }
       }
+      if (start < chunk.length) {
+        lineFragments.push(chunk.slice(start));
+      }
     }
     resolveOpenRouterStreamRemainingMs(deadline);
-    buffer += decoder.decode();
+    lineFragments.push(decoder.decode());
+    const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
     if (pendingBytes > maxEventBytes) {
       throw new Error(
         `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
       );
     }
-    if (buffer.trim()) {
-      for (const line of buffer.split(/\r?\n/u)) {
-        if (processOpenRouterSseLine(line.trim(), result)) {
-          doneSeen = true;
-        }
-      }
-    }
-    if (!doneSeen) {
+    if (!processOpenRouterSseLine(buffer.trim(), result)) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
     flushOpenRouterMusicAudio(result);
@@ -325,10 +277,10 @@ async function readOpenRouterAudioStream(
       audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
       transcript: result.transcriptChunks.join(""),
     };
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
   } finally {
+    // A capture tee can keep cancellation pending until its sibling finishes.
+    // Release the reader without waiting so the request owner can abort transport.
+    void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {}
@@ -341,7 +293,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -376,7 +328,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           capability: "audio",
           jsonContentType: true,
         });
-      const model = resolveOpenRouterMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
       const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
       const streamDeadline = createProviderOperationDeadline({
@@ -414,7 +366,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           tracks: [
             {
               buffer: streamResult.audioBuffer,
-              mimeType: outputFormatToMimeType(format),
+              mimeType: format === "mp3" ? "audio/mpeg" : "audio/wav",
               fileName: `track-1.${format}`,
             },
           ],

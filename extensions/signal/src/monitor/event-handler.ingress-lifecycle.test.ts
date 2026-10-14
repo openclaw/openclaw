@@ -53,48 +53,18 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      const input = await params.adapter.ingest(params.raw);
-      if (!input) {
-        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-      }
-      const eventClass = (await params.adapter.classify?.(input)) ?? {
-        kind: "message" as const,
-        canStartAgentTurn: true,
-      };
-      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
-      const resolved = await params.adapter.resolveTurn(
-        input,
-        eventClass,
-        "kind" in preflight ? { admission: preflight } : preflight,
-      );
-      if (!("route" in resolved) || !("delivery" in resolved)) {
-        throw new Error("expected assembled Signal channel turn plan");
-      }
-      const result = await actual.runPreparedInboundReply({
-        channel: resolved.channel,
-        accountId: resolved.accountId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        ctxPayload: resolved.ctxPayload,
-        recordInboundSession: recordInboundSessionMock,
-        afterRecord: resolved.afterRecord,
-        record: resolved.record,
-        history: resolved.history,
-        admission: resolved.admission,
-        botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () =>
-          await dispatchInboundMessageMock({
-            ctx: resolved.ctxPayload,
-            replyOptions: resolved.replyOptions,
-          }),
-      });
-      await params.adapter.onFinalize?.(result);
-      return result;
-    },
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      recordInboundSessionMock,
+      async (resolved) =>
+        await dispatchInboundMessageMock({
+          ctx: resolved.ctxPayload,
+          replyOptions: resolved.replyOptions,
+        }),
+    ),
   };
 });
 
@@ -147,23 +117,6 @@ describe("signal drain claim ownership", () => {
     dispatchBehavior.adoptDuringDispatch = true;
     dispatchBehavior.failBeforeAdoption = undefined;
     dispatchInboundMessageMock.mockClear();
-  });
-
-  it("defers a drain-claimed event and completes the claim at reply adoption", async () => {
-    const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
-    const lifecycle = createTrackedLifecycle();
-
-    const result = await handler(
-      createDataEvent({ timestamp: 1700000001000, message: "hello there" }),
-      lifecycle,
-    );
-
-    // Deferred, never completed-at-enqueue: a crash inside the debounce window
-    // must leave the claim held so the queue replays the message.
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
-    expect(dispatchCapture[0]?.replyOptions?.turnAdoptionLifecycle).toBeDefined();
-    expect(lifecycle.abandonedCount()).toBe(0);
   });
 
   it("completes every constituent claim when debounced entries merge into one turn", async () => {

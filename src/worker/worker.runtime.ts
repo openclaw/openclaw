@@ -1,51 +1,39 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  type WorkerHelloOk,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
+import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
-  WorkerAdmissionDeadlineExceededError,
-  type WorkerAdmissionDeadlineResult,
-} from "./worker-connection-contract.js";
+  assertNativeInferenceAssignment,
+  type NativeInferenceStartup,
+} from "./native-inference-startup.js";
+import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
+import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
-
-// Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
-// gateway worker turn launcher.
-export type WorkerRuntimeResult =
-  | WorkerAdmissionDeadlineResult
-  | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
-  | {
-      status: "failed";
-      reason: "turn-failed";
-      transcriptLeafId: string | null;
-      transcriptNextSeq: number;
-    }
-  | { status: "fenced"; reason: "credential-replaced" | "owner-epoch-mismatch" };
+import { WorkerNodeLostError } from "./worker-node-loss.js";
+import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
 function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undefined {
-  if (
-    state.kind === "fenced" &&
-    (state.reason === "credential-replaced" || state.reason === "owner-epoch-mismatch")
-  ) {
+  if (state.kind === "fenced") {
     return { status: "fenced", reason: state.reason };
   }
   return undefined;
@@ -66,6 +54,17 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const scopeKey = `worker:${sessionId}`;
+  // Portable POSIX workers need command owners that survive worker loss.
+  // Native PTY and external backends retain their transport cleanup contracts.
+  const cleanupScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree:
+      typeof WORKER_DEPLOY_BUILD === "boolean" &&
+      WORKER_DEPLOY_BUILD &&
+      supportsNodeWorkerProcessOwner()
+        ? "owned-only"
+        : "transport-only",
+  });
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   let closing: Promise<void> | undefined;
@@ -73,11 +72,19 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
     stateDir,
     close: () =>
       (closing ??= (async () => {
-        const supervisor = getProcessSupervisor();
-        const scopeKey = `worker:${sessionId}`;
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await supervisor.waitForScope?.(scopeKey);
-        await waitForExecScope(scopeKey);
+        // Even uncertain process cleanup must join the known finalizers before
+        // reporting failure; those callbacks still own this environment's state.
+        const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+        const failed = settled.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") {
+          throw failed.reason;
+        }
+        // Exec finalizers can open state; release its handle before Windows removes the file.
+        const { closeOpenClawStateDatabaseByPathAsync } =
+          await import("../state/openclaw-state-db-cache.js");
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         // Process completion writes its task outcome into this environment's state.
         // Restore the ambient directory only after those callbacks have settled.
         if (previousStateDir === undefined) {
@@ -91,8 +98,24 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
           process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
         }
         await rm(stateDir, { recursive: true, force: true });
-      })()),
+      })().catch((error: unknown) => {
+        closing = undefined;
+        throw error;
+      })),
   };
+}
+
+export async function loadWorkerTurnRuntime() {
+  const imports = [
+    import("./embedded-agent.runtime.js"),
+    import("./inference-stream.runtime.js"),
+  ] as const;
+  try {
+    return await Promise.all(imports);
+  } finally {
+    // Module evaluation must finish before the caller restores the worker environment.
+    await Promise.allSettled(imports);
+  }
 }
 
 export async function runWorkerDescriptor(
@@ -103,6 +126,9 @@ export async function runWorkerDescriptor(
     browserRuntime?: WorkerBrowserRuntime;
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
+    nativeInference?: NativeInferenceStartup;
+    /** Managed device folders retain the node-approved canonical target across startup. */
+    assertWorkspaceCurrent?: () => void;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   if (
@@ -112,6 +138,15 @@ export async function runWorkerDescriptor(
     registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientId);
     registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientSecret);
   }
+  if (descriptor.assignment.inference === "runtime-local") {
+    if (!options.nativeInference) {
+      throw new Error(
+        "Runtime-local inference was requested but no node-local model configuration was provisioned",
+      );
+    }
+    assertNativeInferenceAssignment(options.nativeInference, descriptor);
+  }
+  options.assertWorkspaceCurrent?.();
   const workspaceDir = await assertWorkerDirectory(descriptor.assignment.workspaceDir, "workspace");
   const workerContainmentRoot = descriptor.assignment.workerContainmentRoot
     ? await assertWorkerDirectory(descriptor.assignment.workerContainmentRoot, "containment root")
@@ -125,12 +160,14 @@ export async function runWorkerDescriptor(
       "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
     );
   }
+  options.assertWorkspaceCurrent?.();
   const environment = options.environmentStateDir
     ? undefined
     : await createWorkerRuntimeEnvironment(descriptor.admission.sessionId);
   const stateDir = options.environmentStateDir ?? environment!.stateDir;
 
   const abortController = new AbortController();
+  let nativeRuntime: NativeRuntime | undefined;
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
@@ -166,11 +203,23 @@ export async function runWorkerDescriptor(
     initialAckedSeq: descriptor.assignment.liveEvents.ackedSeq,
   });
   const inference = new WorkerInferenceProxyClient(connection);
+  let wasAdmitted = false;
   const unsubscribeState = connection.onStateChange((state) => {
-    if (state.kind === "fenced") {
+    if (state.kind === "ready") {
+      wasAdmitted = true;
+    } else if (state.kind === "fenced") {
       abortController.abort(new Error(`worker fenced: ${state.reason}`));
     } else if (state.kind === "failed") {
-      abortController.abort(state.error);
+      abortController.abort(
+        wasAdmitted && state.error instanceof WorkerAdmissionDeadlineExceededError
+          ? new WorkerNodeLostError({ cause: state.error })
+          : state.error,
+      );
+    } else if (wasAdmitted && descriptor.assignment.inference === "runtime-local") {
+      // Startup may retry before admission. Once admitted, any transport loss
+      // ends local provider authority, even while runtime setup is still awaited.
+      // Reconnection may settle the failed turn; it cannot revive its producer.
+      abortController.abort(new WorkerNodeLostError());
     }
   });
 
@@ -194,63 +243,121 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
-    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] = await Promise.all([
-      import("./embedded-agent.runtime.js"),
-      import("./inference-stream.runtime.js"),
-    ]);
-    const stream = createWorkerInferenceStreamAdapter({
-      client: inference,
-      sessionId: descriptor.admission.sessionId,
-      runEpoch: descriptor.admission.ownerEpoch,
-      runId: descriptor.assignment.runId,
-      turnId: descriptor.assignment.turnId,
-      modelRef: descriptor.assignment.modelRef,
-    });
+    if (
+      !hello.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE) ||
+      !hello.toolSurface
+    ) {
+      throw new Error("Gateway does not support the admitted worker tool surface.");
+    }
+    const toolSurface = hello.toolSurface;
+    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
+      await loadWorkerTurnRuntime();
+    const computerContextEpoch: ComputerContextEpoch = { value: 0 };
+    const stream =
+      descriptor.assignment.inference === "runtime-local"
+        ? () => {
+            throw new Error("Gateway inference is forbidden for this runtime-local turn");
+          }
+        : createWorkerInferenceStreamAdapter({
+            client: inference,
+            sessionId: descriptor.admission.sessionId,
+            runEpoch: descriptor.admission.ownerEpoch,
+            runId: descriptor.assignment.runId,
+            turnId: descriptor.assignment.turnId,
+            modelRef: descriptor.assignment.modelRef,
+            computerContextEpoch,
+          });
+    options.assertWorkspaceCurrent?.();
+    const github = descriptor.assignment.github
+      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) => {
+          options.assertWorkspaceCurrent?.();
+          return prepareWorkerGitHubEnvironment({
+            binding: descriptor.assignment.github!,
+            stateDir,
+            turnId: descriptor.assignment.turnId,
+            cwd: workspaceDir,
+            signal: abortController.signal,
+          });
+        })
+      : undefined;
     try {
       turnStarted = true;
-      await runWorkerEmbeddedTurn({
-        agentId: descriptor.assignment.agentId,
-        operationalRunInstance: descriptor.assignment.operationalRunInstance,
-        agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
-        cwd: workspaceDir,
-        workerContainmentRoot,
-        ...(descriptor.assignment.permissionMode
-          ? { permissionMode: descriptor.assignment.permissionMode }
-          : {}),
-        stateDir,
-        sessionId: descriptor.admission.sessionId,
-        sessionKey: `worker:${descriptor.admission.sessionId}`,
-        runId: descriptor.assignment.runId,
-        prompt: descriptor.assignment.prompt,
-        suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
-        modelRef: descriptor.assignment.modelRef,
-        initialMessages: descriptor.assignment.initialMessages,
-        ...(descriptor.assignment.systemPrompt === undefined
-          ? {}
-          : { systemPrompt: descriptor.assignment.systemPrompt }),
-        inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
-          (name) =>
-            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
-        ),
-        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
-        ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
-        inference: { stream },
-        transcript: {
-          commit: async (messages) => {
-            await transcript.commit(messages);
+      const {
+        workspaceDir: _workspace,
+        github: _github,
+        computer,
+        toolAuthority,
+        transcript: _transcript,
+        liveEvents: _liveEvents,
+        inference: _inference,
+        ...assignment
+      } = descriptor.assignment;
+      const runTurn = (nativeInference?: NativeRuntimeResolved) => {
+        options.assertWorkspaceCurrent?.();
+        return runWorkerEmbeddedTurn({
+          ...assignment,
+          nativeInference,
+          cwd: workspaceDir,
+          workerContainmentRoot,
+          stateDir,
+          ...(github ? { github } : {}),
+          sessionId: descriptor.admission.sessionId,
+          sessionKey: `worker:${descriptor.admission.sessionId}`,
+          allowedToolNames: toolAuthority.allowedToolNames,
+          toolSurface,
+          execAuthority: toolAuthority.exec,
+          ...(computer
+            ? {
+                computer: {
+                  contextEpoch: computerContextEpoch,
+                  descriptor: computer,
+                  requestComputer: (request) => connection.requestComputer(request),
+                },
+              }
+            : {}),
+          ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
+          inference: { stream },
+          transcript: {
+            commit: async (messages) => {
+              await transcript.commit(messages);
+            },
           },
-        },
-        live: {
-          enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
-          emitTerminal: async (event) => {
-            await live.emitTerminal(descriptor.assignment.runId, event);
-            resultFenceAcked = true;
+          live: {
+            enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
+            emitTerminal: async (event) => {
+              await live.emitTerminal(descriptor.assignment.runId, event);
+              resultFenceAcked = true;
+            },
           },
-        },
-        sessions: connection,
-        signal: abortController.signal,
-      });
+          gatewayTools: connection,
+          signal: abortController.signal,
+        });
+      };
+      if (descriptor.assignment.inference === "runtime-local") {
+        const startup = options.nativeInference!;
+        const { createNativeRuntime } = await import("./native-runtime.js");
+        nativeRuntime = await createNativeRuntime(startup.config, startup.credentials);
+        abortController.signal.throwIfAborted();
+        await nativeRuntime.withTurn(
+          {
+            binding: {
+              workspacePath: descriptor.assignment.workspaceDir,
+            },
+            selection: {
+              provider: descriptor.assignment.modelRef.provider,
+              modelId: descriptor.assignment.modelRef.model,
+            },
+          },
+          async (native) => {
+            if (native.workspacePath !== workspaceDir) {
+              throw new Error("Node-local inference workspace binding changed");
+            }
+            await runTurn(native);
+          },
+        );
+      } else {
+        await runTurn();
+      }
       if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
@@ -262,10 +369,11 @@ export async function runWorkerDescriptor(
       if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
-      if (resultFenceAcked && connection.state.kind === "ready") {
+      const nodeLost = abortController.signal.reason instanceof WorkerNodeLostError;
+      if (nodeLost || (resultFenceAcked && connection.state.kind === "ready")) {
         return {
           status: "failed",
-          reason: "turn-failed",
+          reason: nodeLost ? "node-lost" : "turn-failed",
           transcriptLeafId: transcript.baseLeafId,
           transcriptNextSeq: transcript.nextSeq,
         };
@@ -290,6 +398,7 @@ export async function runWorkerDescriptor(
     }
     unsubscribeState();
     options.signal?.removeEventListener("abort", abortFromCaller);
+    nativeRuntime?.close();
     inference.dispose();
     live.dispose();
     await connection.stop();

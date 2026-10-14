@@ -5,12 +5,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
-} from "./types.js";
+} from "./hook-message.types.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
+import type { PluginHookHandlerMap } from "./types.js";
+
+type PluginHookMessageSentEvent = Parameters<PluginHookHandlerMap["message_sent"]>[0];
 
 async function expectMessageHookCall(params: {
   hookName: "message_sending" | "message_sent";

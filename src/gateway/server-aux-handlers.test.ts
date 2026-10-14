@@ -1,9 +1,7 @@
 // Gateway auxiliary handler tests cover hot config reload behavior, prepared
 // secret snapshot updates, and restart-plan side effects.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const secretStoreMocks = vi.hoisted(() => ({
   deleteEntry: vi.fn(),
@@ -23,16 +21,15 @@ vi.mock("../secrets/store/secret-store.js", () => {
     writeSecretStoreEntry: secretStoreMocks.writeEntry,
   };
 });
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../infra/agent-run-registry.js";
 import {
   setActiveCredentialDegradedOwner,
   type DegradedSecretOwner,
@@ -41,25 +38,30 @@ import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
 import {
   registerGatewaySecretCredentialReloadCases,
   type CredentialReloadHarnessOptions,
 } from "./server-secrets-reload.test-support.js";
-import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  SharedGatewaySessionGenerationState,
+} from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+
+const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
+let fixture: OpenClawTestState | undefined;
 
 function publishSharedGatewayGeneration(
-  state: { current: string | undefined; required: string | undefined | null },
+  state: SharedGatewaySessionGenerationState,
   generation: string,
 ) {
   enforceSharedGatewaySessionGenerationForConfigWrite({
@@ -84,7 +86,6 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     restartGmailWatcher: overrides?.restartGmailWatcher ?? false,
     restartCron: overrides?.restartCron ?? false,
     restartHeartbeat: overrides?.restartHeartbeat ?? false,
-    restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
     reloadPlugins: overrides?.reloadPlugins ?? false,
     restartChannels: overrides?.restartChannels ?? new Set(),
     restartChannelAccounts: overrides?.restartChannelAccounts,
@@ -99,6 +100,7 @@ function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot 
     config,
     authStores: [],
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
@@ -212,7 +214,7 @@ function buildRestartChannelsPlan(...channels: ChannelName[]) {
 }
 
 type SecretsReloadHarnessParams = {
-  activateRuntimeSecrets: GatewayAuxHandlerParams["activateRuntimeSecrets"];
+  prepareRuntimeSecretsSnapshot: Parameters<typeof createTestRuntimeSecretsActivator>[0];
   buildReloadPlan?: GatewayAuxHandlerParams["buildReloadPlan"];
   sharedGatewaySessionGenerationState?: GatewayAuxHandlerParams["sharedGatewaySessionGenerationState"];
   resolveSharedGatewaySessionGenerationForConfig?: GatewayAuxHandlerParams["resolveSharedGatewaySessionGenerationForConfig"];
@@ -224,27 +226,27 @@ type SecretsReloadHarnessParams = {
   getChannelAutostartSuppression?: GatewayAuxHandlerParams["getChannelAutostartSuppression"];
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
-  onApprovalLifecycle?: GatewayAuxHandlerParams["onApprovalLifecycle"];
-  onAgentRunAuthorityClosed?: GatewayAuxHandlerParams["onAgentRunAuthorityClosed"];
-  validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
-  registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();
   const gatewayAux = createGatewayAuxHandlers({
+    scheduler: createTestGatewayScheduler(),
     log: {},
-    activateRuntimeSecrets: params.activateRuntimeSecrets,
+    getNativeApprovalRouteCoordinator: () => undefined,
+    activateRuntimeSecrets: createTestRuntimeSecretsActivator(params.prepareRuntimeSecretsSnapshot),
     buildReloadPlan: params.buildReloadPlan,
-    sharedGatewaySessionGenerationState: params.sharedGatewaySessionGenerationState ?? {
-      current: undefined,
-      required: null,
-    },
+    sharedGatewaySessionGenerationState:
+      params.sharedGatewaySessionGenerationState ??
+      new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
     resolveSharedGatewaySessionGenerationForConfig:
       params.resolveSharedGatewaySessionGenerationForConfig ?? (() => undefined),
     clients: params.clients ?? [],
     channelManager: {
-      startChannel: params.startChannel ?? (async () => {}),
+      startChannel: params.startChannel ?? (async () => new Map()),
       stopChannel: params.stopChannel ?? (async () => {}),
       isManuallyStopped: params.isManuallyStopped ?? (() => false),
       resolveRuntimeAccountId:
@@ -252,11 +254,8 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     },
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
-    onApprovalLifecycle: params.onApprovalLifecycle,
-    onAgentRunAuthorityClosed: params.onAgentRunAuthorityClosed,
-    validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
-    registerWorkerTurnClaimClosedHandler: params.registerWorkerTurnClaimClosedHandler,
   });
+  auxiliaries.push(gatewayAux);
   const { extraHandlers } = gatewayAux;
 
   return {
@@ -271,7 +270,7 @@ function createSecretsReloadHarnessWithChannelMocks(
   params: Omit<SecretsReloadHarnessParams, "startChannel" | "stopChannel">,
 ) {
   const stopChannel = vi.fn().mockResolvedValue(undefined);
-  const startChannel = vi.fn().mockResolvedValue(undefined);
+  const startChannel = vi.fn().mockResolvedValue(new Map());
   return {
     ...createSecretsReloadHarness({
       ...params,
@@ -300,12 +299,13 @@ function createCredentialReloadHarness(options: CredentialReloadHarnessOptions =
     if (options.createFailure) {
       throw options.createFailure(owner);
     }
+    return new Map();
   });
   const stopChannel = vi.fn().mockResolvedValue(undefined);
   const isManuallyStopped = vi.fn(() => options.manualStop ?? false);
   return {
     ...createSecretsReloadHarness({
-      activateRuntimeSecrets: mockResolvedSecrets(config),
+      prepareRuntimeSecretsSnapshot: mockResolvedSecrets(config),
       buildReloadPlan: () => createReloadPlan(),
       startChannel,
       stopChannel,
@@ -325,7 +325,15 @@ function createCredentialReloadHarness(options: CredentialReloadHarnessOptions =
 // the leaked env vars route the secrets.reload skip-mode branch and prevent
 // the channel restart loop from firing. Reset them before every test so this
 // suite is independent of worker import order.
-beforeEach(() => {
+beforeEach(async () => {
+  if (fixture) {
+    throw new Error("Previous auxiliary owner cleanup did not finish");
+  }
+  fixture = await createOpenClawTestState({ label: "gateway-aux-secrets-reload" });
+  // These channel-only snapshots are not model fixtures; the real publication boundary is
+  // exercised in server-secrets-reload.model-runtime.test.ts.
+  vi.spyOn(modelRuntimeReload, "refreshModelRuntimeAfterHotReload").mockResolvedValue(undefined);
+  await resetPreparedModelRuntimeSnapshotsForTest();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
   secretStoreMocks.deleteEntry.mockReset();
@@ -334,222 +342,28 @@ beforeEach(() => {
   secretStoreMocks.writeEntry.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const aux of auxiliaries) {
+    await aux.stopOperatorInteractions();
+  }
+  auxiliaries.length = 0;
+  vi.restoreAllMocks();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
+  await fixture?.cleanup();
+  fixture = undefined;
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
 
 describe("gateway aux handlers", () => {
-  it("shares one approval epoch per gateway lifetime and rotates it on restart", () => {
-    const first = createSecretsReloadHarness({
-      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
-    });
-    const second = createSecretsReloadHarness({
-      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
-    });
-
-    expect(first.execApprovalManager.runtimeEpoch).toBe(first.pluginApprovalManager.runtimeEpoch);
-    expect(second.execApprovalManager.runtimeEpoch).toBe(second.pluginApprovalManager.runtimeEpoch);
-    expect(first.execApprovalManager.runtimeEpoch).not.toBe(
-      second.execApprovalManager.runtimeEpoch,
-    );
-  });
-
-  it("fans exact run closure out to Gateway-owned capability cleanup", () => {
-    const onAgentRunAuthorityClosed = vi.fn();
-    const gatewayAux = createSecretsReloadHarness({
-      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
-      onAgentRunAuthorityClosed,
-    });
-    const operationalRunInstance = Object.freeze({
-      instanceId: "egress-proxy-instance",
-      runId: "egress-proxy-run",
-    });
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-    releaseAgentRunDelegatedAuthority(authority);
-
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
-      expect.objectContaining({ operationalRunInstance }),
-    );
-    gatewayAux.unregisterApprovalAuthorityObserver();
-  });
-
-  it("publishes exec.approval.resolved when the gateway timeout expires an approval", async () => {
-    vi.useFakeTimers();
-    try {
-      const gatewayAux = createSecretsReloadHarness({
-        activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
-      });
-      const broadcast = vi.fn();
-      const publishResolved = vi.fn();
-      gatewayAux.bindApprovalPublicationContext({
-        broadcast,
-        broadcastToConnIds: vi.fn(),
-        approvalEvents: { publishResolved },
-        logGateway: { error: vi.fn() },
-      } as never);
-      const record = gatewayAux.execApprovalManager.create(
-        { command: "echo expires" },
-        1_000,
-        "exec-timeout-publish",
-      );
-      const decision = gatewayAux.execApprovalManager.register(record, 1_000);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-
-      await expect(decision).resolves.toBeNull();
-      // The gateway clock owns expiry: reviewer surfaces must receive the
-      // terminal event instead of pruning on their own (skewed) clocks.
-      await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
-      expect(broadcast).toHaveBeenCalledWith(
-        "exec.approval.resolved",
-        expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
-        expect.anything(),
-      );
-      gatewayAux.unregisterApprovalAuthorityObserver();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-aux-worker-"));
-    closeOpenClawStateDatabaseForTest();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const identity = {
-      sessionId: "session-worker-close",
-      agentId: "main",
-      sessionKey: "agent:main:worker-close",
-    };
-    let placement = placements.startDispatch(identity);
-    placement = placements.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: "worker-env" },
-    });
-    placement = placements.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = placements.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace/worker-close",
-      },
-    });
-    placement = placements.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (placement.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    const operationalRunInstance = Object.freeze({
-      instanceId: "worker-operational-instance",
-      runId: "worker-run-close",
-    });
-    const runAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const turnClaim = placements.claimTurn({
-      ...identity,
-      claimId: "worker-claim-close",
-      runId: operationalRunInstance.runId,
-      owner: {
-        kind: "worker",
-        environmentId: placement.environmentId,
-        ownerEpoch: placement.activeOwnerEpoch,
-      },
-    });
-    const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
-    const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
-    const lifecycle = vi.fn();
-    const gatewayAux = createSecretsReloadHarness({
-      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
-      onApprovalLifecycle: lifecycle,
-      validateAgentRuntimeDelegatedAuthority: (candidate) =>
-        validateAuthority({
-          kind: "agentRuntime",
-          agentId: identity.agentId,
-          sessionKey: identity.sessionKey,
-          operationalRunInstance: candidate.operationalRunInstance,
-          delegatedAuthority: candidate,
-        }),
-      registerWorkerTurnClaimClosedHandler: (handler) =>
-        placements.registerTurnClaimClosedHandler(handler),
-    });
-    const broadcast = vi.fn();
-    const publishResolved = vi.fn();
-    gatewayAux.bindApprovalPublicationContext({
-      broadcast,
-      broadcastToConnIds: vi.fn(),
-      approvalEvents: { publishResolved },
-      logGateway: { error: vi.fn() },
-    } as never);
-    const execRecord = gatewayAux.execApprovalManager.create(
-      { command: "echo worker", runId: turnClaim.runId },
-      60_000,
-      "exec-worker-close",
-    );
-    execRecord.agentRuntimeDelegatedAuthority = authority;
-    const execDecision = gatewayAux.execApprovalManager.register(execRecord, 60_000);
-    const pluginRecord = gatewayAux.pluginApprovalManager.create(
-      { title: "Worker action", description: "Close with worker claim", runId: turnClaim.runId },
-      60_000,
-      "plugin-worker-close",
-    );
-    pluginRecord.agentRuntimeDelegatedAuthority = authority;
-    const pluginDecision = gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000);
-
-    placements.releaseTurn(turnClaim);
-
-    await expect(execDecision).resolves.toBeNull();
-    await expect(pluginDecision).resolves.toBeNull();
-    await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));
-    expect(publishResolved.mock.calls.map((call) => call[0])).toEqual(["exec", "plugin"]);
-    expect(broadcast.mock.calls.map((call) => call[0])).toEqual([
-      "exec.approval.resolved",
-      "plugin.approval.resolved",
-    ]);
-    expect(lifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "terminal",
-        record: expect.objectContaining({ kind: "exec", status: "cancelled" }),
-      }),
-    );
-    expect(lifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "terminal",
-        record: expect.objectContaining({ kind: "plugin", status: "cancelled" }),
-      }),
-    );
-    gatewayAux.unregisterApprovalAuthorityObserver();
-    releaseAgentRunDelegatedAuthority(runAuthority);
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
   it("refuses secrets.reload channel restarts while crash-loop safe mode suppresses autostart", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     activateSnapshot(slackConfig("old-slack-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
-        activateRuntimeSecrets,
+        prepareRuntimeSecretsSnapshot,
         buildReloadPlan,
         getChannelAutostartSuppression: () => ({
           reason: "crash-loop-breaker",
@@ -581,16 +395,16 @@ describe("gateway aux handlers", () => {
     const prepared = createSnapshot(
       slackZaloDiscordConfig("new-slack-secret", "new-zalo-secret", "unchanged-discord-token"),
     );
-    const activateRuntimeSecrets = vi.fn().mockResolvedValue(prepared);
+    const prepareRuntimeSecretsSnapshot = vi.fn().mockResolvedValue(prepared);
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
-        activateRuntimeSecrets,
+        prepareRuntimeSecretsSnapshot,
         buildReloadPlan,
       });
 
     await reload();
 
-    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     expect(buildReloadPlanCalls).toEqual([
       ["channels.slack.signingSecret", "channels.zalo.webhookSecret"],
     ]);
@@ -609,17 +423,19 @@ describe("gateway aux handlers", () => {
         restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
       });
     activateSnapshot(slackConfig("old-slack-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
-        activateRuntimeSecrets,
+        prepareRuntimeSecretsSnapshot,
         buildReloadPlan,
       });
 
     await reload();
 
     expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
-    expect(startChannel.mock.calls).toEqual([["slack", "ops", { preserveManualStop: true }]]);
+    expect(startChannel.mock.calls).toEqual([
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+    ]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
@@ -628,7 +444,7 @@ describe("gateway aux handlers", () => {
   it("does not restart account targets already covered by a whole-channel target", async () => {
     activateSnapshot(slackConfig("old-secret"));
     const { reload, startChannel, stopChannel } = createSecretsReloadHarnessWithChannelMocks({
-      activateRuntimeSecrets: mockResolvedSecrets(slackConfig("new-secret")),
+      prepareRuntimeSecretsSnapshot: mockResolvedSecrets(slackConfig("new-secret")),
       buildReloadPlan: () =>
         createReloadPlan({
           restartChannels: new Set(["slack"]),
@@ -639,7 +455,7 @@ describe("gateway aux handlers", () => {
     await reload();
 
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack", undefined, { reason: "secrets-reload" }]]);
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
@@ -648,7 +464,7 @@ describe("gateway aux handlers", () => {
 
     const preparedFirst = createSnapshot(slackConfig("new-slack-secret"));
     const activationOrder: string[] = [];
-    const activateRuntimeSecrets = vi.fn().mockImplementationOnce(async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn().mockImplementationOnce(async () => {
       activationOrder.push("first-start");
       // Yield the event loop to let a concurrent caller enter if the
       // handler were not serialized.
@@ -658,11 +474,11 @@ describe("gateway aux handlers", () => {
       return preparedFirst;
     });
     const stopChannel = vi.fn().mockResolvedValue(undefined);
-    const startChannel = vi.fn().mockResolvedValue(undefined);
+    const startChannel = vi.fn().mockResolvedValue(new Map());
     const respond = vi.fn();
 
     const { reload } = createSecretsReloadHarness({
-      activateRuntimeSecrets,
+      prepareRuntimeSecretsSnapshot,
       buildReloadPlan,
       startChannel,
       stopChannel,
@@ -672,9 +488,9 @@ describe("gateway aux handlers", () => {
     await Promise.all([reload(), reload()]);
 
     expect(activationOrder).toEqual(["first-start", "first-end"]);
-    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack", undefined, { reason: "secrets-reload" }]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
@@ -691,15 +507,9 @@ describe("gateway aux handlers", () => {
       },
     });
     activateSecretsRuntimeSnapshot(createSourceSnapshot(sourceConfig));
-    let releaseFirst: (() => void) | undefined;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let firstStarted: (() => void) | undefined;
-    const firstEntered = new Promise<void>((resolve) => {
-      firstStarted = resolve;
-    });
-    const activateRuntimeSecrets = vi
+    const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
+    const { promise: firstEntered, resolve: firstStarted } = createDeferred();
+    const prepareRuntimeSecretsSnapshot = vi
       .fn()
       .mockImplementationOnce(async () => {
         firstStarted?.();
@@ -707,7 +517,7 @@ describe("gateway aux handlers", () => {
         return createSourceSnapshot(sourceConfig);
       })
       .mockResolvedValue(createSourceSnapshot(sourceConfig));
-    const { extraHandlers, reload } = createSecretsReloadHarness({ activateRuntimeSecrets });
+    const { extraHandlers, reload } = createSecretsReloadHarness({ prepareRuntimeSecretsSnapshot });
     const reloadPromise = reload();
     await firstEntered;
 
@@ -718,12 +528,12 @@ describe("gateway aux handlers", () => {
       name: "SERVICE_API_KEY",
     });
     await vi.waitFor(() => expect(secretStoreMocks.writeEntry).toHaveBeenCalledOnce());
-    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     releaseFirst?.();
     await Promise.all([reloadPromise, setPromise]);
 
-    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
-    expect(activateRuntimeSecrets.mock.calls[1]?.[1]).toMatchObject({
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(2);
+    expect(prepareRuntimeSecretsSnapshot.mock.calls[1]?.[0]).toMatchObject({
       forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
     });
     expect(setRespond).toHaveBeenCalledWith(true, {
@@ -737,62 +547,20 @@ describe("gateway aux handlers", () => {
     const initialConfig = slackConfig("initial-secret");
     const canonicalConfig = slackConfig("canonical-secret");
     activateSecretsRuntimeSnapshot(createSourceSnapshot(initialConfig));
-    const activatePreparedSnapshotIfCurrent = vi.fn(
-      async (
-        snapshot: PreparedSecretsRuntimeSnapshot,
-        expectedRevision: number,
-        _params: unknown,
-        onActivated?: () => void | Promise<void>,
-        canActivate?: () => boolean,
-      ) => {
-        if (
-          getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision ||
-          (canActivate && !canActivate())
-        ) {
-          return null;
-        }
-        activateSecretsRuntimeSnapshot(snapshot);
-        await onActivated?.();
-        return snapshot;
-      },
-    );
-    const activateRuntimeSecrets = Object.assign(
-      vi.fn(
-        async (
-          config: OpenClawConfig,
-          _activationParams: Parameters<GatewayAuxHandlerParams["activateRuntimeSecrets"]>[1],
-        ) => {
-          if (activateRuntimeSecrets.mock.calls.length === 1) {
-            activateSecretsRuntimeSnapshot(createSourceSnapshot(canonicalConfig));
-          }
-          return createSourceSnapshot(config);
-        },
-      ),
-      { activatePreparedSnapshotIfCurrent },
-    );
-    const { reload, respond } = createSecretsReloadHarness({ activateRuntimeSecrets });
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }: { config: OpenClawConfig }) => {
+      if (prepareRuntimeSecretsSnapshot.mock.calls.length === 1) {
+        activateSecretsRuntimeSnapshot(createSourceSnapshot(canonicalConfig));
+      }
+      return createSourceSnapshot(config);
+    });
+    const { reload, respond } = createSecretsReloadHarness({ prepareRuntimeSecretsSnapshot });
 
     await reload();
 
-    expect(activateRuntimeSecrets.mock.calls.map(([config]) => config)).toEqual([
+    expect(prepareRuntimeSecretsSnapshot.mock.calls.map(([{ config }]) => config)).toEqual([
       initialConfig,
       canonicalConfig,
     ]);
-    expect(activateRuntimeSecrets.mock.calls.map(([, activation]) => activation)).toEqual([
-      {
-        reason: "reload",
-        activate: false,
-        publishFailureAsDegraded: true,
-        canPublishFailureAsDegraded: expect.any(Function),
-      },
-      {
-        reason: "reload",
-        activate: false,
-        publishFailureAsDegraded: true,
-        canPublishFailureAsDegraded: expect.any(Function),
-      },
-    ]);
-    expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledTimes(2);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(canonicalConfig);
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
@@ -807,7 +575,7 @@ describe("gateway aux handlers", () => {
         ]),
       });
     activateSnapshot(slackZaloConfig("old-slack-secret", "old-zalo-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
       slackZaloConfig("new-slack-secret", "new-zalo-secret"),
     );
     const stopChannel = vi.fn().mockResolvedValue(undefined);
@@ -834,13 +602,13 @@ describe("gateway aux handlers", () => {
       })
       .mockResolvedValue(undefined);
     const logChannelsInfo = vi.fn();
-    const sharedGatewaySessionGenerationState = {
-      current: "gen-old" as string | undefined,
-      required: "gen-old" as string | undefined | null,
-    };
+    const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+      current: "gen-old",
+      required: "gen-old",
+    });
 
     const { reload, respond } = createSecretsReloadHarness({
-      activateRuntimeSecrets,
+      prepareRuntimeSecretsSnapshot,
       buildReloadPlan,
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig: () => "gen-new",
@@ -857,10 +625,10 @@ describe("gateway aux handlers", () => {
       ["slack", "ops", { manual: false }],
     ]);
     expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { preserveManualStop: true }],
-      ["zalo", "alerts", { preserveManualStop: true }],
-      ["slack", "ops", { preserveManualStop: true }],
-      ["zalo", "alerts", { preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["zalo", "alerts", { reason: "secrets-reload", preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["zalo", "alerts", { reason: "secrets-reload", preserveManualStop: true }],
     ]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
@@ -887,7 +655,10 @@ describe("gateway aux handlers", () => {
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       slackZaloConfig("old-slack-secret", "old-zalo-secret"),
     );
-    expect(sharedGatewaySessionGenerationState).toEqual({
+    expect({
+      current: sharedGatewaySessionGenerationState.current,
+      required: sharedGatewaySessionGenerationState.required,
+    }).toEqual({
       current: "gen-old",
       required: "gen-old",
     });
@@ -902,11 +673,11 @@ describe("gateway aux handlers", () => {
     activateSnapshot(slackConfig("old-slack-secret"));
     const prepared = createSnapshot(slackConfig("reload-secret"));
     const concurrent = createSnapshot(slackConfig("concurrent-secret"));
-    const activateRuntimeSecrets = vi.fn(async () => prepared);
-    const sharedGatewaySessionGenerationState = {
-      current: "gen-old" as string | undefined,
-      required: "gen-old" as string | undefined | null,
-    };
+    const prepareRuntimeSecretsSnapshot = vi.fn(async () => prepared);
+    const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+      current: "gen-old",
+      required: "gen-old",
+    });
     const startChannel = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -918,7 +689,7 @@ describe("gateway aux handlers", () => {
 
     const stopChannel = vi.fn().mockResolvedValue(undefined);
     const { reload, respond } = createSecretsReloadHarness({
-      activateRuntimeSecrets,
+      prepareRuntimeSecretsSnapshot,
       buildReloadPlan,
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig: () => "gen-reload",
@@ -931,11 +702,14 @@ describe("gateway aux handlers", () => {
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
     expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { preserveManualStop: true }],
-      ["slack", "ops", { preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
     ]);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(slackConfig("concurrent-secret"));
-    expect(sharedGatewaySessionGenerationState).toEqual({
+    expect({
+      current: sharedGatewaySessionGenerationState.current,
+      required: sharedGatewaySessionGenerationState.required,
+    }).toEqual({
       current: "gen-concurrent",
       required: "gen-concurrent",
     });
@@ -945,10 +719,10 @@ describe("gateway aux handlers", () => {
     const initialConfig = slackConfig("old-slack-secret");
     const prepared = createSourceSnapshot(slackConfig("reload-secret"));
     activateSecretsRuntimeSnapshot(createSourceSnapshot(initialConfig));
-    const sharedGatewaySessionGenerationState = {
-      current: "gen-old" as string | undefined,
-      required: "gen-old" as string | undefined | null,
-    };
+    const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+      current: "gen-old",
+      required: "gen-old",
+    });
     const startChannel = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -957,7 +731,7 @@ describe("gateway aux handlers", () => {
       })
       .mockResolvedValue(undefined);
     const { reload, respond } = createSecretsReloadHarness({
-      activateRuntimeSecrets: vi.fn(async () => prepared),
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => prepared),
       buildReloadPlan: buildRestartChannelsPlan("slack"),
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig: () => "gen-reload",
@@ -970,7 +744,10 @@ describe("gateway aux handlers", () => {
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(startChannel).toHaveBeenCalledTimes(2);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(initialConfig);
-    expect(sharedGatewaySessionGenerationState).toEqual({
+    expect({
+      current: sharedGatewaySessionGenerationState.current,
+      required: sharedGatewaySessionGenerationState.required,
+    }).toEqual({
       current: "gen-concurrent",
       required: "gen-concurrent",
     });
@@ -983,18 +760,18 @@ describe("gateway aux handlers", () => {
     // failed secrets.reload can leave it down.
     const buildReloadPlan = buildRestartChannelsPlan("slack", "zalo");
     activateSnapshot(slackZaloConfig("old-slack-secret", "old-zalo-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
       slackZaloConfig("new-slack-secret", "new-zalo-secret"),
     );
     const stopChannel = vi
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("zalo stop hook failed after socket close"));
-    const startChannel = vi.fn().mockResolvedValue(undefined);
+    const startChannel = vi.fn().mockResolvedValue(new Map());
     const logChannelsInfo = vi.fn();
 
     const { reload, respond } = createSecretsReloadHarness({
-      activateRuntimeSecrets,
+      prepareRuntimeSecretsSnapshot,
       buildReloadPlan,
       startChannel,
       stopChannel,
@@ -1019,48 +796,15 @@ describe("gateway aux handlers", () => {
     expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
-  it("restores both current and required shared-gateway generation on reload failure", async () => {
-    // Locks in the auth-generation rollback contract: a failed reload must
-    // not leave `required` cleared if `setCurrentSharedGatewaySessionGeneration`
-    // cleared it during activation, otherwise stale clients matching `current`
-    // could remain authorized after rollback.
-    const buildReloadPlan = buildRestartChannelsPlan("slack");
-    activateSnapshot(slackConfig("old-slack-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
-    const stopChannel = vi.fn().mockResolvedValue(undefined);
-    const startChannel = vi.fn().mockRejectedValue(new Error("slack refused to start"));
-
-    const sharedGatewaySessionGenerationState = {
-      current: "gen-a" as string | undefined,
-      required: "gen-a" as string | undefined | null,
-    };
-
-    const { reload, respond } = createSecretsReloadHarness({
-      activateRuntimeSecrets,
-      buildReloadPlan,
-      sharedGatewaySessionGenerationState,
-      resolveSharedGatewaySessionGenerationForConfig: () => "gen-b",
-      startChannel,
-      stopChannel,
-    });
-
-    await reload();
-
-    expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
-    expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
-    expect(respond.mock.calls).toHaveLength(1);
-    expect(firstRespondCall(respond)[0]).toBe(false);
-  });
-
   it("fails reload when channel restarts are required but skip flags block them", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     activateSnapshot(slackConfig("old-slack-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
 
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
-        activateRuntimeSecrets,
+        prepareRuntimeSecretsSnapshot,
         buildReloadPlan,
       });
 
@@ -1088,13 +832,13 @@ describe("gateway aux handlers", () => {
       return createReloadPlan();
     };
     activateSnapshot(gatewayTokenSlackConfig("old-token", "same-secret"));
-    const activateRuntimeSecrets = mockResolvedSecrets(
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
       gatewayTokenSlackConfig("new-token", "same-secret"),
     );
 
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
-        activateRuntimeSecrets,
+        prepareRuntimeSecretsSnapshot,
         buildReloadPlan,
       });
 

@@ -3,6 +3,38 @@ import type {
   AssistantTranscriptRoleHeaderKind,
 } from "./assistant-transcript-headers.js";
 
+/** A replacement in the original text's UTF-16 coordinates; equal bounds insert text. */
+export type MarkdownTextEdit = { start: number; end: number; text: string };
+
+/** Apply disjoint edits; equal-position insertions keep caller order and shift their boundary. */
+export function applyMarkdownTextEdits(text: string, edits: readonly MarkdownTextEdit[]) {
+  let output = "";
+  let cursor = 0;
+  const shifts = edits
+    .toSorted((a, b) => a.start - b.start || a.end - b.end)
+    .map((edit) => {
+      output += text.slice(cursor, edit.start) + edit.text;
+      cursor = edit.end;
+      return { end: edit.end, shift: output.length - cursor };
+    });
+  return {
+    text: output + text.slice(cursor),
+    mapOffset: (offset: number): number => {
+      let low = 0;
+      let high = shifts.length;
+      while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        if ((shifts[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      return offset + (shifts[low - 1]?.shift ?? 0);
+    },
+  };
+}
+
 export type MarkdownStyle =
   | "bold"
   | "italic"
@@ -36,25 +68,22 @@ export type MarkdownLinkSpan = {
 // Every span transform must use copyMarkdownLinkSpan so the private fact survives.
 const autoLinkedMarkdownLinks = new WeakSet<MarkdownLinkSpan>();
 
+/** Callers supply a fresh span; transforms copy before attaching provenance. */
 export function createMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  options: { autoLinked?: boolean } = {},
+  autoLinked: boolean,
 ): MarkdownLinkSpan {
-  const created = { ...span };
-  if (options.autoLinked) {
-    autoLinkedMarkdownLinks.add(created);
+  if (autoLinked) {
+    autoLinkedMarkdownLinks.add(span);
   }
-  return created;
+  return span;
 }
 
 export function copyMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  overrides: Partial<MarkdownLinkSpan> = {},
+  overrides?: Partial<MarkdownLinkSpan>,
 ): MarkdownLinkSpan {
-  return createMarkdownLinkSpan(
-    { ...span, ...overrides },
-    { autoLinked: autoLinkedMarkdownLinks.has(span) },
-  );
+  return createMarkdownLinkSpan({ ...span, ...overrides }, autoLinkedMarkdownLinks.has(span));
 }
 
 export function isAutoLinkedMarkdownLink(span: MarkdownLinkSpan): boolean {
@@ -81,57 +110,34 @@ export function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
-export function clampStyleSpans(
-  spans: MarkdownStyleSpan[],
-  maxLength: number,
-): MarkdownStyleSpan[] {
-  const clamped: MarkdownStyleSpan[] = [];
+function clipSpans<T extends { start: number; end: number }>(
+  spans: T[],
+  start: number,
+  end: number,
+  copySpan: (span: T) => T,
+): T[] {
+  const clipped: T[] = [];
   for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push(createStyleSpan({ start, end, style: span.style, language: span.language }));
+    const sliceStart = Math.max(span.start, start);
+    const sliceEnd = Math.min(span.end, end);
+    if (sliceEnd > sliceStart) {
+      const copy = copySpan(span);
+      copy.start = sliceStart - start;
+      copy.end = sliceEnd - start;
+      clipped.push(copy);
     }
   }
-  return clamped;
-}
-
-export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
-  const clamped: MarkdownLinkSpan[] = [];
-  for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push(copyMarkdownLinkSpan(span, { start, end }));
-    }
-  }
-  return clamped;
-}
-
-export function clampAnnotationSpans(
-  spans: MarkdownAnnotationSpan[],
-  maxLength: number,
-): MarkdownAnnotationSpan[] {
-  const clamped: MarkdownAnnotationSpan[] = [];
-  for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push({ ...span, start, end });
-    }
-  }
-  return clamped;
+  return clipped;
 }
 
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
-  const sorted = [...spans].toSorted((a, b) => a.start - b.start || a.end - b.end);
+  const sorted = spans.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const merged: MarkdownAnnotationSpan[] = [];
   for (const span of sorted) {
     const previous = merged.at(-1);
     if (
       previous &&
       previous.end === span.start &&
-      previous.type === span.type &&
       previous.kind === span.kind &&
       previous.role === span.role
     ) {
@@ -144,7 +150,7 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
 }
 
 export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].toSorted((a, b) => {
+  const sorted = spans.toSorted((a, b) => {
     if (a.start !== b.start) {
       return a.start - b.start;
     }
@@ -172,36 +178,12 @@ export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[]
   return merged;
 }
 
-function resolveSliceBounds(
-  span: { start: number; end: number },
-  start: number,
-  end: number,
-): { start: number; end: number } | null {
-  const sliceStart = Math.max(span.start, start);
-  const sliceEnd = Math.min(span.end, end);
-  return sliceEnd > sliceStart ? { start: sliceStart, end: sliceEnd } : null;
-}
-
 export function sliceStyleSpans(
   spans: MarkdownStyleSpan[],
   start: number,
   end: number,
 ): MarkdownStyleSpan[] {
-  const sliced: MarkdownStyleSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push(
-        createStyleSpan({
-          start: bounds.start - start,
-          end: bounds.end - start,
-          style: span.style,
-          language: span.language,
-        }),
-      );
-    }
-  }
-  return mergeStyleSpans(sliced);
+  return mergeStyleSpans(clipSpans(spans, start, end, createStyleSpan));
 }
 
 export function sliceLinkSpans(
@@ -209,19 +191,7 @@ export function sliceLinkSpans(
   start: number,
   end: number,
 ): MarkdownLinkSpan[] {
-  const sliced: MarkdownLinkSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push(
-        copyMarkdownLinkSpan(span, {
-          start: bounds.start - start,
-          end: bounds.end - start,
-        }),
-      );
-    }
-  }
-  return sliced;
+  return clipSpans(spans, start, end, copyMarkdownLinkSpan);
 }
 
 export function sliceAnnotationSpans(
@@ -229,16 +199,5 @@ export function sliceAnnotationSpans(
   start: number,
   end: number,
 ): MarkdownAnnotationSpan[] {
-  const sliced: MarkdownAnnotationSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push({
-        ...span,
-        start: bounds.start - start,
-        end: bounds.end - start,
-      });
-    }
-  }
-  return mergeAnnotationSpans(sliced);
+  return mergeAnnotationSpans(clipSpans(spans, start, end, (span) => ({ ...span })));
 }

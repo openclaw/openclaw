@@ -1,10 +1,10 @@
-// Profiles Vitest main or runner processes and writes CPU/heap artifacts.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { installVitestProcessGroupCleanup } from "./vitest-process-group.mts";
 
@@ -16,9 +16,6 @@ function readOutputDirValue(argv: string[], index: number): string {
   return value;
 }
 
-/**
- * Parses Vitest profiler mode, output directory, and forwarded Vitest args.
- */
 export function parseArgs(argv: string[]) {
   let mode = "";
   let outputDir = process.env.OPENCLAW_VITEST_PROFILE_DIR?.trim() || "";
@@ -56,9 +53,6 @@ export function parseArgs(argv: string[]) {
 }
 
 type VitestProfileOptions = Pick<ReturnType<typeof parseArgs>, "mode" | "outputDir">;
-/**
- * Resolves or creates the directory used for profiler artifacts.
- */
 export function resolveVitestProfileDir({ mode, outputDir }: VitestProfileOptions) {
   if (outputDir && outputDir.trim()) {
     return path.resolve(outputDir);
@@ -67,9 +61,6 @@ export function resolveVitestProfileDir({ mode, outputDir }: VitestProfileOption
   return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-vitest-${mode}-profile-`));
 }
 
-/**
- * Builds the profiler command for either Vitest main or worker-runner profiling.
- */
 export function buildVitestProfileCommandWithArgs({
   mode,
   outputDir,
@@ -102,18 +93,19 @@ async function main() {
 
   const { child, completion } = spawnOwnedVitestProcess({
     ...plan,
+    homeMode: resolveVitestHomeSelection(parsed.vitestArgs, {
+      defaultConfig: "test/vitest/vitest.unit.config.ts",
+      env: process.env,
+    }),
     options: { env: process.env, stdio: "inherit" },
   });
-  let forwardedSignal: NodeJS.Signals | undefined;
-  const teardown = installVitestProcessGroupCleanup({
+  const cleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
-  const result = await completion.finally(teardown);
+  const result = await completion.finally(cleanup.teardown);
+  const forwardedSignal = cleanup.getForwardedSignal();
   if (forwardedSignal) {
     console.error(`[run-vitest-profile] FAILED (exit ${signalExitCode(forwardedSignal)})`);
     process.kill(process.pid, forwardedSignal);

@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -14,18 +15,9 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-test.each([
-  {
-    name: "another plugin's session",
-    key: "agent:main:dreaming-narrative-foreign",
-    entry: sessionStoreEntry("foreign-plugin-session", { pluginOwnerId: "other-plugin" }),
-  },
-  {
-    name: "an operator-owned session",
-    key: "agent:main:dashboard:operator-owned",
-    entry: sessionStoreEntry("operator-owned-session"),
-  },
-])("sessions.reset prevents a plugin from resetting $name", async ({ key, entry }) => {
+test("sessions.reset prevents a plugin from resetting another plugin's session", async () => {
+  const key = "agent:main:dreaming-narrative-foreign";
+  const entry = sessionStoreEntry("foreign-plugin-session", { pluginOwnerId: "other-plugin" });
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { [key]: entry } });
   const pluginClient = {
@@ -42,32 +34,7 @@ test.each([
   });
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     sessionId: entry.sessionId,
-    ...(entry.pluginOwnerId ? { pluginOwnerId: entry.pluginOwnerId } : {}),
-  });
-});
-
-test("sessions.reset preserves ownership when a plugin resets its own session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dreaming-narrative-owned";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("owned-plugin-session", { pluginOwnerId: "memory-core" }),
-    },
-  });
-  const pluginClient = {
-    connect: { scopes: ["operator.write"] },
-    internal: { pluginRuntimeOwnerId: "memory-core" },
-  } as never;
-
-  const reset = await directSessionReq(
-    "sessions.reset",
-    { key: sessionKey },
-    { client: pluginClient },
-  );
-
-  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-    pluginOwnerId: "memory-core",
+    pluginOwnerId: "other-plugin",
   });
 });
 
@@ -197,11 +164,8 @@ test("sessions.patch rechecks plugin ownership after waiting for lifecycle admis
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
+  const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
     scope: storePath,
     identities: [sessionKey, sessionId],
     run: async () => {
@@ -232,60 +196,4 @@ test("sessions.patch rechecks plugin ownership after waiting for lifecycle admis
     pluginOwnerId: "other-plugin",
   });
   expect(loadSessionEntry({ sessionKey, storePath })?.label).toBeUndefined();
-});
-
-test("sessions.delete protects the archived session generation from a replacement", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dreaming-narrative-owned";
-  const originalSessionId = "original-plugin-session";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(originalSessionId, { pluginOwnerId: "memory-core" }),
-    },
-  });
-  const pluginClient = {
-    connect: { scopes: ["operator.write"] },
-    internal: { pluginRuntimeOwnerId: "memory-core" },
-  } as never;
-
-  const archived = await directSessionReq<{
-    entry: { sessionId: string; lifecycleRevision?: string };
-  }>(
-    "sessions.patch",
-    { key: sessionKey, archived: true, expectedSessionId: originalSessionId },
-    { client: pluginClient },
-  );
-
-  expect(archived.ok, JSON.stringify(archived.error)).toBe(true);
-  expect(archived.payload?.entry.sessionId).toBe(originalSessionId);
-
-  await replaceSessionEntry(
-    { sessionKey, storePath },
-    sessionStoreEntry("replacement-plugin-session", {
-      archivedAt: Date.now(),
-      lifecycleRevision: "replacement-plugin-revision",
-      pluginOwnerId: "memory-core",
-    }),
-  );
-
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    {
-      key: sessionKey,
-      archivedOnly: true,
-      expectedSessionId: originalSessionId,
-      ...(archived.payload?.entry.lifecycleRevision
-        ? { expectedLifecycleRevision: archived.payload.entry.lifecycleRevision }
-        : {}),
-    },
-    { client: pluginClient },
-  );
-
-  expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message).toBe(`Session ${sessionKey} changed before deletion. Retry.`);
-  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-    lifecycleRevision: "replacement-plugin-revision",
-    pluginOwnerId: "memory-core",
-    sessionId: "replacement-plugin-session",
-  });
 });

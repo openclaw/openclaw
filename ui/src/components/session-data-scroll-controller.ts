@@ -1,57 +1,45 @@
-import { resolveSidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
+import { observeScrollState } from "./scroll-state-observer.ts";
 
-/** Owns sidebar scroll observation and its paint-coalesced reactive state. */
+/** Owns the sidebar's projection of shared scroll observations. */
 export class SessionDataScrollController {
   state: SidebarSessionsScrollState = "none";
-
   private element: HTMLElement | null = null;
-  private resizeObserver: ResizeObserver | null = null;
-  private frame: number | null = null;
+  private observation: ReturnType<typeof observeScrollState> | undefined;
 
-  /** Creates a scroll owner that notifies its reactive host on state changes. */
   constructor(private readonly notify: () => void) {}
 
-  /** Rebinds observation to the sidebar's current scroll container. */
   synchronize(host: Pick<HTMLElement, "querySelector">): void {
-    const element = host.querySelector(".sidebar-shell__body") as HTMLElement | null;
+    const element = host.querySelector<HTMLElement>(".sidebar-shell__body");
     if (element !== this.element) {
-      this.resizeObserver?.disconnect();
+      this.dispose();
       this.element = element;
-      this.resizeObserver = null;
-      if (element && typeof ResizeObserver === "function") {
-        this.resizeObserver = new ResizeObserver(() => this.update(element));
-        this.resizeObserver.observe(element);
+      if (element) {
+        this.observation = observeScrollState(element, (state) => {
+          const next = !state.scrollable
+            ? "none"
+            : state.atStart
+              ? "top"
+              : state.atEnd
+                ? "bottom"
+                : "middle";
+          if (next !== this.state) {
+            this.state = next;
+            this.notify();
+          }
+        });
       }
     }
-    if (element && this.frame === null) {
-      // One rAF-coalesced read rides paint layout instead of flushing every update.
-      this.frame = requestAnimationFrame(() => {
-        this.frame = null;
-        if (this.element?.isConnected) {
-          this.update(this.element);
-        }
-      });
-    }
+    this.observation?.schedule();
   }
 
-  /** Publishes the scroll affordance state observed from an element. */
-  update(element: HTMLElement): void {
-    const nextState = resolveSidebarSessionsScrollState(element);
-    if (nextState !== this.state) {
-      this.state = nextState;
-      this.notify();
-    }
+  update(_element: HTMLElement): void {
+    this.observation?.schedule();
   }
 
-  /** Releases DOM observers and pending animation-frame work. */
   dispose(): void {
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
+    this.observation?.disconnect();
+    this.observation = undefined;
     this.element = null;
-    if (this.frame !== null) {
-      cancelAnimationFrame(this.frame);
-      this.frame = null;
-    }
   }
 }

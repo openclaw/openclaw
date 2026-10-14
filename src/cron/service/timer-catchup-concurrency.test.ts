@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,8 +9,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { add, update } from "./ops-mutations.js";
 import { run as runCronJob } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
-import { onTimer } from "./timer-scheduler.js";
-import { runMissedJobs } from "./timer.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-catchup-concurrency-" });
 
@@ -43,13 +42,9 @@ describe("cron startup catch-up concurrency", () => {
       await saveCronStore(storePath, { version: 1, jobs: [selected, deferred] });
       const started = createDeferred();
       const release = createDeferred();
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         maxMissedJobsPerRestart: 1,
         missedJobStaggerMs: 5_000,
         runIsolatedAgentJob: vi.fn(async ({ job }) => {
@@ -126,13 +121,9 @@ describe("cron startup catch-up concurrency", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [selected, deferred] });
     const selectedStarted = createDeferred();
     const releaseSelected = createDeferred<{ status: "ok"; summary: string }>();
-    const firstState = createCronServiceState({
-      cronEnabled: true,
+    const firstState = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => startNow,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
       runIsolatedAgentJob: vi.fn(async ({ job }) => {
@@ -148,13 +139,9 @@ describe("cron startup catch-up concurrency", () => {
     try {
       await selectedStarted.promise;
       const foreignNow = startNow + 1;
-      const foreignState = createCronServiceState({
-        cronEnabled: true,
+      const foreignState = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => foreignNow,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "foreign" })),
       });
       await expect(runCronJob(foreignState, deferred.id, "force")).resolves.toEqual({

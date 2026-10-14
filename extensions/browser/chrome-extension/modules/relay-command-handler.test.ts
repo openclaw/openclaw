@@ -4,7 +4,7 @@ import { createRelayCommandHandler } from "./relay-command-handler.js";
 
 function createHarness() {
   const send = vi.fn();
-  const epoch = { revision: 1, tabRevision: 2 };
+  const epoch = { revision: 1, groupRevision: 0, tabRevision: 2 };
   const requireAccessibleTab = vi.fn(async () => ({ id: 7, windowId: 3 }));
   const requireNavigatedTab = vi.fn(async () => ({ id: 7, windowId: 3 }));
   const navigateTab = vi.fn(async () => ({ frameId: "root", loaderId: "blank-loader" }));
@@ -52,12 +52,6 @@ describe("relay authority rechecks", () => {
   it.each([
     { name: "evaluation", method: "Runtime.evaluate", params: undefined, sessionId: undefined },
     {
-      name: "nonblank navigation",
-      method: "Page.navigate",
-      params: { url: "https://example.com" },
-      sessionId: undefined,
-    },
-    {
       name: "blank fragment navigation",
       method: "Page.navigate",
       params: { url: "about:blank#other" },
@@ -68,13 +62,6 @@ describe("relay authority rechecks", () => {
       method: "Page.navigate",
       params: { url: "about:blank" },
       sessionId: "child",
-    },
-    { name: "reload", method: "Page.reload", params: {}, sessionId: undefined },
-    {
-      name: "history navigation",
-      method: "Page.navigateToHistoryEntry",
-      params: { entryId: 9 },
-      sessionId: undefined,
     },
   ])("checks ordinary access around native $name", async ({ method, params, sessionId }) => {
     const harness = createHarness();

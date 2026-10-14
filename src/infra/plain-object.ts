@@ -1,6 +1,6 @@
 /**
- * Config merge/patch accepts only `[object Object]` values, excluding Date/Map/Set/class instances.
- * The stricter prototype contract prevents host objects from being merged as authored config.
+ * Config merge/patch uses the object tag, not prototype identity: class instances
+ * and custom prototypes remain accepted, while Date/Map/Set values are excluded.
  */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return (

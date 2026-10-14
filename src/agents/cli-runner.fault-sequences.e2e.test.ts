@@ -3,10 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import {
+  createTestAdmittedRunContext,
+  withTestRunAdmission,
+} from "./admitted-run-context.test-support.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
@@ -29,10 +36,11 @@ const testMocks = vi.hoisted(() => ({
   runCliAgent: vi.fn(),
 }));
 
+// mock-isolation: CLI fault sequences use synthetic OAuth state without reading host credentials.
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: testMocks.ensureAuthProfileStore,
   resolveAuthProfileOrder: testMocks.resolveAuthProfileOrder,
-  resolveModelAuthMode: testMocks.resolveModelAuthMode,
+  resolveModelAuthModeAsync: testMocks.resolveModelAuthMode,
 }));
 
 vi.mock("../plugins/cli-backends.runtime.js", () => ({
@@ -49,8 +57,8 @@ vi.mock("./cli-runner.runtime.js", () => ({
 }));
 
 type CliBoundaryParams = Pick<
-  RunCliAgentParams,
-  "model" | "onExecutionPhase" | "provider" | "runId" | "sessionKey"
+  PreparedCliRunContext["params"],
+  "admittedRunContext" | "model" | "onExecutionPhase" | "provider" | "runId" | "sessionKey"
 >;
 
 type ScenarioCounts = {
@@ -70,8 +78,11 @@ type ScenarioHarness = {
 
 type OuterRunOptions = {
   fallbacks?: string[];
-  onError?: (error: unknown) => void;
-  runCandidate?: (provider: string, model: string) => Promise<EmbeddedAgentRunResult>;
+  runCandidate?: (
+    provider: string,
+    model: string,
+    admittedRunContext: CliBoundaryParams["admittedRunContext"],
+  ) => Promise<EmbeddedAgentRunResult>;
 };
 
 const PRIMARY_MODEL = "sonnet-4.6";
@@ -118,6 +129,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await fs.rm(scenarioRoot, { recursive: true, force: true });
 });
 
@@ -173,6 +185,7 @@ function applyBoundaryParams(
 ): PreparedCliRunContext {
   context.params = {
     ...context.params,
+    admittedRunContext: params.admittedRunContext,
     sessionId: "openclaw-session",
     sessionKey: params.sessionKey ?? "agent:main:cli-fault-e2e",
     sessionFile: path.join(scenarioRoot, "session.jsonl"),
@@ -214,34 +227,45 @@ function buildReusableProcessContext(params: CliBoundaryParams): PreparedCliRunC
 
 async function runOuter(options: OuterRunOptions = {}) {
   harness.wholeTurnRuns += 1;
-  return runWithModelFallback<EmbeddedAgentRunResult>({
-    cfg: fallbackConfig(options.fallbacks),
-    provider: "claude-cli",
-    model: PRIMARY_MODEL,
-    runId: "run-cli-fault-e2e",
-    sessionId: "openclaw-session",
-    sessionKey: "agent:main:cli-fault-e2e",
-    skipAuthProfileRuntime: true,
-    fallbacksOverride: options.fallbacks,
-    onError: ({ error }) => options.onError?.(error),
-    run: async (provider, model) => {
-      harness.outerCandidates.push({ provider, model });
-      return options.runCandidate
-        ? options.runCandidate(provider, model)
-        : testMocks.runCliAgent({
-            admittedRunContext: createTestAdmittedRunContext("run-cli-fault-e2e"),
-            sessionId: "openclaw-session",
-            sessionKey: "agent:main:cli-fault-e2e",
-            sessionFile: path.join(scenarioRoot, "session.jsonl"),
-            workspaceDir: scenarioRoot,
-            prompt: "latest ask",
-            provider,
-            model,
-            timeoutMs: 5_000,
-            runId: "run-cli-fault-e2e",
-          });
+  const runId = "run-cli-fault-e2e";
+  const config = fallbackConfig(options.fallbacks);
+  setRuntimeConfigSnapshot(config);
+  return withTestRunAdmission(
+    {
+      admittedRunContext: createTestAdmittedRunContext(runId),
+      runId,
+      agentId: "main",
+      config,
     },
-  });
+    (admittedRunContext) =>
+      runWithModelFallback<EmbeddedAgentRunResult>({
+        cfg: config,
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        runId,
+        sessionId: "openclaw-session",
+        sessionKey: "agent:main:cli-fault-e2e",
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: options.fallbacks,
+        run: async (provider, model) => {
+          harness.outerCandidates.push({ provider, model });
+          return options.runCandidate
+            ? options.runCandidate(provider, model, admittedRunContext)
+            : testMocks.runCliAgent({
+                admittedRunContext,
+                sessionId: "openclaw-session",
+                sessionKey: "agent:main:cli-fault-e2e",
+                sessionFile: path.join(scenarioRoot, "session.jsonl"),
+                workspaceDir: scenarioRoot,
+                prompt: "latest ask",
+                provider,
+                model,
+                timeoutMs: 5_000,
+                runId,
+              });
+        },
+      }),
+  );
 }
 
 function currentCounts(): ScenarioCounts {
@@ -260,12 +284,13 @@ function expectCounts(expected: ScenarioCounts): void {
 
 describe("CLI runner fault sequences", () => {
   it("dispatches bridge mode through one fresh CLI child and bypasses the native run budget", async () => {
+    setRuntimeConfigSnapshot(fallbackConfig());
     supervisorSpawnMock.mockResolvedValueOnce(managedRun(successExit("bridge ok")));
 
     const outcome = await runOuter({
-      runCandidate: async (provider, model) =>
+      runCandidate: async (provider, model, admittedRunContext) =>
         runEmbeddedAgent({
-          admittedRunContext: createTestAdmittedRunContext("run-cli-bridge-e2e"),
+          admittedRunContext,
           sessionId: "openclaw-session",
           sessionKey: "agent:main:cli-bridge-e2e",
           workspaceDir: scenarioRoot,
@@ -275,7 +300,7 @@ describe("CLI runner fault sequences", () => {
           provider,
           model,
           timeoutMs: 5_000,
-          runId: "run-cli-bridge-e2e",
+          runId: admittedRunContext.operationalRunInstance.runId,
           cliBackendDispatch: "subscription-auth",
           toolsAllow: ["memory_search"],
         }),
@@ -476,7 +501,7 @@ describe("CLI runner fault sequences", () => {
     });
   });
 
-  it("fresh-retries reused-session context overflow once and never crosses models", async () => {
+  it("fresh-retries reused-session context overflow once before advancing the outer model", async () => {
     harness.contextFor = buildReusableProcessContext;
     supervisorSpawnMock
       .mockResolvedValueOnce(
@@ -484,25 +509,39 @@ describe("CLI runner fault sequences", () => {
       )
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
-      );
+      )
+      .mockResolvedValueOnce(managedRun(successExit("fallback after context overflow")));
 
-    let error: unknown;
-    try {
-      await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
-    } catch (caught) {
-      error = caught;
-    }
+    const outcome = await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
 
-    expect(error).toMatchObject({
-      reason: "context_overflow",
-      code: "cli_context_overflow",
-    });
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(outcome.model).toBe(FALLBACK_MODEL);
+    expect(outcome.result.payloads).toEqual([{ text: "fallback after context overflow" }]);
+    expect(outcome.attempts).toMatchObject([
+      {
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    ]);
+    expect(
+      supervisorSpawnMock.mock.calls.map(([params]) =>
+        params.mode === "child" ? params.argv : params.mode,
+      ),
+    ).toEqual([
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--resume", "source-cli-session"]),
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--session-id"]),
+      expect.arrayContaining(["--model", FALLBACK_MODEL]),
+    ]);
+    expect(harness.outerCandidates).toEqual([
+      { provider: "claude-cli", model: PRIMARY_MODEL },
+      { provider: "claude-cli", model: FALLBACK_MODEL },
+    ]);
     expectCounts({
-      childProcesses: 2,
+      childProcesses: 3,
       nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
+      outerCandidates: 2,
+      runCliAgentCalls: 2,
       wholeTurnRetries: 0,
     });
   });

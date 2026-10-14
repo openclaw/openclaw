@@ -1,4 +1,3 @@
-// Shared first-owner bootstrap for DM pairing approval surfaces.
 import {
   formatCommandOwnerFromChannelSender,
   hasConfiguredCommandOwners,
@@ -32,7 +31,7 @@ export async function bootstrapCommandOwnerFromPairing(params: {
     ownerAllowFrom: [ownerEntry],
   };
   await replaceConfigFile({
-    nextConfig,
+    sourceConfig: nextConfig,
     snapshot,
     writeOptions,
     afterWrite: { mode: "auto" },

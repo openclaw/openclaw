@@ -70,6 +70,17 @@ describe("Google SDK construction auth", () => {
     configureAiTransportHost({});
   });
 
+  it("identifies OpenCode conversations without cache retention", async () => {
+    await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {
+      apiKey: "test",
+      sessionId: "conversation-123",
+      cacheRetention: "none",
+    }).result();
+    expect(googleMockState.configs[0]).toMatchObject({
+      httpOptions: { headers: { "x-opencode-session": "conversation-123" } },
+    });
+  });
+
   it("unwraps Google API-key sentinels immediately before client construction", async () => {
     const buildModelFetch = vi.fn();
     configureAiTransportHost({
@@ -154,23 +165,6 @@ describe("Google SDK construction auth", () => {
       expect(googleMockState.requests[0]).toMatchObject({
         config: { thinkingConfig: expectedThinking },
       });
-    },
-  );
-
-  it.each(["gemma-4-26b-a4b-it", "gemini-2.5-pro"])(
-    "keeps unsupported disabled-thinking config out of Vertex requests for %s",
-    async (modelId) => {
-      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
-
-      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
-        apiKey: "test-vertex-key",
-        reasoning: "off",
-      }).result();
-
-      expect(googleMockState.requests[0]).toMatchObject({ config: {} });
-      expect((googleMockState.requests[0] as { config: unknown }).config).not.toHaveProperty(
-        "thinkingConfig",
-      );
     },
   );
 

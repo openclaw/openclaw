@@ -1,7 +1,8 @@
 // Plugin route runtime scopes map authenticated HTTP callers to operator scopes exposed inside plugin handlers.
 import type { IncomingMessage } from "node:http";
+import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { applyHttpOperatorRoleScopeCeiling } from "../http-auth-user-profile.js";
 import {
-  applyHttpOperatorRoleScopeCeiling,
   getHeader,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
@@ -19,6 +20,25 @@ export function resolvePluginRouteRuntimeOperatorScopes(
   requestAuth: AuthorizedGatewayHttpRequest,
   surface: PluginRouteRuntimeScopeSurface = "write-default",
 ): string[] {
+  if (requestAuth.authMethod === "remote-ingress") {
+    const scopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+    return surface === "trusted-operator" ? scopes : intersectOperatorScopes(scopes, [WRITE_SCOPE]);
+  }
+  if (requestAuth.authMethod === "device-token") {
+    const deviceScopes = applyHttpOperatorRoleScopeCeiling(
+      requestAuth.deviceOperatorScopes ?? [],
+      requestAuth,
+    );
+    return surface === "trusted-operator"
+      ? deviceScopes
+      : [WRITE_SCOPE].filter((scope) =>
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: [scope],
+            allowedScopes: deviceScopes,
+          }),
+        );
+  }
   const useTrustedScopes =
     surface === "trusted-operator"
       ? requestAuth.trustDeclaredOperatorScopes

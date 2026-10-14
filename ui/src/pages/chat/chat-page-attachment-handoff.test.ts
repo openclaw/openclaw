@@ -2,14 +2,21 @@
 /* @vitest-environment-options {"url":"http://chat-page-attachment-handoff.test/"} */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 
-vi.mock("./chat-pane.ts", () => ({}));
+// mock-isolation: Fake panes own staged-attachment callbacks during MCP teardown; real tag registration would replace that lifecycle.
+vi.mock("./chat-pane.tsx", async () => {
+  const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
+  return { ChatPaneView: mockChatPagePane };
+});
 vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatPageState } from "./chat-page-state.ts";
+import { settleChatPage, createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -22,14 +29,6 @@ type RenderedPane = HTMLElement & {
   resumeStagedAttachments?: () => void;
 };
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function splitLayout(sessionKey: string): ChatSplitLayout {
   const layout: ChatSplitLayout = {
     columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
@@ -41,9 +40,14 @@ function splitLayout(sessionKey: string): ChatSplitLayout {
 
 function configure(page: ChatPage) {
   const context = {
-    sessions: { state: { result: null }, subscribe: () => () => undefined, patch: vi.fn() },
+    sessions: { ...createChatPageSessions(), patch: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate: vi.fn(),
     replace: vi.fn(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
@@ -86,16 +90,18 @@ describe("chat page staged attachment rebound", () => {
     const page = new ChatPage();
     configure(page);
     document.body.append(page);
-    (page as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    await settleChatPage(page);
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
     page.requestUpdate();
-    await page.updateComplete;
+    await settleChatPage(page);
 
     const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
     const discard = vi.fn();
     const resume = vi.fn();
     closingPane.discardStagedAttachments = discard;
     closingPane.resumeStagedAttachments = resume;
-    const teardown = deferred<void>();
+    const teardown = deferred();
     const mcpApp = document.createElement("mcp-app-view");
     const restartAfterTeardown = vi.fn();
     mcpApp.restartAfterTeardown = restartAfterTeardown;
@@ -103,13 +109,14 @@ describe("chat page staged attachment rebound", () => {
     closingPane.append(mcpApp);
 
     closingPane.onClosePane?.(closingPane.paneId);
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(discard).toHaveBeenCalledOnce();
     expect(closingPane.isConnected).toBe(true);
 
-    (page as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
     page.requestUpdate();
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(resume).toHaveBeenCalled();
 
     teardown.resolve();

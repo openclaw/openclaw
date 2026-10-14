@@ -1,4 +1,5 @@
-// LLM Core module implements diagnostics behavior.
+export { readProviderRefusalReview, type ProviderRefusalReview } from "./provider-refusal.js";
+
 export interface DiagnosticErrorInfo {
   name?: string;
   message: string;
@@ -11,6 +12,15 @@ export interface AssistantMessageDiagnostic {
   timestamp: number;
   error?: DiagnosticErrorInfo;
   details?: Record<string, unknown>;
+}
+
+/** True when the provider explicitly refused the request payload. */
+export function isProviderRefusalAssistantError(
+  message: { diagnostics?: AssistantMessageDiagnostic[] } | null | undefined,
+): boolean {
+  return Boolean(
+    message?.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+  );
 }
 
 /** Formats arbitrary thrown values into diagnostic-safe text. */

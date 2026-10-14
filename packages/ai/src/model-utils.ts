@@ -1,21 +1,20 @@
 // Provides model selection, usage, and thinking-level utility helpers.
 import {
+  calculateUsageCost,
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
+import {
+  resolveOpenAIThinkingApi,
+  listMappedModelThinkingLevels,
+  MODEL_CATALOG_THINKING_LEVELS,
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { resolveOpenAIModelReasoningEfforts } from "./providers/openai-reasoning-effort.js";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-  const cacheWrite1h = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
-  const cacheWrite5m = usage.cacheWrite - cacheWrite1h;
-  usage.cost.input = (model.cost.input / 1000000) * usage.input;
-  usage.cost.output = (model.cost.output / 1000000) * usage.output;
-  usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * usage.cacheRead;
-  usage.cost.cacheWrite =
-    (model.cost.cacheWrite * cacheWrite5m + model.cost.input * 2 * cacheWrite1h) / 1000000;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+  Object.assign(usage.cost, calculateUsageCost(usage, model.cost));
   return usage.cost;
 }
 
@@ -27,16 +26,6 @@ export function applyProviderReportedUsageCost(usage: Usage, reportedCost: unkno
   usage.cost.total = reportedCost;
   usage.cost.totalOrigin = "provider-billed";
 }
-
-const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
 
 function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
   return model.api === "anthropic-messages"
@@ -54,14 +43,23 @@ export function getSupportedThinkingLevels<TApi extends Api>(
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);
+  const reasoningEfforts = resolveOpenAIThinkingApi(model.api)
+    ? resolveOpenAIModelReasoningEfforts(model)
+    : undefined;
+  const mappedLevels = listMappedModelThinkingLevels(model);
 
-  return EXTENDED_THINKING_LEVELS.filter((level) => {
+  return MODEL_CATALOG_THINKING_LEVELS.filter((level) => {
     const mapped = thinkingLevelMap?.[level];
     if (mapped === null) {
       return false;
     }
     if (level === "xhigh" || level === "max") {
-      return mapped !== undefined;
+      return (
+        reasoningEfforts?.length !== 0 &&
+        (mapped !== undefined ||
+          mappedLevels.includes(level) ||
+          reasoningEfforts?.includes(level) === true)
+      );
     }
     return true;
   });
@@ -77,34 +75,25 @@ export function clampThinkingLevel<TApi extends Api>(
     return level;
   }
 
-  const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level);
+  const requestedIndex = MODEL_CATALOG_THINKING_LEVELS.indexOf(level);
   if (requestedIndex === -1) {
     return availableLevels[0] ?? "off";
   }
 
-  // Explicit provider opt-outs are hard caps. Downgrade them before considering
-  // stronger levels so unsupported xhigh/max requests cannot increase cost.
+  // Prefer lower effort for explicit xhigh/max opt-outs to avoid increasing cost.
+  // Other gaps prefer the next stronger available level before walking down.
   const thinkingLevelMap = resolveThinkingLevelMap(model);
-  if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
-    for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
-      if (availableLevels.includes(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  // Prefer the next stronger available level, then walk down if the request was above the model cap.
-  for (const candidate of EXTENDED_THINKING_LEVELS.slice(requestedIndex)) {
-    if (availableLevels.includes(candidate)) {
-      return candidate;
-    }
-  }
-  for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
-    if (availableLevels.includes(candidate)) {
-      return candidate;
-    }
-  }
-  return availableLevels[0] ?? "off";
+  const lowerFirst = (level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null;
+  const lowerLevels = MODEL_CATALOG_THINKING_LEVELS.slice(0, requestedIndex).toReversed();
+  const upperLevels = MODEL_CATALOG_THINKING_LEVELS.slice(requestedIndex);
+  const candidates = lowerFirst
+    ? [...lowerLevels, ...upperLevels]
+    : [...upperLevels, ...lowerLevels];
+  return (
+    candidates.find((candidate) => availableLevels.includes(candidate)) ??
+    availableLevels[0] ??
+    "off"
+  );
 }
 
 /** Compares model identity by provider and id. */

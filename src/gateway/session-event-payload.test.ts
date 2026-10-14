@@ -1,47 +1,18 @@
 import { expect, it } from "vitest";
-import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionSnapshot,
-} from "./session-event-payload.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 
-it("projects session actors and explicitly clears absent attribution", () => {
-  expect(
-    buildGatewaySessionEventFields({
-      sessionRow: {
-        key: "agent:main:owned",
-        kind: "direct",
-        updatedAt: 1,
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-        participantCount: 1,
-      },
-    }),
-  ).toMatchObject({
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    archivedBy: null,
-    participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-    participantCount: 1,
+it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
+  const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: { ...sessionRow, autoLabel: "Device", displayName: "Device" },
   });
-
-  expect(
-    buildGatewaySessionEventFields({
-      sessionRow: {
-        key: "agent:main:archived",
-        kind: "direct",
-        updatedAt: 2,
-        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-      },
-    }),
-  ).toMatchObject({
-    createdActor: null,
-    archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    participants: [],
-    participantCount: 0,
-  });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
 });
 
 it("projects the prepared permission boundary only for an explicit mode", () => {
-  const ordinary = buildGatewaySessionEventFields({
+  const ordinary = buildGatewaySessionSnapshot({
     sessionRow: {
       key: "agent:main:ordinary",
       kind: "direct",
@@ -53,7 +24,7 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
   expect(ordinary).not.toHaveProperty("sessionRoot");
 
   expect(
-    buildGatewaySessionEventFields({
+    buildGatewaySessionSnapshot({
       sessionRow: {
         key: "agent:main:workspace",
         kind: "direct",
@@ -87,10 +58,14 @@ it("serializes merge tombstones without flattening row-only execution fields", (
   expect(snapshot).toMatchObject({
     agentStatus: null,
     observerDigest: null,
+    activeModel: null,
+    activeModelProvider: null,
     traceLevel: "full",
     session: {
       agentStatus: null,
       observerDigest: null,
+      activeModel: null,
+      activeModelProvider: null,
       traceLevel: "full",
       worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
       execNode: "private-node",
@@ -163,38 +138,138 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", "auto", null] as const)(
-  "carries model override source %s into session change events",
-  (source) => {
-    expect(
-      buildGatewaySessionEventFields({
-        sessionRow: {
-          key: "agent:main:pinned",
-          kind: "direct",
-          updatedAt: 1,
-          modelOverrideSource: source,
-        },
-      }).modelOverrideSource,
-    ).toBe(source);
+it.each([false, true])(
+  "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
+  (active) => {
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
+    const snapshot: unknown = JSON.parse(
+      JSON.stringify(
+        buildGatewaySessionSnapshot({
+          sessionRow: {
+            key: "agent:main:pinned",
+            sessionId: "pinned-session",
+            kind: "direct",
+            updatedAt: 200,
+            status: "done",
+            startedAt: 100,
+            endedAt: 200,
+            runtimeMs: 100,
+            model: "model-a",
+            modelProvider: "provider",
+            activeModel: "model-b",
+            activeModelProvider: "fallback-provider",
+            modelOverrideSource: "user",
+          },
+          lifecycle: true,
+          includeSession: true,
+          activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
+          event: {
+            runId: "next-run",
+            sessionId: "pinned-session",
+            seq: 1,
+            ts: 300,
+            stream: "lifecycle",
+            data: { phase: "start", startedAt: 300 },
+          },
+        }),
+      ),
+    );
+    expect(snapshot).toMatchObject({
+      ...(active ? { status: "running" } : {}),
+      startedAt: 300,
+      endedAt: null,
+      runtimeMs: null,
+      session: {
+        ...(active ? { status: "running" } : {}),
+        startedAt: 300,
+        endedAt: null,
+        runtimeMs: null,
+      },
+    });
+    if (!active) {
+      expect(snapshot).not.toHaveProperty("status");
+      expect(snapshot).not.toHaveProperty("session.status");
+    }
+    for (const field of [
+      "model",
+      "modelProvider",
+      "activeModel",
+      "activeModelProvider",
+      "modelOverrideSource",
+      "agentRuntime",
+    ]) {
+      expect(snapshot).not.toHaveProperty(field);
+      expect(snapshot).not.toHaveProperty(`session.${field}`);
+    }
   },
 );
 
-it.each(["user", "auto", null] as const)(
-  "does not mix lifecycle snapshots with model source %s",
-  (modelOverrideSource) => {
-    const snapshot = buildGatewaySessionSnapshot({
+it.each([
+  { aborted: false, status: "done" },
+  { aborted: true, status: "killed" },
+])("keeps terminal $status ahead of retained active cleanup", ({ aborted, status }) => {
+  expect(
+    buildGatewaySessionSnapshot({
       sessionRow: {
-        key: "agent:main:pinned",
+        key: "agent:main:terminal",
+        sessionId: "terminal-session",
         kind: "direct",
-        updatedAt: 1,
-        model: "model-a",
-        modelProvider: "provider",
-        modelOverrideSource,
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
+        updatedAt: 100,
+        startedAt: 100,
       },
-      lifecycle: true,
       includeSession: true,
-    });
-    expect(snapshot.modelOverrideSource).toBeUndefined();
-    expect(snapshot.session).not.toHaveProperty("modelOverrideSource");
-  },
-);
+      lifecycle: true,
+      lifecycleRunId: "terminal-run",
+      activeRunState: { active: true, status: "queued" },
+      event: {
+        runId: "terminal-run",
+        sessionId: "terminal-session",
+        seq: 1,
+        ts: 200,
+        stream: "lifecycle",
+        controlUiVisible: true,
+        data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
+      },
+    }),
+  ).toMatchObject({
+    status,
+    unread: true,
+    lastActivityAt: 200,
+    hasActiveRun: true,
+    endedAt: 200,
+    runtimeMs: 100,
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
+  });
+});
+
+it("publishes prompt budgets and their invalidation to subscribed sessions", () => {
+  const status = contextBudgetStatusFixture();
+  const row = { key: "agent:main:main", kind: "direct" as const, updatedAt: 2 };
+  expect(
+    buildGatewaySessionSnapshot({ sessionRow: { ...row, contextBudgetStatus: status } }),
+  ).toHaveProperty("contextBudgetStatus", status);
+  expect(buildGatewaySessionSnapshot({ sessionRow: row })).toHaveProperty(
+    "contextBudgetStatus",
+    null,
+  );
+});
+
+it("publishes and clears device folder bindings in subscribed snapshots", () => {
+  const sessionRow = { key: "agent:main:folder", kind: "direct" as const, updatedAt: 1 };
+  const deviceFolder = { deviceId: "paired-device", path: "/home/example/project" };
+  const previous = buildGatewaySessionSnapshot({ sessionRow: { ...sessionRow, deviceFolder } });
+  expect(previous.deviceFolder).toEqual(deviceFolder);
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ deviceFolder: null });
+});

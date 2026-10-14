@@ -11,9 +11,12 @@ import {
   type ChannelSetupFieldMetadata,
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import type { PluginCandidate } from "./discovery.js";
+import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
@@ -21,6 +24,11 @@ import {
 } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  normalizeManifestObjectList,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
+} from "./manifest-capability-normalizers.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
@@ -38,40 +46,25 @@ import {
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
+  pluginCacheRealpathSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import {
-  normalizePluginDependencySpecs,
-  type PluginDependencySpecMap,
-} from "./status-dependencies-core.js";
+import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 type InstalledPackageMetadata = {
+  packageDescription?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
-  if (!value || typeof value !== "object") {
-    return true;
-  }
-  const object = value;
-  if (seen.has(object)) {
-    return true;
-  }
-  if (!Object.isFrozen(object)) {
-    return false;
-  }
-  seen.add(object);
-  return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
-}
-
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  const cached = getPluginCache().metadata.indexFingerprints.get(index);
+  const facts = getInstalledPluginIndexFacts(index);
+  const cached = facts?.fingerprint;
   if (cached) {
     return cached;
   }
@@ -85,22 +78,23 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
+    // Admission receipts and build stamps do not change selection or registration identity.
     plugins: index.plugins.map(
-      ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
+      ({
+        doctorContractFile: _doctorContractFile,
+        sourceAdmissions: _sourceAdmissions,
+        packageBuild,
+        ...plugin
+      }) => ({
         ...plugin,
-        ...(packageBuild
-          ? {
-              packageBuild:
-                packageBuild.bundledDist === undefined
-                  ? {}
-                  : { bundledDist: packageBuild.bundledDist },
-            }
-          : {}),
+        ...(packageBuild?.bundledDist === undefined
+          ? {}
+          : { packageBuild: { bundledDist: packageBuild.bundledDist } }),
       }),
     ),
   });
-  if (isDeepFrozenJsonLike(index)) {
-    getPluginCache().metadata.indexFingerprints.set(index, fingerprint);
+  if (facts) {
+    facts.fingerprint = fingerprint;
   }
   return fingerprint;
 }
@@ -141,25 +135,16 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const env = isRecord(configuredState.env)
-    ? {
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.allOf)?.length
-          ? { allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf) }
-          : {}),
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.anyOf)?.length
-          ? { anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf) }
-          : {}),
-      }
-    : undefined;
-  const specifier = normalizeOptionalString(configuredState.specifier);
-  const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || (env && Object.keys(env).length > 0)
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-        ...(env && Object.keys(env).length > 0 ? { env } : {}),
-      }
-    : undefined;
+  return optionalManifestFields({
+    specifier: normalizeOptionalString(configuredState.specifier),
+    exportName: normalizeOptionalString(configuredState.exportName),
+    env: isRecord(configuredState.env)
+      ? optionalManifestFields({
+          allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf),
+          anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf),
+        })
+      : undefined,
+  });
 }
 
 function normalizePackageChannelPersistedAuthState(
@@ -170,11 +155,17 @@ function normalizePackageChannelPersistedAuthState(
   }
   const specifier = normalizeOptionalString(persistedAuthState.specifier);
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
-  return specifier || exportName
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-      }
+  const exportNameAsync = normalizeOptionalString(persistedAuthState.exportNameAsync);
+  return specifier || exportName || exportNameAsync
+    ? omitUndefinedManifestFields({
+        specifier,
+        exportName,
+        exportNameAsync,
+        backingStore:
+          persistedAuthState.backingStore === "plugin-state"
+            ? ("plugin-state" as const)
+            : undefined,
+      })
     : undefined;
 }
 
@@ -211,34 +202,24 @@ function normalizePackageChannelDoctorCapabilities(
 function normalizePackageChannelCliOptions(
   cliAddOptions: unknown,
 ): PluginPackageChannel["cliAddOptions"] | undefined {
-  if (!Array.isArray(cliAddOptions)) {
-    return undefined;
-  }
-  const normalized = cliAddOptions.flatMap<PluginPackageChannelCliOption>((option) => {
-    if (!isRecord(option)) {
-      return [];
-    }
+  return normalizeManifestObjectList<PluginPackageChannelCliOption>(cliAddOptions, (option) => {
     const flags = normalizeOptionalString(option.flags);
     const description = normalizeOptionalString(option.description);
     if (!flags || !description) {
-      return [];
+      return undefined;
     }
-    const defaultValue =
-      typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
-        ? option.defaultValue
-        : undefined;
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return [
-      {
-        flags,
-        description,
-        ...(defaultValue !== undefined ? { defaultValue } : {}),
-        ...(valueType ? { valueType } : {}),
-      },
-    ];
+    return omitUndefinedManifestFields<PluginPackageChannelCliOption>({
+      flags,
+      description,
+      defaultValue:
+        typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
+          ? option.defaultValue
+          : undefined,
+      valueType,
+    });
   });
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["setup"] | undefined {
@@ -323,6 +304,16 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
   return { fields };
 }
 
+const PACKAGE_CHANNEL_NORMALIZERS = [
+  ["exposure", normalizePackageChannelExposure],
+  ["commands", normalizeManifestChannelCommandDefaults],
+  ["configuredState", normalizePackageChannelConfiguredState],
+  ["persistedAuthState", normalizePackageChannelPersistedAuthState],
+  ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
+  ["setup", normalizePackageChannelSetup],
+  ["cliAddOptions", normalizePackageChannelCliOptions],
+] as const;
+
 function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -373,15 +364,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
       channel[key] = value[key];
     }
   }
-  for (const [key, normalize] of [
-    ["exposure", normalizePackageChannelExposure],
-    ["commands", normalizeManifestChannelCommandDefaults],
-    ["configuredState", normalizePackageChannelConfiguredState],
-    ["persistedAuthState", normalizePackageChannelPersistedAuthState],
-    ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
-    ["setup", normalizePackageChannelSetup],
-    ["cliAddOptions", normalizePackageChannelCliOptions],
-  ] as const) {
+  for (const [key, normalize] of PACKAGE_CHANNEL_NORMALIZERS) {
     const normalized = normalize(value[key]);
     if (normalized) {
       Object.assign(channel, { [key]: normalized });
@@ -421,7 +404,12 @@ function resolveInstalledPackageMetadata(
   const fallbackPackageManifest = recordPackageChannel
     ? { channel: recordPackageChannel }
     : undefined;
-  const fallback = fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
+  // Discovery normalizes absent package metadata to empty dependency maps.
+  const fallback = {
+    packageDependencies: {},
+    packageOptionalDependencies: {},
+    ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
+  };
   if (!record.packageJson?.path) {
     return fallback;
   }
@@ -436,6 +424,7 @@ function resolveInstalledPackageMetadata(
     return fallback;
   }
   const packageJson = parsed.value;
+  const packageDescription = normalizeOptionalString(packageJson.description);
   const packageManifest = getPackageManifestMetadata(packageJson);
   const dependencies = normalizePluginDependencySpecs({
     dependencies: packageJson.dependencies,
@@ -444,6 +433,7 @@ function resolveInstalledPackageMetadata(
   if (!packageManifest) {
     return {
       ...fallback,
+      packageDescription,
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
     };
@@ -455,6 +445,7 @@ function resolveInstalledPackageMetadata(
       : undefined;
   const { channel: _ignoredChannel, ...packageManifestWithoutChannel } = packageManifest;
   return {
+    packageDescription,
     packageManifest: {
       ...packageManifestWithoutChannel,
       ...(channel ? { channel } : {}),
@@ -471,34 +462,96 @@ function toPluginCandidate(
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
-    {
+    omitUndefinedManifestFields({
       idHint: record.pluginId,
       effectivePluginId: record.pluginId,
       source: record.source ?? resolveFallbackPluginSource(record),
-      ...(record.setupSource ? { setupSource: record.setupSource } : {}),
+      setupSource: record.setupSource || undefined,
       rootDir,
       origin: record.origin,
-      ...(record.format ? { format: record.format } : {}),
-      ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
-      ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-      ...(packageMetadata.packageManifest
-        ? { packageManifest: packageMetadata.packageManifest }
-        : {}),
-      ...(packageMetadata.packageDependencies
-        ? { packageDependencies: packageMetadata.packageDependencies }
-        : {}),
-      ...(packageMetadata.packageOptionalDependencies
-        ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
-        : {}),
+      format: record.format || undefined,
+      bundleFormat: record.bundleFormat || undefined,
+      packageName: record.packageName || undefined,
+      packageVersion: record.packageVersion || undefined,
+      packageDescription: packageMetadata.packageDescription || undefined,
+      packageManifest: packageMetadata.packageManifest || undefined,
+      packageDependencies: packageMetadata.packageDependencies || undefined,
+      packageOptionalDependencies: packageMetadata.packageOptionalDependencies || undefined,
       packageDir: rootDir,
-    },
+    }),
     resolveInstalledPluginIndexInstallOwner(record),
     isInstalledPluginIndexInstallOwnerAmbiguous(record),
   );
 }
 
+/** Selects installed owners without projecting unrelated manifest fields. */
+export function selectInstalledPluginManifestRecords(
+  index: InstalledPluginIndex,
+  registry: PluginManifestRegistry,
+  pluginIds: ReadonlySet<string> | null,
+  includeDisabled?: boolean,
+): PluginManifestRecord[] {
+  const enabledPluginIds = new Set(
+    index.plugins
+      .filter((plugin) => includeDisabled || plugin.enabled)
+      .map((plugin) => plugin.pluginId),
+  );
+  return registry.plugins.filter(
+    (plugin) => enabledPluginIds.has(plugin.id) && (!pluginIds || pluginIds.has(plugin.id)),
+  );
+}
+
+/** Prepares transient candidates without loading a registry or Doctor artifact bytes. */
+export function prepareInstalledPluginCandidateResolver(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): (plugin: InstalledPluginIndexRecord) => PluginCandidate {
+  const env = params.env ?? process.env;
+  // These selections belong to this process, not the persisted installation inventory.
+  const sourceRoots = new Set(
+    listBundledSourceOverlayDirs({ bundledRoot: resolveBundledPluginsDir(env), env }).map(
+      (root) => pluginCacheRealpathSync(root) ?? root,
+    ),
+  );
+  const loadPaths = params.config?.plugins?.load?.paths ?? [];
+  const configuredSources = new Set(
+    loadPaths.length > 0
+      ? discoverConfiguredPluginLoadPaths({
+          loadPaths,
+          env,
+          workspaceDir: params.workspaceDir,
+        }).candidates.map(
+          (candidate) => pluginCacheRealpathSync(candidate.source) ?? candidate.source,
+        )
+      : [],
+  );
+  return (plugin) => {
+    const candidate = toPluginCandidate(plugin, env);
+    // Explicit managed paths carry the requested workspace during discovery;
+    // restore that same provenance when hydrating the persisted inventory.
+    if (
+      candidate.origin === "global" &&
+      (resolveInstalledPluginIndexInstallOwner(plugin) ||
+        isInstalledPluginIndexInstallOwnerAmbiguous(plugin))
+    ) {
+      candidate.workspaceDir = normalizeOptionalString(params.workspaceDir);
+    }
+    if (
+      candidate.origin === "bundled" &&
+      ((sourceRoots.size > 0 &&
+        sourceRoots.has(pluginCacheRealpathSync(candidate.rootDir) ?? candidate.rootDir)) ||
+        (configuredSources.size > 0 &&
+          configuredSources.has(pluginCacheRealpathSync(candidate.source) ?? candidate.source)))
+    ) {
+      candidate.sourcePreferred = true;
+    }
+    return candidate;
+  };
+}
+
 export function loadPluginManifestRegistryForInstalledIndex(params: {
+  registryPath?: string;
   index: InstalledPluginIndex;
   manifestRegistry?: PluginManifestRegistry;
   config?: OpenClawConfig;
@@ -523,24 +576,27 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           })
         : params.index.diagnostics;
       if (params.manifestRegistry && !params.bundledChannelConfigCollector) {
-        const enabledPluginIds = new Set(
-          params.index.plugins
-            .filter((plugin) => params.includeDisabled || plugin.enabled)
-            .map((plugin) => plugin.pluginId),
-        );
         return {
-          plugins: params.manifestRegistry.plugins
-            .filter((plugin) => enabledPluginIds.has(plugin.id))
-            .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.id))
-            .map(normalizePreparedManifestRecord),
+          plugins: selectInstalledPluginManifestRecords(
+            params.index,
+            params.manifestRegistry,
+            pluginIdSet,
+            params.includeDisabled,
+          ).map(normalizePreparedManifestRecord),
           diagnostics: [...diagnostics],
         };
       }
+      const resolveCandidate = prepareInstalledPluginCandidateResolver({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+      });
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-        .map((plugin) => toPluginCandidate(plugin, env));
+        .map(resolveCandidate);
       return loadPluginManifestRegistryCore({
+        registryPath: params.registryPath,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

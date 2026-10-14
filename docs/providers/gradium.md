@@ -17,12 +17,14 @@ title: "Gradium"
 
 ## Install plugin
 
-Gradium is an official external plugin. Install it, then restart Gateway:
+Gradium is an official external plugin. Install it:
 
 ```bash
 openclaw plugins install @openclaw/gradium-speech
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Setup
 
@@ -31,7 +33,7 @@ Create a Gradium API key, then expose it with an env var or the config key. Conf
 <Tabs>
   <Tab title="Env var">
     ```bash
-    export GRADIUM_API_KEY="gsk_..."
+    export GRADIUM_API_KEY="<your-gradium-api-key>"
     ```
   </Tab>
 

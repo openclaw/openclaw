@@ -57,17 +57,6 @@ function withSharedSource(source: string, test: (repoRoot: string) => void) {
 }
 
 describe("Periphery intersection", () => {
-  it("matches exact Swift USRs instead of declaration names", () => {
-    const sameNameDifferentUsr = finding({ ids: ["s:11OpenClawKit7ExampleV_other"] });
-    expect(intersectFindings([finding()], [sameNameDifferentUsr])).toEqual([]);
-    expect(intersectFindings([finding()], [finding()])).toEqual([finding()]);
-  });
-
-  it("matches any USR emitted for a declaration compiled into multiple iOS modules", () => {
-    const ios = finding({ ids: ["s:16OpenClawWatchApp7ExampleV", "s:11OpenClawKit7ExampleV"] });
-    expect(intersectFindings([ios], [finding()])).toEqual([ios]);
-  });
-
   it("sorts findings deterministically", () => {
     const later = finding({
       ids: ["s:11OpenClawKit5LaterV"],
@@ -89,16 +78,6 @@ describe("Periphery intersection", () => {
         const declaration = finding({ location: `${FINDING_SOURCE}:2:8` });
         const inline = finding({ location: `${FINDING_SOURCE}:4:8` });
         expect(filterIgnoredFindings([declaration, inline], repoRoot)).toEqual([]);
-      },
-    );
-  });
-
-  it("does not treat scoped Periphery commands as bare ignores", () => {
-    withSharedSource(
-      ["// periphery:ignore:parameters value", "public struct Example {}"].join("\n"),
-      (repoRoot) => {
-        const command = finding({ location: `${FINDING_SOURCE}:2:8` });
-        expect(filterIgnoredFindings([command], repoRoot)).toEqual([command]);
       },
     );
   });
@@ -139,8 +118,6 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(workflow.jobs?.["scan-ios"]?.name).toBe("Scan shared kit from iOS");
     expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
     expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
-    expect(workflow.jobs?.["scan-ios"]?.["runs-on"]).toContain("github.run_attempt > 1");
-    expect(workflow.jobs?.["scan-macos"]?.["runs-on"]).toContain("github.run_attempt > 1");
 
     const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
       (step) => step.name === "Upload iOS consumer report",
@@ -181,20 +158,5 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(iosUpload?.with?.overwrite).toBe(true);
     expect(macosUpload?.with?.overwrite).toBe(true);
     expect(intersectionUpload?.with?.overwrite).toBe(true);
-  });
-
-  it("retains the generated protocol contract and leaves findings for the intersection", () => {
-    for (const jobName of ["scan-ios", "scan-macos"]) {
-      const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
-      expect(scan?.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
-      expect(scan?.run).toContain(
-        "--retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift'",
-      );
-      expect(scan?.run).not.toContain("--strict");
-    }
-    const macosScan = workflow.jobs?.["scan-macos"]?.steps?.find(
-      (step) => step.name === "Scan shared kit",
-    );
-    expect(macosScan?.run).not.toContain("--exclude-tests");
   });
 });

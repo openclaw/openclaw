@@ -1,18 +1,7 @@
-/**
- * Discord Voice Message Support
- *
- * Implements sending voice messages via Discord's API.
- * Voice messages require:
- * - OGG/Opus format audio
- * - Waveform data (base64 encoded, up to 256 samples, 0-255 values)
- * - Duration in seconds
- * - Message flag 8192 (IS_VOICE_MESSAGE)
- * - No other content (text, embeds, etc.)
- */
-
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MessageFlags } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -31,7 +20,12 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  getDiscordEndpointRuntime,
+  resolveDiscordEndpointAttachmentGuard,
+  type DiscordEndpointRuntime,
+} from "./endpoint-runtime.js";
+import { parseDiscordHttpErrorBody } from "./error-body.js";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
@@ -42,8 +36,6 @@ import {
 } from "./retry.js";
 import { createDiscordMessageNonce } from "./send.message-request.js";
 
-const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
-const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
@@ -52,26 +44,31 @@ const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowIpv6UniqueLocalRange: true,
 };
 
-async function runFfmpegToOutput(params: {
-  outputPath: string;
-  buildArgs: (tempPath: string) => string[];
-}): Promise<void> {
-  const rootDir = path.dirname(params.outputPath);
+async function runFfmpegToOutput(
+  inputPath: string,
+  outputPath: string,
+  outputArgs: string[],
+): Promise<void> {
+  const rootDir = path.dirname(outputPath);
   await fs.mkdir(rootDir, { recursive: true });
   await writeExternalFileWithinRoot({
     rootDir,
-    path: path.basename(params.outputPath),
+    path: path.basename(outputPath),
     write: async (tempPath) => {
-      await runFfmpeg(params.buildArgs(tempPath));
+      await runFfmpeg([
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        ...outputArgs,
+        tempPath,
+      ]);
     },
   });
-}
-
-function createRateLimitError(
-  response: Response,
-  body: { message: string; retry_after: number; global: boolean },
-): RateLimitError {
-  return new RateLimitError(response, body);
 }
 
 type VoiceMessageMetadata = {
@@ -79,9 +76,6 @@ type VoiceMessageMetadata = {
   waveform: string; // base64 encoded
 };
 
-/**
- * Get audio duration using ffprobe
- */
 async function getAudioDuration(filePath: string): Promise<number> {
   try {
     const stdout = await runFfprobe([
@@ -97,96 +91,54 @@ async function getAudioDuration(filePath: string): Promise<number> {
     if (duration === undefined) {
       throw new Error("Could not parse duration");
     }
-    return Math.round(duration * 100) / 100; // Round to 2 decimal places
+    return Math.round(duration * 100) / 100;
   } catch (err) {
     const errMessage = formatErrorMessage(err);
     throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
   }
 }
 
-/**
- * Generate waveform data from audio file using ffmpeg
- * Returns base64 encoded byte array of amplitude samples (0-255)
- */
-async function generateWaveform(filePath: string): Promise<string> {
-  try {
-    // Extract raw PCM and sample amplitude values
-    return await generateWaveformFromPcm(filePath);
-  } catch {
-    // If PCM extraction fails, generate a placeholder waveform
-    return generatePlaceholderWaveform();
-  }
-}
-
-/**
- * Generate waveform by extracting raw PCM data and sampling amplitudes
- */
 async function generateWaveformFromPcm(filePath: string): Promise<string> {
   const tempDir = resolvePreferredOpenClawTmpDir();
   const tempPcm = path.join(tempDir, `waveform-${crypto.randomUUID()}.raw`);
 
   try {
-    // Convert to raw 16-bit signed PCM, mono, 8kHz
-    await runFfmpegToOutput({
-      outputPath: tempPcm,
-      buildArgs: (outputPath) => [
-        "-y",
-        "-i",
-        filePath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-t",
-        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-        "-f",
-        "s16le",
-        "-acodec",
-        "pcm_s16le",
-        "-ac",
-        "1",
-        "-ar",
-        "8000",
-        outputPath,
-      ],
-    });
+    await runFfmpegToOutput(filePath, tempPcm, [
+      "-f",
+      "s16le",
+      "-acodec",
+      "pcm_s16le",
+      "-ac",
+      "1",
+      "-ar",
+      "8000",
+    ]);
 
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
 
-    // Sample the PCM data to get WAVEFORM_SAMPLES points
     const step = Math.max(1, Math.floor(samples.length / WAVEFORM_SAMPLES));
-    const waveform: number[] = [];
+    const waveform = Buffer.alloc(WAVEFORM_SAMPLES);
 
     for (let i = 0; i < WAVEFORM_SAMPLES && i * step < samples.length; i++) {
-      // Get average absolute amplitude for this segment
       let sum = 0;
-      let count = 0;
-      for (let j = 0; j < step && i * step + j < samples.length; j++) {
+      const count = Math.min(step, samples.length - i * step);
+      for (let j = 0; j < count; j++) {
         sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
-        count++;
       }
-      const avg = count > 0 ? sum / count : 0;
+      const avg = sum / count;
       // Normalize to 0-255 (16-bit signed max is 32767)
       const normalized = Math.min(255, Math.round((avg / 32767) * 255));
-      waveform.push(normalized);
+      waveform[i] = normalized;
     }
 
-    // Pad with zeros if we don't have enough samples
-    while (waveform.length < WAVEFORM_SAMPLES) {
-      waveform.push(0);
-    }
-
-    return Buffer.from(waveform).toString("base64");
+    return waveform.toString("base64");
   } finally {
     await unlinkIfExists(tempPcm);
   }
 }
 
-/**
- * Generate a placeholder waveform (for when audio processing fails)
- */
 function generatePlaceholderWaveform(): string {
-  // Generate a simple sine-wave-like pattern
   const waveform: number[] = [];
   for (let i = 0; i < WAVEFORM_SAMPLES; i++) {
     const value = Math.round(128 + 64 * Math.sin((i / WAVEFORM_SAMPLES) * Math.PI * 8));
@@ -210,7 +162,6 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
 
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
 
-  // Check if already OGG
   if (ext === ".ogg") {
     // Fast-path only when the file is Opus at Discord's expected 48kHz.
     try {
@@ -234,48 +185,35 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
     }
   }
 
-  // Convert to OGG/Opus
   // Always resample to 48kHz to ensure Discord voice messages play at correct speed
   // (Discord expects 48kHz; lower sample rates like 24kHz from some TTS providers cause 0.5x playback)
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await runFfmpegToOutput({
-    outputPath,
-    buildArgs: (tempPath) => [
-      "-y",
-      "-i",
-      filePath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-ar",
-      String(DISCORD_OPUS_SAMPLE_RATE_HZ),
-      "-c:a",
-      "libopus",
-      "-b:a",
-      "64k",
-      "-f",
-      "ogg",
-      tempPath,
-    ],
-  });
+  await runFfmpegToOutput(filePath, outputPath, [
+    "-ar",
+    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
+    "-c:a",
+    "libopus",
+    "-b:a",
+    "64k",
+    "-f",
+    "ogg",
+  ]);
 
   return { path: outputPath, cleanup: true };
 }
 
 /**
- * Get voice message metadata (duration and waveform)
+ * Wait for waveform cleanup before callers can release the audio input.
  */
 export async function getVoiceMessageMetadata(filePath: string): Promise<VoiceMessageMetadata> {
-  const [durationSecs, waveform] = await Promise.all([
-    getAudioDuration(filePath),
-    generateWaveform(filePath),
-  ]);
-
-  return { durationSecs, waveform };
+  const waveform = generateWaveformFromPcm(filePath).catch(generatePlaceholderWaveform);
+  try {
+    return { durationSecs: await getAudioDuration(filePath), waveform: await waveform };
+  } finally {
+    await waveform;
+  }
 }
 
 type UploadUrlResponse = {
@@ -286,17 +224,6 @@ type UploadUrlResponse = {
   }>;
 };
 
-function coerceDiscordErrorBody(raw: string): unknown {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { message: truncateUtf16Safe(raw, 200) };
-  }
-}
-
 async function createVoiceRequestError(
   response: Response,
   fallbackMessage: string,
@@ -304,9 +231,9 @@ async function createVoiceRequestError(
   const raw = await readResponseTextLimited(response, DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES).catch(
     () => "",
   );
-  const parsed = coerceDiscordErrorBody(raw);
+  const parsed = parseDiscordHttpErrorBody(raw);
   if (response.status === 429) {
-    throw createRateLimitError(response, {
+    throw new RateLimitError(response, {
       message: readDiscordMessage(parsed, "You are being rate limited."),
       retry_after: readRetryAfter(parsed, response, 1),
       global:
@@ -325,12 +252,18 @@ async function createVoiceRequestError(
 
 async function requestVoiceUploadUrl(params: {
   rest: RequestClient;
+  endpointRuntime: DiscordEndpointRuntime | null;
   channelId: string;
   botToken: string;
   filename: string;
   fileSize: number;
 }): Promise<UploadUrlResponse> {
-  const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
+  const endpoint = params.endpointRuntime;
+  const uploadApiBaseUrl =
+    endpoint?.descriptor.restApiBaseUrl ??
+    params.rest.options?.baseUrl ??
+    "https://discord.com/api";
+  const url = `${uploadApiBaseUrl}/channels/${params.channelId}/attachments`;
   const uploadUrlInit: RequestInit = {
     method: "POST",
     headers: {
@@ -341,15 +274,24 @@ async function requestVoiceUploadUrl(params: {
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
   };
-  const { response: res, release } = await fetchWithSsrFGuard({
-    url,
-    init: uploadUrlInit,
-    // Keep control-plane negotiation on the REST budget; the binary upload below
-    // needs the longer attachment-transfer budget.
-    timeoutMs: params.rest.options.timeout,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
-    auditContext: "discord.voice.upload-url",
-  });
+  const endpointResponse = endpoint
+    ? {
+        response: await endpoint.fetch(url, {
+          ...uploadUrlInit,
+          signal: AbortSignal.timeout(params.rest.options.timeout),
+        }),
+        release: async () => {},
+      }
+    : await fetchWithSsrFGuard({
+        url,
+        init: uploadUrlInit,
+        // Keep control-plane negotiation on the REST budget; the binary upload below
+        // needs the longer attachment-transfer budget.
+        timeoutMs: params.rest.options.timeout,
+        policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+        auditContext: "discord.voice.upload-url",
+      });
+  const { response: res, release } = endpointResponse;
   try {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
@@ -363,7 +305,12 @@ async function requestVoiceUploadUrl(params: {
 async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
+  endpointRuntime: DiscordEndpointRuntime | null;
 }): Promise<void> {
+  const endpointGuard = resolveDiscordEndpointAttachmentGuard(
+    params.uploadUrl,
+    params.endpointRuntime,
+  );
   const { response: uploadResponse, release } = await fetchWithSsrFGuard({
     url: params.uploadUrl,
     init: {
@@ -374,7 +321,10 @@ async function uploadVoiceAttachment(params: {
       body: new Uint8Array(params.audioBuffer),
     },
     timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    policy: endpointGuard?.policy ?? DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    ...(endpointGuard
+      ? { maxRedirects: endpointGuard.maxRedirects, requireHttps: endpointGuard.requireHttps }
+      : {}),
     auditContext: "discord.voice.attachment-upload",
   });
 
@@ -388,14 +338,6 @@ async function uploadVoiceAttachment(params: {
   }
 }
 
-/**
- * Send a voice message to Discord
- *
- * This follows Discord's voice message protocol:
- * 1. Request upload URL from Discord
- * 2. Upload the OGG file to the provided URL
- * 3. Send the message with flag 8192 and attachment metadata
- */
 export async function sendDiscordVoiceMessage(
   rest: RequestClient,
   channelId: string,
@@ -406,22 +348,24 @@ export async function sendDiscordVoiceMessage(
   silent?: boolean,
   token?: string,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
+  // Capture the environment-selected endpoint for the whole retrying operation.
+  const endpointRuntime = getDiscordEndpointRuntime() ?? null;
 
-  // Step 1: Request upload URL from Discord
   // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
   // /attachments endpoint expects JSON, so this path uses a guarded raw HTTP call.
-  const botToken = token;
-  if (!botToken) {
+  if (!token) {
     throw new Error("Discord bot token is required for voice message upload");
   }
   const { upload_filename } = await request(async () => {
     const uploadUrlResponse = await requestVoiceUploadUrl({
       rest,
+      endpointRuntime,
       channelId,
-      botToken,
+      botToken: token,
       filename,
       fileSize,
     });
@@ -434,27 +378,13 @@ export async function sendDiscordVoiceMessage(
     await uploadVoiceAttachment({
       uploadUrl: attachment.upload_url,
       audioBuffer,
+      endpointRuntime,
     });
     return attachment;
   }, "voice-upload");
 
-  // Step 3: Send the message with voice message flag and metadata
-  const flags = silent
-    ? DISCORD_VOICE_MESSAGE_FLAG | SUPPRESS_NOTIFICATIONS_FLAG
-    : DISCORD_VOICE_MESSAGE_FLAG;
-  const messagePayload: {
-    flags: number;
-    nonce: string;
-    enforce_nonce: true;
-    attachments: Array<{
-      id: string;
-      filename: string;
-      uploaded_filename: string;
-      duration_secs: number;
-      waveform: string;
-    }>;
-    message_reference?: { message_id: string; fail_if_not_exists: boolean };
-  } = {
+  const flags = MessageFlags.IsVoiceMessage | (silent ? MessageFlags.SuppressNotifications : 0);
+  const messagePayload = {
     flags,
     nonce: createDiscordMessageNonce(),
     enforce_nonce: true,
@@ -467,21 +397,15 @@ export async function sendDiscordVoiceMessage(
         waveform: metadata.waveform,
       },
     ],
+    ...(replyTo ? { message_reference: { message_id: replyTo, fail_if_not_exists: false } } : {}),
   };
-
-  // Note: Voice messages cannot have content, but can have message_reference for replies
-  if (replyTo) {
-    messagePayload.message_reference = {
-      message_id: replyTo,
-      fail_if_not_exists: false,
-    };
-  }
 
   let messageCreateMayHaveCommitted = false;
   try {
-    return (await request(
+    return await request(
       async () => {
         await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
         try {
           return (await rest.post(`/channels/${channelId}/messages`, {
             body: messagePayload,
@@ -493,7 +417,7 @@ export async function sendDiscordVoiceMessage(
       },
       "voice-message",
       { safety: "nonce-protected-create" },
-    )) as { id: string; channel_id: string };
+    );
   } catch (error) {
     // Only this final request can commit a message; upload/preflight failures cannot.
     if (messageCreateMayHaveCommitted) {

@@ -1,6 +1,6 @@
-// Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
+import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
   resolveInboundSupplementalSenderAllowed,
@@ -12,7 +12,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy } from "../policy.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
@@ -28,8 +28,10 @@ type MSTeamsInboundDispatchResult =
 
 export async function dispatchMSTeamsInboundTurn(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
+  accountPolicyCfg: MSTeamsMessageHandlerDeps["cfg"];
+  listenerAccountId: string;
+  readConfig: () => MSTeamsMessageHandlerDeps["cfg"];
   runtime: RuntimeEnv;
-  appId: string;
   app: MSTeamsMessageHandlerDeps["app"];
   tokenProvider: MSTeamsMessageHandlerDeps["tokenProvider"];
   textLimit: number;
@@ -51,7 +53,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const {
     cfg,
     runtime,
-    appId,
     app,
     tokenProvider,
     textLimit,
@@ -77,6 +78,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     groupPolicy,
     commandAuthorized,
     effectiveGroupAllowFrom,
+    msteamsCfg,
   } = admission;
   const { route } = routing;
   const { agentBody, inboundMedia } = content;
@@ -89,7 +91,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
       : `msteams:group:${conversationId}`;
   const teamsTo = isDirectMessage ? `user:${senderId}` : `conversation:${conversationId}`;
   const envelopeFrom = isDirectMessage ? senderName : conversationType;
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg, route });
   const body = buildEnvelope({
     channel: "Teams",
     from: envelopeFrom,
@@ -98,7 +100,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   });
   let combinedBody = body;
   const isRoomish = !isDirectMessage;
-  const historyKey = isRoomish ? conversationId : undefined;
+  const historyKey = isRoomish ? facts.historyKey : undefined;
   if (isRoomish && historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -131,7 +133,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           groupPolicy,
           allowFrom: effectiveGroupAllowFrom,
           isSenderAllowed: (allowFrom) =>
-            resolveMSTeamsAllowlistMatch({
+            resolveAllowlistMatchSimple({
               allowFrom,
               senderId: quoteSenderId ?? "",
               senderName: quoteSenderName,
@@ -139,15 +141,17 @@ export async function dispatchMSTeamsInboundTurn(params: {
             }).allowed,
         })
       : true;
-  const bodyForAgent = threadContext
-    ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
-    : agentBody;
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
+  // The listener config is intentionally account-scoped. If routing ever crosses
+  // accounts, re-read policy from the full config or sibling authorization can leak.
+  const senderAccessCfg =
+    route.accountId === params.listenerAccountId ? params.readConfig() : params.accountPolicyCfg;
   // Thread routing owns the final session key, so mint the bound result at dispatch preparation.
   const boundIngress = await resolveMSTeamsSenderAccess({
-    cfg,
+    cfg: senderAccessCfg,
+    accountId: route.accountId,
     activity,
     hasControlCommand: admission.isControlCommand,
     conversationThreadId: facts.threadId,
@@ -159,11 +163,33 @@ export async function dispatchMSTeamsInboundTurn(params: {
       inboundEventKind: "user_request",
     },
   });
+  if (
+    !boundIngress.senderAccess.allowed ||
+    boundIngress.hasConflictingConversationScope ||
+    boundIngress.msteamsCfg?.enabled === false ||
+    boundIngress.commandAccess.shouldBlockControlCommand
+  ) {
+    log.info("dropping message (dispatch-time account authorization changed)");
+    return { kind: "completed", finalResponses: 0 };
+  }
   const ctxPayload = core.channel.inbound.buildContext({
     channelIngress: boundIngress.channelIngress,
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {
+      // The capped Graph thread slice supplements the pending channel backlog;
+      // it cannot claim to replace that history or become sender command text.
+      channelStructuredContext: threadContext.length
+        ? [
+            {
+              label: "Thread history",
+              source: "msteams",
+              type: "chat_window",
+              sessionTranscriptMode: "preserve",
+              payload: { order: "chronological", messages: threadContext },
+            },
+          ]
+        : undefined,
       quote: quoteInfo
         ? {
             id: quoteInfo.id ?? activity.replyToId ?? undefined,
@@ -208,7 +234,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent,
+      bodyForAgent: agentBody,
       inboundHistory,
       rawBody,
       commandBody,
@@ -240,18 +266,17 @@ export async function dispatchMSTeamsInboundTurn(params: {
     runtime,
     log,
     app,
-    appId,
     conversationRef,
     context,
     replyStyle,
     textLimit,
     onSentMessageIds: (ids) => {
       for (const id of ids) {
-        recordMSTeamsSentMessage(conversationId, id);
+        recordMSTeamsSentMessage(conversationId, id, { accountId: route.accountId });
       }
     },
     tokenProvider,
-    sharePointSiteId: cfg.channels?.msteams?.sharePointSiteId,
+    sharePointSiteId: msteamsCfg?.sharePointSiteId,
   });
 
   const activityClientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
@@ -279,7 +304,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           id: activity.id ?? `${teamsFrom}:${Date.now()}`,
           timestamp: timestamp?.getTime(),
           rawText: rawBody,
-          textForAgent: bodyForAgent,
+          textForAgent: agentBody,
           textForCommands: commandBody,
           raw: activity,
         }),

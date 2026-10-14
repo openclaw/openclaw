@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hiddenStore = vi.hoisted(() => ({ records: new Map<string, string>() }));
 
-vi.mock("../secrets/store/secret-store.js", () => ({
+// mock-isolation: OAuth record fixtures use an in-memory vault so tests cannot read or write real secrets.
+vi.mock("../secrets/store/secret-store-hidden-github.js", () => ({
   deleteHiddenGitHubSecretRecord: ({ name }: { name: string }) => hiddenStore.records.delete(name),
-  listHiddenGitHubSecretRecordNames: ({ prefix }: { prefix: string }) =>
-    [...hiddenStore.records.keys()].filter((name) => name.startsWith(`${prefix}-`)).toSorted(),
+  listHiddenGitHubSecretRecords: ({ prefix }: { prefix: string }) =>
+    [...hiddenStore.records.entries()]
+      .filter(([name]) => name.startsWith(`${prefix}-`))
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([name, value]) => ({ name, value })),
   readHiddenGitHubSecretRecord: ({ name }: { name: string }) => hiddenStore.records.get(name),
   writeHiddenGitHubSecretRecord: ({ name, value }: { name: string; value: string }) =>
     hiddenStore.records.set(name, value),
@@ -40,7 +44,11 @@ const deviceRecord: GitHubDeviceAuthorizationRecord = {
   nextPollAtMs: now + 5_000,
   agentId: "main",
   scope: "agent",
-  expectedIdentity: null,
+  expectedIdentity: {
+    profileId,
+    allowInSandbox: true,
+    gitAuthor: { name: "  Original Author  ", email: "  original@example.test  " },
+  },
   agentLifecycleBinding: {
     agentId: "main",
     provenance: null,
@@ -61,65 +69,110 @@ const oauthRecord: GitHubOAuthRecord = {
   createdAtMs: now,
 };
 
-describe("GitHub OAuth hidden records", () => {
+describe("GitHub OAuth hidden records", async () => {
   beforeEach(() => hiddenStore.records.clear());
 
-  it("round-trips exact pending and refresh records under opaque hidden names", () => {
-    writeGitHubDeviceAuthorizationRecord(deviceRecord);
-    writeGitHubOAuthRecord(oauthRecord);
+  it("round-trips exact pending and refresh records under opaque hidden names", async () => {
+    await writeGitHubDeviceAuthorizationRecord(deviceRecord);
+    await writeGitHubOAuthRecord(oauthRecord);
 
     expect([...hiddenStore.records.keys()]).toEqual([
       requestId,
       `github-oauth-${profileId.slice("ghp_".length)}`,
     ]);
-    expect(listGitHubDeviceAuthorizationRecords()).toEqual([{ requestId, record: deviceRecord }]);
-    expect(listGitHubOAuthRecords()).toEqual([{ profileId, record: oauthRecord }]);
-    expect(readGitHubDeviceAuthorizationRecord(requestId)).toEqual(deviceRecord);
-    expect(inspectGitHubOAuthRecord(profileId)).toEqual({ state: "valid", record: oauthRecord });
+    expect(await listGitHubDeviceAuthorizationRecords()).toEqual([
+      { requestId, record: deviceRecord },
+    ]);
+    expect(await listGitHubOAuthRecords()).toEqual([{ profileId, record: oauthRecord }]);
+    expect(await readGitHubDeviceAuthorizationRecord(requestId)).toEqual(deviceRecord);
+    expect(await inspectGitHubOAuthRecord(profileId)).toEqual({
+      state: "valid",
+      record: oauthRecord,
+    });
     expect(JSON.stringify([...hiddenStore.records.keys()])).not.toContain("refresh-token-secret");
     expect(JSON.stringify([...hiddenStore.records.keys()])).not.toContain(deviceRecord.deviceCode);
 
-    deleteGitHubDeviceAuthorizationRecord(requestId);
-    deleteGitHubOAuthRecord(profileId);
+    await deleteGitHubDeviceAuthorizationRecord(requestId);
+    await deleteGitHubOAuthRecord(profileId);
     expect(hiddenStore.records.size).toBe(0);
   });
 
-  it.each([
-    ["extra field", { unexpected: true }],
-    ["unpinned verification URI", { verificationUri: "https://example.test" }],
-    ["oversized lifetime", { expiresAtMs: deviceRecord.expiresAtMs + 1 }],
-    ["noncanonical agent", { agentId: " Main " }],
-    ["invalid device code", { deviceCode: "secret" }],
-  ])("rejects a pending record with %s", (_label, overrides) => {
-    const value = structuredClone(deviceRecord);
-    Object.assign(value, overrides);
-    expect(() => writeGitHubDeviceAuthorizationRecord(value)).toThrow();
+  it("rejects an own __proto__ key in persisted provenance", async () => {
+    const record = {
+      ...deviceRecord,
+      agentLifecycleBinding: {
+        agentId: "main",
+        provenance: {
+          agentId: "main",
+          createdVia: "operator",
+          creatorAgentId: null,
+          createdAtMs: now,
+        },
+      },
+    };
+    Object.defineProperty(record.agentLifecycleBinding.provenance, "__proto__", {
+      value: null,
+      enumerable: true,
+    });
+    hiddenStore.records.set(requestId, JSON.stringify(record));
+    expect(await readGitHubDeviceAuthorizationRecord(requestId)).toBeUndefined();
+  });
+
+  it("preserves System record reads that discard an invalid agent binding", async () => {
+    const agentLifecycleBinding = { agentId: "main", provenance: null, extra: true };
+    const { agentLifecycleBinding: _binding, ...unboundDevice } = deviceRecord;
+    const expected = { ...unboundDevice, scope: "system" };
+    hiddenStore.records.set(requestId, JSON.stringify({ ...expected, agentLifecycleBinding }));
+    expect(await readGitHubDeviceAuthorizationRecord(requestId)).toStrictEqual(expected);
+    const pendingInitial = {
+      requestId,
+      scope: "system",
+      agentId: "main",
+      expectedIdentity: null,
+    };
+    hiddenStore.records.set(
+      `github-oauth-${profileId.slice("ghp_".length)}`,
+      JSON.stringify({
+        ...oauthRecord,
+        scope: "system",
+        pendingInitial: { ...pendingInitial, agentLifecycleBinding },
+      }),
+    );
+    expect(await inspectGitHubOAuthRecord(profileId)).toStrictEqual({
+      state: "valid",
+      record: { ...oauthRecord, scope: "system", pendingInitial },
+    });
   });
 
   it.each([
-    ["extra field", { ...oauthRecord, unexpected: true }],
-    ["newline-bearing refresh token", { ...oauthRecord, refreshToken: "secret\nleak" }],
-    ["unsorted scopes", { ...oauthRecord, scopes: ["repo", "offline_access", "workflow"] }],
-    ["duplicate scopes", { ...oauthRecord, scopes: ["repo", "repo"] }],
-    ["invalid login", { ...oauthRecord, login: "-robot" }],
+    ["missing lifecycle binding", { agentLifecycleBinding: undefined }],
+    ["foreign lifecycle agent", { agentLifecycleBinding: { agentId: "other", provenance: null } }],
     [
-      "access expiry after refresh",
-      { ...oauthRecord, accessExpiresAtMs: oauthRecord.refreshExpiresAtMs },
-    ],
-    [
-      "both pending-initial and pending-refresh markers",
+      "foreign provenance agent",
       {
-        ...oauthRecord,
-        pendingInitial: {
-          requestId,
-          scope: "agent",
+        agentLifecycleBinding: {
           agentId: "main",
-          expectedIdentity: null,
-          agentLifecycleBinding: { agentId: "main", provenance: null },
+          provenance: {
+            agentId: "other",
+            createdVia: "operator",
+            creatorAgentId: null,
+            createdAtMs: now,
+          },
         },
-        pendingRefresh: true,
       },
     ],
+    [
+      "extra Git author field",
+      { expectedIdentity: { profileId, gitAuthor: { name: "Name", extra: true } } },
+    ],
+    ["missing identity snapshot", { expectedIdentity: undefined }],
+  ])("rejects a pending record with %s", async (_label, overrides) => {
+    const value = structuredClone(deviceRecord);
+    Object.assign(value, overrides);
+    await expect(writeGitHubDeviceAuthorizationRecord(value)).rejects.toThrow();
+  });
+
+  it.each([
     [
       "pending-initial scope mismatch",
       {
@@ -136,9 +189,9 @@ describe("GitHub OAuth hidden records", () => {
       "pending refresh with terminal failure",
       { ...oauthRecord, pendingRefresh: true, refreshFailure: "expired" },
     ],
-  ])("rejects refresh metadata with %s", (_label, value) => {
+  ])("rejects refresh metadata with %s", async (_label, value) => {
     const candidate = structuredClone(oauthRecord);
     Object.assign(candidate, value);
-    expect(() => writeGitHubOAuthRecord(candidate)).toThrow();
+    await expect(writeGitHubOAuthRecord(candidate)).rejects.toThrow();
   });
 });

@@ -21,8 +21,10 @@ Access Arcee models directly through the Arcee platform or through [OpenRouter](
 
 ```bash
 openclaw plugins install @openclaw/arcee-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -100,6 +102,12 @@ openclaw gateway restart
     ```
   </Tab>
 </Tabs>
+
+Ordinary onboarding saves the connection without adding catalog rows to
+`models.providers.arcee.models`. Existing rows and model aliases stay in place.
+With `models.mode: "replace"`, onboarding also adds the route's catalog defaults
+because that mode disables automatic discovery. The public `applyArceeConfig`
+and `applyArceeOpenRouterConfig` helpers still add catalog defaults in every mode.
 
 ## Direct Arcee catalog
 

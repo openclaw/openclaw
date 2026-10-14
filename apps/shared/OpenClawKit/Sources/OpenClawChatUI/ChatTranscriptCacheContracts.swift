@@ -46,17 +46,6 @@ extension OpenClawChatTranscriptCache {
     public func observeCanonicalMessageIdempotencyKeys(_: Set<String>) {}
 }
 
-/// Optional atomic merge seam for cache owners that also provide a durable
-/// outbox. Keeping this separate preserves source compatibility for read-only
-/// transcript-cache conformers.
-protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
-    func mergeCanonicalTranscriptMessage(
-        sessionKey: String,
-        agentID: String?,
-        message: OpenClawChatMessage,
-        canonicalMessageIdempotencyKey: String) async
-}
-
 /// Durable branch ownership is scoped exactly like outbox delivery routing.
 public struct OpenClawChatOutboxScope: Hashable, Sendable {
     public let sessionKey: String
@@ -64,8 +53,7 @@ public struct OpenClawChatOutboxScope: Hashable, Sendable {
 
     public init(sessionKey: String, agentID: String?) {
         self.sessionKey = sessionKey
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }
 
@@ -169,6 +157,9 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Thinking level captured when the command was queued, so a later flush
     /// never borrows the setting of whichever session is visible then.
     public let thinking: String
+    /// Permission and tool state captured with this command. Durable replay
+    /// must use this command-owned fence, never the currently visible session.
+    public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
     /// Seconds since 1970; flush order is strictly ascending `createdAt`.
     public let createdAt: Double
     public var status: Status
@@ -189,6 +180,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         createdAt: Double,
         status: Status,
         attemptVersion: Int = 1,
@@ -197,20 +189,15 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     {
         self.id = id
         self.sessionKey = sessionKey
-        if let deliverySessionKey {
-            self.deliverySessionKey = deliverySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            self.deliverySessionKey = sessionKey
-        }
-        let normalizedRoutingContract = routingContract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.deliverySessionKey = deliverySessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? sessionKey
+        self.routingContract = ChatPayloadDecoding.trimmedNonEmptyString(routingContract)
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         self.branchEpoch = branchEpoch
         self.scopeBranchEpoch = scopeBranchEpoch ?? branchEpoch
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
+        self.expectedSessionSettings = expectedSessionSettings
         self.createdAt = createdAt
         self.status = status
         self.attemptVersion = attemptVersion
@@ -320,7 +307,12 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         agentID: String?,
         deliverySessionKey: String,
         routingContract: String,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation,
         replacementID: String?) async -> OpenClawChatOutboxUpdateResult
+    /// Persistently parks automatic replay after a failed settings mutation.
+    func parkQueuedCommands(
+        in scope: OpenClawChatOutboxScope,
+        lastError: String) async -> Bool
     /// User cancellation succeeds only before a sender claims the row. The
     /// status predicate is the cross-view-model cancellation boundary.
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult
@@ -332,6 +324,13 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 }
 
 extension OpenClawChatCommandOutbox {
+    public func parkQueuedCommands(
+        in _: OpenClawChatOutboxScope,
+        lastError _: String) async -> Bool
+    {
+        false
+    }
+
     public func markCommandQueued(
         id _: String,
         attemptVersion _: Int,
@@ -414,6 +413,7 @@ extension OpenClawChatCommandOutbox {
         agentID _: String?,
         deliverySessionKey _: String,
         routingContract _: String,
+        expectedSessionSettings _: OpenClawChatSessionSettingsExpectation,
         replacementID _: String? = nil) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable

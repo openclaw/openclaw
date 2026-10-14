@@ -1,7 +1,11 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 export function contextWith(
@@ -13,9 +17,43 @@ export function contextWith(
 ) {
   const request = vi.fn().mockResolvedValue({ models });
   const navigate = vi.fn();
+  const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
+  const emitCatalogChanged = (
+    event: "config.changed" | "chat.metadata.changed" = "chat.metadata.changed",
+    payload: unknown = {},
+  ) => {
+    invalidateChatMetadataStore(
+      context.gateway.snapshot.client!,
+      undefined,
+      undefined,
+      modelCatalogEventInvalidation({ event, payload }) ?? "preserve",
+    );
+    for (const listener of listeners) {
+      listener({ type: "event", event, payload });
+    }
+  };
+  const ownerListeners = {
+    gateway: new Set<() => void>(),
+    agents: new Set<() => void>(),
+    sessions: new Set<() => void>(),
+    config: new Set<() => void>(),
+  };
+  const subscribe = (owner: keyof typeof ownerListeners) => (listener: () => void) => {
+    ownerListeners[owner].add(listener);
+    return () => ownerListeners[owner].delete(listener);
+  };
+  const publish = (owner: keyof typeof ownerListeners) =>
+    ownerListeners[owner].forEach((listener) => listener());
   const context = {
     navigate,
+    agents: { subscribe: subscribe("agents") },
+    config: { subscribe: subscribe("config"), current: {} },
     gateway: {
+      subscribe: subscribe("gateway"),
+      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       snapshot: {
         phase: "connected",
         client: { request },
@@ -23,6 +61,7 @@ export function contextWith(
       },
     },
     sessions: {
+      subscribe: subscribe("sessions"),
       state: {
         result: {
           defaults: {
@@ -40,17 +79,7 @@ export function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, navigate, request };
-}
-
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
+  return { context, navigate, request, emitCatalogChanged, publish, ownerListeners };
 }
 
 export function renderControl(
@@ -64,14 +93,18 @@ export function renderControl(
   },
 ) {
   const container = document.createElement("div");
-  render(
-    control.render({
-      ...(agent ? { agent } : {}),
-      agentId,
-      context,
-      sending: false,
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(NewSessionModelControlView, {
+        control,
+        options: {
+          ...(agent ? { agent } : {}),
+          agentId,
+          context,
+          sending: false,
+        },
+      }),
+    { container },
   );
   return container;
 }

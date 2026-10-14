@@ -4,11 +4,31 @@ import OSLog
 /// Monitors right Option key (keyCode 61) to interrupt Talk Mode speech.
 /// Independent of Push-to-Talk — active whenever Talk Mode is enabled.
 final class TalkSpeechInterruptMonitor: @unchecked Sendable {
-    static let shared = TalkSpeechInterruptMonitor()
+    struct Registration: Sendable {
+        let addGlobal: @MainActor @Sendable (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
+        let addLocal: @MainActor @Sendable (NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any?
+        let remove: @MainActor @Sendable (Any) -> Void
+
+        static let live = Self(
+            addGlobal: { NSEvent.addGlobalMonitorForEvents(matching: $0, handler: $1) },
+            addLocal: { NSEvent.addLocalMonitorForEvents(matching: $0, handler: $1) },
+            remove: { NSEvent.removeMonitor($0) })
+    }
+
+    private let registration: Registration
+    private let controller: AppVoiceRuntime.Controller
+
+    init(
+        registration: Registration = .live,
+        controller: @escaping AppVoiceRuntime.Controller = { TalkModeController.shared })
+    {
+        self.registration = registration
+        self.controller = controller
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.interrupt")
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    @MainActor private var globalMonitor: Any?
+    @MainActor private var localMonitor: Any?
 
     func setEnabled(_ enabled: Bool) {
         DispatchQueue.main.async { [weak self] in
@@ -21,25 +41,25 @@ final class TalkSpeechInterruptMonitor: @unchecked Sendable {
         }
     }
 
-    private func startMonitoring() {
+    @MainActor private func startMonitoring() {
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
-        self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        self.globalMonitor = self.registration.addGlobal(.flagsChanged) { [weak self] event in
             self?.handleFlags(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
         }
-        self.localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        self.localMonitor = self.registration.addLocal(.flagsChanged) { [weak self] event in
             self?.handleFlags(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
             return event
         }
         self.logger.info("talk interrupt monitor started")
     }
 
-    private func stopMonitoring() {
+    @MainActor private func stopMonitoring() {
         if let globalMonitor {
-            NSEvent.removeMonitor(globalMonitor)
+            self.registration.remove(globalMonitor)
             self.globalMonitor = nil
         }
         if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
+            self.registration.remove(localMonitor)
             self.localMonitor = nil
         }
         self.logger.info("talk interrupt monitor stopped")
@@ -49,9 +69,9 @@ final class TalkSpeechInterruptMonitor: @unchecked Sendable {
         // Right Option key down (keyCode 61).
         guard keyCode == 61, modifierFlags.contains(.option) else { return }
         Task { @MainActor in
-            guard TalkModeController.shared.phase == .speaking else { return }
+            guard let controller = self.controller(), controller.phase == .speaking else { return }
             self.logger.info("right option — interrupting talk mode speech")
-            TalkModeController.shared.stopSpeaking(reason: .userTap)
+            controller.stopSpeaking(reason: .userTap)
         }
     }
 }

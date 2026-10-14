@@ -1,23 +1,19 @@
-import type { UserMessage } from "../../../llm/types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import type {
   SessionEntry as SessionManagerEntry,
   SessionMessageEntry,
 } from "../../sessions/index.js";
 import { isSessionContextMetadataEntry } from "../../sessions/session-manager-codec.js";
-import {
-  resolveMessageMergeStrategy,
-  type MessageMergeStrategy,
-} from "./message-merge-strategy.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
-  appendThinkingLevelChange: (thinkingLevel: string) => string;
-  appendModelChange: (provider: string, modelId: string) => string;
-  appendCustomEntry: (customType: string, data?: unknown) => string;
-  appendSessionInfo: (name: string) => string;
-  appendLabelChange: (targetId: string, label?: string) => string;
+  appendThinkingLevelChange: (thinkingLevel: string) => Promise<string>;
+  appendModelChange: (provider: string, modelId: string) => Promise<string>;
+  appendCustomEntryAsync: (customType: string, data?: unknown) => Promise<string>;
+  appendSessionInfoAsync: (name: string) => Promise<string>;
+  appendLabelChangeAsync: (targetId: string, label?: string) => Promise<string>;
 };
 
 type OrphanRepairCandidate = {
@@ -44,80 +40,73 @@ function findTrailingMessageEntryForOrphanRepair(
     : undefined;
 }
 
-function appendTrailingEntryForOrphanRepair(
-  sessionManager: OrphanRepairSessionManager,
-  entry: SessionManagerEntry,
-  replayedEntryIds: Map<string, string>,
-): void {
-  if (entry.type === "thinking_level_change") {
-    replayedEntryIds.set(entry.id, sessionManager.appendThinkingLevelChange(entry.thinkingLevel));
-    return;
-  }
-  if (entry.type === "model_change") {
-    replayedEntryIds.set(entry.id, sessionManager.appendModelChange(entry.provider, entry.modelId));
-    return;
-  }
-  if (entry.type === "custom") {
-    replayedEntryIds.set(entry.id, sessionManager.appendCustomEntry(entry.customType, entry.data));
-    return;
-  }
-  if (entry.type === "session_info") {
-    replayedEntryIds.set(entry.id, sessionManager.appendSessionInfo(entry.name ?? ""));
-    return;
-  }
-  if (entry.type === "label") {
-    const replayedTargetId = replayedEntryIds.get(entry.targetId);
-    if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
-      return;
-    }
-    const targetId = replayedTargetId ?? entry.targetId;
-    replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
-  }
-}
-
-export function replayTrailingEntriesForOrphanRepair(
+export async function replayTrailingEntriesForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   trailingEntries: SessionManagerEntry[],
-): void {
+): Promise<void> {
   const replayedEntryIds = new Map<string, string>();
   for (const entry of trailingEntries) {
-    appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
+    let replayedId: string;
+    switch (entry.type) {
+      case "thinking_level_change":
+        replayedId = await sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
+        break;
+      case "model_change":
+        replayedId = await sessionManager.appendModelChange(entry.provider, entry.modelId);
+        break;
+      case "custom":
+        replayedId = await sessionManager.appendCustomEntryAsync(entry.customType, entry.data);
+        break;
+      case "session_info":
+        replayedId = await sessionManager.appendSessionInfoAsync(entry.name ?? "");
+        break;
+      case "label": {
+        const replayedTargetId = replayedEntryIds.get(entry.targetId);
+        if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
+          continue;
+        }
+        replayedId = await sessionManager.appendLabelChangeAsync(
+          replayedTargetId ?? entry.targetId,
+          entry.label,
+        );
+        break;
+      }
+      default:
+        continue;
+    }
+    replayedEntryIds.set(entry.id, replayedId);
   }
 }
 
 type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
   contextEnginePrompt: string;
-  messageEntry: SessionMessageEntry & { message: UserMessage };
-  strategy: MessageMergeStrategy;
+  messageEntry: SessionMessageEntry & { message: PersistedUserTurnMessage };
   removeLeaf: boolean;
 };
 
 function isUserSessionMessageEntry(
   entry: SessionMessageEntry,
-): entry is SessionMessageEntry & { message: UserMessage } {
+): entry is SessionMessageEntry & { message: PersistedUserTurnMessage } {
   return entry.message.role === "user";
 }
 
 export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
-  trigger: EmbeddedRunAttemptParams["trigger"];
+  preserveLeaf: boolean;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
     return undefined;
   }
-  const strategy = resolveMessageMergeStrategy();
-  const merge = strategy.mergeOrphanedTrailingUserPrompt({
+  const merge = mergeOrphanedTrailingUserPrompt({
     prompt: params.prompt,
-    trigger: params.trigger,
     leafMessage: candidate.messageEntry.message,
   });
   return {
     contextEnginePrompt: merge.prompt,
     messageEntry: candidate.messageEntry,
     trailingEntries: candidate.trailingEntries,
-    strategy,
-    removeLeaf: merge.removeLeaf,
+    removeLeaf: merge.removeLeaf || !params.preserveLeaf,
   };
 }

@@ -2,7 +2,9 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { CliPluginInvocationResources } from "../cli/plugin-invocation-resources.js";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
+import { getCliPluginInvocationResources } from "../cli/runtime-cleanup-scope.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -12,9 +14,12 @@ import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
-import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadOpenClawPluginCliRegistry, loadPluginRegistryHandle } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadOpenClawPluginCliRegistry,
+  loadPluginRegistryHandle,
+} from "./loader.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   resolvePluginMetadataEnvFingerprint,
@@ -60,6 +65,7 @@ type PreparedPluginCliLoad = {
   context: PluginRuntimeLoadContext;
   assertCurrent: () => void;
   withCache: <T>(run: () => T) => T;
+  resources?: CliPluginInvocationResources;
   metadataRegistry?: Promise<PluginRegistry>;
   entries?: Promise<PluginCliCommandGroupEntry[]>;
 };
@@ -67,10 +73,15 @@ type PreparedPluginCliLoad = {
 export type PluginCliLoadSession = ReturnType<typeof createPluginCliLoadSession>;
 
 /** Invocation authority closes before actions; its package generation lives through them. */
-export function createPluginCliLoadSession(cache = createPluginCache()) {
+export function createPluginCliLoadSession(
+  cache = createPluginCache(),
+  ownership: { resources?: CliPluginInvocationResources } = {
+    resources: getCliPluginInvocationResources(),
+  },
+) {
+  const { resources } = ownership;
   const withCache = <T>(run: () => T): T => withPluginCache(cache, run);
   let closed = false;
-  let revision = getCurrentPluginMetadataSnapshotState().revision;
   let current:
     | {
         key: string;
@@ -85,29 +96,13 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
       throw new Error("Plugin CLI preparation is closed; start a new registration operation.");
     }
   };
-  const refreshRevision = () => {
-    assertOpen();
-    const next = getCurrentPluginMetadataSnapshotState().revision;
-    if (next !== revision) {
-      revision = next;
-      current = undefined;
-    }
-  };
-  const assertRevision = (captured: symbol) => {
-    assertOpen();
-    if (captured !== getCurrentPluginMetadataSnapshotState().revision) {
-      throw new Error(
-        "Plugin CLI preparation was invalidated; start a new registration operation.",
-      );
-    }
-  };
   return {
+    resources,
     withCache,
     readConfig: async <T>(read: () => Promise<T>): Promise<T> => {
-      refreshRevision();
-      const captured = revision;
+      assertOpen();
       const result = await withCache(read);
-      assertRevision(captured);
+      assertOpen();
       return result;
     },
     close: () => {
@@ -116,21 +111,19 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
     },
     resolve: (params: PluginCliPublicLoadParams): PreparedPluginCliLoad =>
       withCache(() => {
-        refreshRevision();
+        assertOpen();
         const config = params.cfg ?? getRuntimeConfig();
         const activationSourceConfig = resolvePluginActivationSourceConfig({ config });
         const env = params.env ?? process.env;
-        const inputKey = () =>
-          stableStringify([
-            config,
-            resolvePluginActivationSourceConfig({ config }),
-            env,
-            resolvePluginControlPlaneWorkspace({ config, env }),
-            resolvePluginMetadataEnvFingerprint(env),
-            resolveStateDir(env),
-            params.primaryCommand,
-          ]);
-        const key = inputKey();
+        const key = stableStringify([
+          config,
+          activationSourceConfig,
+          env,
+          resolvePluginControlPlaneWorkspace({ config, env }),
+          resolvePluginMetadataEnvFingerprint(env),
+          resolveStateDir(env),
+          params.primaryCommand,
+        ]);
         const sdk = params.loaderOptions?.pluginSdkResolution;
         // Equal values permit package reuse, but raw/source identities retain private provenance.
         if (
@@ -159,31 +152,16 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginCliLogger(),
+          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
         });
-        const captured = revision;
         const prepared: PreparedPluginCliLoad = {
           context,
           withCache,
-          assertCurrent() {
-            assertRevision(captured);
-            if (
-              current?.prepared !== prepared ||
-              key !== inputKey() ||
-              (params.cfg !== undefined && params.cfg !== config) ||
-              (params.env ?? process.env) !== env ||
-              activationSourceConfig !== resolvePluginActivationSourceConfig({ config }) ||
-              current.sdk !== params.loaderOptions?.pluginSdkResolution ||
-              current.logger !== params.logger
-            ) {
-              throw new Error(
-                "Plugin CLI preparation inputs changed; start a new registration operation.",
-              );
-            }
-          },
+          resources,
+          // Metadata stays captured for this preparation; invocation closure still gates use.
+          assertCurrent: assertOpen,
         };
         current = { key, sdk, logger: params.logger, env, prepared };
-        prepared.assertCurrent();
         return prepared;
       }),
   };
@@ -191,11 +169,6 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
 
 function resolvePreparedPluginCliLoad(params: PluginCliPublicLoadParams): PreparedPluginCliLoad {
   return (params.session ?? createPluginCliLoadSession()).resolve(params);
-}
-
-/** Creates the default plugin CLI logger shared with runtime loading. */
-export function createPluginCliLogger(): PluginLogger {
-  return createPluginRuntimeLoaderLogger();
 }
 
 function resolvePrimaryCommandManifestPluginIds(
@@ -218,23 +191,16 @@ function resolvePrimaryCommandManifestPluginIds(
   });
 }
 
-function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: string): string[] {
-  const normalizedPrimary = normalizeLowercaseStringOrEmpty(primaryCommand);
-  if (!normalizedPrimary) {
-    return [];
-  }
-  return uniqueStrings(
-    registry.cliRegistrars
-      .filter((entry) => {
-        const parentPath = entry.parentPath ?? [];
-        const roots =
-          parentPath.length > 0
-            ? [parentPath[0]]
-            : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
-        return roots.includes(normalizedPrimary);
-      })
-      .map((entry) => entry.pluginId),
-  );
+function pluginCliRegistrarOwnsRoot(
+  entry: PluginRegistry["cliRegistrars"][number],
+  primaryCommand: string,
+): boolean {
+  const parentPath = entry.parentPath ?? [];
+  const roots =
+    parentPath.length > 0
+      ? [parentPath[0]]
+      : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
+  return roots.includes(primaryCommand);
 }
 
 async function resolvePrimaryCommandPluginIds(
@@ -242,7 +208,6 @@ async function resolvePrimaryCommandPluginIds(
   primaryCommand: string | undefined,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<string[] | undefined> {
-  prepared.assertCurrent();
   const { context } = prepared;
   const normalizedPrimary = normalizeLowercaseStringOrEmpty(primaryCommand);
   if (!normalizedPrimary) {
@@ -254,34 +219,36 @@ async function resolvePrimaryCommandPluginIds(
   }
   const registry = await loadPluginCliMetadataRegistryWithContext(
     prepared,
-    { primaryCommand: normalizedPrimary },
+    normalizedPrimary,
     loaderOptions,
   );
-  prepared.assertCurrent();
-  return listPluginCliRootOwnerIds(registry, normalizedPrimary);
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => pluginCliRegistrarOwnsRoot(entry, normalizedPrimary))
+      .map((entry) => entry.pluginId),
+  );
 }
 
 async function loadPluginCliMetadataRegistryWithContext(
   prepared: PreparedPluginCliLoad,
-  params?: { primaryCommand?: string },
+  primaryCommand?: string,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginRegistry> {
-  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(
-    prepared.context,
-    params?.primaryCommand,
-  );
+  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
   prepared.assertCurrent();
-  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() =>
-    loadOpenClawPluginCliRegistry(
-      buildPluginRuntimeLoadOptions(prepared.context, {
-        ...loaderOptions,
-        // The prepared record owns reuse; process caching can retain another generation's registrars.
-        cache: false,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-      }),
-    ),
-  ));
-  prepared.assertCurrent();
+  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
+    const options = buildPluginRuntimeLoadOptions(prepared.context, {
+      ...loaderOptions,
+      // The prepared record owns reuse; process caching can retain another generation's registrars.
+      cache: false,
+      ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    });
+    return prepared.resources
+      ? prepared.resources.acquire(() =>
+          acquirePluginRegistryForInspection({ ...options, mode: "cli-metadata" }),
+        )
+      : loadOpenClawPluginCliRegistry(options);
+  }));
   return registry;
 }
 
@@ -305,46 +272,19 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  const options = buildPluginRuntimeLoadOptions(context, {
+    ...params.loaderOptions,
+    ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    cache: false,
+    channelPluginLoadIntent: "full",
+    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+  });
+  const resources = params.prepared.resources;
   return params.prepared.withCache(() =>
-    loadPluginRegistryHandle(
-      buildPluginRuntimeLoadOptions(context, {
-        ...params.loaderOptions,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-        cache: false,
-        channelPluginLoadIntent: "full",
-        runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
-      }),
-    ),
+    resources
+      ? resources.acquire(() => acquirePluginRegistryForInspection(options))
+      : loadPluginRegistryHandle(options),
   );
-}
-
-function buildPluginCliCommandGroupEntries(params: {
-  registry: PluginRegistry;
-  config: OpenClawConfig;
-  workspaceDir: string | undefined;
-  logger: PluginLogger;
-  assertCurrent: () => void;
-  withCache: PreparedPluginCliLoad["withCache"];
-}): PluginCliCommandGroupEntry[] {
-  return params.registry.cliRegistrars.map((entry) => ({
-    pluginId: entry.pluginId,
-    parentPath: entry.parentPath ?? [],
-    placeholders: entry.descriptors,
-    names: entry.commands,
-    register: async (program) => {
-      params.assertCurrent();
-      await params.withCache(() =>
-        entry.register({
-          program,
-          parentPath: entry.parentPath ?? [],
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          logger: params.logger,
-        }),
-      );
-      params.assertCurrent();
-    },
-  }));
 }
 
 export async function loadPluginCliDescriptors(
@@ -354,7 +294,7 @@ export async function loadPluginCliDescriptors(
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
-      { primaryCommand: params.primaryCommand },
+      params.primaryCommand,
       params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
@@ -373,22 +313,51 @@ export async function loadPluginCliDescriptors(
 
 export async function loadPluginCliRegistrationEntriesWithDefaults(
   params: PluginCliPublicLoadParams,
+  mode: "runtime" | "metadata" = "runtime",
 ): Promise<PluginCliCommandGroupEntry[]> {
   const prepared = resolvePreparedPluginCliLoad(params);
-  const entries = await (prepared.entries ??= loadPluginCliCommandRegistryWithContext({
-    prepared,
-    primaryCommand: params.primaryCommand,
-    loaderOptions: params.loaderOptions,
-  }).then((registry) => {
-    prepared.assertCurrent();
-    return buildPluginCliCommandGroupEntries({
-      ...prepared.context,
-      registry,
-      assertCurrent: prepared.assertCurrent,
-      withCache: prepared.withCache,
-    });
-  }));
-  prepared.assertCurrent();
+  const buildEntries = (registry: PluginRegistry): PluginCliCommandGroupEntry[] => {
+    const primary = mode === "metadata" && normalizeLowercaseStringOrEmpty(params.primaryCommand);
+    // Metadata discovery can include unrelated legacy roots without manifest ownership.
+    const registrars = primary
+      ? registry.cliRegistrars.filter((entry) => pluginCliRegistrarOwnsRoot(entry, primary))
+      : registry.cliRegistrars;
+    const { config, workspaceDir, logger } = prepared.context;
+    return registrars.map((entry) => ({
+      pluginId: entry.pluginId,
+      parentPath: entry.parentPath ?? [],
+      placeholders: entry.descriptors,
+      names: entry.commands,
+      register: async (program) => {
+        prepared.assertCurrent();
+        const register = () =>
+          prepared.withCache(() =>
+            entry.register({
+              program,
+              parentPath: entry.parentPath ?? [],
+              config,
+              workspaceDir,
+              logger,
+            }),
+          );
+        await (prepared.resources ? prepared.resources.run(register) : register());
+      },
+    }));
+  };
+  const entries =
+    mode === "metadata"
+      ? buildEntries(
+          await loadPluginCliMetadataRegistryWithContext(
+            prepared,
+            params.primaryCommand,
+            params.loaderOptions,
+          ),
+        )
+      : await (prepared.entries ??= loadPluginCliCommandRegistryWithContext({
+          prepared,
+          primaryCommand: params.primaryCommand,
+          loaderOptions: params.loaderOptions,
+        }).then(buildEntries));
   return entries;
 }
 
@@ -405,6 +374,5 @@ export async function resolvePluginCliRootOwnerIds(
     primaryCommand,
     params.loaderOptions,
   );
-  prepared.assertCurrent();
   return ownerIds ?? null;
 }

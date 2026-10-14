@@ -22,15 +22,28 @@ const model = {
 } satisfies Model<"anthropic-messages">;
 
 describeLive("Anthropic provider live", () => {
-  it(
-    "streams a basic response with usage",
-    async () => {
+  it.each(["known", "unknown"])(
+    "streams a basic response with usage and %s model output limit",
+    async (modelOutputLimit) => {
+      const requestModel = { ...model };
+      if (modelOutputLimit === "unknown") {
+        Reflect.deleteProperty(requestModel, "maxTokens");
+      }
+      let sentMaxTokens: unknown;
       const result = await streamSimpleAnthropic(
-        model,
+        requestModel,
         { messages: [{ role: "user", content: "Reply with the single word ok.", timestamp: 0 }] },
-        { apiKey, maxTokens: 32, reasoning: "off" },
+        {
+          apiKey,
+          maxTokens: 360,
+          reasoning: "off",
+          onPayload: (payload) => {
+            sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;
+          },
+        },
       ).result();
 
+      expect(sentMaxTokens).toBe(360);
       expect(result.stopReason).toBe("stop");
       expect(result.usage.output).toBeGreaterThan(0);
     },
@@ -99,7 +112,7 @@ describeLive("Anthropic provider live", () => {
             },
           ],
         },
-        { apiKey, maxTokens: 1, maxRetries: 0 },
+        { apiKey, maxTokens: 1 },
       ).result();
 
       expect(result.stopReason).toBe("error");
@@ -120,7 +133,6 @@ describeLive("Anthropic provider live", () => {
       const result = await streamSimpleAnthropic(model, context, {
         apiKey,
         maxTokens: requestedMaxTokens,
-        maxRetries: 0,
         reasoning: "off",
         onPayload: (payload) => {
           sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;

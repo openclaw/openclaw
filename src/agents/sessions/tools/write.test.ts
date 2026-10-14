@@ -5,9 +5,26 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { applyPatch } from "diff";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
-import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { WriteToolOutputSchema } from "./tool-schemas.js";
+import { createWriteTool, type WriteToolOptions } from "./write.js";
+
+type WriteOperations = NonNullable<WriteToolOptions["operations"]>;
+
+const WritePatchReceiptSchema = Type.Extract(
+  WriteToolOutputSchema,
+  Type.Object({ patch: Type.String() }),
+);
+
+function expectApplicablePatch(details: unknown, oldContent: string, content: string) {
+  if (!Value.Check(WritePatchReceiptSchema, details)) {
+    throw new Error("Expected a changed-file receipt with a patch");
+  }
+  expect(applyPatch(oldContent, details.patch)).toBe(content);
+}
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -125,18 +142,24 @@ describe("write tool", () => {
     await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("rejects a delegated write that leaves stale same-size content", async () => {
-    const filePath = await createTempPath("stale.txt");
-    await fs.writeFile(filePath, "stale\n", "utf-8");
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async () => {}),
-    });
+  it.each([
+    { name: "text", original: Buffer.from("stale\n"), content: "fresh\n" },
+    { name: "invalid UTF-8", original: Buffer.from([0xf0, 0x90, 0x80]), content: "\uFFFD" },
+  ])(
+    "rejects a delegated write that leaves stale same-size bytes: $name",
+    async ({ original, content }) => {
+      const filePath = await createTempPath("stale.txt");
+      await fs.writeFile(filePath, original);
+      const tool = createWriteTool(tmpDir, {
+        operations: createRecoverableOperations(async () => {}),
+      });
 
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "fresh\n" }, undefined),
-    ).rejects.toThrow("Write verification failed");
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("stale\n");
-  });
+      await expect(tool.execute("call-1", { path: filePath, content }, undefined)).rejects.toThrow(
+        "Write verification failed",
+      );
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    },
+  );
 
   it("rejects a delegated write that leaves a non-file target", async () => {
     const filePath = await createTempPath("directory");
@@ -150,19 +173,38 @@ describe("write tool", () => {
     ).rejects.toThrow("Write verification failed");
   });
 
-  it("verifies delegated writes by their persisted UTF-8 bytes", async () => {
-    const filePath = await createTempPath("surrogate.txt");
-    const content = "unpaired \ud800 surrogate\n";
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations((absolutePath, requestedContent) =>
+  it.each(["buffer", "text"] as const)(
+    "verifies delegated UTF-8 bytes with %s readback",
+    async (readback) => {
+      const filePath = await createTempPath("surrogate.txt");
+      const content = "unpaired \ud800 surrogate\n";
+      const operations = createRecoverableOperations((absolutePath, requestedContent) =>
         fs.writeFile(absolutePath, requestedContent, "utf-8"),
-      ),
-    });
+      );
+      if (readback === "text") {
+        operations.readFile = (absolutePath) => fs.readFile(absolutePath, "utf8");
+      }
+      const tool = createWriteTool(tmpDir, { operations });
+
+      await expect(
+        tool.execute("call-1", { path: filePath, content }, undefined),
+      ).resolves.toMatchObject({ details: { changed: true, created: true } });
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+      const noOpResult = await tool.execute("call-2", { path: filePath, content }, undefined);
+      expect(noOpResult).toMatchObject({ details: { changed: false } });
+      expect((noOpResult as { terminate?: boolean }).terminate).toBeUndefined();
+    },
+  );
+
+  it("overwrites invalid UTF-8 bytes that decode to the requested text", async () => {
+    const filePath = await createTempPath("invalid.txt");
+    await fs.writeFile(filePath, Buffer.from([0xf0, 0x90, 0x80]));
+    const tool = createWriteTool(tmpDir);
 
     await expect(
-      tool.execute("call-1", { path: filePath, content }, undefined),
-    ).resolves.toMatchObject({ details: { changed: true, created: true } });
-    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+      tool.execute("call-1", { path: filePath, content: "\uFFFD" }, undefined),
+    ).resolves.toMatchObject({ details: { changed: true, created: false } });
+    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from("\uFFFD", "utf8"));
   });
 
   it("writes file URL paths through the shared session path resolver", async () => {
@@ -190,23 +232,22 @@ describe("write tool", () => {
     await expect(fs.readFile(asciiPath, "utf-8")).resolves.toBe("ascii\n");
   });
 
-  it("returns terminal no-op when writing identical content to existing file", async () => {
-    const filePath = await createTempPath("identical.txt");
-    await fs.writeFile(filePath, "hello\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
+  it.each(["café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
+    "returns a non-terminal no-op for identical UTF-8 content: %j",
+    async (content) => {
+      const filePath = await createTempPath("identical.txt");
+      await fs.writeFile(filePath, content, "utf-8");
+      const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "identical.txt", content: "hello\n" },
-      undefined,
-    );
+      const result = await tool.execute("call-1", { path: "identical.txt", content }, undefined);
 
-    const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
-    expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
-    expect(result.details).toEqual({ changed: false });
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("hello\n");
-  });
+      const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
+      expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
+      expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+      expect(result.details).toEqual({ changed: false });
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+    },
+  );
 
   it("reports a created file with its authoritative diff", async () => {
     await createTempPath("created.txt");
@@ -214,15 +255,14 @@ describe("write tool", () => {
     const tool = createWriteTool(tmpDir);
 
     const result = await tool.execute("call-1", { path: "created.txt", content }, undefined);
-    const diffResult = generateDiffString("", content);
-
     expect(result.details).toEqual({
       changed: true,
       created: true,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch("created.txt", "", content),
-      firstChangedLine: diffResult.firstChangedLine,
+      diff: "+1 first\n+2 second",
+      patch: expect.stringContaining("--- created.txt\n+++ created.txt\n"),
+      firstChangedLine: 1,
     });
+    expectApplicablePatch(result.details, "", content);
   });
 
   it("keeps oversized created-file details bounded", async () => {
@@ -243,8 +283,6 @@ describe("write tool", () => {
     const tool = createWriteTool(tmpDir);
 
     const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
-    const diffResult = generateDiffString(oldContent, content);
-
     expect(result.content[0]).toEqual({
       type: "text",
       text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to different.txt`,
@@ -252,12 +290,113 @@ describe("write tool", () => {
     expect(result.details).toEqual({
       changed: true,
       created: false,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch("different.txt", oldContent, content),
-      firstChangedLine: diffResult.firstChangedLine,
+      diff: "-1 old\n+1 new 😀",
+      patch: expect.stringContaining("--- different.txt\n+++ different.txt\n"),
+      firstChangedLine: 1,
     });
+    expectApplicablePatch(result.details, oldContent, content);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
   });
+
+  it.each([
+    {
+      name: "insert at start",
+      oldContent: "a\nb\n",
+      content: "first\na\nb\n",
+      diff: "+1 first\n 2 a\n 3 b",
+      firstChangedLine: 1,
+    },
+    {
+      name: "delete at end",
+      oldContent: "a\nb\nlast\n",
+      content: "a\nb\n",
+      diff: " 1 a\n 2 b\n-3 last",
+      firstChangedLine: 3,
+    },
+    {
+      name: "empty overwrite",
+      oldContent: "last\n",
+      content: "",
+      diff: "-1 last",
+      firstChangedLine: 1,
+    },
+    {
+      name: "remove final newline",
+      oldContent: "last\n",
+      content: "last",
+      diff: "-1 last\n+1 last",
+      firstChangedLine: 1,
+    },
+    {
+      name: "add final newline",
+      oldContent: "last",
+      content: "last\n",
+      diff: "-1 last\n+1 last",
+      firstChangedLine: 1,
+    },
+    {
+      name: "CRLF and Unicode without final newline",
+      oldContent: "café 🦀\r\n日本語 e\u0301\r\nlast",
+      content: "café 😀\r\n日本語 é\r\nlast",
+      diff: "-1 café 🦀\r\n-2 日本語 e\u0301\r\n+1 café 😀\r\n+2 日本語 é\r\n 3 last",
+      firstChangedLine: 1,
+    },
+    ...[7, 8, 9].map((gap) => {
+      const middle = Array.from({ length: gap }, (_, i) => `context-${i}\n`).join("");
+      return {
+        name: `${gap} context lines between edits`,
+        oldContent: `before\n${middle}after\n`,
+        content: `BEFORE\n${middle}AFTER\n`,
+        diff: expect.stringContaining("- 1 before\n+ 1 BEFORE"),
+        firstChangedLine: 1,
+      };
+    }),
+  ])(
+    "preserves both receipt formats for $name",
+    async ({ oldContent, content, diff, firstChangedLine }) => {
+      const filePath = await createTempPath("receipt.txt");
+      await fs.writeFile(filePath, oldContent, "utf8");
+      const tool = createWriteTool(tmpDir);
+
+      const result = await tool.execute("call-1", { path: "receipt.txt", content }, undefined);
+      expect(result.details).toEqual({
+        changed: true,
+        created: false,
+        diff,
+        patch: expect.stringContaining("--- receipt.txt\n+++ receipt.txt\n"),
+        firstChangedLine,
+      });
+      expectApplicablePatch(result.details, oldContent, content);
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+    },
+  );
+
+  it.each([1999, 2000, 2001])(
+    "preserves the overwrite receipt budget at edit distance %i",
+    async (editDistance) => {
+      const filePath = await createTempPath("edit-limit.txt");
+      const oldContent = "anchor\n";
+      const content = oldContent + "added\n".repeat(editDistance);
+      await fs.writeFile(filePath, oldContent, "utf8");
+      const tool = createWriteTool(tmpDir);
+
+      const result = await tool.execute("call-1", { path: "edit-limit.txt", content }, undefined);
+
+      if (editDistance <= 2000) {
+        expect(result.details).toEqual({
+          changed: true,
+          created: false,
+          diff: expect.stringContaining("    1 anchor\n+   2 added"),
+          patch: expect.any(String),
+          firstChangedLine: 2,
+        });
+        expectApplicablePatch(result.details, oldContent, content);
+      } else {
+        expect(result.details).toEqual({ changed: true, created: false });
+      }
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+    },
+  );
 
   it("omits the diff when the old content is not valid UTF-8 text", async () => {
     const filePath = await createTempPath("binary.bin");

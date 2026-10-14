@@ -1,13 +1,14 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixAccount } from "./accounts.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./accounts.js";
 import { withResolvedActionClient } from "./actions/client.js";
 import type { MatrixActionClientOpts } from "./actions/types.js";
 import {
@@ -76,7 +77,7 @@ type MatrixRoomClassification =
   | { kind: "unknown" };
 
 function resolveMatrixReadRoomPolicy(params: {
-  account: ReturnType<typeof resolveMatrixAccount>;
+  account: { accountId: string; config: ReturnType<typeof resolveMatrixAccountConfig> };
   baseConfig: ReturnType<typeof resolveMatrixBaseConfig>;
   roomId: string;
   aliases: string[];
@@ -151,7 +152,15 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
   opts: MatrixActionClientOpts;
   run: (target: { client: MatrixClient; roomId: string }) => Promise<T>;
 }): Promise<T> {
-  const account = resolveMatrixAccount({ cfg: params.cfg, accountId: params.accountId });
+  const assertCurrent = captureChannelReadAuthority();
+  assertCurrent?.();
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  );
+  const account = {
+    accountId,
+    config: resolveMatrixAccountConfig({ cfg: params.cfg, accountId }),
+  };
   const baseConfig = resolveMatrixBaseConfig(params.cfg);
   const preliminaryRoomId = normalizeMatrixResolvableTarget(params.roomId);
   const preliminaryPolicy = resolveMatrixReadRoomPolicy({
@@ -164,10 +173,15 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
     throw new ToolAuthorizationError("Matrix read target is not allowed.");
   }
   return await withResolvedActionClient(params.opts, async (client) => {
-    const roomId = await resolveMatrixRoomId(client, params.roomId);
+    assertCurrent?.();
+    const roomId = await resolveMatrixRoomId(client, params.roomId, {
+      persistDirectMapping: false,
+    });
+    assertCurrent?.();
     const inputAlias = params.roomId.trim().startsWith("#") ? params.roomId.trim() : undefined;
     const { getRoomInfo } = createMatrixRoomInfoResolver(client);
     const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
+    assertCurrent?.();
     const mutableRoomName =
       account.config.dangerouslyAllowNameMatching === true ? roomInfo.name : undefined;
     const aliases = [
@@ -203,6 +217,7 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : current && trustedCurrentClassification
           ? trustedCurrentClassification
           : await classifyMatrixReadRoom({ client, roomId });
+    assertCurrent?.();
     const resolvedGroupPolicy = resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: params.cfg.channels?.matrix !== undefined,
       groupPolicy: account.config.groupPolicy,
@@ -218,31 +233,23 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
     const directOperator = params.context?.conversationReadOrigin === "direct-operator";
-    const allowed = finalPolicy.blocked
-      ? false
-      : directOperator
-        ? classification.kind === "direct"
-          ? account.config.dm?.enabled !== false && dmPolicy !== "disabled"
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled"
-            : groupPolicy !== "disabled" &&
-              dmPolicy !== "disabled" &&
-              account.config.dm?.enabled !== false
-        : classification.kind === "direct"
-          ? account.config.dm?.enabled !== false &&
-            dmPolicy !== "disabled" &&
-            (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled" &&
-              (current || groupPolicy === "open" || room.config !== undefined)
-            : current
-              ? groupPolicy !== "disabled" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false
-              : groupPolicy === "open" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false &&
-                hasWildcardEntry(account.config.dm?.allowFrom);
+    const dmEnabled = account.config.dm?.enabled !== false && dmPolicy !== "disabled";
+    const groupEnabled = groupPolicy !== "disabled";
+    const allowed =
+      !finalPolicy.blocked &&
+      (classification.kind === "direct"
+        ? dmEnabled &&
+          (directOperator ||
+            current ||
+            includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
+        : classification.kind === "group"
+          ? groupEnabled &&
+            (directOperator || current || groupPolicy === "open" || room.config !== undefined)
+          : groupEnabled &&
+            dmEnabled &&
+            (directOperator ||
+              current ||
+              (groupPolicy === "open" && hasWildcardEntry(account.config.dm?.allowFrom))));
     if (!allowed) {
       throw new ToolAuthorizationError("Matrix read target is not allowed.");
     }

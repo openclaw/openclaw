@@ -3,16 +3,53 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
-import { resolveHeartbeatToolResponseFromReplyResult } from "../../../auto-reply/heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { classifyHeartbeatAgentOutcome } from "../../../infra/heartbeat-delivery-normalization.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
+import { observeReplyDelivery } from "../../reply-completion.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import type { ProcessTerminalDiagnostic, ToolErrorSummary } from "../../tool-error-summary.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
+import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
+  it.each(["observation-failed", "missing"] as const)(
+    "retains delivery custody before selecting current text and media (%s)",
+    async (observation) => {
+      const errors: unknown[] = [];
+      const sourceReplyDeliveryState = await observeReplyDelivery(
+        async () => {
+          if (observation === "observation-failed") {
+            throw new Error("delivery observation unavailable");
+          }
+          return observation;
+        },
+        2,
+        (error) => errors.push(error),
+      );
+      expect(errors).toHaveLength(observation === "observation-failed" ? 1 : 0);
+      const payloads = buildPayloads({
+        assistantTexts: ["Current answer.\nMEDIA:./current.pdf"],
+        sourceReplyDeliveryState,
+        sourceReplyDeliveryMode: "automatic",
+        messagingToolSourceReplyPayloads: [{ text: "Earlier reply.", sourceReplyFinal: true }],
+        verboseLevel: "full",
+        lastToolError: { toolName: "exec", error: "verification failed" },
+      });
+      expect(payloads).toEqual([
+        expect.objectContaining({ text: "Earlier reply." }),
+        ...(observation === "missing"
+          ? [expect.objectContaining({ text: "Current answer.", mediaUrl: "./current.pdf" })]
+          : []),
+      ]);
+    },
+  );
+
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
     // Many suppression cases should produce no channel reply at all; keep the
     // assertion explicit so accidental fallback text is obvious.
@@ -20,50 +57,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toHaveLength(0);
   }
 
-  it("does not fall back to commentary-only assistant text when streamed text was suppressed", () => {
-    const payloads = buildPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "text",
-            text: "Need update cron messages to use finalBrief/briefPath.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_commentary",
-              phase: "commentary",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expect(payloads).toStrictEqual([]);
-  });
-
-  it("strips provider reasoning close tags from streamed assistant payload text", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
-    });
-
-    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
-  });
-
-  it("suppresses streamed text that only contains hidden reasoning", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["<mm:think>private reasoning</mm:think>"],
-    });
-
-    expect(payloads).toStrictEqual([]);
-  });
-
   it("sanitizes every streamed text while preserving multiple visible answers", () => {
     const payloads = buildPayloads({
       assistantTexts: [
         '<tool_call>{"name":"exec","arguments":{"command":"secret"}}</tool_call>',
-        "</mm:think>First visible answer.",
-        "Second visible answer.",
+        "  </mm:think>First visible answer.  ",
+        "\nSecond visible answer.\n",
       ],
     });
 
@@ -75,7 +74,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
-      assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantTexts: [
+        "<mm:think>private reasoning</mm:think>",
+        "</mm:think>MEDIA:/tmp/reply-image.png\nAttached image",
+      ],
       assistantMessageIndex: 1,
     });
 
@@ -89,37 +91,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("falls back to final-answer assistant text when streamed text is unavailable", () => {
-    const payloads = buildPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Need inspect.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_commentary",
-              phase: "commentary",
-            }),
-          },
-          {
-            type: "text",
-            text: "Done.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Done.");
-  });
-
   it("marks runtime-persisted final replies as transcript owned", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Already persisted."],
@@ -131,31 +102,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
-    });
-  });
-
-  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
-    expectNoPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "MEDIA:/tmp/old.png",
-            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
-          },
-          {
-            type: "text",
-            text: "   ",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
     });
   });
 
@@ -184,29 +130,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
-    const text = "Before <think>literal tag text after";
-    const payloads = buildPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text,
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, text);
-  });
-
   it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
     const payloads = buildPayloads({
       lastAssistant: {
@@ -219,227 +142,67 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Visible prefix");
   });
 
-  it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
+  it("uses the kept answer instead of pre-tool text for an empty terminal answer", () => {
+    const lastAssistant = makeAgentAssistantMessage({
+      api: "ollama",
+      provider: "ollama",
+      stopReason: "stop",
+      content: [],
+    });
     const payloads = buildPayloads({
-      assistantTexts: ["   "],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Fixed.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Fixed.");
-  });
-
-  it("uses the final assistant answer when streamed text was an incomplete preview", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Long answer, part one"],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Long answer, part one\nLong answer, part two\nLong answer, part three",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(
-      payloads,
-      "Long answer, part one\nLong answer, part two\nLong answer, part three",
-    );
-  });
-
-  it("uses the final assistant answer when one streamed text contains progress and final text", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Need inspect.\n\nDone."],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Need inspect.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_commentary",
-              phase: "commentary",
-            }),
-          },
-          {
-            type: "text",
-            text: "Done.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Done.");
-  });
-
-  it("keeps a current one-chunk reply when only a stale transcript assistant is available", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Current room event reply."],
-      currentAssistant: null,
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Previous transcript reply.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_previous",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Current room event reply.");
-  });
-
-  it("delivers only the final assistant answer when accumulated text includes pre-tool progress", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["I'll inspect that first.", "Done."],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Done.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Done.");
-  });
-
-  it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
-    const payloads = buildPayloads({
-      assistantTexts: [
-        "/root/openclaw/packages/gateway-protocol/src/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
-        "The schema export is fixed.",
-      ],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "The schema export is fixed.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "The schema export is fixed.");
-  });
-
-  it("turns internal message-tool source replies into suppression-safe final payloads", () => {
-    // message_tool_only source replies are already delivered internally but
-    // still need mirror metadata so transcript/persistence can record them.
-    const payloads = buildPayloads({
-      assistantTexts: ["ordinary final should stay private"],
-      didSendViaMessagingTool: true,
-      messagingToolSourceReplyPayloads: [
-        {
-          text: "sent through message tool",
-          mediaUrls: ["/tmp/reply.png"],
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-1",
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({
-      text: "sent through message tool",
-      mediaUrl: "/tmp/reply.png",
-      mediaUrls: ["/tmp/reply.png"],
-    });
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main",
-        agentId: "main",
-        text: "sent through message tool",
-        mediaUrls: ["/tmp/reply.png"],
-        idempotencyKey: "run-1:internal-source-reply:0",
+      assistantTexts: ["I will read the file.", "Checking the next file."],
+      lastAssistant,
+      keptAnswer: {
+        assistant: makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Completed answer." }],
+        }),
+        messageIndex: 1,
       },
     });
+    expect(payloads.map((payload) => payload.text)).toEqual(["Completed answer."]);
   });
 
-  it("suppresses terminal assistant text after direct message-tool source replies", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["ordinary final should stay private"],
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      sourceReplyDeliveryMode: "message_tool_only",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-1",
-    });
+  it.each(["NO_REPLY"])(
+    "buildEmbeddedRunPayloads selects each sealed and open segment's answer with middle answer %s",
+    (middleAnswer) => {
+      const answers = ["First answer.", middleAnswer, "Third answer."];
+      const messages = answers.map((text) =>
+        makeAgentAssistantMessage({ content: [{ type: "text", text }] }),
+      );
+      const payloads = buildPayloads({
+        assistantTexts: answers.flatMap((text) => ["Checking first.", text]),
+        answerSegments: messages.slice(0, 2).map((lastAssistant, index) => ({
+          textEnd: (index + 1) * 2,
+          messageEnd: (index + 1) * 2,
+          finalMessageStart: (index + 1) * 2,
+          lastAssistant,
+        })),
+        lastAssistant: messages[2],
+        currentAssistant: messages[2],
+        assistantMessageIndex: 6,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        answers.filter((text) => text && text !== "NO_REPLY"),
+      );
+      expect(
+        payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
+      ).toEqual([2, 6]);
+      expect(
+        payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
+      ).toEqual([true, undefined]);
+    },
+  );
 
-    expect(payloads).toEqual([]);
-  });
-
-  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+  it("does not append a presentation failure after confirmed automatic source completion", () => {
     const payloads = buildPayloads({
-      assistantTexts: ["ordinary final should stay private"],
-      didSendViaMessagingTool: true,
+      lastAssistant: makeAgentAssistantMessage({
+        stopReason: "error",
+        errorMessage: "presentation failed after delivery",
+        content: [],
+      }),
+      lastToolError: { toolName: "message", error: "presentation failed after delivery" },
       didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: false,
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-1",
+      sourceReplyDeliveryMode: "automatic",
     });
 
     expect(payloads).toEqual([]);
@@ -503,108 +266,19 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("ignores accumulated internal/status text after the final answer", () => {
+  it("renders an intentional Gateway restart as status", () => {
     const payloads = buildPayloads({
-      assistantTexts: [
-        "Done.",
-        "Background task done: Context engine turn maintenance. Rewrote 0 transcript entries and freed 0 bytes.",
-      ],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "Done.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
-    });
-
-    expectSinglePayloadText(payloads, "Done.");
-  });
-
-  it("surfaces concise exec tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "exec", error: "command failed" },
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "command failed",
-    });
-  });
-
-  it("surfaces concise bash tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "bash", error: "command failed" },
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Bash",
-      absentDetail: "command failed",
-    });
-  });
-
-  it("surfaces declined Codex native command errors for aborted empty turns", () => {
-    const payloads = buildPayloads({
-      assistantTexts: [],
       lastToolError: {
-        toolName: "bash",
-        error: "codex native tool blocked",
-        mutatingAction: true,
+        toolName: "gateway_exec",
+        error: "OpenClaw dynamic tool call aborted.",
+        executionStarted: true,
       },
       runAborted: true,
+      runStopReason: "restart",
+      toolResultFormat: "markdown",
     });
 
-    expectSingleToolErrorPayload(payloads, {
-      title: "Bash",
-      absentDetail: "codex native tool blocked",
-    });
-  });
-
-  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        timedOut: true,
-        error:
-          "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
-      },
-      sessionKey: "agent:main:cron:job-1",
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail:
-        "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
-    });
-  });
-
-  it("keeps timed-out cron-trigger exec failures compact", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        timedOut: true,
-        error: "Command timed out after 1800 seconds.",
-      },
-      sessionKey: "agent:main:project-alpha",
-      isCronTrigger: true,
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "Command timed out after 1800 seconds.",
-    });
+    expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
   });
 
   it("keeps heartbeat exec commands and paths private without full verbosity", () => {
@@ -625,78 +299,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps a quiet heartbeat response behind an unresolved mutating failure", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Everything is fine."],
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("HEARTBEAT_OK");
-    expect(payloads[1]).toMatchObject({
-      isError: true,
-      text: expect.stringContaining("Message failed"),
-    });
-    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
-      outcome: "no_change",
-      notify: false,
-      summary: "Nothing needs attention.",
-    });
-    for (const payload of payloads) {
-      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
-        toolName: "message",
-      });
-    }
-  });
-
-  it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["The heartbeat check completed."],
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("The heartbeat check completed.");
-    for (const payload of payloads) {
-      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
-        toolName: "message",
-      });
-    }
-  });
-
-  it("retains terminal heartbeat state when all failure copy is suppressed", () => {
-    const payloads = buildPayloads({
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-      suppressToolErrorWarnings: true,
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
-      toolName: "message",
-    });
-  });
-
-  it("adds an outbound terminal marker when suppressed failure copy leaves only reasoning", () => {
+  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
     const payloads = buildPayloads({
       isHeartbeatTrigger: true,
       lastAssistant: {
@@ -711,80 +314,19 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       },
       reasoningLevel: "on",
       thinkingLevel: "high",
-      suppressToolErrorWarnings: true,
     });
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(resolveHeartbeatReplyPayload(payloads)?.text).toBe("HEARTBEAT_OK");
+    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+      text: "⚠️ Message failed",
+      isError: true,
+    });
     for (const payload of payloads) {
       expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
         toolName: "message",
       });
     }
-  });
-
-  it("does not duplicate a visible heartbeat acknowledgement of a mutating failure", () => {
-    const notificationText = "Message send failed because cross-context messaging was denied.";
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "blocked",
-        notify: true,
-        summary: "Message delivery was blocked.",
-        notificationText,
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadText(payloads, notificationText);
-    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
-      toolName: "message",
-    });
-  });
-
-  it("uses a structured blocked heartbeat response as the failure acknowledgement", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "blocked",
-        notify: true,
-        summary: "Message delivery was blocked.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadText(payloads, "Message delivery was blocked.");
-  });
-
-  it("suppresses heartbeat failure copy without suppressing terminal failure state", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-      suppressToolErrorWarnings: true,
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
-      toolName: "message",
-    });
   });
 
   it("does not infer a terminal mutation from a mixed-action tool name", () => {
@@ -807,31 +349,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ).toBeUndefined();
   });
 
-  it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "exec", error: "Command not found" },
-      sessionKey: "agent:main:cron:job-1",
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "Command not found",
-    });
-  });
-
-  it("keeps exec tool errors compact when verbose mode is on", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "exec", error: "command failed" },
-      verboseLevel: "on",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "command failed",
-    });
-  });
-
   it("shows exec tool error details when verbose mode is full", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
@@ -844,38 +361,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("preserves full-verbose tool error details with static suppression disabled", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
-    });
-  });
-
-  it("keeps non-exec mutating tool failures visible", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      absentDetail: "permission denied",
-    });
-  });
-
   it.each([
-    {
-      name: "keeps mutating tool failures compact when verbose is on",
-      verboseLevel: "on" as const,
-      detail: undefined,
-      absentDetail: "permission denied",
-    },
     {
       name: "includes details for mutating tool failures when verbose is full",
       verboseLevel: "full" as const,
@@ -892,43 +378,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       title: "Write",
       detail,
       absentDetail,
-    });
-  });
-
-  it.each([
-    {
-      name: "default relay failure",
-      lastToolError: { toolName: "sessions_send", error: "delivery timeout" },
-    },
-    {
-      name: "mutating relay failure",
-      lastToolError: {
-        toolName: "sessions_send",
-        error: "delivery timeout",
-        mutatingAction: true,
-      },
-    },
-  ])("warns for silent sessions_send failures: $name", ({ lastToolError }) => {
-    const payloads = buildPayloads({
-      lastToolError,
-      verboseLevel: "on",
-    });
-    expectSingleToolErrorPayload(payloads, {
-      title: "Session Send",
-      absentDetail: "delivery timeout",
-    });
-  });
-
-  it("suppresses assistant text when a deterministic exec approval prompt was already delivered", () => {
-    expectNoPayloads({
-      assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],
-      didSendDeterministicApprovalPrompt: true,
-    });
-  });
-
-  it("suppresses JSON NO_REPLY assistant payloads", () => {
-    expectNoPayloads({
-      assistantTexts: ['{"action":"NO_REPLY"}'],
     });
   });
 
@@ -969,78 +418,182 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
   });
+});
 
-  it("keeps media directives when collapsing accumulated pre-tool text to the final answer", () => {
+describe("cron completion after a delivered report", () => {
+  const deliveredReport = {
+    tool: "message",
+    provider: "slack",
+    to: "C_REPORTS",
+    text: "The daily report is complete.",
+  };
+  const completedRun = {
+    isCronTrigger: true,
+    assistantTexts: ["NO_REPLY"],
+    didSendViaMessagingTool: true,
+    messagingToolSentTargets: [deliveredReport],
+    lastToolError: {
+      toolName: "codex_apps.slack.slack_read_thread",
+      error: "429 RATE_LIMITED",
+      mutatingAction: false,
+    },
+  };
+
+  it.each([
+    {
+      name: "a send without visible content",
+      messagingToolSentTargets: [{ ...deliveredReport, text: "", visible: false }],
+    },
+    { name: "a heartbeat", isHeartbeatTrigger: true },
+  ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
+    expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
+      expect.objectContaining({ isError: true }),
+    ]);
+  });
+});
+
+describe("buildEmbeddedRunPayloads delivery recovery", () => {
+  it("uses persisted delivery facts for a recovered final assistant", () => {
     const payloads = buildPayloads({
-      assistantTexts: ["Preparing the image...", "Attached image"],
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "MEDIA:/tmp/reply-image.png\nAttached image",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
+        content: [{ type: "text", text: "Recovered answer" }],
+        openclawDelivery: {
+          audioAsVoice: true,
+          replyToCurrent: true,
+          replyToId: "message-7",
+          tts: {
+            tagged: true,
+            text: "Recovered speech",
           },
-        ],
+        },
       } as AssistantMessage,
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Attached image");
-    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
-    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        text: "Recovered answer",
+        audioAsVoice: true,
+        replyToCurrent: true,
+        replyToId: "message-7",
+      }),
+    ]);
+    expect(getReplyPayloadMetadata(payloads[0]!)?.tts).toEqual({
+      tagged: true,
+      text: "Recovered speech",
+    });
+  });
+});
+
+describe("quiet heartbeat failures", () => {
+  it.each(["exec"])("does not notify after a failed %s and generated media", (toolName) => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Everything is fine."],
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: { toolName, error: "operation failed", mutatingAction: true },
+    });
+    const merged = mergeAttemptToolMediaPayloads({
+      payloads,
+      toolMediaUrls: ["/tmp/heartbeat.png"],
+      hostOwnedToolMediaUrls: ["/tmp/heartbeat.png"],
+      toolAutoDeliveryMediaUrls: ["/tmp/heartbeat.opus"],
+      toolAudioAsVoice: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(
+      classifyHeartbeatAgentOutcome({
+        agentRun: {
+          agentRunFailed: false,
+          heartbeatToolResponse: selectHeartbeatToolResponse(merged)?.response,
+          heartbeatTerminalToolFailure: { toolName },
+          replyPayload: resolveHeartbeatReplyPayload(merged),
+        },
+        useHeartbeatFailureCopy: true,
+        hasRelayableExecCompletion: false,
+        suppressUnmarkedSourceReplies: false,
+        responsePrefix: undefined,
+        ackMaxChars: 300,
+      }),
+    ).toMatchObject({ kind: "failure", reason: "agent-tool-failure", shouldSkipMain: true });
+  });
+});
+
+describe("buildEmbeddedRunPayloads process-error warnings", () => {
+  it("surfaces safe terminal diagnostics when verbose mode is off", () => {
+    const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
+    const lastToolError: ToolErrorSummary = {
+      toolName: "process",
+      error: `SAFE_PROCESS_STDERR ${dummyTelegramToken}`,
+      terminalDiagnostic: {
+        kind: "process",
+        sessionId: "wild-lagoon",
+        reason: { kind: "exit", exitCode: 7 },
+      },
+    };
+    const payloads = buildPayloads({ lastToolError, verboseLevel: "off" });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Process",
+      absentDetail: "SAFE_PROCESS_STDERR",
+    });
+    expect(payloads[0]?.text).not.toContain("wild-lagoon");
+    expect(payloads[0]?.text).not.toContain(dummyTelegramToken);
+    expect(payloads[0]?.text).toContain("exit 7");
+    expect(payloads[0]?.text).not.toContain("/verbose");
   });
 
-  it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
-    // Media directives are not visible text, but they still carry channel media
-    // attachments and must survive final-answer extraction.
+  it("shows a sanitized bounded error only at full verbosity", () => {
     const payloads = buildPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "text",
-            text: "MEDIA:/tmp/reply-image.png\nAttached image",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "item_final",
-              phase: "final_answer",
-            }),
-          },
-        ],
-      } as AssistantMessage,
+      lastToolError: {
+        toolName: "process",
+        error: "SAFE_PROCESS_STDERR",
+        terminalDiagnostic: {
+          kind: "process",
+          sessionId: "wild-lagoon",
+          reason: { kind: "exit", exitCode: 7 },
+        },
+      },
+      verboseLevel: "full",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Attached image");
-    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
-    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(payloads[0]?.text).toContain("SAFE_PROCESS_STDERR");
+    expect(payloads[0]?.text).not.toContain("/verbose full");
   });
 
-  it("suppresses native reasoning payloads when thinking is disabled", () => {
+  it.each([
+    {
+      label: "signal",
+      reason: { kind: "signal", signal: "SIGKILL" } as const,
+      expected: "signal SIGKILL",
+    },
+    {
+      label: "overall timeout",
+      reason: { kind: "timeout", timeoutKind: "overall-timeout" } as const,
+      expected: "timed out",
+    },
+    {
+      label: "no-output timeout",
+      reason: { kind: "timeout", timeoutKind: "no-output-timeout" } as const,
+      expected: "timed out waiting for output",
+    },
+  ])("renders $label without fabricating an exit code", ({ reason, expected }) => {
+    const terminalDiagnostic: ProcessTerminalDiagnostic = {
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason,
+    };
     const payloads = buildPayloads({
-      reasoningLevel: "on",
-      thinkingLevel: "off",
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          {
-            type: "thinking",
-            thinking: "",
-            thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
-          },
-          { type: "text", text: "THINKING-OFF-OK" },
-        ],
-      } as AssistantMessage,
+      lastToolError: { toolName: "process", terminalDiagnostic },
+      verboseLevel: "off",
     });
 
-    expectSinglePayloadText(payloads, "THINKING-OFF-OK");
+    expect(payloads[0]?.text).toContain(expected);
+    expect(payloads[0]?.text).not.toMatch(/exit -?\d+/u);
   });
 });

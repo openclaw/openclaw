@@ -16,6 +16,7 @@ const FIRST_USAGE: UsageInput = {
   reasoningTokens: 12,
   cacheRead: 80_000,
   cacheWrite: 5_000,
+  cacheWrite1h: 3_000,
   total: 85_150,
 };
 
@@ -53,6 +54,34 @@ function createAccumulatorWithUsage(...usages: UsageInput[]) {
 
 describe("usage-accumulator", () => {
   describe("mergeUsageIntoAccumulator", () => {
+    it("preserves complete zero accounting without a price across attempts", () => {
+      const attempt = createAccumulatorWithUsage({
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+      });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)).toEqual({
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+      });
+    });
+
+    it("does not present completed calls as a complete run total after an interrupted call", () => {
+      const acc = createAccumulatorWithUsage(
+        FIRST_USAGE,
+        { usageReport: { state: "unavailable" } },
+        FINAL_USAGE,
+      );
+      expect(toNormalizedUsage(acc)).toEqual({
+        usageReport: { state: "unavailable" },
+        contextUsage: { state: "unavailable" },
+      });
+    });
     it("accumulates usage across multiple API calls", () => {
       const acc = createAccumulatorWithUsage(FIRST_USAGE, SECOND_USAGE, FINAL_USAGE);
 
@@ -61,7 +90,40 @@ describe("usage-accumulator", () => {
       expect(acc.reasoningTokens).toBe(19);
       expect(acc.cacheRead).toBe(246_000);
       expect(acc.cacheWrite).toBe(5_000);
+      expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000 });
       expect(acc.total).toBe(251_490);
+    });
+
+    it("carries complete costs across attempts without claiming provider provenance", () => {
+      const firstAttempt = createAccumulatorWithUsage({
+        input: 150_000,
+        cost: { total: 0.125, totalOrigin: "provider-billed" },
+      });
+      const secondAttempt = createAccumulatorWithUsage({ input: 150_000, cost: { total: 0.5 } });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(firstAttempt));
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(secondAttempt));
+
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0.625 });
+      mergeUsageIntoAccumulator(run, { input: 1 });
+      expect(toNormalizedUsage(run)?.cost).toBeUndefined();
+      mergeUsageIntoAccumulator(run, { input: 1, cost: { total: 0.25 } });
+      expect(toNormalizedUsage(run)?.cost).toBeUndefined();
+    });
+
+    it("preserves billed-zero provenance only while every contribution is billed", () => {
+      const attempt = createAccumulatorWithUsage({
+        input: 100,
+        cost: { total: 0, totalOrigin: "provider-billed" },
+      });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0, totalOrigin: "provider-billed" });
+
+      mergeUsageIntoAccumulator(run, { input: 100, cost: { total: 0 } });
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0 });
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0 });
     });
 
     it("ignores undefined or zero-only usage", () => {
@@ -113,49 +175,19 @@ describe("usage-accumulator", () => {
       expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
     });
 
-    it("returns accumulated totals for billing", () => {
-      const acc = createUsageAccumulator();
-
-      mergeUsageIntoAccumulator(acc, {
+    it("preserves reported zero cache counters across attempt and run totals", () => {
+      const attempt = createAccumulatorWithUsage({ input: 100, cacheRead: 0, cacheWrite: 0 });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)).toMatchObject({
         input: 100,
-        output: 50,
-        reasoningTokens: 4,
-        cacheRead: 80_000,
-        cacheWrite: 5_000,
-      });
-      mergeUsageIntoAccumulator(acc, {
-        input: 120,
-        output: 30,
-        cacheRead: 82_000,
+        cacheRead: 0,
         cacheWrite: 0,
+        total: 100,
       });
-      mergeUsageIntoAccumulator(acc, {
-        input: 150,
-        output: 40,
-        cacheRead: 84_000,
-        cacheWrite: 0,
-      });
-
-      expect(toNormalizedUsage(acc)).toEqual({
-        input: 370,
-        output: 120,
-        reasoningTokens: 4,
-        cacheRead: 246_000,
-        cacheWrite: 5_000,
-        total: 251_490,
-      });
-    });
-
-    it("omits zero fields", () => {
-      const acc = createUsageAccumulator();
-      mergeUsageIntoAccumulator(acc, { input: 100, output: 50 });
-
-      expect(toNormalizedUsage(acc)).toEqual({
-        input: 100,
-        output: 50,
+      expect(toNormalizedUsage(createAccumulatorWithUsage({ input: 100 }))).toMatchObject({
         cacheRead: undefined,
         cacheWrite: undefined,
-        total: 150,
       });
     });
   });

@@ -4,17 +4,20 @@ import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state
 import { CHECK_IDS } from "./check-ids.js";
 import {
   authProfileAllowModesShapeFindings,
-  dataHandlingEntries,
-  dataHandlingFinding,
   dataHandlingLabel,
   dataHandlingPolicyShapeFindings,
   secretPolicyShapeFindings,
 } from "./data-auth-shapes.js";
+import {
+  policyEvidenceFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
 import {
   agentScopedPolicyTargets,
-  dataHandlingPolicyHasRules,
-  scopedAgentIdMatches,
+  policyHasRules,
+  scopedAgentEvidenceMatches,
 } from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
@@ -32,7 +35,6 @@ export function secretAuthProvenanceFindings(
       : [
           ...secretManagedProviderFindings(policy, policyDocName, evidence),
           ...secretDeniedSourceFindings(policy, policyDocName, evidence),
-          ...secretInsecureProviderFindings(policy, policyDocName, evidence),
         ]),
     ...(authShapeFindings.length > 0
       ? authShapeFindings
@@ -58,7 +60,7 @@ export function dataHandlingFindings(
     ...dataHandlingFindingsForRule(policy, policyDocName, "dataHandling", evidence, () => true),
   );
   for (const target of agentScopedPolicyTargets(policy)) {
-    if (!dataHandlingPolicyHasRules(target.overlay.dataHandling)) {
+    if (!policyHasRules(target.overlay, "dataHandling")) {
       continue;
     }
     findings.push(
@@ -69,30 +71,16 @@ export function dataHandlingFindings(
         evidence,
         (entry) =>
           entry.kind !== "memorySessionTranscriptIndexing" ||
-          scopedDataHandlingAgentMatches(entry, target.agentId, evidence.dataHandling ?? []),
+          scopedAgentEvidenceMatches(
+            entry,
+            target.agentId,
+            evidence.dataHandling ?? [],
+            entry.id === "agents-defaults-memory-session-transcripts",
+          ),
       ),
     );
   }
   return findings;
-}
-
-function scopedDataHandlingAgentMatches(
-  entry: PolicyDataHandlingEvidence,
-  policyAgentId: string,
-  entries: readonly PolicyDataHandlingEvidence[],
-): boolean {
-  if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
-    return true;
-  }
-  return (
-    entry.id === "agents-defaults-memory-session-transcripts" &&
-    !entries.some(
-      (candidate) =>
-        candidate.scope === "agent" &&
-        candidate.kind === entry.kind &&
-        scopedAgentIdMatches(candidate.agentId, policyAgentId),
-    )
-  );
 }
 
 function dataHandlingFindingsForRule(
@@ -106,57 +94,40 @@ function dataHandlingFindingsForRule(
   if (!isRecord(dataHandling)) {
     return [];
   }
-  const findings: HealthFinding[] = [];
-  // dataHandling.sensitiveLogging.requireRedaction has no check here on purpose: redaction is
-  // an unconditional runtime invariant (src/logging/redact.ts), so policy state records it as
-  // satisfied evidence (oc://openclaw.invariant/logging/redaction) instead of a finding.
-  if (readPolicyBoolean(dataHandling, ["telemetry", "denyContentCapture"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "telemetryContentCapture")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value === true)
-        .map((entry) =>
-          dataHandlingFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-            message: "Telemetry content capture is enabled.",
-            requirement: `oc://${policyDocName}/${requirementBase}/telemetry/denyContentCapture`,
-            fixHint: "Disable diagnostics.otel.captureContent or update policy after review.",
-          }),
-        ),
-    );
-  }
-  if (readPolicyBoolean(dataHandling, ["retention", "requireSessionMaintenance"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "sessionRetentionMode")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value !== "enforce")
-        .map((entry) =>
-          dataHandlingFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-            message: `Session retention maintenance mode is '${entry.value ?? "unknown"}'.`,
-            requirement: `oc://${policyDocName}/${requirementBase}/retention/requireSessionMaintenance`,
-            fixHint: "Set session.maintenance.mode to enforce or update policy after review.",
-          }),
-        ),
-    );
-  }
-  if (readPolicyBoolean(dataHandling, ["memory", "denySessionTranscriptIndexing"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "memorySessionTranscriptIndexing")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value === true)
-        .map((entry) =>
-          dataHandlingFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-            message: `${dataHandlingLabel(entry)} enables session transcript memory indexing.`,
-            requirement: `oc://${policyDocName}/${requirementBase}/memory/denySessionTranscriptIndexing`,
-            fixHint:
-              "Disable session transcript memory indexing for the matching config surface or update policy after review.",
-          }),
-        ),
-    );
-  }
-  return findings;
+  // Redaction is an unconditional runtime invariant, recorded as satisfied evidence.
+  const rules = [
+    {
+      path: ["telemetry", "denyContentCapture"],
+      kind: "telemetryContentCapture",
+      violates: (entry) => entry.value === true,
+      checkId: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+      message: () => "Telemetry content capture is enabled.",
+      fixHint: "Disable diagnostics.otel.captureContent or update policy after review.",
+    },
+    {
+      path: ["retention", "requireSessionMaintenance"],
+      kind: "sessionRetentionMode",
+      violates: (entry) => entry.value !== "enforce",
+      checkId: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
+      message: (entry) => `Session retention maintenance mode is '${entry.value ?? "unknown"}'.`,
+      fixHint: "Set session.maintenance.mode to enforce or update policy after review.",
+    },
+    {
+      path: ["memory", "denySessionTranscriptIndexing"],
+      kind: "memorySessionTranscriptIndexing",
+      violates: (entry) => entry.value === true,
+      checkId: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
+      message: (entry) => `${dataHandlingLabel(entry)} enables session transcript memory indexing.`,
+      fixHint:
+        "Disable session transcript memory indexing for the matching config surface or update policy after review.",
+    },
+  ] satisfies readonly PolicyEvidenceRule<PolicyDataHandlingEvidence>[];
+  return policyEvidenceRuleFindings(
+    (evidence.dataHandling ?? []).filter(evidenceFilter),
+    rules.filter((rule) => readPolicyBoolean(dataHandling, rule.path) === true),
+    policyDocName,
+    requirementBase,
+  );
 }
 
 function secretManagedProviderFindings(
@@ -183,18 +154,13 @@ function secretManagedProviderFindings(
           !providerKeys.has(`${secret.refSource}:${secret.refProvider}`)),
     )
     .map((secret): HealthFinding => {
-      return {
+      return policyEvidenceFinding(secret, {
         checkId: CHECK_IDS.policySecretsUnmanagedProvider,
-        severity: "error",
         message: `SecretRef uses unmanaged provider '${secret.refProvider ?? "default"}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
         requirement: `oc://${policyDocName}/secrets/requireManagedProviders`,
         fixHint:
           "Declare the referenced provider under secrets.providers or update policy after review.",
-      };
+      });
     });
 }
 
@@ -214,42 +180,12 @@ function secretDeniedSourceFindings(
     })
     .map((secret): HealthFinding => {
       const source = secret.kind === "provider" ? secret.providerSource : secret.refSource;
-      return {
+      return policyEvidenceFinding(secret, {
         checkId: CHECK_IDS.policySecretsDeniedProviderSource,
-        severity: "error",
         message: `Secret ${secret.kind} '${secret.id}' uses denied source '${source}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
         requirement: `oc://${policyDocName}/secrets/denySources`,
         fixHint: "Move this secret to an approved source or update policy after review.",
-      };
-    });
-}
-
-function secretInsecureProviderFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["secrets", "allowInsecureProviders"]) !== false) {
-    return [];
-  }
-  return (evidence.secrets ?? [])
-    .filter((secret) => secret.kind === "provider" && (secret.insecure?.length ?? 0) > 0)
-    .map((secret): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policySecretsInsecureProvider,
-        severity: "error",
-        message: `Secret provider '${secret.id}' enables insecure posture: ${(secret.insecure ?? []).join(", ")}.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: secret.source,
-        target: secret.source,
-        requirement: `oc://${policyDocName}/secrets/allowInsecureProviders`,
-        fixHint: "Remove insecure provider overrides or update policy after review.",
-      };
+      });
     });
 }
 
@@ -270,17 +206,12 @@ function authProfileMetadataFindings(
       return [];
     }
     return [
-      {
+      policyEvidenceFinding(profile, {
         checkId: CHECK_IDS.policyAuthProfileInvalidMetadata,
-        severity: "error",
         message: `Auth profile '${profile.id}' is missing required metadata: ${missing.join(", ")}.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: profile.source,
-        target: profile.source,
         requirement: `oc://${policyDocName}/auth/profiles/requireMetadata`,
         fixHint: "Set auth.profiles.<id>.provider and a supported auth profile mode.",
-      },
+      }),
     ];
   });
 }
@@ -297,16 +228,11 @@ function authProfileModeFindings(
   return (evidence.authProfiles ?? [])
     .filter((profile) => profile.mode !== undefined && !allowedModes.has(profile.mode))
     .map((profile): HealthFinding => {
-      return {
+      return policyEvidenceFinding(profile, {
         checkId: CHECK_IDS.policyAuthProfileUnapprovedMode,
-        severity: "error",
         message: `Auth profile '${profile.id}' uses mode '${profile.mode}' outside the policy allowlist.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: profile.source,
-        target: profile.source,
         requirement: `oc://${policyDocName}/auth/profiles/allowModes`,
         fixHint: "Change the auth profile mode or update policy after review.",
-      };
+      });
     });
 }

@@ -1,13 +1,16 @@
+import { Writable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Progress tests cover CLI progress rendering and lifecycle cleanup.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { supportsOscProgress } from "../../packages/terminal-core/src/osc-progress.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createCliProgress, withProgress } from "./progress.js";
 
 const clackMocks = vi.hoisted(() => {
   const spinnerInstance = {
     start: vi.fn(),
     message: vi.fn(),
-    stop: vi.fn(),
+    clear: vi.fn(),
   };
   return {
     spinner: vi.fn(() => spinnerInstance),
@@ -15,9 +18,25 @@ const clackMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   spinner: clackMocks.spinner,
 }));
+
+function createOutput(
+  isTTY: boolean,
+  write: (chunk: string) => void = () => {},
+  columns?: number,
+): NodeJS.WriteStream {
+  const output = new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      write(chunk.toString());
+      callback();
+    },
+  });
+  Object.assign(output, { isTTY, columns });
+  return output as NodeJS.WriteStream;
+}
 
 function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
   const original = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
@@ -41,36 +60,35 @@ describe("cli progress", () => {
     clackMocks.spinner.mockClear();
     clackMocks.spinnerInstance.start.mockClear();
     clackMocks.spinnerInstance.message.mockClear();
-    clackMocks.spinnerInstance.stop.mockClear();
+    clackMocks.spinnerInstance.clear.mockClear();
   });
 
-  it("logs progress when non-tty and fallback=log", () => {
-    const writes: string[] = [];
-    const stream = {
-      isTTY: false,
-      write: vi.fn((chunk: string) => {
-        writes.push(chunk);
-      }),
-    } as unknown as NodeJS.WriteStream;
+  it.each<[number, string]>([[36, "Checking channel status (pro…"]])(
+    "bounds spinner at %i columns",
+    (columns, expected) => {
+      const stream = createOutput(true, undefined, columns);
+      const progress = createCliProgress({ label: "Checking channel status (probe)…", stream });
+      onTestFinished(() => progress.done());
 
-    const progress = createCliProgress({
-      label: "Indexing memory...",
-      total: 10,
-      stream,
-      fallback: "log",
-    });
-    progress.setPercent(50);
+      expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(theme.accent(expected));
+      progress.done();
+      expect(stream.listenerCount("resize")).toBe(0);
+    },
+  );
+
+  it("suppresses animation below the frame budget", () => {
+    const stream = createOutput(true, undefined, 6);
+    const progress = createCliProgress({ label: "Loading", stream });
+    onTestFinished(() => progress.done());
+
+    expect(clackMocks.spinnerInstance.start).not.toHaveBeenCalled();
     progress.done();
-
-    expect(writes).toEqual(["Indexing memory... 0%\n", "Indexing memory... 50%\n"]);
+    expect(stream.listenerCount("resize")).toBe(0);
   });
 
   it("does not log without a tty when fallback is none", () => {
     const write = vi.fn();
-    const stream = {
-      isTTY: false,
-      write,
-    } as unknown as NodeJS.WriteStream;
+    const stream = createOutput(false, write);
 
     const progress = createCliProgress({
       label: "Nope",
@@ -86,12 +104,12 @@ describe("cli progress", () => {
 
   it("does not render progress updates after the reporter is finished", () => {
     const writes: string[] = [];
-    const stream = {
-      isTTY: false,
-      write: vi.fn((chunk: string) => {
+    const stream = createOutput(
+      false,
+      vi.fn((chunk: string) => {
         writes.push(chunk);
       }),
-    } as unknown as NodeJS.WriteStream;
+    );
 
     const progress = createCliProgress({
       label: "Indexing memory...",
@@ -107,34 +125,12 @@ describe("cli progress", () => {
     expect(writes).toEqual(["Indexing memory... 0%\n"]);
   });
 
-  it("does not stop an interactive spinner more than once", () => {
-    const stream = {
-      isTTY: true,
-      write: vi.fn(),
-    } as unknown as NodeJS.WriteStream;
-
-    const progress = createCliProgress({ label: "Loading", stream });
-    progress.done();
-    progress.done();
-
-    expect(clackMocks.spinnerInstance.stop).toHaveBeenCalledTimes(1);
-  });
-
   it("does not let a finished reporter clear or unlock a newer progress line", () => {
-    const firstStream = {
-      isTTY: true,
-      write: vi.fn(),
-    } as unknown as NodeJS.WriteStream;
+    const firstStream = createOutput(true, vi.fn());
     const secondWrite = vi.fn();
-    const secondStream = {
-      isTTY: true,
-      write: secondWrite,
-    } as unknown as NodeJS.WriteStream;
+    const secondStream = createOutput(true, secondWrite);
     const thirdWrite = vi.fn();
-    const thirdStream = {
-      isTTY: true,
-      write: thirdWrite,
-    } as unknown as NodeJS.WriteStream;
+    const thirdStream = createOutput(true, thirdWrite);
 
     const first = createCliProgress({
       label: "First",
@@ -167,51 +163,34 @@ describe("cli progress", () => {
     }
   });
 
-  it("does not use readline-backed spinners while raw TUI input is active", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps the normal interactive spinner for regular tty commands", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: false,
-      }),
-    ).toBe(true);
-  });
-
   it("routes clack spinner output through the progress stream", () => {
-    const stream = {
-      isTTY: true,
-      write: vi.fn(),
-    } as unknown as NodeJS.WriteStream;
+    const stream = createOutput(true, vi.fn());
 
-    const progress = createCliProgress({
-      label: "Loading",
-      stream,
+    withStdinIsRaw(false, () => {
+      const progress = createCliProgress({
+        label: "Loading",
+        stream,
+        fallback: "spinner",
+      });
+      try {
+        expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
+        expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
+          expect.stringContaining("Loading"),
+        );
+      } finally {
+        progress.done();
+      }
     });
-    progress.done();
-
-    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
-    expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
-      expect.stringContaining("Loading"),
-    );
-    expect(clackMocks.spinnerInstance.stop).toHaveBeenCalledTimes(1);
   });
 
   it("does not write terminal controls when raw TUI input suppresses the default spinner", () => {
     const writes: string[] = [];
-    const stream = {
-      isTTY: true,
-      write: vi.fn((chunk: string) => {
+    const stream = createOutput(
+      true,
+      vi.fn((chunk: string) => {
         writes.push(chunk);
       }),
-    } as unknown as NodeJS.WriteStream;
+    );
 
     withStdinIsRaw(true, () => {
       const progress = createCliProgress({
@@ -229,16 +208,14 @@ describe("cli progress", () => {
 
   it("unregisters a delayed tty progress line when done before start", () => {
     const firstWrites: string[] = [];
-    const firstStream = {
-      isTTY: true,
-      write: vi.fn((chunk: string) => {
+    const firstStream = createOutput(
+      true,
+      vi.fn((chunk: string) => {
         firstWrites.push(chunk);
       }),
-    } as unknown as NodeJS.WriteStream;
-    const secondStream = {
-      isTTY: true,
-      write: vi.fn(),
-    } as unknown as NodeJS.WriteStream;
+    );
+    const secondWrite = vi.fn();
+    const secondStream = createOutput(true, secondWrite);
 
     const delayed = createCliProgress({
       label: "Delayed",
@@ -256,13 +233,56 @@ describe("cli progress", () => {
     next.done();
 
     expect(firstWrites).toStrictEqual([]);
+    expect(secondWrite).toHaveBeenCalledWith(theme.accent("Next"));
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "releases the line after work callbacks %s",
+    async (outcome) => {
+      const events: string[] = [];
+      const stream = createOutput(true, (chunk) => events.push(chunk));
+      const oscSupported = supportsOscProgress(process.env, true);
+      const error = new Error("work failed");
+      let owned: ReturnType<typeof createCliProgress> | undefined;
+      let next: ReturnType<typeof createCliProgress> | undefined;
+      try {
+        const work = withProgress({ label: "Work", stream, fallback: "line" }, async (progress) => {
+          owned = progress;
+          await Promise.resolve();
+          events.push("callback");
+          progress.setLabel("Updated");
+          if (outcome === "reject") {
+            throw error;
+          }
+          return "value";
+        });
+        if (outcome === "reject") {
+          await expect(work).rejects.toBe(error);
+        } else {
+          await expect(work).resolves.toBe("value");
+        }
+        expect(events).toEqual([
+          ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
+          "\r\x1b[2K",
+          theme.accent("Work"),
+          "callback",
+          ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
+          "\r\x1b[2K",
+          theme.accent("Updated"),
+          ...(oscSupported ? ["\x1b]9;4;0;0\x1b\\"] : []),
+          "\r\x1b[2K",
+        ]);
+        next = createCliProgress({ label: "Next", stream, fallback: "line" });
+        expect(events.at(-1)).toBe(theme.accent("Next"));
+      } finally {
+        owned?.done();
+        next?.done();
+      }
+    },
+  );
+
   it("clamps oversized delayed progress timers", () => {
-    const stream = {
-      isTTY: true,
-      write: vi.fn(),
-    } as unknown as NodeJS.WriteStream;
+    const stream = createOutput(true, vi.fn());
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const progress = createCliProgress({

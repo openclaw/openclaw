@@ -6,11 +6,7 @@ enum VoiceWakeForwarder {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.forward")
 
     static func prefixedTranscript(_ transcript: String, machineName: String? = nil) -> String {
-        let resolvedMachine = machineName
-            .flatMap { name -> String? in
-                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
+        let resolvedMachine = machineName?.nonEmpty
             ?? Host.current().localizedName
             ?? ProcessInfo.processInfo.hostName
 
@@ -33,15 +29,6 @@ enum VoiceWakeForwarder {
         }
     }
 
-    struct ForwardOptions {
-        var sessionKey: String = "main"
-        var thinking: String?
-        var deliver: Bool = true
-        var to: String?
-        var channel: GatewayAgentChannel = .webchat
-        var voiceWakeTrigger: String?
-    }
-
     private struct SessionListResponse: Decodable {
         let sessions: [SessionRouteEntry]
     }
@@ -59,29 +46,36 @@ enum VoiceWakeForwarder {
         let to: String?
     }
 
-    static func selectedSessionOptions(voiceWakeTrigger: String? = nil) async -> ForwardOptions {
+    @discardableResult
+    static func forwardToSelectedSession(
+        transcript: String,
+        voiceWakeTrigger: String? = nil) async -> Result<Void, VoiceWakeForwardError>
+    {
         let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
-        let sessionKey: String = if let activeSessionKey = activeSessionKey?.trimmingCharacters(
-            in: .whitespacesAndNewlines),
-            !activeSessionKey.isEmpty
-        {
+        let sessionKey: String = if let activeSessionKey = activeSessionKey?.nonEmpty {
             activeSessionKey
         } else {
             await GatewayConnection.shared.mainSessionKey()
         }
 
-        let routeEntry = await self.loadSessionRouteEntry(sessionKey: sessionKey)
-        return self.forwardOptions(
+        let routeEntries = await self.loadSessionRouteEntries()
+        return await self.forward(invocation: self.makeInvocation(
+            transcript: transcript,
             sessionKey: sessionKey,
-            routeEntry: routeEntry,
-            voiceWakeTrigger: voiceWakeTrigger)
+            routeEntries: routeEntries,
+            voiceWakeTrigger: voiceWakeTrigger))
     }
 
-    static func forwardOptions(
-        sessionKey: String,
-        routeEntry: SessionRouteEntry?,
-        voiceWakeTrigger: String? = nil) -> ForwardOptions
+    static func makeInvocation(
+        transcript: String,
+        sessionKey: String = "main",
+        routeEntries: [SessionRouteEntry] = [],
+        voiceWakeTrigger: String? = nil) -> GatewayAgentInvocation
     {
+        let comparisonKey = OpenClawChatSessionKey.comparisonKey(sessionKey)
+        let routeEntry = routeEntries.first {
+            OpenClawChatSessionKey.comparisonKey($0.key) == comparisonKey
+        }
         let parsedRoute = self.parseSessionKeyRoute(sessionKey)
         let channelRaw = self.firstNonEmpty(
             routeEntry?.deliveryContext?.channel,
@@ -89,45 +83,31 @@ enum VoiceWakeForwarder {
             routeEntry?.channel,
             parsedRoute?.channel)
         let channel = channelRaw
-            .flatMap { GatewayAgentChannel(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+            .flatMap { GatewayAgentChannel(rawValue: $0.lowercased()) }
             ?? .webchat
         let to = self.firstNonEmpty(
             routeEntry?.deliveryContext?.to,
             routeEntry?.lastTo,
             parsedRoute?.to)
 
-        return ForwardOptions(
+        return GatewayAgentInvocation(
+            message: self.prefixedTranscript(transcript),
             sessionKey: sessionKey,
-            deliver: true,
+            deliver: channel.isDeliverable,
             to: to,
             channel: channel,
             voiceWakeTrigger: voiceWakeTrigger)
     }
 
     @discardableResult
-    static func forwardToSelectedSession(
-        transcript: String,
-        voiceWakeTrigger: String? = nil) async -> Result<Void, VoiceWakeForwardError>
+    static func forward(
+        transcript: String) async -> Result<Void, VoiceWakeForwardError>
     {
-        let options = await self.selectedSessionOptions(voiceWakeTrigger: voiceWakeTrigger)
-        return await self.forward(transcript: transcript, options: options)
+        await self.forward(invocation: self.makeInvocation(transcript: transcript))
     }
 
-    @discardableResult
-    static func forward(
-        transcript: String,
-        options: ForwardOptions = ForwardOptions()) async -> Result<Void, VoiceWakeForwardError>
-    {
-        let payload = Self.prefixedTranscript(transcript)
-        let deliver = options.channel.shouldDeliver(options.deliver)
-        let result = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-            message: payload,
-            sessionKey: options.sessionKey,
-            thinking: options.thinking,
-            deliver: deliver,
-            to: options.to,
-            channel: options.channel,
-            voiceWakeTrigger: options.voiceWakeTrigger))
+    private static func forward(invocation: GatewayAgentInvocation) async -> Result<Void, VoiceWakeForwardError> {
+        let result = await GatewayConnection.shared.sendAgent(invocation)
 
         if result.ok {
             self.logger.info("voice wake forward ok")
@@ -139,7 +119,7 @@ enum VoiceWakeForwarder {
         return .failure(.rpcFailed(message))
     }
 
-    private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
+    private static func loadSessionRouteEntries() async -> [SessionRouteEntry] {
         do {
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 500,
@@ -148,15 +128,11 @@ enum VoiceWakeForwarder {
                 includeGlobal: false,
                 timeoutMs: 10000)
             let data = try await GatewayConnection.shared.request(request)
-            let response = try JSONDecoder().decode(SessionListResponse.self, from: data)
-            return response.sessions.first {
-                $0.key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .caseInsensitiveCompare(sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-            }
+            return try JSONDecoder().decode(SessionListResponse.self, from: data).sessions
         } catch {
             self.logger.debug(
                 "voice wake selected route lookup failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return []
         }
     }
 
@@ -181,12 +157,6 @@ enum VoiceWakeForwarder {
     }
 
     private static func firstNonEmpty(_ values: String?...) -> String? {
-        for value in values {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let trimmed, !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return nil
+        values.lazy.compactMap { $0?.nonEmpty }.first
     }
 }

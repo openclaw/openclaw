@@ -1,4 +1,3 @@
-// Log file path helpers resolve log output paths for local runtime logs.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
@@ -64,18 +63,12 @@ export function resolveConfiguredLogFilePath(
   return config?.logging?.file ?? resolveDefaultRollingLogFile(options);
 }
 
-/** Returns whether a path is one of OpenClaw's dated rolling log files. */
-export function isRollingLogFilePath(file: string): boolean {
-  return ROLLING_LOG_FILE_RE.test(path.basename(file));
-}
-
 /** Returns whether a configured path had the legacy default rolling filename shape. */
 export function isLegacyRollingLogFilePath(file: string): boolean {
   const base = path.basename(file);
   return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
+    base === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}` ||
+    ROLLING_LOG_FILE_RE.exec(base)?.[1] === LOG_PREFIX
   );
 }
 

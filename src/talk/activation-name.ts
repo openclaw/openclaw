@@ -7,14 +7,11 @@
  */
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 
-export const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
+const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
 
-/** Transcript edge where an activation name was heard. */
-export type RealtimeVoiceActivationNameEdge = "leading" | "trailing";
-/** Whether the heard name matched exactly or through the guarded fuzzy path. */
-export type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
+type RealtimeVoiceActivationNameEdge = "leading" | "trailing";
+type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
 
-/** Activation-name match result plus transcript text with the name removed. */
 export type RealtimeVoiceActivationNameTranscriptResult =
   | {
       allowed: true;
@@ -39,22 +36,6 @@ type PreparedActivationName = {
   compact: string;
 };
 
-type PreparedEdgeActivationNameCandidate = {
-  candidate: EdgeActivationNameCandidate;
-  compact: string;
-};
-
-/** Count alphanumeric words in a configured activation name. */
-export function realtimeVoiceActivationNameWordCount(value: string): number {
-  return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
-}
-
-/** Normalize configured activation names while preserving word boundaries. */
-export function normalizeRealtimeVoiceActivationName(value: string): string | undefined {
-  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
 /** Extract the supported leading activation-name prefix from a longer phrase. */
 export function normalizeRealtimeVoiceActivationNamePrefix(
   value: string,
@@ -67,16 +48,14 @@ export function normalizeRealtimeVoiceActivationNamePrefix(
   return words.slice(0, maxWords).join(" ");
 }
 
-/** Validate the configured activation name length bound. */
 export function isSupportedRealtimeVoiceActivationName(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
 ): boolean {
-  const wordCount = realtimeVoiceActivationNameWordCount(value);
+  const wordCount = Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
   return wordCount >= 1 && wordCount <= maxWords;
 }
 
-/** Normalize and reject unsupported activation names in one reusable step. */
 export function normalizeSupportedRealtimeVoiceActivationName(
   value: string | undefined,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -84,7 +63,7 @@ export function normalizeSupportedRealtimeVoiceActivationName(
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = normalizeRealtimeVoiceActivationName(value);
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim() || undefined;
   return normalized && isSupportedRealtimeVoiceActivationName(normalized, maxWords)
     ? normalized
     : undefined;
@@ -103,14 +82,10 @@ export function matchRealtimeVoiceActivationName(
 ): Extract<RealtimeVoiceActivationNameTranscriptResult, { allowed: true }> | undefined {
   const preparedActivationNames: PreparedActivationName[] = [];
   for (const activationName of activationNames) {
-    const normalizedActivationName = normalizeActivationNameCandidate(activationName);
-    if (!normalizedActivationName) {
-      continue;
+    const compact = compactActivationName(activationName.toLowerCase());
+    if (compact) {
+      preparedActivationNames.push({ activationName, compact });
     }
-    preparedActivationNames.push({
-      activationName,
-      compact: compactActivationName(normalizedActivationName),
-    });
   }
   if (preparedActivationNames.length === 0) {
     return undefined;
@@ -120,12 +95,10 @@ export function matchRealtimeVoiceActivationName(
     ...leadingActivationNameCandidates(text, maxWords),
     ...trailingActivationNameCandidates(text, maxWords),
   ]
-    .map(
-      (candidate): PreparedEdgeActivationNameCandidate => ({
-        candidate,
-        compact: compactActivationName(candidate.heardName),
-      }),
-    )
+    .map((candidate) => ({
+      candidate,
+      compact: compactActivationName(candidate.heardName),
+    }))
     .toSorted((left, right) => right.compact.length - left.compact.length);
 
   for (const { candidate, compact: heardCompact } of candidates) {
@@ -151,7 +124,6 @@ function normalizeActivationNameCandidate(value: string): string | undefined {
   const normalized = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
     .trim();
   return normalized || undefined;
 }
@@ -308,13 +280,13 @@ function isFuzzyActivationNameMatch(
   if (heardCompact[0] !== activationCompact[0]) {
     return false;
   }
-  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (candidate.edge === "trailing") {
     return (
       heardCompact.length === activationCompact.length &&
       hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)
     );
   }
+  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (distance <= 1) {
     return true;
   }

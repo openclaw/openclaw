@@ -5,6 +5,7 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createAssistantReasoningMessage } from "./event-projector-assistant-message.js";
 import type { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -19,14 +20,15 @@ export function buildCodexMessagesSnapshot(params: {
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
+  steeringMessages?: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
-  createAssistantMirrorMessage: (title: string, text: string) => AssistantMessage;
+  turnTainted?: boolean;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
   if (params.reasoningText) {
     messages.push(
       attachCodexMirrorIdentity(
-        params.createAssistantMirrorMessage("Codex reasoning", params.reasoningText),
+        createAssistantReasoningMessage(params.runParams, params.reasoningText),
         `${params.turnId}:reasoning`,
       ),
     );
@@ -47,18 +49,23 @@ export function buildCodexMessagesSnapshot(params: {
       attachCodexMirrorIdentity(message, `${params.turnId}:assistant:${itemId}`),
     ),
     ...params.toolMessages,
+    ...(params.steeringMessages ?? []),
   ].toSorted(
     (left, right) =>
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );
   messages.push(...visibleWorkMessages);
   if (params.lastAssistant) {
-    messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
+    const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
+      tainted: params.turnTainted === true,
+    });
+    messages.push(attachCodexMirrorIdentity(assistant, `${params.turnId}:assistant`));
   }
   const taint = { tainted: false };
   return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: params.runParams.trigger === "memory",
+      inputProvenance: params.runParams.inputProvenance,
       message: applyCodexTranscriptTaint(message, taint),
     }),
   );
@@ -71,18 +78,18 @@ export function buildCodexSteeringMessagesSnapshot(params: {
   completedItemIds: ReadonlySet<string>;
   assistantProjection: CodexAssistantProjection;
   toolMessages: readonly AgentMessage[];
-}): { messages: AgentMessage[]; assistantBoundaryItemId?: string } {
+}): AgentMessage[] {
   const asyncMessages = params.assistantProjection
     .collectAsyncMessages()
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
   const commentaryMessages = params.assistantProjection
     .collectCommentaryMessages()
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
-  const assistantMessages = params.assistantProjection.collectCompletedAssistantMessages(
+  const assistantMessages = params.assistantProjection.collectSteeringAssistantMessages(
     params.completedItemIds,
     { tokenUsage: undefined, aborted: false, promptError: undefined },
   );
-  const messages = buildCodexMessagesSnapshot({
+  return buildCodexMessagesSnapshot({
     runParams: params.runParams,
     turnId: params.turnId,
     upstreamUserText: params.upstreamUserText,
@@ -92,11 +99,5 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     assistantMessages,
     toolMessages: params.toolMessages,
     lastAssistant: undefined,
-    createAssistantMirrorMessage: (title, text) =>
-      params.assistantProjection.createAssistantMirrorMessage(title, text),
   }).filter((message) => message.role !== "user");
-  return {
-    messages,
-    assistantBoundaryItemId: assistantMessages.at(-1)?.itemId,
-  };
 }

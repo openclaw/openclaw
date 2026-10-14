@@ -1,4 +1,3 @@
-/** Builds provider auth summaries for model-list/status output. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -12,12 +11,15 @@ import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js"
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
@@ -45,15 +47,12 @@ function formatProfileSecretLabel(params: {
   kind: "api-key" | "token";
 }): string {
   const value = normalizeOptionalString(params.value) ?? "";
-  if (value) {
-    const display = formatMarkerOrSecret(value);
-    return params.kind === "token" ? `token:${display}` : display;
-  }
-  if (params.ref) {
-    const refLabel = `ref(${params.ref.source}:${params.ref.id})`;
-    return params.kind === "token" ? `token:${refLabel}` : refLabel;
-  }
-  return params.kind === "token" ? "token:missing" : "missing";
+  const display = value
+    ? formatMarkerOrSecret(value)
+    : params.ref
+      ? `ref(${params.ref.source}:${params.ref.id})`
+      : "missing";
+  return params.kind === "token" ? `token:${display}` : display;
 }
 
 function resolveProfileSourceAgentDir(params: {
@@ -73,7 +72,6 @@ function resolveProfileSourceAgentDir(params: {
     : params.agentDir;
 }
 
-/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -107,22 +105,12 @@ export function resolveProviderAuthOverview(params: {
     if (!profile) {
       return `${profileId}=missing`;
     }
-    if (profile.type === "api_key") {
+    if (profile.type === "api_key" || profile.type === "token") {
       return withUnusableSuffix(
         `${profileId}=${formatProfileSecretLabel({
-          value: profile.key,
-          ref: profile.keyRef,
-          kind: "api-key",
-        })}`,
-        profileId,
-      );
-    }
-    if (profile.type === "token") {
-      return withUnusableSuffix(
-        `${profileId}=${formatProfileSecretLabel({
-          value: profile.token,
-          ref: profile.tokenRef,
-          kind: "token",
+          value: profile.type === "api_key" ? profile.key : profile.token,
+          ref: profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
+          kind: profile.type === "api_key" ? "api-key" : "token",
         })}`,
         profileId,
       );
@@ -157,13 +145,36 @@ export function resolveProviderAuthOverview(params: {
     authEvidenceMap: params.authEvidenceMap,
     skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
   });
+  const env = envKey
+    ? {
+        value:
+          envKey.source.includes("OAUTH_TOKEN") ||
+          normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth")
+            ? "OAuth (env)"
+            : maskApiKey(envKey.apiKey),
+        source: envKey.source,
+      }
+    : undefined;
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
+    if (providerApiKeyRef) {
+      if (
+        providerApiKeyRef.source !== "env" &&
+        resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider })
+      ) {
+        return { kind: "models.json", detail: formatMarkerOrSecret(NON_ENV_SECRETREF_MARKER) };
+      }
+      if (!usableCustomKey) {
+        return { kind: "missing", detail: "missing" };
+      }
+      return providerApiKeyRef.source === "env"
+        ? { kind: "env", detail: maskApiKey(usableCustomKey.apiKey) }
+        : { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
     if (profiles.length > 0) {
-      // Profiles win over env/config markers because runtime auth selection uses
-      // the profile store before provider-wide fallback material.
       return {
         kind: "profiles",
         detail: shortenHomePath(
@@ -176,13 +187,10 @@ export function resolveProviderAuthOverview(params: {
         ),
       };
     }
-    if (envKey) {
-      const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-      const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth");
+    if (env) {
       return {
         kind: "env",
-        detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
+        detail: env.value,
       };
     }
     if (usableCustomKey) {
@@ -207,19 +215,7 @@ export function resolveProviderAuthOverview(params: {
       apiKey: apiKeyCount,
       labels,
     },
-    ...(envKey
-      ? {
-          env: {
-            value: (() => {
-              const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-              return envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth")
-                ? "OAuth (env)"
-                : maskApiKey(envKey.apiKey);
-            })(),
-            source: envKey.source,
-          },
-        }
-      : {}),
+    ...(env ? { env } : {}),
     ...(customKey
       ? {
           modelsJson: {

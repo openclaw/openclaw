@@ -1,24 +1,11 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  buildGoogleChatApprovalTextWidget as buildTextWidget,
+  escapeGoogleChatApprovalCardText as escapeGoogleChatText,
+} from "./approval-card-text.js";
 import type { GoogleChatCardV2 } from "./types.js";
 
 const GOOGLECHAT_APPROVAL_CARD_ID = "openclaw-approval";
-const MAX_TEXT_PARAGRAPH_CHARS = 1800;
-
-function escapeGoogleChatText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function truncateText(text: string): string {
-  return text.length <= MAX_TEXT_PARAGRAPH_CHARS
-    ? text
-    : `${truncateUtf16Safe(text, MAX_TEXT_PARAGRAPH_CHARS - 3)}...`;
-}
-
-function formatApprovalId(value: string): string {
-  return JSON.stringify(value).slice(1, -1);
-}
-
 function formatCanonicalOutcome(approval: ApprovalResolveResult["approval"]): string {
   switch (approval.status) {
     case "allowed":
@@ -39,15 +26,7 @@ function buildSubjectSection(
   if (presentation.kind === "exec") {
     return {
       header: "Command",
-      widgets: [
-        {
-          textParagraph: {
-            text: escapeGoogleChatText(
-              truncateText(presentation.commandPreview ?? presentation.commandText),
-            ),
-          },
-        },
-      ],
+      widgets: [buildTextWidget(presentation.commandPreview ?? presentation.commandText)],
     };
   }
   const description = presentation.description.trim();
@@ -56,7 +35,7 @@ function buildSubjectSection(
   }`;
   return {
     header: "Request",
-    widgets: [{ textParagraph: { text: truncateText(requestText) } }],
+    widgets: [buildTextWidget(requestText, "html")],
   };
 }
 
@@ -67,7 +46,7 @@ export function buildGoogleChatCanonicalApprovalTerminalCards(
   const { approval } = result;
   const kindLabel = approval.presentation.kind === "plugin" ? "Plugin" : "Exec";
   const detailLines = [
-    `<b>Approval ID:</b> ${escapeGoogleChatText(formatApprovalId(approval.id))}`,
+    `<b>Approval ID:</b> ${escapeGoogleChatText(JSON.stringify(approval.id).slice(1, -1))}`,
     `<b>Status:</b> ${escapeGoogleChatText(approval.status)}`,
     ...(approval.status === "allowed" || approval.status === "denied"
       ? [`<b>Decision:</b> ${escapeGoogleChatText(approval.decision)}`]
@@ -86,7 +65,7 @@ export function buildGoogleChatCanonicalApprovalTerminalCards(
           buildSubjectSection(approval.presentation),
           {
             header: "Details",
-            widgets: [{ textParagraph: { text: truncateText(detailLines.join("<br>")) } }],
+            widgets: [buildTextWidget(detailLines.join("<br>"), "html")],
           },
         ],
       },

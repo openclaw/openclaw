@@ -6,6 +6,7 @@ import {
   repairLaunchAgentBootstrap,
   resolveLaunchAgentLabel,
 } from "../../daemon/launchd.js";
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 
 const LAUNCH_AGENT_RECOVERY_MESSAGE =
   "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
@@ -23,12 +24,13 @@ export async function recoverInstalledLaunchAgent<
   TResult extends LaunchAgentRecoveryAction,
 >(params: {
   result: TResult;
+  deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
 }): Promise<LaunchAgentRecoveryResult<TResult> | null> {
   if (process.platform !== "darwin") {
     return null;
   }
-  const env = params.env ?? (process.env as Record<string, string | undefined>);
+  const env = params.env ?? process.env;
   // Check host-wide ownership even when no user plist exists. Otherwise start
   // and restart would report "not installed" for a gateway already supervised
   // by a same-label system LaunchDaemon.
@@ -37,10 +39,12 @@ export async function recoverInstalledLaunchAgent<
   if (!plistExists) {
     return null;
   }
-  const repaired = await repairLaunchAgentBootstrap({ env }).catch(() => ({
-    ok: false as const,
-    status: "bootstrap-failed" as const,
-  }));
+  const repaired = await repairLaunchAgentBootstrap({ env, deadline: params.deadline }).catch(
+    () => ({
+      ok: false as const,
+      status: "bootstrap-failed" as const,
+    }),
+  );
   if (!repaired.ok) {
     if (
       repaired.status === "system-launchdaemon-conflict" ||

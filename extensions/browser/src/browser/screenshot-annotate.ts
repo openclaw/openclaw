@@ -1,15 +1,4 @@
-// extensions/browser/src/browser/screenshot-annotate.ts
-//
-// Pure helper module for screenshot label annotations.
-// Has no Playwright / CDP / page dependency: takes document-space inputs,
-// returns coordinate-projected annotations + IIFE strings the caller can
-// hand to page.evaluate / Runtime.evaluate.
-//
-// Used by:
-//   - pw-tools-core.interactions.ts (Playwright path, M1.2-a)
-//   - planned: raw-CDP path in M1.2-b
-//
-// chrome-mcp path keeps its own inline overlay (renderChromeMcpLabels) for now.
+// Projects document-space boxes into screenshot coordinates and builds Playwright overlays.
 
 const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
 const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
@@ -22,7 +11,7 @@ export interface RawAnnotationInput {
   role: string;
   name?: string;
   /** Bounding box in document coordinates (viewport top-left + scroll). */
-  doc: { x: number; y: number; width: number; height: number };
+  doc: AnnotationBox;
 }
 
 interface AnnotationBox {
@@ -48,15 +37,6 @@ interface OverlayItem {
   h: number;
 }
 
-interface AnnotationPlan {
-  /** Always document-space items, fed to buildOverlayInjectionScript. */
-  overlayItems: OverlayItem[];
-  /** Items projected into the capture mode's image-space coordinates. */
-  annotations: AnnotationItem[];
-  /** Refs dropped because of maxLabels truncation. */
-  skipped: number;
-}
-
 interface PlanAnnotationsParams {
   inputs: RawAnnotationInput[];
   space: CoordinateSpace;
@@ -70,7 +50,7 @@ interface PlanAnnotationsParams {
    */
   viewport?: { width: number; height: number };
   /** Required when space === "element". */
-  elementRect?: { x: number; y: number; width: number; height: number };
+  elementRect?: AnnotationBox;
   maxLabels?: number;
 }
 
@@ -83,7 +63,7 @@ function refToNumber(ref: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function planAnnotations(params: PlanAnnotationsParams): AnnotationPlan {
+export function planAnnotations(params: PlanAnnotationsParams) {
   const maxLabels = params.maxLabels ?? ANNOTATION_MAX_LABELS_DEFAULT;
 
   if (params.space === "viewport" && !params.scroll) {
@@ -156,40 +136,23 @@ function toAnnotation(input: RawAnnotationInput, params: PlanAnnotationsParams):
   };
 }
 
-function projectBox(
-  doc: { x: number; y: number; width: number; height: number },
-  params: PlanAnnotationsParams,
-): AnnotationBox {
-  if (params.space === "viewport") {
-    const scroll = params.scroll!;
-    return {
-      x: doc.x - scroll.x,
-      y: doc.y - scroll.y,
-      width: doc.width,
-      height: doc.height,
-    };
-  }
-  if (params.space === "element") {
-    const er = params.elementRect!;
-    // NOTE: width/height pass through unchanged even when the input rect
-    // partially extends past the element. The capture backend (e.g.
-    // locator.screenshot) is responsible for clipping; the box may have
-    // negative x/y or extend past elementRect width/height for partial overlaps.
-    return {
-      x: doc.x - er.x,
-      y: doc.y - er.y,
-      width: doc.width,
-      height: doc.height,
-    };
-  }
-  // fullpage: document coordinates as-is
-  return { x: doc.x, y: doc.y, width: doc.width, height: doc.height };
+function projectBox(doc: AnnotationBox, params: PlanAnnotationsParams): AnnotationBox {
+  const origin =
+    params.space === "viewport"
+      ? params.scroll!
+      : params.space === "element"
+        ? params.elementRect!
+        : { x: 0, y: 0 };
+  // Capture backends own clipping; partial overlaps keep their full box dimensions.
+  return {
+    x: doc.x - origin.x,
+    y: doc.y - origin.y,
+    width: doc.width,
+    height: doc.height,
+  };
 }
 
-function rectsOverlap(
-  a: { x: number; y: number; width: number; height: number },
-  b: { x: number; y: number; width: number; height: number },
-): boolean {
+function rectsOverlap(a: AnnotationBox, b: AnnotationBox): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
@@ -200,15 +163,15 @@ export function buildOverlayInjectionScript(params: {
   const itemsJson = JSON.stringify(
     params.items.map((it) => ({
       ref: it.ref,
-      x: round(it.x),
-      y: round(it.y),
-      w: Math.max(1, round(it.w)),
-      h: Math.max(1, round(it.h)),
+      x: Math.round(it.x),
+      y: Math.round(it.y),
+      w: Math.max(1, Math.round(it.w)),
+      h: Math.max(1, Math.round(it.h)),
     })),
   );
   const attr = ANNOTATION_OVERLAY_ATTR;
   const rootId = ANNOTATION_OVERLAY_ROOT_ID;
-  const captureY = Number.isFinite(params.captureY) ? round(params.captureY ?? 0) : 0;
+  const captureY = Number.isFinite(params.captureY) ? Math.round(params.captureY ?? 0) : 0;
   return `(() => {
   var items = ${itemsJson};
   var captureY = ${captureY};
@@ -247,36 +210,31 @@ export function buildOverlayClearScript(): string {
 }
 
 /**
- * Scale annotation boxes by independent x/y factors. Used to keep annotation
- * coordinates aligned with the saved image after the response pipeline
- * resizes the screenshot (e.g. via normalizeBrowserScreenshot capping the
- * longest side or the byte budget). Returns a new array; inputs are not
- * mutated. When both factors are 1 the boxes are returned unchanged (modulo
- * structural copy) so callers can share the same code path for resized and
- * non-resized captures.
+ * Translate the capture origin before scaling boxes into image pixels.
+ * Also used for subsequent output resizing; inputs remain unchanged.
  */
 export function scaleAnnotations(
   items: AnnotationItem[],
   scaleX: number,
   scaleY: number,
+  offset = { x: 0, y: 0 },
 ): AnnotationItem[] {
-  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
-    return items.map((it) => ({ ...it, box: { ...it.box } }));
-  }
-  if (scaleX === 1 && scaleY === 1) {
+  if (
+    !Number.isFinite(scaleX) ||
+    !Number.isFinite(scaleY) ||
+    scaleX <= 0 ||
+    scaleY <= 0 ||
+    (scaleX === 1 && scaleY === 1 && offset.x === 0 && offset.y === 0)
+  ) {
     return items.map((it) => ({ ...it, box: { ...it.box } }));
   }
   return items.map((it) => ({
     ...it,
     box: {
-      x: round(it.box.x * scaleX),
-      y: round(it.box.y * scaleY),
-      width: Math.max(1, round(it.box.width * scaleX)),
-      height: Math.max(1, round(it.box.height * scaleY)),
+      x: Math.round((it.box.x - offset.x) * scaleX),
+      y: Math.round((it.box.y - offset.y) * scaleY),
+      width: Math.max(1, Math.round(it.box.width * scaleX)),
+      height: Math.max(1, Math.round(it.box.height * scaleY)),
     },
   }));
-}
-
-function round(v: number): number {
-  return Math.round(v);
 }

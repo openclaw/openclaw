@@ -2,21 +2,28 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, onTestFinished } from "vitest";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { expect, onTestFinished, vi } from "vitest";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { disposeSessionReadContexts } from "../server-methods/sessions-read-cache.test-support.js";
 import { testState } from "../test-helpers.js";
+import { startWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   seedLinearSessionTranscript,
   setupGatewaySessionsHandlerTestHarness,
 } from "./server-sessions.test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 
-export async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
+async function initializeRemoteBackedGitSeed(root: string): Promise<void> {
   const workspace = path.join(root, "workspace");
   const remote = path.join(root, "remote.git");
   await fs.mkdir(workspace, { recursive: true });
@@ -35,11 +42,27 @@ export async function initializeRemoteBackedGitWorkspace(root: string): Promise<
   await execFileAsync("git", ["clone", "--bare", workspace, remote]);
   await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
   await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
-  return await fs.realpath(workspace);
 }
 
 export function setupGatewaySessionsWorktreeTestHarness() {
-  const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+  let seedRoot: string;
+  const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness(async (makeTempDir) => {
+    seedRoot = makeTempDir("openclaw-worktree-seed-");
+    await initializeRemoteBackedGitSeed(seedRoot);
+  });
+
+  async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
+    const workspace = path.join(root, "workspace");
+    const remote = path.join(root, "remote.git");
+    // Only pristine contents are shared. Each case owns its Git metadata, remote,
+    // and later managed worktrees; suite cleanup owns the never-mutated seed.
+    await Promise.all([
+      fs.cp(path.join(seedRoot, "workspace"), workspace, { recursive: true }),
+      fs.cp(path.join(seedRoot, "remote.git"), remote, { recursive: true }),
+    ]);
+    await execFileAsync("git", ["-C", workspace, "remote", "set-url", "origin", remote]);
+    return await fs.realpath(workspace);
+  }
 
   async function createArchiveWorktreeFixture() {
     const state = await createOpenClawTestState({
@@ -60,7 +83,17 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     const worktreeId = created.payload?.worktree.id;
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const maintenance = startWorktreeMaintenance({
+      scheduler,
+      getRuntimeConfig: (await getGatewayConfigModule()).getRuntimeConfig,
+      onComplete: vi.fn(),
+      onError: vi.fn(),
+    });
     onTestFinished(async () => {
+      await maintenance.stop();
+      await scheduler.stop();
       const record = worktreeId ? getRegistryWorktree(process.env, worktreeId) : undefined;
       if (record && record.removedAt === undefined) {
         await managedWorktrees.remove({
@@ -69,7 +102,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
           allowSnapshotLoss: true,
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       await state.cleanup();
     });
@@ -80,8 +113,28 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       ...transcriptScope,
       contents: ["Preserve this conversation."],
     });
-    return { key, sessionId, storePath, transcriptScope, worktree, workspace };
+    const tickWorktreeMaintenance = async () => {
+      await clock.advanceBy(0);
+    };
+    const cleanupWorktrees = async () => {
+      maintenance.request();
+      await tickWorktreeMaintenance();
+    };
+    return {
+      key,
+      sessionId,
+      storePath,
+      transcriptScope,
+      worktree,
+      workspace,
+      cleanupWorktrees,
+      tickWorktreeMaintenance,
+    };
   }
 
-  return { createSessionStoreDir, createArchiveWorktreeFixture };
+  return {
+    createSessionStoreDir,
+    createArchiveWorktreeFixture,
+    initializeRemoteBackedGitWorkspace,
+  };
 }

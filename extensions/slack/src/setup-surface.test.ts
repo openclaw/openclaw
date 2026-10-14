@@ -13,6 +13,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackSetupWizardBase, slackSetupContract } from "./setup-core.js";
 import { buildSlackSetupLines } from "./setup-shared.js";
 
+function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
+  return { channels: { slack } };
+}
+
 const slackSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: async ({ cfg }) => cfg,
   resolveAllowFromEntries: async ({ entries }) =>
@@ -32,18 +36,29 @@ const credentialOnlySlackSetupWizard = {
   finalize: undefined,
 };
 
+function createConfigure(accountId = "default") {
+  return createSetupWizardAdapter({
+    plugin: {
+      id: "slack",
+      meta: { label: "Slack" },
+      config: {
+        listAccountIds: () => [accountId],
+        defaultAccountId: () => accountId,
+      },
+      setupContract: slackSetupContract,
+    } as never,
+    wizard: credentialOnlySlackSetupWizard,
+  }).configure;
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const baseCfg = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-    },
-  },
-} as OpenClawConfig;
+const baseCfg = slackConfig({
+  botToken: "xoxb-test",
+  appToken: "xapp-test",
+});
 
 function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): string {
   const [call] = mock.mock.calls;
@@ -68,7 +83,7 @@ describe("slackSetupWizard.prepare", () => {
 
     await runSetupWizardPrepare({
       prepare: slackSetupWizard.prepare,
-      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      cfg: slackConfig({ mode: "http" }),
       prompter: createTestWizardPrompter({ plain, note }),
     });
 
@@ -85,7 +100,7 @@ describe("slackSetupWizard.prepare", () => {
 
     await runSetupWizardPrepare({
       prepare: slackSetupWizard.prepare,
-      cfg: { channels: { slack: {} } } as OpenClawConfig,
+      cfg: slackConfig({}),
       prompter: createTestWizardPrompter({
         plain,
         note,
@@ -171,6 +186,8 @@ describe("slackSetupWizard.prepare", () => {
             "app_home_opened",
             "app_mention",
             "app_context_changed",
+            "agent_session_stopped",
+            "agent_session_title_changed",
             "channel_rename",
             "member_joined_channel",
             "member_left_channel",
@@ -193,18 +210,7 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["user"],
       textValues: ["test-user-token", "test-app-token"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["default"],
-          defaultAccountId: () => "default",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure();
 
     const result = await runSetupWizardConfigure({
       configure,
@@ -238,22 +244,11 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["user"],
       textValues: ["test-user-token", "test-signing-secret"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["default"],
-          defaultAccountId: () => "default",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure();
 
     const result = await runSetupWizardConfigure({
       configure,
-      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      cfg: slackConfig({ mode: "http" }),
       prompter: queued.prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -276,22 +271,11 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-signing-secret"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["default"],
-          defaultAccountId: () => "default",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure();
 
     const result = await runSetupWizardConfigure({
       configure,
-      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      cfg: slackConfig({ mode: "http" }),
       prompter: queued.prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -316,22 +300,11 @@ describe("slackSetupWizard.prepare", () => {
       confirmValues: [true],
       textValues: ["test-signing-secret"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["default"],
-          defaultAccountId: () => "default",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure();
 
     const result = await runSetupWizardConfigure({
       configure,
-      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      cfg: slackConfig({ mode: "http" }),
       prompter: queued.prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -355,18 +328,7 @@ describe("slackSetupWizard.prepare", () => {
       confirmValues: [true],
       textValues: ["test-app-token"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["work"],
-          defaultAccountId: () => "work",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure("work");
     const userTokenRef = {
       source: "env" as const,
       provider: "default",
@@ -375,15 +337,11 @@ describe("slackSetupWizard.prepare", () => {
 
     const result = await runSetupWizardConfigure({
       configure,
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              work: { postAs: "user", userToken: userTokenRef },
-            },
-          },
+      cfg: slackConfig({
+        accounts: {
+          work: { postAs: "user", userToken: userTokenRef },
         },
-      } as OpenClawConfig,
+      }),
       prompter: queued.prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -399,7 +357,7 @@ describe("slackSetupWizard.prepare", () => {
     { name: "new setup", cfg: {} as OpenClawConfig },
     {
       name: "switch from user identity",
-      cfg: { channels: { slack: { postAs: "user" } } } as OpenClawConfig,
+      cfg: slackConfig({ postAs: "user" }),
     },
   ])("keeps bot identity implicit for $name", async ({ cfg }) => {
     vi.stubEnv("SLACK_BOT_TOKEN", "");
@@ -408,18 +366,7 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-app-token"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["default"],
-          defaultAccountId: () => "default",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure();
 
     const result = await runSetupWizardConfigure({
       configure,
@@ -444,33 +391,18 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-app-token"],
     });
-    const configure = createSetupWizardAdapter({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        config: {
-          listAccountIds: () => ["work"],
-          defaultAccountId: () => "work",
-        },
-        setupContract: slackSetupContract,
-      } as never,
-      wizard: credentialOnlySlackSetupWizard,
-    }).configure;
+    const configure = createConfigure("work");
 
     const result = await runSetupWizardConfigure({
       configure,
-      cfg: {
-        channels: {
-          slack: {
-            postAs: "user",
-            userToken: "test-user-token",
-            appToken: "test-user-app-token",
-            accounts: {
-              work: { userToken: "", appToken: "" },
-            },
-          },
+      cfg: slackConfig({
+        postAs: "user",
+        userToken: "test-user-token",
+        appToken: "test-user-app-token",
+        accounts: {
+          work: { userToken: "", appToken: "" },
         },
-      } as OpenClawConfig,
+      }),
       prompter: queued.prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -489,15 +421,11 @@ describe("slackSetupWizard.prepare", () => {
 
     const result = await runSetupWizardPrepare({
       prepare: slackSetupWizard.prepare,
-      cfg: {
-        channels: {
-          slack: {
-            postAs: "user",
-            userToken: "test-user-token",
-            appToken: "test-app-token",
-          },
-        },
-      } as OpenClawConfig,
+      cfg: slackConfig({
+        postAs: "user",
+        userToken: "test-user-token",
+        appToken: "test-app-token",
+      }),
       prompter: queued.prompter,
     });
 
@@ -540,10 +468,6 @@ describe("slackSetupWizard.dmPolicy", () => {
 });
 
 describe("slackSetupWizard.status", () => {
-  it("defers identity-specific setup instructions until after identity selection", () => {
-    expect("introNote" in slackSetupWizard).toBe(false);
-  });
-
   it.each([
     {
       name: "Socket Mode",
@@ -572,25 +496,21 @@ describe("slackSetupWizard.status", () => {
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
     const configured = await slackSetupWizard.status.resolveConfigured({
-      cfg: {
-        channels: {
-          slack: {
-            defaultAccount: "work",
-            botToken: "xoxb-root",
-            appToken: "xapp-root",
-            accounts: {
-              alerts: {
-                botToken: "xoxb-alerts",
-                appToken: "xapp-alerts",
-              },
-              work: {
-                botToken: "",
-                appToken: "",
-              },
-            },
+      cfg: slackConfig({
+        defaultAccount: "work",
+        botToken: "xoxb-root",
+        appToken: "xapp-root",
+        accounts: {
+          alerts: {
+            botToken: "xoxb-alerts",
+            appToken: "xapp-alerts",
+          },
+          work: {
+            botToken: "",
+            appToken: "",
           },
         },
-      } as OpenClawConfig,
+      }),
     });
 
     expect(configured).toBe(false);

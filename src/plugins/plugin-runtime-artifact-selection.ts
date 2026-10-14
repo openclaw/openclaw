@@ -1,77 +1,167 @@
 /** Selects built plugin artifacts without importing active runtime state. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPathInside } from "../infra/path-guards.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
-import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "./package-entrypoints.js";
+import { getPackageManifestMetadata } from "./package-manifest.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
 import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
-function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string {
-  return relativePath.replace(/\.[^.]+$/u, ".js");
-}
+export type PluginRuntimeArtifactPreference = "source" | "bundled" | "all";
+export type PluginRuntimeArtifact = { source: string; rootDir: string };
+export type PluginRuntimeArtifactSelectionParams = PluginRuntimeArtifact & {
+  entryKind: "runtime" | "setup" | "provider-discovery" | "capability-catalog";
+  origin: PluginOrigin;
+  preferBuiltPluginArtifacts: boolean;
+  sourcePreferred?: boolean;
+  packageManifest?: OpenClawPackageManifest;
+};
 
-function listPackageLocalRuntimeArtifactOutputExtensions(sourceExt: string): string[] {
-  switch (sourceExt) {
-    case ".mts":
-    case ".mjs":
-      return [".mjs", ".js", ".cjs"];
-    case ".cts":
-    case ".cjs":
-      return [".cjs", ".js", ".mjs"];
-    default:
-      return [".js", ".mjs", ".cjs"];
+/** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
+export function resolveCanonicalDistRuntimeSource(source: string): string {
+  const marker = `${path.sep}dist-runtime${path.sep}extensions${path.sep}`;
+  const index = source.indexOf(marker);
+  if (index === -1) {
+    return source;
   }
+  const candidate = `${source.slice(0, index)}${path.sep}dist${path.sep}extensions${path.sep}${source.slice(index + marker.length)}`;
+  return pluginCacheExistsSync(candidate) ? candidate : source;
 }
 
-function listPackageLocalRuntimeArtifactRelativePathBases(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
-  if (!withoutExt.startsWith(`src${path.sep}`) && !withoutExt.startsWith("src/")) {
-    return [withoutExt];
+/** Finalize once at execution; discovery and identity retain the selected artifact. */
+export function resolvePluginRuntimeExecutionArtifact(
+  selected: PluginRuntimeArtifact,
+): PluginRuntimeArtifact {
+  // This is the loader's existing final pass, not recursive normalization:
+  // nested staging paths can make another pass select a different file.
+  const source = resolveCanonicalDistRuntimeSource(selected.source);
+  const rootDir = resolveCanonicalDistRuntimeSource(selected.rootDir);
+  return {
+    source,
+    // A partial build can have the canonical directory without this entry;
+    // a staging symlink can also have already resolved into the canonical tree.
+    rootDir:
+      rootDir !== selected.rootDir &&
+      !isPathInside(
+        pluginCacheRealpathSync(rootDir) ?? rootDir,
+        pluginCacheRealpathSync(source) ?? source,
+      )
+        ? selected.rootDir
+        : rootDir,
+  };
+}
+
+/** Selects from lifecycle-owned package facts without pinning a runtime registry. */
+export function resolvePluginRuntimeArtifactSelection(
+  params: PluginRuntimeArtifactSelectionParams,
+): PluginRuntimeArtifact {
+  const { source, rootDir } = resolvePluginRuntimeExecutionArtifact({
+    source: pluginCacheRealpathSync(params.source) ?? path.resolve(params.source),
+    rootDir: pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir),
+  });
+  const artifacts = getPluginCacheRoot(rootDir).runtimeArtifacts;
+  const key = JSON.stringify([
+    params.source,
+    params.entryKind,
+    params.origin,
+    params.preferBuiltPluginArtifacts,
+    params.sourcePreferred,
+    params.packageManifest?.build?.bundledDist,
+  ]);
+  let resolved = artifacts.get(key);
+  if (!resolved) {
+    resolved = resolvePluginRuntimeExecutionArtifact(
+      resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir }),
+    );
+    artifacts.set(key, resolved);
   }
-  return [withoutExt.slice(4), withoutExt];
+  return resolved;
 }
 
-function listPackageLocalDistRuntimeArtifactRelativePaths(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const candidates = new Set<string>();
-  for (const base of listPackageLocalRuntimeArtifactRelativePathBases(relativePath)) {
-    for (const outputExt of listPackageLocalRuntimeArtifactOutputExtensions(ext)) {
-      candidates.add(`${base}${outputExt}`);
-    }
+/** Built hosts default only checkout plugins to compiled execution, not installed packages. */
+export function resolvePluginRuntimeArtifactPreference(
+  preferBuiltPluginArtifacts?: boolean,
+): PluginRuntimeArtifactPreference {
+  if (preferBuiltPluginArtifacts !== undefined) {
+    return preferBuiltPluginArtifacts ? "all" : "source";
   }
-  return [...candidates];
+  return /\.[cm]?js$/.test(new URL(import.meta.url).pathname) ? "bundled" : "source";
 }
 
-function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
-  switch (path.extname(source).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-      return true;
-    default:
-      return false;
+export function prefersBuiltPluginArtifacts(
+  preference: PluginRuntimeArtifactPreference,
+  origin: PluginOrigin,
+): boolean {
+  return preference === "all" || (preference === "bundled" && origin === "bundled");
+}
+
+function resolveBundledArtifactRelativePath(
+  rootDir: string,
+  relativeSource: string,
+): string | null {
+  const file = readPluginCacheFile({
+    rootDir,
+    relativePath: "package.json",
+    rejectHardlinks: false,
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  const metadata =
+    parsed?.ok && isRecord(parsed.value) ? getPackageManifestMetadata(parsed.value) : undefined;
+  const entries = [
+    ...(metadata?.runtimeExtensions?.length
+      ? metadata.runtimeExtensions
+      : (metadata?.extensions ?? [])),
+    metadata?.runtimeSetupEntry ?? metadata?.setupEntry,
+  ].filter((entry): entry is string => typeof entry === "string");
+  const sourceStem = relativeSource.replace(/\.[^.]+$/u, "");
+  const declared = entries.find(
+    (entry) => path.normalize(entry).replace(/\.[^.]+$/u, "") === sourceStem,
+  );
+  if (declared) {
+    return /\.[cm]?js$/.test(declared) ? declared : null;
   }
+  const extensions = new Set(entries.map((entry) => path.extname(entry)));
+  const extension = extensions.size === 1 ? [...extensions][0] : undefined;
+  // Emitted metadata owns the format: Docker's unified ESM build can override
+  // the standalone CJS preference. Never probe a stale sibling extension.
+  if (
+    !extension ||
+    ![".js", ".mjs", ".cjs"].includes(extension) ||
+    entries.some((entry) => path.normalize(entry).startsWith(`dist${path.sep}`))
+  ) {
+    return null;
+  }
+  return relativeSource.replace(/\.[^.]+$/u, extension);
 }
 
-function resolvePackageLocalDistRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-}): string | null {
+function resolvePackageLocalDistRuntimeArtifact(
+  params: Pick<PluginRuntimeArtifactSelectionParams, "source" | "rootDir" | "origin">,
+): string | null {
   const relativeSource = path.relative(params.rootDir, params.source);
   if (
-    !shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) ||
+    !isTypeScriptPackageEntry(relativeSource) ||
     relativeSource === "" ||
     relativeSource.startsWith("..") ||
     path.isAbsolute(relativeSource)
   ) {
     return null;
   }
-  const artifactRoot = path.join(params.rootDir, "dist");
-  for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
-    relativeSource,
-  )) {
-    const artifactSource = path.join(artifactRoot, artifactRelativePath);
+  for (const artifactRelativePath of listBuiltRuntimeEntryCandidates(relativeSource)) {
+    // Bundled source peers must not shadow the canonical root build below.
+    if (params.origin === "bundled" && !artifactRelativePath.startsWith("./dist/")) {
+      continue;
+    }
+    const artifactSource = path.resolve(params.rootDir, artifactRelativePath);
     if (pluginCacheExistsSync(artifactSource)) {
       return pluginCacheRealpathSync(artifactSource) ?? path.resolve(artifactSource);
     }
@@ -83,7 +173,7 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
   source: string;
   rootDir: string;
   packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+}): PluginRuntimeArtifact {
   const { rootDir, source } = params;
   const sourceExternal = params.packageManifest?.build?.bundledDist === false;
   const extensionsDir = path.dirname(rootDir);
@@ -98,7 +188,6 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
   if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
     return { source, rootDir };
   }
-  const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
   // Source-external packaging can replace the flat root build while leaving its
   // staging wrapper behind, so only bundled artifacts may fall back to dist-runtime.
   for (const artifactRootName of sourceExternal ? ["dist"] : ["dist-runtime", "dist"]) {
@@ -108,6 +197,10 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
       "extensions",
       path.basename(rootDir),
     );
+    const artifactRelativePath = resolveBundledArtifactRelativePath(artifactRoot, relativeSource);
+    if (!artifactRelativePath) {
+      continue;
+    }
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (pluginCacheExistsSync(artifactSource)) {
       return {
@@ -124,7 +217,7 @@ export function resolvePreferredBundledRootArtifact(params: {
   source: string;
   rootDir: string;
   packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+}): PluginRuntimeArtifact {
   const artifacts = getPluginCacheRoot(params.rootDir).runtimeArtifacts;
   const key = JSON.stringify([
     "bundled-root",
@@ -145,20 +238,16 @@ export function resolvePreferredBundledRootArtifact(params: {
 }
 
 /** Applies source, package-local, and root-build preference without runtime memo state. */
-export function resolvePreferredBuiltRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  preferBuiltPluginArtifacts: boolean;
-  packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+function resolvePreferredBuiltRuntimeArtifact(
+  params: PluginRuntimeArtifactSelectionParams,
+): PluginRuntimeArtifact {
   // The stateful resolver canonicalizes both paths before memo-key construction.
   const { rootDir, source } = params;
-  if (!params.preferBuiltPluginArtifacts) {
+  if (!params.preferBuiltPluginArtifacts || params.sourcePreferred) {
     return { source, rootDir };
   }
   if (params.origin !== "bundled") {
-    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ ...params, source, rootDir });
     return artifactSource ? { source: artifactSource, rootDir } : { source, rootDir };
   }
   // Source-external plugins keep source authoritative over package-local output;
@@ -166,7 +255,7 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
   const sourceExternal = params.packageManifest?.build?.bundledDist === false;
   const packageLocalArtifactSource = sourceExternal
     ? null
-    : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+    : resolvePackageLocalDistRuntimeArtifact({ ...params, source, rootDir });
   if (packageLocalArtifactSource) {
     return { source: packageLocalArtifactSource, rootDir };
   }

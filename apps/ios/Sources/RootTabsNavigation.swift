@@ -1,14 +1,17 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 extension RootTabs {
     private static var sidebarPersistentWidthThreshold: CGFloat {
-        980
+        self.sidebarSplitIdealWidth + self.sidebarDetailMinimumWidth
     }
 
-    static let sidebarSplitIdealWidth: CGFloat = 316
-    static let sidebarSplitMaximumWidth: CGFloat = 340
+    static let sidebarSplitIdealWidth: CGFloat = 300
+    static let sidebarSplitMaximumWidth: CGFloat = 320
+    static let sidebarDetailMinimumWidth: CGFloat = 500
     // Keep the web drawer's 86% reveal while using more of current iPhone widths.
     static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
@@ -88,17 +91,42 @@ extension RootTabs {
             }
         }
 
-        var settingsRoute: SettingsRoute? {
+        var screen: SidebarScreen {
             switch self {
-            case .gateway:
-                .gateway
-            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
-                 .files,
-                 .dreaming,
-                 .usage, .cron, .desktop, .terminal, .settings, .docs:
-                nil
+            case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
+            case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
+            case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
+            case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
+            case .usage: .dashboard(DashboardRouteMap.usagePagePath)
+            case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .chat: .chat
+            case .overview: .overview
+            case .agents: .agents
+            case .sessions: .sessions
+            case .files: .files
+            case .desktop: .desktop
+            case .terminal: .terminal
+            case .docs: .docs
+            case .settings: .settings
+            case .gateway: .gateway
             }
         }
+
+        var settingsRoute: SettingsRoute? {
+            self == .gateway ? .gateway : nil
+        }
+    }
+
+    enum SidebarScreen: Equatable {
+        case dashboard(String)
+        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+    }
+
+    static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
+        servingEnabled && disclosureAccepted
+            ? DashboardRouteMap.devicePermissionsSettingsPath
+            : DashboardRouteMap.deviceSettingsPath
     }
 
     enum SidebarLayoutMode: Equatable {
@@ -106,29 +134,43 @@ extension RootTabs {
         case split
     }
 
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
+    }
+
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
+    }
+
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
         windowSize ?? contentSize
     }
 
-    static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
-        containerSize.width < self.sidebarPersistentWidthThreshold || containerSize.height > containerSize.width
+    /// A content budget, not an OS-defined breakpoint. Keep phones and accessibility
+    /// text in one column even when their window is wider than the tablet threshold.
+    static func sidebarLayoutMode(
+        containerSize: CGSize,
+        isPad: Bool,
+        usesAccessibilityText: Bool = false) -> SidebarLayoutMode
+    {
+        !isPad || usesAccessibilityText || containerSize.width < self.sidebarPersistentWidthThreshold
             ? .drawer
             : .split
     }
 
-    static func preferredSidebarVisibility(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .split
-    }
-
-    static func shouldCollapseSidebarAfterSelection(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .drawer
+    static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
+        layoutMode == .split ? (splitPreference ?? true) : false
     }
 
     static func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
         if isDrawerLayout {
             return min(self.sidebarDrawerMaximumWidth, containerWidth * 0.86)
         }
-        return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
+        return min(
+            self.sidebarSplitMaximumWidth,
+            max(self.sidebarSplitIdealWidth, containerWidth * 0.25),
+            max(0, containerWidth - self.sidebarDetailMinimumWidth))
     }
 
     static func sidebarContentOffset(
@@ -165,13 +207,9 @@ extension RootTabs {
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-
-        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
+        else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":

@@ -1,178 +1,8 @@
 import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
 import { SessionManager } from "../../agents/sessions/index.js";
-import {
-  makeAgentAssistantMessage,
-  makeAgentUserMessage,
-} from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import type { Message } from "../../llm/types.js";
-import type { ExperienceReviewCandidate } from "./experience-review.js";
-
-export function createExperienceReviewMessages(modelId: string) {
-  function assistantText(text: string) {
-    return makeAgentAssistantMessage({ model: modelId, content: [{ type: "text", text }] });
-  }
-
-  function toolRound(
-    id: string,
-    name: string,
-    args: Record<string, unknown>,
-    text: string,
-    isError = false,
-  ): Message[] {
-    return [
-      makeAgentAssistantMessage({
-        model: modelId,
-        stopReason: "toolUse",
-        content: [{ type: "toolCall", id, name, arguments: args }],
-      }),
-      {
-        role: "toolResult",
-        toolCallId: id,
-        toolName: name,
-        content: [{ type: "text", text }],
-        isError,
-        timestamp: 0,
-      },
-    ];
-  }
-
-  function positiveMessages(): Message[] {
-    return [
-      makeAgentUserMessage({
-        content:
-          "Deploy this repository from its checked-in manifest. Do not ask for values already present there.",
-      }),
-      ...toolRound("deploy-project", "exec", { command: "deploy" }, "project required", true),
-      ...toolRound(
-        "deploy-region",
-        "exec",
-        { command: "deploy --project app" },
-        "region required",
-        true,
-      ),
-      ...toolRound(
-        "deploy-service",
-        "exec",
-        { command: "deploy --project app --region us" },
-        "service required",
-        true,
-      ),
-      assistantText("I am still guessing required fields one at a time."),
-      ...toolRound(
-        "read-manifest",
-        "read",
-        { path: "deploy.json" },
-        "project=app region=us service=api health=/ready",
-      ),
-      assistantText("The manifest contains all required deployment inputs."),
-      ...toolRound(
-        "deploy-complete",
-        "exec",
-        { command: "deploy --project app --region us --service api" },
-        "deployed",
-      ),
-      ...toolRound("fetch-health", "exec", { command: "fetch /ready" }, "200 ok"),
-      assistantText("Deployment verified."),
-      assistantText("Next time the manifest should be read before the first deploy call."),
-      assistantText("That preflight would remove three failed tool rounds."),
-      assistantText("Done."),
-    ];
-  }
-
-  function negativeMessages(): Message[] {
-    return [
-      makeAgentUserMessage({
-        content:
-          "One-time audit: check these ten unrelated opaque receipts. Policy requires one signed lookup per receipt; no batching or reuse is possible.",
-      }),
-      ...Array.from({ length: 10 }, (_, index) =>
-        toolRound(
-          `receipt-${index + 1}`,
-          "exec",
-          { command: `signed_receipt_lookup --id ${index + 1}` },
-          "valid",
-        ),
-      ).flat(),
-      assistantText("All ten one-time receipts are valid."),
-    ];
-  }
-
-  function interruptedMessages(): Message[] {
-    // Copying only a WAL-mode main file can pass integrity_check while missing
-    // committed rows. This recovery was reproduced against SQLite's backup API.
-    return [
-      makeAgentUserMessage({
-        content:
-          "Back up the running SQLite event database, verify the backup, then update the operations guide.",
-      }),
-      ...toolRound(
-        "copy-backup",
-        "exec",
-        { command: "cp events.db backup.db && python3 verify-backup.py events.db backup.db" },
-        "source events=3; backup events=0; backup integrity_check=ok; verification failed: committed events missing",
-        true,
-      ),
-      ...toolRound(
-        "copy-backup-retry",
-        "exec",
-        { command: "cp events.db backup.db && python3 verify-backup.py events.db backup.db" },
-        "source events=3; backup events=0; backup integrity_check=ok; verification failed: committed events missing",
-        true,
-      ),
-      ...toolRound(
-        "inspect-journal",
-        "exec",
-        {
-          command:
-            "sqlite3 events.db 'PRAGMA journal_mode; SELECT count(*) FROM events;' && ls events.db*",
-        },
-        "wal\n3\nevents.db events.db-shm events.db-wal",
-      ),
-      assistantText(
-        "The committed events are still in the WAL. A valid main-file copy is not a complete snapshot.",
-      ),
-      ...toolRound(
-        "read-backup-api",
-        "read",
-        { path: "docs/sqlite-online-backup.md" },
-        "https://sqlite.org/backup.html: The online backup API copies a database into a consistent snapshot while the source remains in use. Python sqlite3.Connection.backup exposes that API.",
-      ),
-      ...toolRound(
-        "online-backup",
-        "exec",
-        {
-          command:
-            'python3 -c \'import sqlite3; source=sqlite3.connect("events.db"); target=sqlite3.connect("snapshot.db"); source.backup(target); target.close(); source.close()\'',
-        },
-        "exit code 0",
-      ),
-      ...toolRound(
-        "verify-snapshot",
-        "exec",
-        { command: "python3 verify-backup.py events.db snapshot.db" },
-        "source events=3; backup events=3; backup integrity_check=ok; verification passed",
-      ),
-      assistantText(
-        "The online backup contains all committed events and passes the integrity check while the source remains open. Moving on to the operations guide.",
-      ),
-      makeAgentAssistantMessage({
-        model: modelId,
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "toolCall",
-            id: "read-operations-guide",
-            name: "read",
-            arguments: { path: "OPERATIONS.md" },
-          },
-        ],
-      }),
-    ];
-  }
-
-  return { positiveMessages, negativeMessages, interruptedMessages };
-}
+import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 
 export async function createExperienceReviewCandidate(
   runId: string,
@@ -188,12 +18,9 @@ export async function createExperienceReviewCandidate(
   const { workspaceDir, modelId } = options;
   const sessionId = `live-skill-review-${runId}`;
   const sessionKey = `agent:main:${sessionId}`;
-  const result: ExperienceReviewCandidate = {
+  const result = {
     ctx: {
-      agentId: "main",
       runId,
-      sessionId,
-      sessionKey,
       workspaceDir,
       modelProviderId: "openai",
       modelId,
@@ -207,6 +34,8 @@ export async function createExperienceReviewCandidate(
       },
     },
     config: {
+      // This fixture exercises deferred-tool receipts, independently of model Code Mode defaults.
+      tools: { codeMode: false },
       models: {
         providers: {
           openai: {
@@ -232,7 +61,7 @@ export async function createExperienceReviewCandidate(
         },
       },
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: {
           model: { primary: `openai/${modelId}` },
           models: {
@@ -243,14 +72,14 @@ export async function createExperienceReviewCandidate(
           },
         },
       },
-      skills: { workshop: { autonomous: { mode: "propose" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
       // Only the OpenAI provider plugin is needed. A cold unrestricted load
       // compiles all bundled extensions and runs provider discovery inside the
       // review lane, which can exceed the lane's no-progress watchdog.
       plugins: { allow: ["openai"] },
     },
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),
-  };
+  } satisfies Omit<ExperienceReviewCandidate, "source">;
   const target = await resolveAgentRunSessionTarget({
     agentId: "main",
     config: result.config,
@@ -266,8 +95,18 @@ export async function createExperienceReviewCandidate(
   if (!created.ok) {
     throw new Error(`Failed to create live review session: ${created.error}`);
   }
+  const session = await SessionManager.openAsync(target, workspaceDir);
+  let source;
   for (const message of messages) {
-    SessionManager.appendMessageToTranscript(target, message, { config: result.config });
+    source = (
+      await session.appendMessageWithTranscriptAnchorAsync(message, { config: result.config })
+    ).anchor;
   }
-  return result;
+  if (!source) {
+    throw new Error("Review fixture requires a completed message");
+  }
+  return {
+    ...result,
+    source,
+  };
 }

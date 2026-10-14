@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.Manifest
 import android.app.Dialog
 import android.content.pm.PackageManager
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -131,7 +132,48 @@ class PermissionRequesterTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun emptyPlatformCallbackTreatsRequestedPermissionsAsDenied() =
+  fun cancelledPermissionDialogsDismissAndReleaseNextRequest() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        for (showRationale in listOf(true, false)) {
+          val originalActivity = if (showRationale) rationaleActivity() else activity()
+          val requests = FakePermissionRequests()
+          val requester = requester(originalActivity, requests)
+          val cancelled = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+          runCurrent()
+          if (!showRationale) {
+            assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to false)))
+            runCurrent()
+          }
+
+          val dialog = checkNotNull(ShadowDialog.getLatestDialog())
+          assertTrue(dialog.isShowing)
+          cancelled.cancelAndJoin()
+          shadowOf(Looper.getMainLooper()).idle()
+          runCurrent()
+          assertFalse("rationale=$showRationale", dialog.isShowing)
+
+          val replacementActivity = activity()
+          val replacementRequests = FakePermissionRequests()
+          requester.attach(replacementActivity, replacementRequests::request)
+          requester.activate(replacementActivity)
+          val recovered =
+            async { requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO), timeoutMs = 1_000) }
+          runCurrent()
+          assertEquals(1, replacementRequests.size)
+          assertTrue(replacementRequests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to true)))
+          runCurrent()
+          assertEquals(mapOf(Manifest.permission.RECORD_AUDIO to true), recovered.await())
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun emptyPlatformCallbackReturnsDeniedWithoutSettingsEscalation() =
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
@@ -150,9 +192,45 @@ class PermissionRequesterTest {
         )
         runCurrent()
 
-        cancelDialog(checkNotNull(ShadowDialog.getLatestDialog()))
-        runCurrent()
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
         assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun optionalBatchWaitsForItsResultAndSerializesOtherRequests() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val requests = FakePermissionRequests()
+      val requester = requester(activity(), requests)
+      try {
+        val batch =
+          async {
+            requester.requestIfMissing(
+              listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+              timeoutMs = Long.MAX_VALUE,
+              showSettingsOnDenial = false,
+            )
+          }
+        val next = async { requester.requestIfMissing(listOf(Manifest.permission.READ_CONTACTS)) }
+        runCurrent()
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertFalse(batch.isCompleted)
+        assertFalse(next.isCompleted)
+        assertEquals(1, requests.size)
+
+        assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to true, Manifest.permission.RECORD_AUDIO to false), batch.await())
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
+        assertEquals(2, requests.size)
+        assertTrue(requests.deliver(requester, 1, mapOf(Manifest.permission.READ_CONTACTS to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.READ_CONTACTS to true), next.await())
       } finally {
         Dispatchers.resetMain()
       }
@@ -364,8 +442,10 @@ class PermissionRequesterTest {
 
   @Test
   fun requestCodeAllocatorWrapsWithinLegacyRangeAndSkipsLiveCodes() {
-    val allocator =
-      PermissionRequestCodeAllocator(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE)
+    val allocator = PermissionRequestCodeAllocator()
+    repeat(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE - PermissionRequestCodeAllocator.FIRST_PERMISSION_REQUEST_CODE) {
+      allocator.allocate { false }
+    }
 
     assertEquals(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE, allocator.allocate { false })
     assertEquals(

@@ -1,5 +1,6 @@
 // Delivery queue health tests cover independent inbound and outbound diagnostic reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 
 const countOutbound = vi.fn();
 const countIngressFailed = vi.fn();
@@ -42,62 +43,75 @@ const ingressPressure = [
 
 describe("buildDeliveryQueueHealthSummary", () => {
   beforeEach(() => {
-    countOutbound.mockReset().mockReturnValue([]);
-    countIngressFailed.mockReset().mockReturnValue([]);
-    countIngressPressure.mockReset().mockReturnValue([]);
+    countOutbound.mockReset().mockResolvedValue([]);
+    countIngressFailed.mockReset().mockResolvedValue([]);
+    countIngressPressure.mockReset().mockResolvedValue([]);
   });
 
   it.each([
     {
       name: "outbound failures when the ingress dead-letter read fails",
       arrange: () => {
-        countOutbound.mockReturnValue(outboundFailed);
-        countIngressFailed.mockImplementation(() => {
-          throw new Error("ingress database unavailable");
-        });
+        countOutbound.mockResolvedValue(outboundFailed);
+        countIngressFailed.mockRejectedValue(new Error("ingress database unavailable"));
       },
       expected: { failed: outboundFailed },
     },
     {
       name: "ingress failures when the outbound read fails",
       arrange: () => {
-        countOutbound.mockImplementation(() => {
-          throw new Error("outbound database unavailable");
-        });
-        countIngressFailed.mockReturnValue(ingressFailed);
+        countOutbound.mockRejectedValue(new Error("outbound database unavailable"));
+        countIngressFailed.mockResolvedValue(ingressFailed);
       },
       expected: { failed: [], ingressFailed },
     },
     {
       name: "dead letters when the ingress pressure read fails",
       arrange: () => {
-        countIngressFailed.mockReturnValue(ingressFailed);
-        countIngressPressure.mockImplementation(() => {
-          throw new Error("ingress pressure read unavailable");
-        });
+        countIngressFailed.mockResolvedValue(ingressFailed);
+        countIngressPressure.mockRejectedValue(new Error("ingress pressure read unavailable"));
       },
       expected: { failed: [], ingressFailed },
     },
     {
       name: "ingress pressure when the dead-letter read fails",
       arrange: () => {
-        countIngressFailed.mockImplementation(() => {
-          throw new Error("ingress failed read unavailable");
-        });
-        countIngressPressure.mockReturnValue(ingressPressure);
+        countIngressFailed.mockRejectedValue(new Error("ingress failed read unavailable"));
+        countIngressPressure.mockResolvedValue(ingressPressure);
       },
       expected: { failed: [], ingressPressure },
     },
-  ])("preserves $name", ({ arrange, expected }) => {
+  ])("preserves $name", async ({ arrange, expected }) => {
     arrange();
-    expect(buildDeliveryQueueHealthSummary()).toEqual(expected);
+    expect(await buildDeliveryQueueHealthSummary()).toEqual(expected);
   });
 
-  it("uses cached ingress pressure without rerunning its reader", () => {
-    expect(buildDeliveryQueueHealthSummary(ingressPressure)).toEqual({
+  it("uses cached ingress pressure without rerunning its reader", async () => {
+    expect(await buildDeliveryQueueHealthSummary(ingressPressure)).toEqual({
       failed: [],
       ingressPressure,
     });
     expect(countIngressPressure).not.toHaveBeenCalled();
+  });
+
+  it("preserves cached ingress diagnostics when outbound admission capture fails", async () => {
+    const capture = vi
+      .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
+      .mockImplementation(() => {
+        throw new Error("outbound admission unavailable");
+      });
+    countIngressFailed.mockResolvedValue(ingressFailed);
+    try {
+      expect(await buildDeliveryQueueHealthSummary(ingressPressure)).toEqual({
+        failed: [],
+        ingressFailed,
+        ingressPressure,
+      });
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(countOutbound).not.toHaveBeenCalled();
+      expect(countIngressPressure).not.toHaveBeenCalled();
+    } finally {
+      capture.mockRestore();
+    }
   });
 });

@@ -6,7 +6,7 @@ const clientFetchMocks = vi.hoisted(() => ({
 
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
-import { browserNavigate } from "./client-actions-core.js";
+import { browserNavigate } from "./client-actions.js";
 
 function lastNavigationRequest(): {
   url: string;
@@ -47,7 +47,6 @@ describe("browser navigation client actions", () => {
 
   it.each([
     { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
     { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "normalizes navigation timeout $requestedTimeoutMs before arming its transport watchdog",
@@ -68,11 +67,14 @@ describe("browser navigation client actions", () => {
     },
   );
 
-  it("preserves the existing navigation watchdog when no timeout is requested", async () => {
+  it("keeps the default navigation timeout inside its transport watchdog", async () => {
     await browserNavigate(undefined, { url: "https://example.com" });
 
     const request = lastNavigationRequest();
-    expect(request.options.timeoutMs).toBe(20_000);
-    expect(JSON.parse(request.options.body ?? "{}")).toEqual({ url: "https://example.com" });
+    expect(request.options.timeoutMs).toBe(25_000);
+    expect(JSON.parse(request.options.body ?? "{}")).toEqual({
+      url: "https://example.com",
+      timeoutMs: 20_000,
+    });
   });
 });

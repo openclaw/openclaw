@@ -3,9 +3,7 @@ import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
 import type { BoardTab } from "./types.ts";
 
 export type BoardFace = SessionBoardFace;
-// Canonical visible-dock union, derived from the protocol BoardTab shape so
-// persisted settings and render code can never drift from the wire contract.
-export type BoardVisibleChatDock = Exclude<BoardTab["chatDock"], "hidden">;
+type BoardVisibleChatDock = Exclude<BoardTab["chatDock"], "hidden">;
 
 export type BoardSessionView = {
   activeTabId?: string;
@@ -14,18 +12,17 @@ export type BoardSessionView = {
 
 export type BoardSessionViews = Record<string, BoardSessionView>;
 
-const MAX_BOARD_SESSION_VIEWS = 50;
+const MAX_BOARD_SESSION_VIEWS = 500;
 
 export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
   if (!isRecord(value)) {
     return {};
   }
   const normalized: BoardSessionViews = {};
-  for (const [sessionKey, rawView] of Object.entries(value)) {
-    if (!sessionKey.trim() || !isRecord(rawView)) {
+  for (const [sessionKey, view] of Object.entries(value)) {
+    if (!sessionKey.trim() || !isRecord(view)) {
       continue;
     }
-    const view = rawView;
     const activeTabId = typeof view.activeTabId === "string" ? view.activeTabId.trim() : "";
     const reopenDockByTab: Record<string, BoardVisibleChatDock> = {};
     if (isRecord(view.reopenDockByTab)) {

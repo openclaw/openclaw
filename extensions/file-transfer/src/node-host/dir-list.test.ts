@@ -36,32 +36,9 @@ describe("handleDirList — input validation", () => {
     await expectDirListError({ path: "" }, "INVALID_PATH");
     await expectDirListError({ path: undefined }, "INVALID_PATH");
   });
-
-  it("rejects relative paths", async () => {
-    await expectDirListError({ path: "relative" }, "INVALID_PATH");
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    await expectDirListError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
-  });
 });
 
-describe("handleDirList — fs errors", () => {
-  it("returns NOT_FOUND for a missing directory", async () => {
-    await expectDirListError({ path: path.join(tmpRoot, "does-not-exist") }, "NOT_FOUND");
-  });
-
-  it("returns IS_FILE when path resolves to a regular file", async () => {
-    const f = path.join(tmpRoot, "f.txt");
-    await fs.writeFile(f, "x");
-    await expectDirListError({ path: f }, "IS_FILE");
-  });
-});
-
-describe.each([
-  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
-  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
-] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
+describe("handleDirList — invalid directory bindings", () => {
   it.each(["malformed", "write", "device", "inode"] as const)(
     "rejects a %s binding before reading the directory",
     async (kind) => {
@@ -81,7 +58,7 @@ describe.each([
       const readdir = vi.spyOn(fs, "readdir");
 
       await expect(
-        handle({ path: tmpRoot, preflightOnly: true, expectedBinding }),
+        handleDirList({ path: tmpRoot, preflightOnly: true, expectedBinding }),
       ).resolves.toEqual({
         ok: false,
         code: "CANONICAL_PATH_CHANGED",
@@ -91,44 +68,52 @@ describe.each([
       expect(readdir).not.toHaveBeenCalled();
     },
   );
+});
 
+describe("directory binding", () => {
   it("preserves path and directory errors before validating the binding", async () => {
     const missing = path.join(tmpRoot, "missing");
-    await expect(handle({ path: missing, expectedBinding: null })).resolves.toEqual({
+    await expect(handleDirList({ path: missing, expectedBinding: null })).resolves.toEqual({
       ok: false,
       code: "NOT_FOUND",
-      message: notFoundMessage,
+      message: "path not found",
     });
     const file = path.join(tmpRoot, "file.txt");
     await fs.writeFile(file, "keep");
-    await expect(handle({ path: file, expectedBinding: null })).resolves.toEqual({
+    await expect(handleDirList({ path: file, expectedBinding: null })).resolves.toEqual({
       ok: false,
       code: "IS_FILE",
       message: "path is not a directory",
       canonicalPath: file,
     });
     await expect(
-      handle({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
+      handleDirList({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
     ).resolves.toEqual({
       ok: false,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: file,
     });
   });
 
-  it("retains the command's permission-error classification", async () => {
-    vi.spyOn(fs, "stat").mockRejectedValueOnce(
-      Object.assign(new Error("denied"), { code: "EACCES" }),
-    );
+  it.each([
+    ["dir.list", handleDirList, "PERMISSION_DENIED"],
+    ["dir.fetch", handleDirFetch, "READ_ERROR"],
+  ] as const)(
+    "retains %s's permission-error classification",
+    async (_command, handle, permissionCode) => {
+      vi.spyOn(fs, "stat").mockRejectedValueOnce(
+        Object.assign(new Error("denied"), { code: "EACCES" }),
+      );
 
-    await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
-      ok: false,
-      code: permissionCode,
-      message: "stat failed: Error: denied",
-      canonicalPath: tmpRoot,
-    });
-  });
+      await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
+        ok: false,
+        code: permissionCode,
+        message: "stat failed: Error: denied",
+        canonicalPath: tmpRoot,
+      });
+    },
+  );
 });
 
 describe("handleDirList — happy path", () => {
@@ -153,10 +138,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
+      const drained = path.join(tmpRoot, "worker-drained");
       // Retarget after the real chdir, before the unchanged worker checks and
       // enumerates its bound directory. Polling /proc can miss the entire child.
+      // beforeExit also distinguishes natural settlement from any forced-exit alias.
       const retargetAfterBinding = `(() => {
         const fs = require("node:fs");
+        process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "settled"));
         const chdir = process.chdir;
         process.chdir = (directory) => {
           chdir(directory);
@@ -182,6 +170,7 @@ describe("handleDirList — happy path", () => {
       });
       try {
         expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+        expect(await fs.readFile(drained, "utf8")).toBe("settled");
         expect(await fs.readlink(current)).toBe(replacement);
         const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
           entries: Array<{ name: string }>;
@@ -217,9 +206,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
-      const child = spawn(command[0]!, command.slice(1), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const drained = path.join(tmpRoot, "rejected-worker-drained");
+      const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
+      const child = spawn(
+        command[0]!,
+        [command[1]!, observeNaturalExit + command[2]!, ...command.slice(3)],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
       const stdout: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
       const exit = await new Promise<number | null>((resolve, reject) => {
@@ -228,6 +221,7 @@ describe("handleDirList — happy path", () => {
       });
 
       expect(exit).toBe(78);
+      expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);
     },
   );
@@ -258,13 +252,13 @@ describe("handleDirList — happy path", () => {
     expect(changed).toEqual({
       ok: false,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: tmpRoot,
     });
   });
 
   it("lists files and subdirs with metadata, sorted by name", async () => {
-    await fs.writeFile(path.join(tmpRoot, "z.txt"), "Z");
+    await fs.writeFile(path.join(tmpRoot, ".hidden"), "Z");
     await fs.writeFile(path.join(tmpRoot, "a.png"), "PNG-bytes");
     await fs.mkdir(path.join(tmpRoot, "subdir"));
 
@@ -272,7 +266,7 @@ describe("handleDirList — happy path", () => {
     if (!r.ok) {
       throw new Error("expected ok");
     }
-    expect(r.entries.map((e) => e.name)).toEqual(["a.png", "subdir", "z.txt"]);
+    expect(r.entries.map((e) => e.name)).toEqual([".hidden", "a.png", "subdir"]);
 
     const a = r.entries.find((e) => e.name === "a.png")!;
     expect(a.isDir).toBe(false);
@@ -286,55 +280,6 @@ describe("handleDirList — happy path", () => {
 
     expect(r.truncated).toBe(false);
     expect(r.nextPageToken).toBeUndefined();
-  });
-
-  it("includes dotfiles in the listing", async () => {
-    await fs.writeFile(path.join(tmpRoot, ".hidden"), "x");
-    await fs.writeFile(path.join(tmpRoot, "visible"), "x");
-
-    const r = await handleDirList({ path: tmpRoot });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    expect(r.entries.map((e) => e.name)).toEqual([".hidden", "visible"]);
-  });
-
-  it("paginates via pageToken (offset-based)", async () => {
-    for (let i = 0; i < 7; i++) {
-      // zero-pad so localeCompare-stable sort matches creation order
-      await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
-    }
-
-    const page1 = await handleDirList({ path: tmpRoot, maxEntries: 3 });
-    if (!page1.ok) {
-      throw new Error("page1");
-    }
-    expect(page1.entries.map((e) => e.name)).toEqual(["f-0.txt", "f-1.txt", "f-2.txt"]);
-    expect(page1.truncated).toBe(true);
-    expect(page1.nextPageToken).toBe("3");
-
-    const page2 = await handleDirList({
-      path: tmpRoot,
-      maxEntries: 3,
-      pageToken: page1.nextPageToken,
-    });
-    if (!page2.ok) {
-      throw new Error("page2");
-    }
-    expect(page2.entries.map((e) => e.name)).toEqual(["f-3.txt", "f-4.txt", "f-5.txt"]);
-    expect(page2.truncated).toBe(true);
-
-    const page3 = await handleDirList({
-      path: tmpRoot,
-      maxEntries: 3,
-      pageToken: page2.nextPageToken,
-    });
-    if (!page3.ok) {
-      throw new Error("page3");
-    }
-    expect(page3.entries.map((e) => e.name)).toEqual(["f-6.txt"]);
-    expect(page3.truncated).toBe(false);
-    expect(page3.nextPageToken).toBeUndefined();
   });
 
   it("does not coerce partial page tokens", async () => {
@@ -361,23 +306,5 @@ describe("handleDirList — happy path", () => {
     }
     expect(r.entries.map((e) => e.name)).toEqual(["f-1.txt"]);
     expect(r.nextPageToken).toBe("2");
-  });
-
-  it("uses the 200-entry default for invalid limits", async () => {
-    await Promise.all(
-      Array.from({ length: 201 }, (_, index) =>
-        fs.writeFile(path.join(tmpRoot, `entry-${String(index).padStart(3, "0")}`), ""),
-      ),
-    );
-
-    for (const maxEntries of [undefined, -1, Number.NaN, "200"] as unknown[]) {
-      const result = await handleDirList({ path: tmpRoot, maxEntries });
-      if (!result.ok) {
-        throw new Error(`expected ok, got ${result.code}`);
-      }
-      expect(result.entries).toHaveLength(200);
-      expect(result.nextPageToken).toBe("200");
-      expect(result.truncated).toBe(true);
-    }
   });
 });

@@ -1,8 +1,9 @@
+import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 import {
   inspectGatewayPortHealth,
-  resolveGatewayRestartProbeAuth,
+  resolveGatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -13,6 +14,7 @@ import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 
 export async function waitForGatewayHealthyListener(params: {
   port: number;
+  env?: NodeJS.ProcessEnv;
   attempts?: number;
   delayMs?: number;
   previousLockIdentity?: GatewayLockIdentity;
@@ -22,9 +24,24 @@ export async function waitForGatewayHealthyListener(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const previousLockIdentity = params.previousLockIdentity;
 
-  const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
-  let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
-    ? {
+  const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
+    auth: undefined,
+    config: {},
+  }));
+  const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
+
+  let attempt = 0;
+  let expectedListenerPid: number | undefined;
+  if (previousLockIdentity) {
+    const replacement = await waitForGatewayLockReplacement({
+      previousLockIdentity,
+      env: params.env,
+      attempts,
+      delayMs,
+      waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
+    });
+    if (replacement.status === "timeout") {
+      return {
         portUsage: {
           port: params.port,
           status: "unknown",
@@ -35,48 +52,25 @@ export async function waitForGatewayHealthyListener(params: {
           ],
         },
         healthy: false,
-      }
-    : await inspectGatewayPortHealth({
-        port: params.port,
-        auth: probeAuth,
-      });
-
-  let attempt = 0;
-  let expectedListenerPid: number | undefined;
-  if (previousLockIdentity) {
-    const replacement = await waitForGatewayLockReplacement({
-      previousLockIdentity,
-      attempts,
-      delayMs,
-      waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
-    });
-    if (replacement.status === "timeout") {
-      return snapshot;
+      };
     }
     attempt = replacement.attemptsUsed;
     expectedListenerPid = replacement.lockIdentity.pid;
-    snapshot = await inspectGatewayPortHealth({
-      port: params.port,
-      auth: probeAuth,
-      expectedListenerPid,
-    });
   }
 
-  if (snapshot.healthy) {
+  for (;;) {
+    const snapshot = await inspectGatewayPortHealth({
+      port: params.port,
+      auth: probeContext.auth,
+      config: probeContext.config,
+      configuredProbe,
+      expectedListenerPid,
+    });
+    if (!snapshot.healthy && attempt < attempts) {
+      attempt += 1;
+      await sleep(delayMs);
+      continue;
+    }
     return snapshot;
   }
-  while (attempt < attempts) {
-    attempt += 1;
-    await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth({
-      port: params.port,
-      auth: probeAuth,
-      expectedListenerPid,
-    });
-    if (snapshot.healthy) {
-      return snapshot;
-    }
-  }
-
-  return snapshot;
 }

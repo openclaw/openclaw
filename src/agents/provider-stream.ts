@@ -1,15 +1,16 @@
-/**
- * Provider stream registration entry point.
- * Resolves plugin-owned or transport-aware stream functions and registers the
- * model API once a concrete stream implementation exists.
- */
 import type { ApiRegistry } from "@openclaw/ai";
 import "./ai-transport-runtime-host.js";
 import { createTransportAwareStreamFnForModel } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Api, Model } from "../llm/types.js";
+import {
+  attachModelProviderRuntimePluginHandle,
+  getModelProviderRuntimePluginHandle,
+  resolveProviderRuntimePluginHandle,
+} from "../plugins/provider-hook-runtime.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
+import type { ProviderPrepareExtraParamsContext } from "../plugins/provider-runtime.types.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import {
   unwrapHeaderSentinelsForProviderEgress,
@@ -18,7 +19,6 @@ import {
 } from "./provider-secret-egress.js";
 import type { StreamFn } from "./runtime/index.js";
 
-/** Resolves and registers the stream function for a provider-backed model. */
 export function registerProviderStreamForModel<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: OpenClawConfig;
@@ -26,33 +26,51 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowRuntimePluginLoad?: boolean;
+  wrapProviderStream?: boolean;
+  auth?: ProviderPrepareExtraParamsContext["auth"];
   apiRegistry?: ApiRegistry;
 }): StreamFn | undefined {
+  const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(params.model)?.registry;
+  const runtimeHandle =
+    getModelProviderRuntimePluginHandle(params.model) ??
+    (params.allowRuntimePluginLoad === false
+      ? undefined
+      : resolveProviderRuntimePluginHandle({
+          provider: params.model.provider,
+          modelId: params.model.id,
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        }));
+  const runtimeModel = runtimeHandle
+    ? attachModelProviderRuntimePluginHandle(params.model, runtimeHandle)
+    : params.model;
   // Plugin stream factories may capture model headers, so construction is the
   // last safe boundary for providers that do not expose the host fetch seam.
   const pluginModel = unwrapModelHeaderSentinelsForProviderEgress(
-    params.model,
+    runtimeModel,
     "plugin provider stream construction",
   );
   const providerStreamFn = resolveProviderStreamFn({
-    provider: params.model.provider,
+    provider: runtimeModel.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle,
     allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      provider: params.model.provider,
-      modelId: params.model.id,
+      provider: runtimeModel.provider,
+      modelId: runtimeModel.id,
       model: pluginModel,
     },
   });
   const transportFallback = providerStreamFn
     ? undefined
     : createTransportAwareStreamFnForModel(
-        params.model.api === "google-generative-ai" ? pluginModel : params.model,
+        runtimeModel.api === "google-generative-ai" ? pluginModel : runtimeModel,
         {
           cfg: params.cfg,
           agentDir: params.agentDir,
@@ -68,13 +86,33 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   if (!streamFn) {
     return undefined;
   }
+  const providerWrappedStreamFn =
+    params.wrapProviderStream && runtimeHandle
+      ? (runtimeHandle.plugin?.wrapStreamFn?.({
+          config: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          provider: runtimeModel.provider,
+          modelId: runtimeModel.id,
+          model: runtimeModel,
+          auth: params.auth,
+          streamFn,
+        }) ?? streamFn)
+      : streamFn;
+  const preparedStreamFn: StreamFn = runtimeHandle
+    ? (model, context, options) =>
+        providerWrappedStreamFn(
+          attachModelProviderRuntimePluginHandle(model, runtimeHandle),
+          context,
+          options,
+        )
+    : providerWrappedStreamFn;
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
-  const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(params.model)?.registry;
   if (apiRegistry) {
-    ensureCustomApiRegistered(apiRegistry, params.model.api, streamFn);
+    ensureCustomApiRegistered(apiRegistry, runtimeModel.api, preparedStreamFn);
   }
-  return streamFn;
+  return preparedStreamFn;
 }
 
 function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {

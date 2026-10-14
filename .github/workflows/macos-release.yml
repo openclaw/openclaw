@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to validate for macOS release handoff (for example v2026.3.22, v2026.3.22-alpha.1, or v2026.3.22-beta.1)
+        description: Existing release tag to validate for macOS release handoff (for example v2026.3.22 or v2026.3.22-beta.1)
         required: true
         type: string
       preflight_only:
@@ -24,7 +24,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   validate_macos_release_request:
@@ -35,12 +35,20 @@ jobs:
       - name: Validate tag input format
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          PUBLIC_RELEASE_BRANCH: ${{ inputs.public_release_branch }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ "${RELEASE_TAG}" == *-alpha.* || "${GITHUB_REF:-}" == *tideclaw/alpha/* || "${PUBLIC_RELEASE_BRANCH:-}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,10 +82,13 @@ jobs:
             echo "public_release_branch must be main or release/YYYY.M.PATCH, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
-          RELEASE_SHA=$(git rev-parse HEAD)
+          RELEASE_SHA="$(
+            python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD
+          )"
           RELEASE_MAIN_REF="refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin \
+            "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           pnpm release:openclaw:npm:check
 
       - name: Summarize next step
@@ -94,5 +105,5 @@ jobs:
             echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the macOS validation lane to pass."
             echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\` and \`preflight_only=true\` for the full macOS preflight."
             echo "- For the real publish path, run the same macOS publish workflow from \`main\` with the successful preflight \`preflight_run_id\` so it promotes the prepared artifacts instead of rebuilding them."
-            echo "- For stable releases, the publish workflow also publishes the signed \`appcast.xml\` to public \`main\`, or opens an appcast PR if direct push is blocked."
+            echo "- For stable releases, the publish workflow uploads universal, arm64, and x86_64 assets and publishes their signed Sparkle appcasts to public \`main\`, or opens an appcast PR if direct push is blocked."
           } >> "$GITHUB_STEP_SUMMARY"

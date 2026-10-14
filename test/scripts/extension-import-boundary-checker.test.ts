@@ -80,6 +80,13 @@ describe("extension import boundary checker", () => {
 
   it.each([
     {
+      name: "TSX component import",
+      fileName: "guarded.tsx",
+      createSource: (specifier: string) =>
+        "import " + JSON.stringify(specifier) + "; const view = <div />;",
+      kind: "import",
+    },
+    {
       name: "comment-obscured side-effect import",
       createSource: (specifier: string) => "import /* gap */ " + JSON.stringify(specifier),
       kind: "import",
@@ -96,9 +103,27 @@ describe("extension import boundary checker", () => {
       kind: "commonjs-require",
     },
     {
+      name: "import after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; import ' + JSON.stringify(specifier),
+      kind: "import",
+    },
+    {
+      name: "CommonJS require after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; require(' + JSON.stringify(specifier) + ")",
+      kind: "commonjs-require",
+    },
+    {
       name: "import.meta URL",
       createSource: (specifier: string) =>
         "new URL(" + JSON.stringify(specifier) + ", import.meta.url)",
+      kind: "import-meta-url",
+    },
+    {
+      name: "import.meta URL with an escaped meta property",
+      createSource: (specifier: string) =>
+        "new URL(" + JSON.stringify(specifier) + ", import.m\\u0065ta.url)",
       kind: "import-meta-url",
     },
     {
@@ -131,26 +156,48 @@ describe("extension import boundary checker", () => {
         "import " + JSON.stringify(specifier).replace("extensions/", "exten\\\nsions/"),
       kind: "import",
     },
-  ])("rejects $name crossing the real plugin boundary", async ({ createSource, kind }) => {
-    const root = tempDirs.make("openclaw-extension-boundary-");
-    const sourcePath = path.join(root, "guarded.ts");
-    const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
-    const specifier = path.relative(root, targetPath).split(path.sep).join("/");
-    writeFileSync(sourcePath, createSource(specifier), "utf8");
-    const checker = createExtensionImportBoundaryChecker({
-      boundaryLabel: "test",
-      cleanMessage: "clean",
-      inventoryTitle: "inventory",
-      roots: [path.relative(process.cwd(), root)],
-      skipSourcesWithoutBundledPluginPrefix: true,
-    });
+  ])(
+    "rejects $name crossing the real plugin boundary",
+    async ({ createSource, kind, fileName }) => {
+      const root = tempDirs.make("openclaw-extension-boundary-");
+      const sourcePath = path.join(root, fileName ?? "guarded.ts");
+      const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
+      const specifier = path.relative(root, targetPath).split(path.sep).join("/");
+      writeFileSync(sourcePath, createSource(specifier), "utf8");
+      const checker = createExtensionImportBoundaryChecker({
+        boundaryLabel: "test",
+        cleanMessage: "clean",
+        inventoryTitle: "inventory",
+        roots: [path.relative(process.cwd(), root)],
+        skipSourcesWithoutBundledPluginPrefix: true,
+      });
 
-    await expect(checker.collectInventory()).resolves.toEqual([
-      expect.objectContaining({
-        kind,
-        resolvedPath: "extensions/security-proof/private.js",
-        specifier,
-      }),
-    ]);
+      await expect(checker.collectInventory()).resolves.toEqual([
+        expect.objectContaining({
+          kind,
+          resolvedPath: "extensions/security-proof/private.js",
+          specifier,
+        }),
+      ]);
+    },
+  );
+
+  it("excludes TSX test helpers and permits components without private plugin imports", async () => {
+    const root = tempDirs.make("openclaw-extension-boundary-");
+    for (const name of ["test", "test-utils", "test-harness", "e2e-harness"]) {
+      writeFileSync(
+        path.join(root, `ignored.${name}.tsx`),
+        'import "./extensions/private/secret";',
+      );
+    }
+    writeFileSync(path.join(root, "safe.tsx"), 'import { render } from "@solidjs/web";');
+    const checker = createExtensionImportBoundaryChecker({ repoRoot: root, roots: ["."] });
+    await expect(checker.collectInventory()).resolves.toEqual([]);
+    const includingTests = createExtensionImportBoundaryChecker({
+      repoRoot: root,
+      roots: ["."],
+      sourceOptions: { includeTests: true },
+    });
+    await expect(includingTests.collectInventory()).resolves.toHaveLength(4);
   });
 });

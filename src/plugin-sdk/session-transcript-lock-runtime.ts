@@ -1,12 +1,15 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
-  publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   type SessionTranscriptWriteLockAccessorContext,
   type TranscriptMessageAppendOptions,
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
+import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -28,10 +31,11 @@ export type InternalSessionTranscriptWriteLockParams = SessionTranscriptReadPara
 
 export type InternalSessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
-    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<unknown[]>;
+  readMessageFacts: SessionTranscriptWriteLockAccessorContext["readMessageFacts"];
   target: InternalSessionTranscriptTarget;
 };
 
@@ -46,11 +50,12 @@ export async function withProjectedSessionTranscriptWriteLock<
     context: InternalSessionTranscriptWriteLockContext,
     locked: SessionTranscriptWriteLockAccessorContext,
   ) => TContext,
-  publishQueuedUpdate?: (
-    params: InternalSessionTranscriptWriteLockParams & { update?: TranscriptUpdatePayload },
-  ) => Promise<void>,
+  mode: "lock" | "sequence" = "lock",
 ): Promise<T> {
-  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
+  if (mode === "lock") {
+    assertLegacyTranscriptPreparation(params);
+  }
+  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
     agentId,
@@ -64,51 +69,66 @@ export async function withProjectedSessionTranscriptWriteLock<
   };
   const boundScope = {
     ...params,
-    sessionId: storageTarget.sessionId,
-    sessionKey: storageTarget.sessionKey,
+    ...storageTarget,
   };
-  // Publish only after the write callback commits, so failed transactions cannot
-  // expose transcript updates to gateway subscribers.
+  // Keep the selected store and owner through awaits and publication. Individual appends
+  // commit independently, but a failed callback must not publish its queued updates.
   const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
-  const result = await withTranscriptWriteLock(
-    boundScope,
-    async (locked) =>
-      await run(
-        projectContext(
-          {
-            target,
-            readEvents: locked.readEvents,
-            appendMessage: (options) =>
+  let callbackClosed = false;
+  const whileOpen = <R>(operation: () => Promise<R>): Promise<R> => {
+    if (callbackClosed) {
+      return Promise.reject(new Error("Transcript write context is closed"));
+    }
+    return operation();
+  };
+  const guardProjectedContext = (
+    locked: SessionTranscriptWriteLockAccessorContext,
+  ): SessionTranscriptWriteLockAccessorContext => ({
+    publishUpdate: (update) => whileOpen(() => locked.publishUpdate(update)),
+    readEvents: () => whileOpen(locked.readEvents),
+    readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
+    replaceEvents: (events) => whileOpen(() => locked.replaceEvents(events)),
+    appendMessage: (options) => whileOpen(() => locked.appendMessage(options)),
+    appendMessageWithMessageSequence: (options) =>
+      whileOpen(() => locked.appendMessageWithMessageSequence(options)),
+  });
+  const runOpen = async (context: TContext) => {
+    try {
+      const result = run(context);
+      if (!isPromiseLike(result)) {
+        callbackClosed = true;
+      }
+      return await result;
+    } finally {
+      callbackClosed = true;
+    }
+  };
+  const write = mode === "sequence" ? withTranscriptWriteSequence : withTranscriptWriteLock;
+  return await write(boundScope, async (locked) => {
+    const result = await runOpen(
+      projectContext(
+        {
+          target,
+          readEvents: () => whileOpen(locked.readEvents),
+          readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
+          appendMessage: (options) =>
+            whileOpen(() =>
               locked.appendMessage({
                 ...options,
                 ...(params.config !== undefined ? { config: params.config } : {}),
               }),
-            publishUpdate: async (update) => {
+            ),
+          publishUpdate: (update) =>
+            whileOpen(async () => {
               queuedUpdates.push(update ? { ...update } : undefined);
-            },
-          },
-          locked,
-        ),
+            }),
+        },
+        guardProjectedContext(locked),
       ),
-  );
-  for (const update of queuedUpdates) {
-    if (publishQueuedUpdate) {
-      await publishQueuedUpdate({
-        ...boundScope,
-        ...(update !== undefined ? { update } : {}),
-      });
-      continue;
+    );
+    for (const update of queuedUpdates) {
+      await locked.publishUpdate(update);
     }
-    await publishTranscriptUpdate(boundScope, {
-      ...update,
-      agentId: storageTarget.agentId,
-      sessionKey: storageTarget.sessionKey,
-      target: {
-        agentId: storageTarget.agentId,
-        sessionId: storageTarget.sessionId,
-        sessionKey: storageTarget.sessionKey,
-      },
-    });
-  }
-  return result;
+    return result;
+  });
 }

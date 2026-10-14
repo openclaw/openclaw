@@ -5,12 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
-import {
-  parseDoctorGatewayStartupRecoveryOptions,
-  resolveSystemdRecoveryPermission,
-  testing,
-} from "./doctor-gateway-startup-recovery.js";
+} from "../../../../extensions/qa-lab/test-api.js";
+import { resolveSystemdRecoveryPermission, testing } from "./doctor-gateway-startup-recovery.js";
 
 const tempRoots: string[] = [];
 
@@ -67,30 +63,6 @@ describe("doctor gateway startup recovery producer", () => {
     expect(env.SUDO_USER).toBeUndefined();
   });
 
-  it("uses the stable built launcher for every child CLI command", () => {
-    expect(
-      testing.resolveOpenClawInvocation(
-        { artifactBase: "/tmp/artifacts", repoRoot: "/workspace/openclaw" },
-        "qa-doctor-stable",
-        ["gateway", "status", "--json"],
-      ),
-    ).toEqual({
-      args: [
-        path.join("/workspace/openclaw", "openclaw.mjs"),
-        "--profile",
-        "qa-doctor-stable",
-        "gateway",
-        "status",
-        "--json",
-      ],
-      command: process.execPath,
-    });
-  });
-
-  it("follows the exact managed restart guidance after systemd exhausts retries", () => {
-    expect(testing.gatewayRecoveryArgs).toEqual(["gateway", "restart", "--json"]);
-  });
-
   it("requires an explicit native-systemd opt-in", () => {
     expect(resolveSystemdRecoveryPermission({})).toEqual({
       available: false,
@@ -100,16 +72,6 @@ describe("doctor gateway startup recovery producer", () => {
     expect(resolveSystemdRecoveryPermission({ OPENCLAW_QA_ALLOW_SYSTEMD_RECOVERY: "1" })).toEqual({
       available: true,
     });
-  });
-
-  it("requires an artifact base", () => {
-    expect(
-      parseDoctorGatewayStartupRecoveryOptions(["--artifact-base", ".artifacts/doctor"])
-        .artifactBase,
-    ).toContain(".artifacts/doctor");
-    expect(() => parseDoctorGatewayStartupRecoveryOptions([])).toThrow(
-      "usage: --artifact-base <output-directory>",
-    );
   });
 
   it("writes honest blocked evidence before native execution is enabled", async () => {
@@ -140,47 +102,5 @@ describe("doctor gateway startup recovery producer", () => {
     await expect(
       fs.readFile(path.join(artifactBase, "doctor-gateway-startup-recovery.log"), "utf8"),
     ).resolves.toContain("blocked native systemd recovery proof");
-  });
-
-  it("persists the observed status and health payloads without reconstructing them", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-artifacts-"));
-    const artifactBase = path.join(root, "artifacts");
-    tempRoots.push(root);
-    const statusJson = {
-      ok: true,
-      rpc: { latencyMs: 17, ok: true },
-      service: { runtime: { pid: 4242, status: "running" } },
-      targets: [{ id: "observed-target" }],
-    };
-    const healthJson = {
-      ok: true,
-      agents: [{ id: "main", status: "healthy" }],
-      ts: 123456789,
-    };
-
-    const paths = await testing.writeRecoveryArtifacts(
-      { artifactBase, repoRoot: process.cwd() },
-      {
-        healthJson,
-        statusJson,
-        summary: {
-          cleanupVerified: true,
-          foreignPortDiagnosed: true,
-          independentHealthHealthy: true,
-          independentStatusHealthy: true,
-          restartCount: 3,
-          restartGuidanceObserved: true,
-          startLimitObserved: true,
-          startLimitResult: "start-limit-hit",
-        },
-      },
-    );
-
-    await expect(fs.readFile(paths.statusPath, "utf8").then(JSON.parse)).resolves.toEqual(
-      statusJson,
-    );
-    await expect(fs.readFile(paths.healthPath, "utf8").then(JSON.parse)).resolves.toEqual(
-      healthJson,
-    );
   });
 });

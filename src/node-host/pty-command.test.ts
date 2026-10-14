@@ -1,7 +1,13 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
-import { decodeNodePtyResumeParams, runNodePtyCommand } from "./pty-command.js";
+import {
+  decodeNodePtyResumeParams,
+  decodeNodePtyStartParams,
+  runNodePtyCommand,
+} from "./pty-command.js";
 
 const { nodePtySpawn } = vi.hoisted(() => ({ nodePtySpawn: vi.fn() }));
 
@@ -10,6 +16,7 @@ vi.mock("@lydell/node-pty", () => ({ spawn: nodePtySpawn }));
 type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
 
 describe("node PTY command", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
     nodePtySpawn.mockReset();
   });
@@ -30,6 +37,73 @@ describe("node PTY command", () => {
       decodeNodePtyResumeParams('{"threadId":"id","cols":80,"rows":24,"argv":["sh"]}', validate),
     ).toThrow("unknown terminal resume parameter: argv");
   });
+
+  it.each([{ rows: 2001 }, { initialMessage: "x".repeat(16385) }])(
+    "rejects unsafe native-start params %#",
+    (override) => {
+      expect(() =>
+        decodeNodePtyStartParams(
+          JSON.stringify({ cwd: process.cwd(), cols: 80, rows: 24, ...override }),
+        ),
+      ).toThrow("INVALID_REQUEST");
+    },
+  );
+
+  it("refuses a selected node directory removed after decoding instead of falling home", async () => {
+    const cwd = tempDirs.make("native-start-");
+    const params = decodeNodePtyStartParams(
+      JSON.stringify({ cwd, initialMessage: "--help", cols: 100, rows: 30 }),
+    );
+    expect(params).toEqual({ cwd, initialMessage: "--help", cols: 100, rows: 30 });
+    await fs.rm(cwd, { recursive: true });
+    const spawn = vi.fn();
+    await expect(
+      runNodePtyCommand(
+        { file: "codex", args: ["--", params.initialMessage!], ...params, requiredCwd: true },
+        {
+          signal: new AbortController().signal,
+          emitChunk: vi.fn(),
+          onInput: vi.fn(),
+        },
+        spawn,
+      ),
+    ).rejects.toThrow("existing absolute directory");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(["source", "abort"] as const)(
+    "closes PTY admission when %s authority changes during loading",
+    async (change) => {
+      nodePtySpawn.mockImplementation(() => {
+        throw new Error("unexpected PTY spawn");
+      });
+      const controller = new AbortController();
+      let sourceCurrent = true;
+      const pending = runNodePtyCommand(
+        {
+          file: "/synthetic/codex",
+          args: ["resume", "thread-1"],
+          cols: 80,
+          rows: 24,
+          assertCurrent: () => {
+            if (!sourceCurrent) {
+              throw new Error("source revoked");
+            }
+          },
+        },
+        { signal: controller.signal, emitChunk: vi.fn(), onInput: vi.fn() },
+      );
+      if (change === "source") {
+        sourceCurrent = false;
+      } else {
+        controller.abort();
+      }
+      await expect(pending).rejects.toThrow(
+        change === "source" ? "source revoked" : "PTY construction aborted",
+      );
+      expect(nodePtySpawn).not.toHaveBeenCalled();
+    },
+  );
 
   it("relays output, data, resize, abort, and exit", async () => {
     let onData: ((chunk: string) => void) | undefined;
@@ -64,6 +138,7 @@ describe("node PTY command", () => {
         file: "/usr/bin/codex",
         args: ["resume", "id"],
         cwd: "/missing/catalog/cwd",
+        requiredCwd: false,
         env: { CODEX_HOME: "/catalog/codex-home" },
         pathEnv: "/shell/bin:/usr/bin",
         cols: 80,

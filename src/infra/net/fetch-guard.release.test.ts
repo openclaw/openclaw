@@ -44,7 +44,7 @@ describe("guarded request release", () => {
         captures.set(new URL(url).pathname, captured);
         const response = await fetchWithRuntimeDispatcher(input, init);
         captureHttpExchange(
-          { url, method: "GET", response },
+          { url, method: "GET", response, signal: init?.signal ?? undefined },
           {
             enabled: true,
             required: false,
@@ -186,9 +186,18 @@ describe("guarded request release", () => {
             const completed = await get("/complete");
             expect(completed.dispatcherReused).toBe(true);
             expect(dispatchers[2]).toBe(dispatchers[0]);
-            expect((await readResponseWithLimit(completed.response, 32)).toString("utf8")).toBe(
-              "complete",
-            );
+            const completedClone = completed.response.clone();
+            expect(completedClone.url).toBe(completed.response.url);
+            expect(completedClone.redirected).toBe(completed.response.redirected);
+            expect(completedClone.type).toBe(completed.response.type);
+            expect(() => completed.response.headers.set("x-openclaw-test", "1")).toThrow();
+            expect(() => completedClone.headers.set("x-openclaw-test", "1")).toThrow();
+            const [completedBody, completedCloneBody] = await Promise.all([
+              readResponseWithLimit(completed.response, 32),
+              readResponseWithLimit(completedClone, 32),
+            ]);
+            expect(completedBody.toString("utf8")).toBe("complete");
+            expect(completedCloneBody.toString("utf8")).toBe("complete");
             await completed.release();
             expect(await withinDeadline(captures.get("/complete")!.promise)).toMatchObject({
               kind: "response",
@@ -208,40 +217,30 @@ describe("guarded request release", () => {
     },
   );
 
-  it.each(
-    (["signal", "init"] as const).flatMap((source) =>
-      [undefined, 5_000].map((timeoutMs) => ({ source, timeoutMs })),
-    ),
-  )(
-    "preserves cancellation from $source with timeout $timeoutMs",
-    async ({ source, timeoutMs }) => {
-      const parent = new AbortController();
-      const reason = new Error("caller stopped");
-      await withServer(
-        (_request, response) => response.write("unfinished"),
-        async (baseUrl) => {
-          const result = await fetchWithSsrFGuard({
-            url: baseUrl,
-            timeoutMs,
-            ...(source === "signal"
-              ? { signal: parent.signal }
-              : { init: { signal: parent.signal } }),
-            policy: { allowPrivateNetwork: true },
-          });
-          const body = readResponseWithLimit(result.response, 32);
-          try {
-            parent.abort(reason);
-            await expect(withinDeadline(body)).rejects.toBe(reason);
-            await result.release();
-            expect(parent.signal.reason).toBe(reason);
-          } finally {
-            parent.abort();
-            await result.release();
-          }
-        },
-      );
-    },
-  );
+  it("preserves cancellation from init.signal without a timeout", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped");
+    await withServer(
+      (_request, response) => response.write("unfinished"),
+      async (baseUrl) => {
+        const result = await fetchWithSsrFGuard({
+          url: baseUrl,
+          init: { signal: parent.signal },
+          policy: { allowPrivateNetwork: true },
+        });
+        const body = readResponseWithLimit(result.response, 32);
+        try {
+          parent.abort(reason);
+          await expect(withinDeadline(body)).rejects.toBe(reason);
+          await result.release();
+          expect(parent.signal.reason).toBe(reason);
+        } finally {
+          parent.abort();
+          await result.release();
+        }
+      },
+    );
+  });
 
   it("gives the explicit caller signal precedence over init.signal with a timeout", async () => {
     const parent = new AbortController();

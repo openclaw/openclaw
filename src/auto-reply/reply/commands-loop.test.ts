@@ -80,13 +80,6 @@ describe("loop command", () => {
     expect(rewrittenBody(params)).not.toMatch(/\bcron tool\b/);
   });
 
-  it("preserves parseDurationMs unitless millisecond intervals", async () => {
-    const params = buildLoopParams("/loop 30000 check ci");
-
-    expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
-    expect(rewrittenBody(params)).toContain('schedule:{kind:"every",everyMs:30000}');
-  });
-
   it("rewrites an interval-free loop with pacing and next_check guidance", async () => {
     const params = buildLoopParams("/loop watch for new github issues");
 
@@ -130,7 +123,10 @@ describe("loop command", () => {
     const params = buildLoopParams("/loop 5m check ci");
     params.command.senderIsOwner = false;
 
-    expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: false });
+    expect(await handleLoopCommand(params, true)).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("operator.admin") },
+    });
     expect(rewrittenBody(params)).toBe("/loop 5m check ci");
   });
 

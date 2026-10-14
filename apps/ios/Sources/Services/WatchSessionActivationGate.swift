@@ -1,6 +1,32 @@
 import Foundation
 @preconcurrency import WatchConnectivity
 
+/// Owns the SDK's non-Sendable reply closure across the application admission hop.
+final class WatchMessageAcknowledgment: @unchecked Sendable {
+    private let lock = NSLock()
+    private var replyHandler: (([String: Any]) -> Void)?
+
+    init(replyHandler: @escaping ([String: Any]) -> Void) {
+        self.replyHandler = replyHandler
+    }
+
+    func accept() {
+        self.reply(["ok": true])
+    }
+
+    func reject(reason: String) {
+        self.reply(["ok": false, "error": reason])
+    }
+
+    private func reply(_ payload: [String: Any]) {
+        let replyHandler = self.lock.withLock {
+            defer { self.replyHandler = nil }
+            return self.replyHandler
+        }
+        replyHandler?(payload)
+    }
+}
+
 enum WatchMessageAcknowledgmentError: LocalizedError {
     case rejected(String)
 
@@ -41,10 +67,21 @@ final class WatchMessageSendCompletion: @unchecked Sendable {
     }
 }
 
-func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
+func sendReachableWatchMessage(
+    _ payload: [String: Any],
+    with session: WCSession,
+    isolation: isolated (any Actor)? = #isolation) async throws
+{
     // WatchConnectivity callbacks use their own executor and can race despite their
     // documented exactly-once contract; only the first callback owns this continuation.
-    try await withCheckedThrowingContinuation(isolation: nil) { continuation in
+    try await withCheckedThrowingContinuation(
+        isolation: isolation)
+    { (continuation: CheckedContinuation<Void, any Error>) in
+        // An executor hop can retire the caller before this SDK enqueue begins.
+        guard !Task.isCancelled else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
         let completion = WatchMessageSendCompletion(continuation)
         session.sendMessage(
             payload,
@@ -137,7 +174,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
                 }
             }
             if let completedResult {
-                Self.resume(continuation, with: completedResult)
+                continuation.resume(with: completedResult)
             }
         }
     }
@@ -164,7 +201,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
         let result = Result<Void, WatchSessionActivationError>.failure(
             .failed("active Apple Watch changed"))
         for waiter in waiters {
-            Self.resume(waiter, with: result)
+            waiter.resume(with: result)
         }
     }
 
@@ -187,19 +224,7 @@ final class WatchSessionActivationGate: @unchecked Sendable {
         }
         guard let waiters else { return }
         for waiter in waiters {
-            Self.resume(waiter, with: result)
-        }
-    }
-
-    private static func resume(
-        _ continuation: Waiter,
-        with result: Result<Void, WatchSessionActivationError>)
-    {
-        switch result {
-        case .success:
-            continuation.resume(returning: ())
-        case let .failure(error):
-            continuation.resume(throwing: error)
+            waiter.resume(with: result)
         }
     }
 }

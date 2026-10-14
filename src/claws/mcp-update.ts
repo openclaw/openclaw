@@ -16,9 +16,9 @@ import {
 } from "./mcp.js";
 import type { ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { rollbackClawUpdate } from "./update-rollback.js";
 
 export type ClawMcpUpdateExecution = {
-  appliedNames: string[];
   rollback: () => Promise<void>;
 };
 
@@ -55,7 +55,7 @@ export async function applyClawMcpUpdate(
     (action) => action.kind === "mcpServer" && action.action !== "unchanged",
   );
   if (actions.length === 0) {
-    return { appliedNames: [], rollback: async () => undefined };
+    return { rollback: async () => undefined };
   }
   const setServer = options.setServer ?? setConfiguredMcpServer;
   const unsetServer = options.unsetServer ?? unsetConfiguredMcpServer;
@@ -66,23 +66,10 @@ export async function applyClawMcpUpdate(
   const deleteRef = options.deleteRef ?? deleteClawMcpServerRef;
   const currentServers = normalizeConfiguredMcpServers(options.sourceMcpServers);
   const undo: Array<() => Promise<void>> = [];
-  const appliedNames: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
   let configMutationUncertain = false;
 
-  const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(coerceErrorMessage(error));
-      }
-    }
-    if (failures.length > 0) {
-      throw new ClawMcpUpdateError(failures.join("; "));
-    }
-  };
+  const rollback = () => rollbackClawUpdate(undo, ClawMcpUpdateError);
 
   try {
     for (const action of actions) {
@@ -121,7 +108,6 @@ export async function applyClawMcpUpdate(
                 upsertRef(previousRef, options);
               }),
           );
-          appliedNames.push(name);
           return;
         }
         if (action.action === "remove") {
@@ -163,7 +149,6 @@ export async function applyClawMcpUpdate(
               }),
           );
           deleteRef(updatePlan.agentId, name, options);
-          appliedNames.push(name);
           return;
         }
 
@@ -247,7 +232,6 @@ export async function applyClawMcpUpdate(
             }),
         );
         upsertRef({ ...targetRef, status: "complete" }, options);
-        appliedNames.push(name);
       });
     }
   } catch (error) {
@@ -264,5 +248,5 @@ export async function applyClawMcpUpdate(
       configMutationUncertain || (error instanceof ClawMcpUpdateError && error.partial),
     );
   }
-  return { appliedNames, rollback };
+  return { rollback };
 }

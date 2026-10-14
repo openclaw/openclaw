@@ -2,17 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   loaded: [] as string[],
-  close: vi.fn(),
+  prepareClose: vi.fn(),
+  drainEmbeddingProviders: vi.fn(),
+  completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
+  drainSessionPublications: vi.fn(),
   stopPlugins: vi.fn(),
-  clearPluginRegistry: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
+  artifactsAvailable: true,
+  waitForPluginCacheRetirement: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
   state.loaded.push("server-close");
   return {
-    createGatewayCloseHandler: state.close,
+    prepareGatewayClose: state.prepareClose,
+    completeGatewayClose: state.completeClose,
     drainActiveSessionsForShutdown: vi.fn(),
     runGatewayClosePrelude: vi.fn(),
   };
@@ -25,13 +30,20 @@ vi.mock("./server-methods/session-change-event.js", () => {
   state.loaded.push("session-change-events");
   return { flushPendingSessionsChangedEvents: state.flushSessionChanges };
 });
+vi.mock("./session-event-prepared-row.js", () => {
+  state.loaded.push("session-event-publications");
+  return {
+    get drainSessionEventPublications() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed session-event-prepared-row chunk was removed");
+      }
+      return state.drainSessionPublications;
+    },
+  };
+});
 vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
   return { closeMcpLoopbackServer: vi.fn() };
-});
-vi.mock("../tasks/task-registry.maintenance.js", () => {
-  state.loaded.push("task-maintenance");
-  return { stopTaskRegistryMaintenance: vi.fn() };
 });
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => {
   state.loaded.push("restart-recovery");
@@ -42,12 +54,19 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", () => {
   return { disposeAllBundleLspRuntimes: vi.fn() };
 });
 vi.mock("./embeddings-http.js", () => {
+  throw new Error("shutdown preparation must not load embeddings HTTP");
+});
+vi.mock("./embeddings-provider-lifetime.js", () => {
   state.loaded.push("embeddings");
-  return { drainRetainedOpenAiEmbeddingProviders: vi.fn() };
+  return { drainRetainedOpenAiEmbeddingProviders: state.drainEmbeddingProviders };
 });
 vi.mock("../hooks/gmail-watcher.js", () => {
   state.loaded.push("gmail-watcher");
   return { stopGmailWatcher: vi.fn() };
+});
+vi.mock("../cron/maintenance.js", () => {
+  state.loaded.push("cron-maintenance");
+  return { stopCronMaintenance: vi.fn() };
 });
 vi.mock("../agents/code-mode-state.js", () => {
   state.loaded.push("code-mode");
@@ -60,10 +79,23 @@ vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
 vi.mock("../plugins/runtime.js", () => {
   state.loaded.push("plugin-runtime");
   return {
-    clearActivePluginRegistry: state.clearPluginRegistry,
     prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
   };
 });
+vi.mock("../plugins/plugin-cache.js", () => {
+  state.loaded.push("plugin-cache");
+  return {
+    get waitForPluginCacheRetirement() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed plugin-cache chunk was removed");
+      }
+      return state.waitForPluginCacheRetirement;
+    },
+  };
+});
+vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
+  loadSubagentSessionCleanupRuntime: async () => undefined,
+}));
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
@@ -76,21 +108,34 @@ describe("gateway shutdown runtime", () => {
         "server-close",
         "plugin-hooks",
         "session-change-events",
+        "session-event-publications",
         "mcp-http",
-        "task-maintenance",
         "restart-recovery",
         "bundle-lsp",
         "embeddings",
         "gmail-watcher",
+        "cron-maintenance",
         "code-mode",
         "provider-transports",
         "plugin-runtime",
+        "plugin-cache",
       ].toSorted(),
     );
-    expect(runtime.createGatewayCloseHandler).toBe(state.close);
+    expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
+    expect(runtime.drainRetainedOpenAiEmbeddingProviders).toBe(state.drainEmbeddingProviders);
+    expect(runtime.completeGatewayClose).toBe(state.completeClose);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
-    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
+    expect(state.waitForPluginCacheRetirement).not.toHaveBeenCalled();
+    expect(state.drainSessionPublications).not.toHaveBeenCalled();
+    state.artifactsAvailable = false;
+    try {
+      expect(runtime.drainSessionEventPublications).toBe(state.drainSessionPublications);
+      await runtime.waitForPluginCacheRetirement();
+      expect(state.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
+    } finally {
+      state.artifactsAvailable = true;
+    }
   });
 });

@@ -1,9 +1,11 @@
-// Zalo plugin module implements token behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { resolveSecretInputString, type SecretInputStringResolutionMode } from "./secret-input.js";
+import {
+  resolveSecretInputString,
+  type SecretInputStringResolutionMode,
+} from "openclaw/plugin-sdk/secret-input";
 import type { ResolvedZaloAccount, ZaloConfig, ZaloTokenStatus } from "./types.js";
 
 type ZaloTokenResolution = BaseTokenResolution & {
@@ -41,7 +43,7 @@ export function resolveZaloToken(
   const baseConfig = config;
   const accountConfig = resolveAccountEntry(
     baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
-    normalizeAccountId(resolvedAccountId),
+    resolvedAccountId,
   );
   const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 

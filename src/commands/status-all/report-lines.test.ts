@@ -3,7 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { buildStatusAllReportLines } from "./report-lines.js";
 
-const diagnosisSpy = vi.hoisted(() => vi.fn(async () => {}));
+const renderingEvents = vi.hoisted(() => [] as string[]);
+
+const diagnosisSpy = vi.hoisted(() =>
+  vi.fn(async ({ lines }: { lines: string[]; secretDiagnostics: string[] }) => {
+    renderingEvents.push("diagnosis");
+    await Promise.resolve();
+    lines.push("diagnosis body", "");
+  }),
+);
 
 vi.mock("./diagnosis.js", () => ({
   appendStatusAllDiagnosis: diagnosisSpy,
@@ -11,6 +19,7 @@ vi.mock("./diagnosis.js", () => ({
 
 describe("buildStatusAllReportLines", () => {
   it("renders bootstrap state and invalid config diagnostics", async () => {
+    renderingEvents.length = 0;
     const progress: ProgressReporter = {
       setLabel: () => {},
       setPercent: () => {},
@@ -23,7 +32,15 @@ describe("buildStatusAllReportLines", () => {
         path: "/tmp/openclaw.json",
         issues: [{ path: "gateway.port", message: "invalid" }],
       },
-      overviewRows: [{ Item: "Gateway", Value: "ok" }],
+      overviewRows: [
+        {
+          get Item() {
+            renderingEvents.push("render Overview");
+            return "Gateway";
+          },
+          Value: "ok",
+        },
+      ],
       channels: {
         rows: [
           {
@@ -34,14 +51,33 @@ describe("buildStatusAllReportLines", () => {
             detail: "connected",
           },
         ],
-        details: [],
+        details: [
+          {
+            title: "Discord accounts",
+            columns: ["Account", "Status", "Notes"],
+            rows: [
+              {
+                Account: "default",
+                get Status() {
+                  renderingEvents.push("prepare detail");
+                  return "OK";
+                },
+                Notes: "ready",
+              },
+            ],
+          },
+          { title: "Empty accounts", columns: ["Account", "Status"], rows: [] },
+        ],
       },
       channelIssues: [{ channel: "discord", message: `${"x".repeat(89)}🚀tail` }],
       agentStatus: {
         agents: [
           {
             id: "main",
-            bootstrapPending: true,
+            get bootstrapPending() {
+              renderingEvents.push("prepare agent");
+              return true;
+            },
             sessionsCount: 1,
             lastActiveAgeMs: 12_000,
             sessionsPath: "/tmp/main-sessions.json",
@@ -65,14 +101,9 @@ describe("buildStatusAllReportLines", () => {
         port: 18789,
         portUsage: null,
         tailscaleMode: "off",
-        tailscale: {
-          backendState: null,
-          dnsName: null,
-          ips: [],
-          error: null,
-        },
+        tailscaleDns: null,
         tailscaleHttpsUrl: null,
-        skillStatus: null,
+        skillReadiness: null,
         pluginCompatibility: [],
         channelsStatus: null,
         channelIssues: [],
@@ -84,6 +115,12 @@ describe("buildStatusAllReportLines", () => {
       },
     });
 
+    expect(renderingEvents.filter((event, index) => event !== renderingEvents[index - 1])).toEqual([
+      "prepare detail",
+      "prepare agent",
+      "render Overview",
+      "diagnosis",
+    ]);
     const output = lines.join("\n");
     expect(output).toContain("Bootstrap file");
     expect(output).toContain("PRESENT");
@@ -96,10 +133,22 @@ describe("buildStatusAllReportLines", () => {
       output.indexOf("OpenClaw status --all"),
     );
     expect(output).not.toContain(String.fromCharCode(0xd83d));
+    expect(
+      lines.filter((line) =>
+        /^(Overview|Channels|Discord accounts|Empty accounts|Agents|Diagnosis \(read-only\))$/.test(
+          line,
+        ),
+      ),
+    ).toEqual([
+      "Overview",
+      "Channels",
+      "Discord accounts",
+      "Empty accounts",
+      "Agents",
+      "Diagnosis (read-only)",
+    ]);
+    expect(lines.slice(-4)).toEqual(["", "Diagnosis (read-only)", "diagnosis body", ""]);
     expect(diagnosisSpy).toHaveBeenCalledOnce();
-    const [diagnosisOptions] = diagnosisSpy.mock.calls[0] as unknown as [
-      { secretDiagnostics?: unknown[] },
-    ];
-    expect(diagnosisOptions?.secretDiagnostics).toEqual([]);
+    expect(diagnosisSpy).toHaveBeenCalledWith(expect.objectContaining({ secretDiagnostics: [] }));
   });
 });

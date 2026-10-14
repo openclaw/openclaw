@@ -1,31 +1,23 @@
-// Deepinfra tests cover speech provider plugin behavior.
 import { requireFirstPostJsonRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
-    return new Uint8Array(await response.arrayBuffer());
-  }),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
+  vi.hoisted(() => ({
+    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+    postJsonRequestMock: vi.fn(),
+    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
+  }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
-  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -38,7 +30,6 @@ describe("deepinfra speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });
@@ -102,22 +93,15 @@ describe("deepinfra speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: "Bearer sk-deepinfra",
-            "Content-Type": "application/json",
-          },
-          provider: "deepinfra",
-          capability: "audio",
-          transport: "http",
-        },
-      ],
-    ]);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepinfra",
+        capability: "audio",
+        transport: "http",
+        defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+        allowPrivateNetwork: false,
+      }),
+    );
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const postRequest = requireFirstPostJsonRequest(
       postJsonRequestMock,

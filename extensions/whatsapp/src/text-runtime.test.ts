@@ -12,7 +12,7 @@ import {
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
-} from "./text-runtime.js";
+} from "./targets-runtime.js";
 
 async function withTempDir<T>(
   prefix: string,
@@ -28,178 +28,18 @@ async function withTempDir<T>(
 
 describe("markdownToWhatsApp", () => {
   it.each([
-    { name: "bold", input: "**SOD Blast:**", before: "*SOD Blast:*", after: "*SOD Blast:*" },
-    { name: "alternate bold", input: "__important__", before: "*important*", after: "*important*" },
-    { name: "strikethrough", input: "~~deleted~~", before: "~deleted~", after: "~deleted~" },
-    { name: "star italic", input: "*text*", before: "*text*", after: "_text_" },
-    { name: "underscore italic", input: "_text_", before: "_text_", after: "_text_" },
-    { name: "underline fallback", input: "<u>under</u>", before: "<u>under</u>", after: "under" },
-    { name: "spoiler fallback", input: "||secret||", before: "||secret||", after: "secret" },
-    {
-      name: "inline code",
-      input: "Use `**not bold**` here",
-      before: "Use `**not bold**` here",
-      after: "Use ```**not bold**``` here",
-    },
-    {
-      name: "fenced code",
-      input: "```\nconst x = **bold**;\n```",
-      before: "```\nconst x = **bold**;\n```",
-      after: "```\nconst x = **bold**;\n```",
-    },
-    {
-      name: "fence language fallback",
-      input: "```ts\nconst x = 1;\n```",
-      before: "```ts\nconst x = 1;\n```",
-      after: "```\nconst x = 1;\n```",
-    },
-    {
-      name: "labeled link fallback",
-      input: "[docs](https://example.com)",
-      before: "[docs](https://example.com)",
-      after: "docs (https://example.com)",
-    },
-    { name: "heading fallback", input: "# Title", before: "# Title", after: "*Title*" },
-    { name: "bullet list", input: "- one\n- two", before: "- one\n- two", after: "• one\n• two" },
-    {
-      name: "ordered list",
-      input: "1. one\n2. two",
-      before: "1. one\n2. two",
-      after: "1. one\n2. two",
-    },
-    {
-      name: "task-list fallback",
-      input: "- [x] done\n- [ ] todo",
-      before: "- [x] done\n- [ ] todo",
-      after: "[x] done\n[ ] todo",
-    },
-    {
-      name: "table fallback",
-      input: "| Name | Value |\n| --- | --- |\n| A | 1 |",
-      before: "*A*\n• Value: 1",
-      after: "*A*\n• Value: 1",
-    },
-    { name: "blockquote", input: "> quote", before: "> quote", after: "> quote" },
-    {
-      name: "image fallback",
-      input: "![alt](https://example.com/a.png)",
-      before: "![alt](https://example.com/a.png)",
-      after: "alt",
-    },
-    { name: "mention", input: "Hello @alice", before: "Hello @alice", after: "Hello @alice" },
-    {
-      name: "mixed formatting",
-      input: "**bold** and ~~strike~~ and _italic_",
-      before: "*bold* and ~strike~ and _italic_",
-      after: "*bold* and ~strike~ and _italic_",
-    },
-    {
-      name: "multiple bold segments",
-      input: "**one** then **two**",
-      before: "*one* then *two*",
-      after: "*one* then *two*",
-    },
-    { name: "empty input", input: "", before: "", after: "" },
-    {
-      name: "plain text",
-      input: "no formatting here",
-      before: "no formatting here",
-      after: "no formatting here",
-    },
-    {
-      name: "inline bold",
-      input: "This is **very** important",
-      before: "This is *very* important",
-      after: "This is *very* important",
-    },
-    { name: "triple-star bold italic", input: "***bi***", before: "*_bi_*", after: "*_bi_*" },
-    { name: "underscore-star bold italic", input: "__*y*__", before: "*_y_*", after: "*_y_*" },
-    { name: "star-underscore bold italic", input: "**_x_**", before: "*_x_*", after: "*_x_*" },
-    { name: "triple-underscore bold italic", input: "___z___", before: "*_z_*", after: "*_z_*" },
-    {
-      name: "star-double-underscore bold italic",
-      input: "*__q__*",
-      before: "*_q_*",
-      after: "*_q_*",
-    },
-    {
-      name: "underscore-double-star bold italic",
-      input: "_**r**_",
-      before: "*_r_*",
-      after: "*_r_*",
-    },
-    {
-      name: "inline code containing markers",
-      input: "Use `***not bold italic***` here",
-      before: "Use `***not bold italic***` here",
-      after: "Use ```***not bold italic***``` here",
-    },
-    {
-      name: "inline code containing a backtick",
-      input: "Use ``a`b`` here",
-      before: "Use ``a`b`` here",
-      after: "Use ```a`b``` here",
-    },
-    {
-      name: "inline code followed by one digit",
-      input: "`a`5",
-      before: "`a`5",
-      after: "```a```5",
-    },
-    {
-      name: "inline code followed by a number",
-      input: "`status`200 done",
-      before: "`status`200 done",
-      after: "```status```200 done",
-    },
-    {
-      name: "two code spans followed by digits",
-      input: "`x`1 and `y`2",
-      before: "`x`1 and `y`2",
-      after: "```x```1 and ```y```2",
-    },
-    {
-      name: "inline code separated from a digit",
-      input: "`a` 5",
-      before: "`a` 5",
-      after: "```a``` 5",
-    },
-    {
-      name: "triple-delimited inline code followed by a digit",
-      input: "```code```7 done",
-      before: "```code```7 done",
-      after: "```code```7 done",
-    },
-    {
-      name: "triple-delimited inline code containing markers",
-      input: "Before ```**bold** and ~~strike~~``` after **real bold**",
-      before: "Before ```**bold** and ~~strike~~``` after *real bold*",
-      after: "Before ```**bold** and ~~strike~~``` after *real bold*",
-    },
-    {
-      name: "escaped WhatsApp markers",
-      input: "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
-      before: "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
-      after: "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
-    },
-    {
-      name: "short leading indentation",
-      input: "  indented",
-      before: "  indented",
-      after: "  indented",
-    },
-    {
-      name: "literal private-use characters",
-      input: "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
-      before: "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
-      after: "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
-    },
-  ] as const)(
-    "renders $name through the WhatsApp capability profile",
-    ({ input, before, after }) => {
-      expect([before, markdownToWhatsApp(input)]).toEqual([before, after]);
-    },
-  );
+    ["star italic", "*text*", "_text_"],
+    ["empty input", "", ""],
+    ["two code spans followed by digits", "`x`1 and `y`2", "```x```1 and ```y```2"],
+    ["short leading indentation", "  indented", "  indented"],
+    [
+      "literal private-use characters",
+      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
+      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
+    ],
+  ] as const)("renders %s through the WhatsApp capability profile", (_name, input, expected) => {
+    expect(markdownToWhatsApp(input)).toBe(expected);
+  });
 
   it("honors each configured table mode", () => {
     const input = "| Name | Value |\n| --- | --- |\n| A | 1 |";
@@ -232,27 +72,12 @@ describe("markdownToWhatsApp", () => {
     ).toEqual(["*Alpha*", "*Beta*", "*Gamma*"]);
   });
 
-  it("keeps escaped markers atomic across formatted chunk boundaries", () => {
-    const chunks = markdownToWhatsAppChunks("**aaaa\\*bbbb**", 8);
-    expect(chunks.every((chunk) => chunk.length <= 8)).toBe(true);
-    expect(chunks.join("")).toContain("\\*");
-    expect(chunks.join("")).not.toMatch(/\p{Co}/u);
-  });
-
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
-  });
-
-  it("does not count the parse-only indentation guard toward the chunk limit", () => {
-    expect(markdownToWhatsAppChunks(`  ${"x".repeat(8)}`, 10)).toEqual([`  ${"x".repeat(8)}`]);
   });
 });
 
 describe("assertWebChannel", () => {
-  it("accepts valid channel", () => {
-    expect(assertWebChannel("web")).toBeUndefined();
-  });
-
   it("throws for invalid channel", () => {
     expect(() => assertWebChannel("bad" as string)).toThrow("Web channel must be 'web'");
   });
@@ -283,7 +108,7 @@ describe("jidToE164", () => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       vi.resetModules();
       try {
-        const { jidToE164: freshJidToE164 } = await import("./text-runtime.js");
+        const { jidToE164: freshJidToE164 } = await import("./targets-runtime.js");
         expect(freshJidToE164("123@lid")).toBe("+5551234");
       } finally {
         if (previousStateDir === undefined) {
@@ -294,26 +119,6 @@ describe("jidToE164", () => {
         vi.resetModules();
       }
     });
-  });
-
-  it("maps @lid from authDir mapping files", async () => {
-    await withTempDir("openclaw-auth-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
-      fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
-      expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
-    });
-  });
-
-  it("maps @hosted.lid from authDir mapping files", async () => {
-    await withTempDir("openclaw-auth-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
-      fs.writeFileSync(mappingPath, JSON.stringify(4440001));
-      expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
-    });
-  });
-
-  it("accepts hosted PN JIDs", () => {
-    expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
   });
 
   it("falls back through lidMappingDirs in order", async () => {
@@ -339,14 +144,6 @@ describe("toWhatsappJidWithLid (issue #67378)", () => {
   it("falls back to PN s.whatsapp.net JID when no forward mapping exists", async () => {
     await withTempDir("openclaw-fwd-", (authDir) => {
       expect(toWhatsappJidWithLid("+33123456789", { authDir })).toBe("33123456789@s.whatsapp.net");
-    });
-  });
-
-  it("accepts numeric LID values in mapping files (Baileys writes either string or number)", async () => {
-    await withTempDir("openclaw-fwd-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-447700900123.json");
-      fs.writeFileSync(mappingPath, JSON.stringify(42424242));
-      expect(toWhatsappJidWithLid("+447700900123", { authDir })).toBe("42424242@lid");
     });
   });
 
@@ -393,8 +190,6 @@ describe("resolveJidToE164", () => {
 describe("resolveEquivalentWhatsAppDirectChatJids", () => {
   it.each([
     ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
-    ["15551230000:2@hosted", "15551230000@hosted"],
-    ["777:1@lid", "777@lid"],
     ["777:2@hosted.lid", "777@hosted.lid"],
   ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
     await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([

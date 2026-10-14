@@ -1,12 +1,15 @@
 // Shared compact-command mocks and fixtures for focused behavior suites.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Command fixtures control compaction settlement without running an agent or writing storage.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),
@@ -14,7 +17,13 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
-  isCurrentSessionEntry: vi.fn(() => true),
+  prepareCurrentSessionEntry: vi.fn(
+    async ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
+    }),
+  ),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
@@ -23,9 +32,10 @@ vi.mock("./commands-compact.runtime.js", () => ({
 export const {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
+  enqueueSystemEvent,
   formatContextUsageShort,
   incrementCompactionCount,
-  isCurrentSessionEntry,
+  prepareCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,
   waitForEmbeddedAgentRunEnd,
 } = await import("./commands-compact.runtime.js");
@@ -61,11 +71,17 @@ export function buildCompactParams(
 export function resetCompactCommandMocks() {
   vi.clearAllMocks();
   vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-  vi.mocked(isCurrentSessionEntry).mockReturnValue(true);
+  vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) => ({
+    entry: { updatedAt: 1, ...expected },
+    assertCurrent() {},
+    release() {},
+  }));
   resolveAgentDirMock.mockImplementation(
     (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
   );
-  resolveSessionAgentIdMock.mockReturnValue("main");
+  resolveSessionAgentIdMock.mockImplementation(({ sessionKey, agentId }) =>
+    resolveAgentIdFromSessionKey(sessionKey, agentId ?? "main"),
+  );
 }
 
 export function requireCompactEmbeddedAgentSessionCall(index = 0) {
@@ -85,9 +101,7 @@ export function requireIncrementCompactionCountCall(index = 0) {
 }
 
 export function requireResolveSessionAgentIdCall(index = 0) {
-  const call = (
-    resolveSessionAgentIdMock.mock.calls[index] as unknown as [unknown] | undefined
-  )?.[0] as { sessionKey?: string; config?: OpenClawConfig } | undefined;
+  const call = resolveSessionAgentIdMock.mock.calls[index]?.[0];
   if (!call) {
     throw new Error(`resolveSessionAgentId call ${index} missing`);
   }

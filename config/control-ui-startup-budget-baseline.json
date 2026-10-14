@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346185,
-  "reason": "Per-session colors in the boot path (#132570): sidebar stripe render, color tokens, and menu wiring measured 346185 B, +579 B over the prior baseline and 3 B past its growth allowance; below the maintainer-approved 347323 B ceiling; hard cap and allowances unchanged",
-  "updatedAt": "2026-08-29"
+  "startupJsGzipBytes": 374285,
+  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
+  "updatedAt": "2026-10-12"
 }

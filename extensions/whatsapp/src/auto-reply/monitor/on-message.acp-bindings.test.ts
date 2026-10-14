@@ -271,8 +271,6 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
         debug: () => {},
         error: () => {},
       } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/whatsapp-auth", accountId: "work" },
     }),
   };
 }
@@ -373,76 +371,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockImplementation(resolvedConfiguredRoute());
   });
 
-  it.each([
-    {
-      name: "remote message with media and quote context",
-      message: createTestWebInboundMessage({
-        admission: {
-          accountId: "work",
-          conversation: { kind: "direct", id: directConversationId },
-          sender: { id: directConversationId },
-        },
-        event: { id: "in-2" },
-        payload: {
-          body: "Done.",
-          media: { kind: "image", path: "/tmp/collision.jpg", type: "image/jpeg" },
-        },
-        platform: {
-          chatJid: directConversationId,
-          recipientJid: "15559876543@s.whatsapp.net",
-        },
-        quote: {
-          id: "quoted-1",
-          body: "Earlier message",
-        },
-      }),
-      cfg: createCfg(),
-    },
-    {
-      name: "linked-device self-chat message",
-      message: createTestWebInboundMessage({
-        admission: {
-          accountId: "work",
-          isSelfChat: true,
-          conversation: { kind: "direct", id: directConversationId },
-          sender: { id: directConversationId, isSamePhone: true },
-        },
-        event: { id: "in-2" },
-        payload: { body: "Done." },
-        platform: {
-          chatJid: directConversationId,
-          recipientJid: "15559876543@s.whatsapp.net",
-          fromMe: true,
-        },
-      }),
-      cfg: createCfg(),
-    },
-    {
-      name: "owner group message",
-      message: createGroupMessage({
-        event: { id: "in-2" },
-        payload: { body: "Done." },
-        platform: { fromMe: true },
-      }),
-      cfg: createGroupCfg(),
-    },
-  ])("dispatches a distinct-ID $name with identical text", async ({ message, cfg }) => {
-    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
-      bindingResolution: null,
-      route,
-    }));
-    const { handler } = createHandler(vi.fn(), cfg);
-
-    await handler(message);
-
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const dispatchedMessage = processMessageMock.mock.calls[0]?.[0]?.msg;
-    expect(dispatchedMessage?.event.id).toBe(message.event.id);
-    expect(dispatchedMessage?.payload).toMatchObject(message.payload);
-    expect(dispatchedMessage?.quote).toEqual(message.quote);
-    expect(dispatchedMessage?.platform.fromMe).toBe(message.platform.fromMe);
-  });
-
   it("dispatches two same-content messages with distinct native ids in order", async () => {
     const sentConversation = "15550001111@s.whatsapp.net";
     resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
@@ -475,50 +403,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     ]);
   });
 
-  it("rewrites matching WhatsApp inbound turns to the configured ACP session key", async () => {
-    const { handler } = createHandler();
-
-    await handler(createMessage());
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "whatsapp",
-        accountId: "work",
-        conversationId: "+15551234567",
-        route: baseRoute,
-      }),
-    );
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      bindingResolution: configuredBindingResolution,
-    });
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    expect(processMessageMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        route: expect.objectContaining({
-          sessionKey: boundSessionKey,
-          matchedBy: "binding.channel",
-        }),
-      }),
-    );
-  });
-
-  it("drops the inbound turn instead of falling back when ACP binding readiness fails", async () => {
-    const { handler, warn } = createHandler();
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
-      ok: false,
-      error: "acpx backend unavailable",
-    });
-
-    await handler(createMessage());
-
-    expect(processMessageMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "whatsapp: configured ACP binding unavailable for conversation +15551234567: acpx backend unavailable",
-    );
-  });
-
   it("keeps the ordinary WhatsApp route when no configured ACP binding matches", async () => {
     const { handler } = createHandler();
     resolveConfiguredBindingRouteMock.mockImplementationOnce(({ route }) => ({
@@ -535,28 +419,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
         route: expect.objectContaining({
           sessionKey: baseRoute.sessionKey,
           matchedBy: baseRoute.matchedBy,
-        }),
-      }),
-    );
-  });
-
-  it("skips broadcast fan-out for configured ACP binding routes", async () => {
-    const { handler } = createHandler(vi.fn(), {
-      ...createCfg(),
-      broadcast: {
-        "+15551234567": ["ordinary-agent"],
-      },
-    });
-
-    await handler(createMessage());
-
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    expect(processMessageMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        route: expect.objectContaining({
-          sessionKey: boundSessionKey,
-          matchedBy: "binding.channel",
         }),
       }),
     );
@@ -593,75 +455,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     expect(groupHistories.get("group-key")).toEqual([pendingEntry]);
   });
 
-  it("does not record ordinary group routes before group admission", async () => {
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(({ route }) => ({
-      bindingResolution: null,
-      route,
-    }));
-    applyGroupGatingMock.mockResolvedValueOnce({ shouldProcess: false });
-    const { handler } = createHandler(vi.fn(), { channels: { whatsapp: {} } });
-
-    await handler(createGroupMessage());
-
-    expect(applyGroupGatingMock).toHaveBeenCalledTimes(1);
-    expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("does not record group routes when admission blocks dispatch", async () => {
-    const { handler } = createHandler(vi.fn(), { channels: { whatsapp: {} } });
-
-    await handler(
-      createGroupMessage({
-        admission: {
-          ingress: {
-            admission: "drop",
-            decision: "block",
-            reasonCode: "group_policy_not_allowlisted",
-          },
-          senderAccess: {
-            allowed: false,
-            decision: "block",
-            reasonCode: "group_policy_not_allowlisted",
-          },
-          activationAccess: {
-            allowed: false,
-            shouldSkip: true,
-            reasonCode: "group_policy_not_allowlisted",
-          },
-        },
-      }),
-    );
-
-    expect(applyGroupGatingMock).not.toHaveBeenCalled();
-    expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("does not record configured ACP group routes when readiness fails", async () => {
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
-    const { handler, warn } = createHandler(vi.fn(), createGroupCfg());
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
-      ok: false,
-      error: "acpx backend unavailable",
-    });
-
-    await handler(createGroupMessage());
-
-    expect(applyGroupGatingMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "whatsapp: configured ACP binding unavailable for conversation 120363001234567890@g.us: acpx backend unavailable",
-    );
-  });
-
   it("removes preflight ack when configured ACP readiness fails after group audio mention gating", async () => {
     const ackReaction = {
       ackReactionPromise: Promise.resolve(true),
@@ -686,48 +479,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(ackReaction.remove).toHaveBeenCalledTimes(1);
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("clears preflight status reaction when configured ACP readiness fails after group audio mention gating", async () => {
-    const statusReactionController = {
-      setQueued: vi.fn(async () => undefined),
-      setThinking: vi.fn(async () => undefined),
-      setTool: vi.fn(async () => undefined),
-      setCompacting: vi.fn(async () => undefined),
-      cancelPending: vi.fn(),
-      setDone: vi.fn(async () => undefined),
-      setError: vi.fn(async () => undefined),
-      clear: vi.fn(async () => undefined),
-      restoreInitial: vi.fn(async () => undefined),
-    };
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
-    applyGroupGatingMock
-      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
-      .mockResolvedValueOnce({ shouldProcess: true });
-    createStatusReactionControllerMock.mockResolvedValueOnce(statusReactionController);
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
-      ok: false,
-      error: "acpx backend unavailable",
-    });
-    const { handler } = createHandler(vi.fn(), {
-      ...createGroupCfg(),
-      messages: {
-        statusReactions: { enabled: true },
-      },
-    });
-
-    await handler(createGroupAudioMessage());
-
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.clear).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });

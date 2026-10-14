@@ -1,5 +1,8 @@
 // Openai tests cover realtime voice provider plugin behavior.
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -23,8 +26,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Response-control tests own the transport credential fixture and exclude host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
@@ -120,52 +125,6 @@ describe("OpenAI realtime voice response control", () => {
     );
   });
 
-  it("creates an explicit user item and response for manual speech", async () => {
-    const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onEvent });
-    const socket = await connectReadyBridge(bridge);
-
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-
-    const sent = parseSent(socket);
-    expect(sent[1]).toEqual({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "Say exactly: hello from explicit speech.",
-          },
-        ],
-      },
-    });
-    expectRecordFields(
-      requireNestedRecord(sent[2]?.session, ["audio", "input", "turn_detection"]),
-      "manual response turn detection",
-      {
-        create_response: false,
-        interrupt_response: true,
-      },
-    );
-    expect(sent[3]).toEqual(expectedResponseCreateEvent());
-    expect(JSON.stringify(parseSent(socket).at(-1))).not.toContain("output_modalities");
-    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
-    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
-
-    emitServerEvent(socket, { type: "response.done" });
-
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
-
   it("forces one host-selected function on an otherwise automatic response", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
@@ -184,102 +143,122 @@ describe("OpenAI realtime voice response control", () => {
     });
   });
 
-  it("defers manual response.create while a realtime response is active", async () => {
-    const bridge = createNativeBridge();
-    const socket = await connectReadyBridge(bridge);
-    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
-
-    bridge.sendUserMessage?.("queued manual response");
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "queued manual response" }],
+  it.each([
+    { mode: "manual", hasEventId: false },
+    { mode: "standalone", hasEventId: false },
+  ] as const)(
+    "settles rejected $mode speech (eventId=$hasEventId) before dispatching the consumer's next message",
+    async ({ mode }) => {
+      const onError = vi.fn();
+      const onResponseDone = vi.fn((outcome: RealtimeVoiceResponseOutcome) => {
+        if (outcome.status === "failed") {
+          bridge.sendUserMessage?.("Say exactly: the next answer.");
+        }
+      });
+      const bridge = createNativeBridge({ onError, onResponseDone, onToolCall: vi.fn() });
+      const socket = await connectReadyBridge(bridge);
+      if (mode === "standalone") {
+        emitCompletedToolCalls(socket);
+        onResponseDone.mockClear();
+      }
+      bridge.sendUserMessage?.("Say exactly: the first answer.");
+      const rejected = parseSent(socket).findLast((event) => event.type === "response.create");
+      if (!rejected?.event_id) {
+        throw new Error("expected speech response.create event id");
+      }
+      const rejection = {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_value",
+          param: "response.tool_choice",
+          message: "Speech request rejected",
         },
-      },
-    ]);
+      };
 
-    emitServerEvent(socket, { type: "response.done" });
+      emitServerEvent(socket, rejection);
 
-    expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
-  });
+      expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({
+        status: "failed",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_value",
+          message: "Speech request rejected",
+        },
+        message: "OpenAI realtime voice response failed: Speech request rejected",
+      });
+      expect(onError).toHaveBeenCalledExactlyOnceWith(new Error("Speech request rejected"));
+      const responseCreates = parseSent(socket).filter((event) => event.type === "response.create");
+      expect(responseCreates).toHaveLength(2);
+      expect(responseCreates[1]?.event_id).not.toBe(rejected.event_id);
+      expect(bridge.isConnected()).toBe(true);
 
-  it("restores automatic audio responses when a manual response is rejected", async () => {
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
-    const socket = await connectReadyBridge(bridge);
+      emitServerEvent(socket, {
+        ...rejection,
+        error: { ...rejection.error, event_id: rejected.event_id },
+      });
+      expect(onResponseDone).toHaveBeenCalledOnce();
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+      emitServerEvent(socket, { type: "response.created", response: { id: "response-next" } });
+      emitServerEvent(socket, {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          param: "response.tool_choice",
+          message: "Late error",
+        },
+      });
+      expect(onResponseDone).toHaveBeenCalledOnce();
+      await bridge.close();
+    },
+  );
 
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
+  it.each([
+    {
+      event_id: "unrelated-audio-event",
+      type: "invalid_request_error",
+      param: "response.tool_choice",
+    },
+  ])(
+    "keeps automatic audio suppressed for unrelated errors during a manual response: %j",
+    async (error) => {
+      const onError = vi.fn();
+      const onResponseDone = vi.fn();
+      const bridge = createNativeBridge({ onError, onResponseDone });
+      const socket = await connectReadyBridge(bridge);
 
-    const responseCreateEvent = parseSent(socket).findLast(
-      (event) => event.type === "response.create",
-    );
-    if (!responseCreateEvent?.event_id) {
-      throw new Error("expected response.create event id");
-    }
+      bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
+      const sessionUpdatesBeforeError = parseSent(socket).filter(
+        (event) => event.type === "session.update",
+      );
 
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-2)?.session, ["audio", "input", "turn_detection"]),
-      "suppressed turn detection",
-      {
-        create_response: false,
-        interrupt_response: true,
-      },
-    );
+      emitServerEvent(socket, {
+        type: "error",
+        error: { ...error, message: "bad audio append" },
+      });
 
-    emitServerEvent(socket, {
-      type: "error",
-      error: {
-        event_id: responseCreateEvent.event_id,
-        message: "bad response request",
-      },
-    });
+      expect(onError).toHaveBeenCalledWith(new Error("bad audio append"));
+      expect(onResponseDone).not.toHaveBeenCalled();
+      expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
+        sessionUpdatesBeforeError.length,
+      );
 
-    expect(onError).toHaveBeenCalledWith(new Error("bad response request"));
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
+      emitServerEvent(socket, { type: "response.done" });
 
-  it("keeps automatic audio suppressed for unrelated errors during a manual response", async () => {
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
-    const socket = await connectReadyBridge(bridge);
-
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-    const sessionUpdatesBeforeError = parseSent(socket).filter(
-      (event) => event.type === "session.update",
-    );
-
-    emitServerEvent(socket, {
-      type: "error",
-      error: { event_id: "unrelated-audio-event", message: "bad audio append" },
-    });
-
-    expect(onError).toHaveBeenCalledWith(new Error("bad audio append"));
-    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
-      sessionUpdatesBeforeError.length,
-    );
-
-    emitServerEvent(socket, { type: "response.done" });
-
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
+      expectRecordFields(
+        requireNestedRecord(parseSent(socket).at(-1)?.session, [
+          "audio",
+          "input",
+          "turn_detection",
+        ]),
+        "restored turn detection",
+        {
+          create_response: true,
+          interrupt_response: true,
+        },
+      );
+    },
+  );
 
   it("flushes a queued manual response after the prior request is rejected", async () => {
     const onError = vi.fn();
@@ -467,7 +446,8 @@ describe("OpenAI realtime voice response control", () => {
 
   it("turns active-response errors into a deferred response.create retry", async () => {
     const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
+    const onResponseDone = vi.fn();
+    const bridge = createNativeBridge({ onError, onResponseDone });
     const socket = await connectReadyBridge(bridge);
 
     bridge.sendUserMessage?.("trigger active-response retry");
@@ -485,6 +465,7 @@ describe("OpenAI realtime voice response control", () => {
       },
     });
     const afterError = parseSent(socket);
+    expect(onResponseDone).not.toHaveBeenCalled();
     expect(afterError.filter((event) => event.type === "session.update")).toHaveLength(2);
     expectRecordFields(
       requireNestedRecord(afterError.at(-2)?.session, ["audio", "input", "turn_detection"]),

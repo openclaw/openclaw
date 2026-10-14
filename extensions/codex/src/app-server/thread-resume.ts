@@ -1,4 +1,6 @@
 /** Owns Codex thread/resume subscription safety. */
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { publishCodexCatalogResume } from "../session-catalog-events.js";
 import {
   assertCodexThreadResumeSubscription,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -6,6 +8,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { forgetCodexWorkspaceReferences } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -14,8 +17,7 @@ import {
 } from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
-import { CodexAppServerScopedRequestRejectedError } from "./request.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
+import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 
 /** Resumes one thread, releasing or isolating every possible native subscription. */
 export async function resumeCodexAppServerThread(params: {
@@ -25,8 +27,7 @@ export async function resumeCodexAppServerThread(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
-  /** Identifies ownership rejection by the request's physical pre-write fence only. */
-  isPrewriteOwnershipError?: (error: unknown) => boolean;
+  withCurrent?: (write: () => void) => Promise<void>;
   onSubscriptionReleased?: () => void;
   requestResume?: (request: CodexThreadResumeParams) => Promise<unknown>;
 }): Promise<CodexThreadResumeResponse> {
@@ -40,13 +41,13 @@ export async function resumeCodexAppServerThread(params: {
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
             assertCurrent: params.assertCurrent,
+            withCurrent: params.withCurrent,
           })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
+    forgetCodexWorkspaceReferences(params.client, threadId);
   } catch (error) {
     if (
-      params.isPrewriteOwnershipError?.(error) ||
-      isCodexAppServerStartSelectionChangedError(error) ||
       isCodexAppServerStartupError(error) ||
       error instanceof CodexAppServerScopedRequestRejectedError ||
       isCodexAppServerPrewriteRequestCancellationError(error) ||
@@ -61,6 +62,7 @@ export async function resumeCodexAppServerThread(params: {
         threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         assertCurrent: params.assertCurrent,
+        withCurrent: params.withCurrent,
       }).catch(() => false);
       if (subscriptionReleased) {
         params.onSubscriptionReleased?.();
@@ -85,5 +87,6 @@ export async function resumeCodexAppServerThread(params: {
       { cause: error },
     );
   }
+  await publishCodexCatalogResume(params.client, response, sanitizeTerminalText);
   return response;
 }

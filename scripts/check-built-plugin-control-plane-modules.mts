@@ -5,7 +5,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
@@ -26,11 +32,12 @@ type BuiltDoctorContractClosureViolation = BuiltPluginControlPlaneModule & {
 
 type ProbeParams = {
   rootDir?: string;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 };
 
 const ROOT = resolveRepoRoot(import.meta.url);
-const DIRECT_CONTRACT_FILES = ["contract-api.js", "doctor-contract-api.js"];
+const DIRECT_CONTRACT_ENTRIES = ["contract-api", "doctor-contract-api"];
 const LEGACY_SETUP_PROPERTIES = new Map<string, string>([
   ["legacyStateMigrations", "channel-legacy-state-migrations"],
   ["legacySessionSurface", "channel-legacy-session-surface"],
@@ -67,12 +74,12 @@ process.stdout.write("\n${PROBE_RESULT_MARKER}" + JSON.stringify({ failures }));
 `;
 
 function propertyNameText(name: ts.PropertyName) {
-  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : "";
+  return ts.isIdentifier(name) || ts.isStringLiteralLikeNode(name) ? name.text : "";
 }
 
-function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
+function listLegacySetupModuleSpecifiers(setupEntryPath: string, parser: NativeTypeScriptParser) {
   const source = fs.readFileSync(setupEntryPath, "utf8");
-  const sourceFile = ts.createSourceFile(setupEntryPath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(setupEntryPath, source);
   const specifiers: Array<{ kind: string; specifier: string }> = [];
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.initializer)) {
@@ -85,25 +92,34 @@ function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
         if (
           specifierProperty &&
           ts.isPropertyAssignment(specifierProperty) &&
-          ts.isStringLiteralLike(specifierProperty.initializer)
+          ts.isStringLiteralLikeNode(specifierProperty.initializer)
         ) {
           specifiers.push({ kind, specifier: specifierProperty.initializer.text });
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return specifiers;
 }
 
 /** Lists exact built doctor, contract, and channel legacy migration artifacts. */
-export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } = {}) {
+export function listBuiltPluginControlPlaneModules(
+  params: Pick<ProbeParams, "rootDir" | "env"> = {},
+) {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   const extensionsDir = path.join(rootDir, "dist", "extensions");
   if (!fs.existsSync(extensionsDir)) {
     return [];
   }
+  const sourceEntries = new Map(
+    (fs.existsSync(path.join(rootDir, "extensions"))
+      ? collectSourceCheckoutPluginBuildEntries({ cwd: rootDir, env: params.env })
+      : []
+    ).map((entry) => [entry.id, entry]),
+  );
   const modules = new Map<string, BuiltPluginControlPlaneModule>();
   for (const entry of fs
     .readdirSync(extensionsDir, { withFileTypes: true })
@@ -111,22 +127,26 @@ export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } 
     .toSorted((left, right) => left.name.localeCompare(right.name))) {
     const pluginId = entry.name;
     const pluginDir = path.join(extensionsDir, pluginId);
-    for (const fileName of DIRECT_CONTRACT_FILES) {
+    // Packaged core artifacts use ESM; isolated source-checkout plugins use
+    // the same selected format as their builder and generated metadata.
+    const extension = sourceEntries.get(pluginId)?.runtimeExtension ?? ".js";
+    for (const entryName of DIRECT_CONTRACT_ENTRIES) {
+      const fileName = `${entryName}${extension}`;
       const modulePath = path.join(pluginDir, fileName);
       if (fs.existsSync(modulePath)) {
         const relativePath = path.relative(rootDir, modulePath).split(path.sep).join("/");
         modules.set(relativePath, {
           pluginId,
-          kind: fileName === "doctor-contract-api.js" ? "doctor-contract" : "contract",
+          kind: entryName === "doctor-contract-api" ? "doctor-contract" : "contract",
           relativePath,
         });
       }
     }
-    const setupEntryPath = path.join(pluginDir, "setup-entry.js");
+    const setupEntryPath = path.join(pluginDir, `setup-entry${extension}`);
     if (!fs.existsSync(setupEntryPath)) {
       continue;
     }
-    for (const { kind, specifier } of listLegacySetupModuleSpecifiers(setupEntryPath)) {
+    for (const { kind, specifier } of listLegacySetupModuleSpecifiers(setupEntryPath, parser)) {
       const modulePath = path.resolve(pluginDir, specifier);
       const pluginRelativePath = path.relative(pluginDir, modulePath);
       if (pluginRelativePath.startsWith(`..${path.sep}`) || path.isAbsolute(pluginRelativePath)) {
@@ -151,12 +171,16 @@ export function probeBuiltPluginControlPlaneModules(
   }
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   const encodedTargets = Buffer.from(JSON.stringify(modules), "utf8").toString("base64url");
-  const result = spawnSync(process.execPath, ["-e", REQUIRE_PROBE_SOURCE, encodedTargets], {
-    cwd: rootDir,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  const result = spawnSync(
+    resolveNodeRuntimeExecutable() ?? process.execPath,
+    ["-e", REQUIRE_PROBE_SOURCE, encodedTargets],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
+  );
   if (result.error) {
     throw new Error(
       `built plugin control-plane native-require probe failed: ${result.error.message}`,
@@ -184,34 +208,43 @@ export function probeBuiltPluginControlPlaneModules(
   );
 }
 
-// Built chunks are plain ESM, so static edges are exactly the import/export
-// declarations. Dynamic `import()` is excluded by construction: a lazy edge is
-// never paid at enumeration time.
-function parseStaticModuleSpecifiers(source: string, filePath: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+// Follow ESM declarations and eager CJS require calls emitted by isolated builds.
+// Dynamic imports and requires inside functions are lazy, not enumeration costs.
+function parseStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
   const specifiers: string[] = [];
-  for (const statement of sourceFile.statements) {
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLikeDeclaration(node)) {
+      return;
+    }
     const moduleSpecifier =
-      ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
-        ? statement.moduleSpecifier
-        : undefined;
-    if (moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+        ? node.moduleSpecifier
+        : ts.isCallExpression(node) &&
+            ts.isIdentifier(node.expression) &&
+            /^(?:require|_+require\d*)$/u.test(node.expression.text)
+          ? node.arguments[0]
+          : undefined;
+    if (moduleSpecifier && ts.isStringLiteralLikeNode(moduleSpecifier)) {
       specifiers.push(moduleSpecifier.text);
     }
-  }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
   return specifiers;
 }
 
 function resolveBuiltChunkPath(importerPath: string, specifier: string): string | undefined {
   const target = path.resolve(path.dirname(importerPath), specifier);
-  const candidates = [target, `${target}.js`, `${target}.mjs`, path.join(target, "index.js")];
-  return candidates.find(
-    (candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile(),
-  );
+  // Generated chunk edges carry their exact output suffix, including CJS.
+  return fs.existsSync(target) && fs.statSync(target).isFile() ? target : undefined;
 }
 
 /** Collects the bare dependencies a built artifact reaches through static imports. */
-function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, string> {
+function collectBuiltModuleStaticDependencies(
+  entryPath: string,
+  parser: NativeTypeScriptParser,
+  moduleSpecifiers: Map<string, string[]>,
+): Map<string, string> {
   const dependencies = new Map<string, string>();
   const visited = new Set<string>();
   const pending: string[] = [entryPath];
@@ -221,13 +254,18 @@ function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, st
       continue;
     }
     visited.add(filePath);
-    let source: string;
-    try {
-      source = fs.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    let specifiers = moduleSpecifiers.get(filePath);
+    if (!specifiers) {
+      let source: string;
+      try {
+        source = fs.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      specifiers = parseStaticModuleSpecifiers(parser.parseSourceFile(filePath, source));
+      moduleSpecifiers.set(filePath, specifiers);
     }
-    for (const reference of parseStaticModuleSpecifiers(source, filePath)) {
+    for (const reference of specifiers) {
       if (reference.startsWith(".") || reference.startsWith("/")) {
         const resolved = resolveBuiltChunkPath(filePath, reference);
         if (resolved) {
@@ -249,10 +287,15 @@ export function collectBuiltDoctorContractClosureViolations(
   params: { rootDir?: string } = {},
 ): BuiltDoctorContractClosureViolation[] {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   const violations: BuiltDoctorContractClosureViolation[] = [];
+  // Shared chunks are parsed once per check; each contract retains its own traversal and attribution.
+  const moduleSpecifiers = new Map<string, string[]>();
   for (const module of modules.filter((candidate) => candidate.kind === "doctor-contract")) {
     const dependencies = collectBuiltModuleStaticDependencies(
       path.join(rootDir, module.relativePath),
+      parser,
+      moduleSpecifiers,
     );
     for (const dependency of FORBIDDEN_DOCTOR_CONTRACT_DEPENDENCIES) {
       const importer = dependencies.get(dependency);

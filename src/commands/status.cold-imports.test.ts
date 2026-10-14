@@ -1,5 +1,6 @@
 // Default status imports must not pull in the broad plugin diagnostics/runtime graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 describe("status cold imports", () => {
   afterEach(() => {
@@ -19,9 +20,13 @@ describe("status cold imports", () => {
       getNodeDaemonStatusSummary: async () => ({ label: "node" }),
     }));
 
-    const { loadStatusProviderUsageModule, resolveStatusRuntimeSnapshot } =
-      await import("./status-runtime-shared.js");
-    const params = { config: {}, sourceConfig: {}, gatewayReachable: false };
+    const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
+    const params = {
+      config: {},
+      sourceConfig: {},
+      gatewayReachable: false,
+      gatewayProbeDeadlineMs: performance.now() + 60_000,
+    };
     const snapshot = await resolveStatusRuntimeSnapshot(params);
 
     expect(snapshot).toEqual({
@@ -33,17 +38,18 @@ describe("status cold imports", () => {
       nodeService: { label: "node" },
     });
 
-    // Vitest wraps a failed module factory; both callers must preserve its cause.
+    // Usage collection must preserve its failure without breaking pure text formatting.
     await expect(resolveStatusRuntimeSnapshot({ ...params, usage: true })).rejects.toMatchObject({
       cause: usageImportFailure,
     });
-    await expect(loadStatusProviderUsageModule()).rejects.toMatchObject({
-      cause: usageImportFailure,
-    });
+    const { formatUsageReportLines } = await import("./status.command.text-runtime.js");
+    expect(formatUsageReportLines({ updatedAt: 0, providers: [] })).toEqual([
+      "Usage: no provider usage available.",
+    ]);
     await expect(resolveStatusRuntimeSnapshot(params)).resolves.toEqual(snapshot);
   });
 
-  it("keeps broad plugin status code behind the detailed status boundary", async () => {
+  it("keeps broad plugin status code out of default status imports", async () => {
     vi.doMock("../plugins/status.js", () => {
       throw new Error("default status must not import broad plugin diagnostics");
     });
@@ -54,6 +60,6 @@ describe("status cold imports", () => {
     ]);
 
     expect(scan.scanStatus).toBeTypeOf("function");
-    expect(textRuntime.formatPluginCompatibilityNotice).toBeTypeOf("function");
+    expect(textRuntime.buildStatusCommandReportData).toBeTypeOf("function");
   });
 });

@@ -1,11 +1,12 @@
+import { containingSegment } from "@openclaw/normalization-core/grapheme";
 import stringWidth from "string-width";
 import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
   ANSI_OSC_INTRODUCER_PATTERN,
   ANSI_STRING_TERMINATOR_PATTERN,
+  iterateAnsiSegments,
   matchAnsiOscAt,
   scanAnsiCsiAt,
-  splitAnsiSegments,
 } from "./ansi-sequences.js";
 
 /*
@@ -38,10 +39,8 @@ const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
   `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
   "y",
 );
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+// string-width already requires Intl.Segmenter at module initialization.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function hasAnsiIntroducer(input: string): boolean {
   return input.includes("\u001B") || input.includes("\u009B") || input.includes("\u009D");
@@ -56,6 +55,9 @@ function stripAnsiInternal(
   input: string,
   options: { compatibilityGrammar: boolean; preserveIncompleteCsi?: boolean },
 ): string {
+  if (!hasAnsiIntroducer(input)) {
+    return input;
+  }
   const output: string[] = [];
   let copyStart = 0;
   let index = 0;
@@ -68,50 +70,29 @@ function stripAnsiInternal(
     }
 
     const osc = matchAnsiOscAt(input, index);
-    if (osc) {
-      output.push(input.slice(copyStart, index));
-      index += osc.length;
-      copyStart = index;
-      continue;
-    }
-
-    const csi = scanAnsiCsiAt(input, index);
-    if (!csi) {
-      ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-      const compatibilityMatch = options.compatibilityGrammar
-        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-        : null;
-      if (compatibilityMatch) {
-        output.push(input.slice(copyStart, index));
-        index += compatibilityMatch[0].length;
-        copyStart = index;
-        continue;
-      }
+    const csi = osc ? undefined : scanAnsiCsiAt(input, index);
+    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
+    const compatibilityMatch =
+      !osc && options.compatibilityGrammar
+        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)?.[0]
+        : undefined;
+    let length = osc?.length ?? csi?.value.length ?? compatibilityMatch?.length;
+    if (length === undefined) {
       index += 1;
       continue;
     }
 
-    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-    const compatibilityMatch = options.compatibilityGrammar
-      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-      : null;
-    if (!csi.ended && options.preserveIncompleteCsi) {
+    if (csi && !csi.ended && options.preserveIncompleteCsi) {
       break;
     }
 
-    let cursor = index + csi.value.length;
-    const canonicalLength = csi.value.length;
-    if (
-      csi.controls.length === 0 &&
-      compatibilityMatch &&
-      compatibilityMatch[0].length > canonicalLength
-    ) {
-      cursor = index + compatibilityMatch[0].length;
+    if (csi?.controls.length === 0 && compatibilityMatch) {
+      length = Math.max(length, compatibilityMatch.length);
     }
 
-    output.push(input.slice(copyStart, index), ...csi.controls);
-    index = cursor;
-    copyStart = cursor;
+    output.push(input.slice(copyStart, index), ...(csi?.controls ?? []));
+    index += length;
+    copyStart = index;
   }
 
   output.push(input.slice(copyStart));
@@ -119,18 +100,12 @@ function stripAnsiInternal(
 }
 
 export function stripAnsi(input: string): string {
-  if (!hasAnsiIntroducer(input)) {
-    return input;
-  }
   return stripAnsiInternal(input, { compatibilityGrammar: false });
 }
 
 export function stripAnsiSequences(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError(`Expected a \`string\`, got \`${typeof input}\``);
-  }
-  if (!hasAnsiIntroducer(input)) {
-    return input;
   }
   return stripAnsiInternal(input, { compatibilityGrammar: true });
 }
@@ -149,19 +124,22 @@ export function stripAnsiForStreamChunk(
   });
 }
 
-export function splitGraphemes(input: string): string[] {
-  if (!input) {
-    return [];
-  }
-  if (!graphemeSegmenter) {
-    return Array.from(input);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
-  } catch {
-    return Array.from(input);
+/** Let sequential renderers consume graphemes without retaining a full-run array. */
+export function* iterateGraphemes(input: string): Generator<string, void> {
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    yield segment;
   }
 }
+
+export function splitGraphemes(input: string): string[] {
+  return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
+}
+
+// Construct once without embedding literal controls; DEL and C1 form one range.
+const LOG_CONTROL_CHARS_REGEX = new RegExp(
+  `[${String.fromCharCode(0x00)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}-${String.fromCharCode(0x9f)}]`,
+  "g",
+);
 
 /**
  * Sanitize a value for safe interpolation into log messages.
@@ -169,15 +147,7 @@ export function splitGraphemes(input: string): string[] {
  * prevent log forging / terminal escape injection (CWE-117).
  */
 export function sanitizeForLog(v: string): string {
-  // Pattern built at runtime so the source file stays free of literal control
-  // characters AND the linter cannot statically detect them (no-control-regex).
-  const c0Start = String.fromCharCode(0x00);
-  const c0End = String.fromCharCode(0x1f);
-  const del = String.fromCharCode(0x7f);
-  const c1Start = String.fromCharCode(0x80);
-  const c1End = String.fromCharCode(0x9f);
-  const controlCharsRegex = new RegExp(`[${c0Start}-${c0End}${del}${c1Start}-${c1End}]`, "g");
-  return stripAnsi(v).replace(controlCharsRegex, "");
+  return stripAnsi(v).replace(LOG_CONTROL_CHARS_REGEX, "");
 }
 
 function textWidth(text: string): number {
@@ -237,77 +207,75 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
       return;
     }
 
-    const graphemes = splitGraphemes(segment);
-    let offset = 0;
-    const offsets = [offset];
-    for (const grapheme of graphemes) {
-      offset += grapheme.length;
-      offsets.push(offset);
-    }
-    let start = 0;
+    const segments = graphemeSegmenter.segment(segment);
+    const measurePrefix = remaining <= width / 2;
+    let current: Intl.SegmentData | undefined;
+    let candidateWidth = 0;
+    let low = 0;
+    let high = segment.length;
+    let end = 0;
     let fittedWidth = 0;
-    if (remaining <= width / 2) {
-      let end = Math.max(
-        1,
-        Math.min(graphemes.length - 1, Math.floor((remaining * graphemes.length) / width)),
-      );
-      let stride = 1;
-      // Estimate the cell boundary first; gallop handles uneven/zero-width clusters.
-      while (end < graphemes.length) {
-        const candidateWidth = textWidth(segment.slice(0, offsets[end]));
-        if (candidateWidth > remaining) {
-          break;
-        }
-        start = end;
-        fittedWidth = candidateWidth;
-        end = Math.min(graphemes.length, end + stride);
-        stride *= 2;
+    const fits = (position: number): boolean => {
+      if (position === segment.length) {
+        return false;
       }
-      while (start + 1 < end) {
-        const middle = Math.floor((start + end) / 2);
-        const candidateWidth = textWidth(segment.slice(0, offsets[middle]));
-        if (candidateWidth <= remaining) {
-          start = middle;
-          fittedWidth = candidateWidth;
-        } else {
-          end = middle;
-        }
+      // containing() keeps UTF-16 probes on whole graphemes without indexing the
+      // entire line. Reuse its result while probing one oversized cluster.
+      if (
+        !current ||
+        position < current.index ||
+        position >= current.index + current.segment.length
+      ) {
+        // SAFETY: the end sentinel returns above; other probes resolve inside this segment.
+        current = containingSegment(segments, segment, position) as Intl.SegmentData;
+        candidateWidth =
+          current.index === 0
+            ? 0
+            : measurePrefix
+              ? textWidth(segment.slice(0, current.index))
+              : width - textWidth(segment.slice(current.index));
       }
-    } else {
-      const overflow = width - remaining;
-      let tooShort = 0;
-      let removed = Math.min(graphemes.length, 1);
-      let removedWidth = width;
-      // Near-end cuts search short complete-grapheme suffixes, not repeated full prefixes.
-      while (removed < graphemes.length) {
-        removedWidth = textWidth(segment.slice(offsets[graphemes.length - removed]));
-        if (removedWidth >= overflow) {
-          break;
-        }
-        tooShort = removed;
-        removed = Math.min(graphemes.length, removed * 2);
+      if (candidateWidth > remaining) {
+        return false;
       }
-      if (removed === graphemes.length) {
-        removedWidth = width;
+      end = current.index;
+      fittedWidth = candidateWidth;
+      return true;
+    };
+    let probe = Math.min(segment.length - 1, Math.floor((remaining * segment.length) / width));
+    let fitting = fits(probe);
+    const initiallyFits = fitting;
+    let stride = 1;
+    // Bracket the estimate before bisecting so small cuts measure short prefixes
+    // or suffixes even when the line contains many variable-width graphemes.
+    while (low < high) {
+      if (fitting) {
+        low = probe;
+      } else {
+        high = probe;
       }
-      while (tooShort + 1 < removed) {
-        const middle = Math.floor((tooShort + removed) / 2);
-        const candidateWidth = textWidth(segment.slice(offsets[graphemes.length - middle]));
-        if (candidateWidth >= overflow) {
-          removed = middle;
-          removedWidth = candidateWidth;
-        } else {
-          tooShort = middle;
-        }
+      if (fitting !== initiallyFits || probe === 0 || probe === segment.length) {
+        break;
       }
-      start = graphemes.length - removed;
-      fittedWidth = width - removedWidth;
+      probe = initiallyFits
+        ? Math.min(segment.length, probe + stride)
+        : Math.max(0, probe - stride);
+      stride *= 2;
+      fitting = fits(probe);
     }
-    out += segment.slice(0, offsets[start]);
+    while (low + 1 < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (fits(middle)) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    out += segment.slice(0, end);
     used += fittedWidth;
     budgetSpent = true;
   };
-  for (const segment of splitAnsiSegments(input)) {
+  for (const segment of iterateAnsiSegments(input)) {
     if (segment.kind === "ansi") {
       // CSI retains only C0/DEL controls; TAB is the sole visible-width member.
       const widthControls = segment.controls.filter((control) => control === "\t");
@@ -316,10 +284,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         out += segment.value;
         used += controlWidth;
       } else if (controlWidth > 0) {
-        out += widthControls.reduce(
-          (value, control) => value.replaceAll(control, ""),
-          segment.value,
-        );
+        out += segment.value.replaceAll("\t", "");
         budgetSpent = true;
       } else {
         out += segment.value;

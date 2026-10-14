@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
 import {
   runCommandWithTimeout,
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 
 export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
@@ -40,7 +43,7 @@ function workerSshStderrTail(stderr: string): string | undefined {
   return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
-/** Production runner that treats the remote post-forward marker as connection readiness. */
+/** Production runner that treats the post-forward marker as connection readiness. */
 export function createWorkerSshRunner(): WorkerSshRunner {
   return {
     run: runCommandWithTimeout,
@@ -55,23 +58,17 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
-      let closed = false;
+      const releaseOutput = releaseChildProcessOutputAfterExit(child);
       let exitedSettled = false;
       let readySettled = false;
-      let exitEventResult: WorkerSshProcessExit | undefined;
-      let resolveReady!: () => void;
-      let rejectReady!: (error: Error) => void;
-      let resolveExited!: (exit: WorkerSshProcessExit) => void;
-      const ready = new Promise<void>((resolve, reject) => {
-        resolveReady = resolve;
-        rejectReady = reject;
-      });
+      let childExited = false;
+      const readiness = createDeferredCore();
+      const exit = createDeferredCore<WorkerSshProcessExit>();
+      const ready = readiness.promise;
+      const exited = exit.promise;
       // Readiness can reject after its awaiter timed out and moved on (stop()/late close);
       // observe it here so lifecycle settles never become unhandled rejections.
       void ready.catch(() => {});
-      const exited = new Promise<WorkerSshProcessExit>((resolve) => {
-        resolveExited = resolve;
-      });
       let stdout = "";
       let stderr = "";
       const settleReadyError = () => {
@@ -79,26 +76,27 @@ export function createWorkerSshRunner(): WorkerSshRunner {
           return;
         }
         readySettled = true;
-        rejectReady(workerSshProcessError(stderr));
+        readiness.reject(workerSshProcessError(stderr));
       };
-      const settleExited = (exit: WorkerSshProcessExit) => {
+      const settleExited = (result: WorkerSshProcessExit) => {
         if (exitedSettled) {
           return;
         }
         exitedSettled = true;
+        releaseOutput();
         const stderrTail = workerSshStderrTail(stderr);
-        resolveExited({ ...exit, ...(stderrTail ? { stderrTail } : {}) });
+        exit.resolve({ ...result, ...(stderrTail ? { stderrTail } : {}) });
       };
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
       child.stdout.on("data", (chunk: string) => {
-        if (readySettled || exitEventResult !== undefined) {
+        if (readySettled || childExited) {
           return;
         }
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
         if (stdout.split(/\r?\n/u).includes(WORKER_TUNNEL_READY_MARKER)) {
           readySettled = true;
-          resolveReady();
+          readiness.resolve();
         }
       });
       child.stderr.setEncoding("utf8");
@@ -110,38 +108,23 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         settleReadyError();
         // "error" also fires for abort/kill-delivery failures on a live child; only a child
         // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
-        // The no-pid case is terminal: mark it closed so stop() never signals an unspawned child.
+        // The no-pid case is terminal: settle exit so stop() never signals an unspawned child.
         if (child.pid === undefined) {
-          closed = true;
           settleExited({ code: null, signal: null });
         }
       });
-      // "exit" fires before "close", and "close" can be delayed indefinitely while a
-      // descendant holds a piped stdio descriptor; settle on the real exit so connected
-      // tunnels awaiting `exited` observe termination without depending on stream closure.
-      child.once("exit", (code, signal) => {
-        exitEventResult = { code, signal };
+      // Fence readiness at real exit, but retain diagnostics until stdio closes.
+      // The shared output owner bounds draining if descendants retain the pipes.
+      child.once("exit", () => {
+        childExited = true;
         child.stdin.destroy();
-        // Give queued output one I/O turn to reach the diagnostic buffers without waiting
-        // for "close", which a descendant holding the pipe can delay indefinitely.
-        setImmediate(() => {
-          settleReadyError();
-          settleExited(exitEventResult!);
-          child.stdout.destroy();
-          child.stderr.destroy();
-        });
       });
       child.once("close", (code, signal) => {
-        closed = true;
         settleReadyError();
         settleExited({ code, signal });
       });
       child.stdin.on("error", () => {});
-      if (options.input !== undefined) {
-        child.stdin.end(options.input);
-      } else {
-        child.stdin.end();
-      }
+      child.stdin.end(options.input);
 
       let stopPromise: Promise<void> | undefined;
       return {
@@ -149,37 +132,16 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         exited,
         stop() {
           return (stopPromise ??= (async () => {
-            if (closed) {
+            if (exitedSettled) {
               return;
             }
             child.kill("SIGTERM");
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            await Promise.race([
-              exited,
-              new Promise<void>((resolve) => {
-                timer = setTimeout(resolve, STOP_GRACE_MS);
-                timer.unref?.();
-              }),
-            ]);
-            clearTimeout(timer);
-            if (!closed && !exitedSettled) {
+            await settlesWithin(exited, STOP_GRACE_MS);
+            if (!exitedSettled) {
               // A false return can also mean the child died a moment ago with its "exit"
               // event still queued; always take the bounded wait before judging.
               const killDelivered = child.kill("SIGKILL");
-              let killTimer: ReturnType<typeof setTimeout> | undefined;
-              let killWaitExpired = false;
-              await Promise.race([
-                exited,
-                new Promise<void>((resolve) => {
-                  killTimer = setTimeout(() => {
-                    killWaitExpired = true;
-                    resolve();
-                  }, STOP_KILL_WAIT_MS);
-                  killTimer.unref?.();
-                }),
-              ]);
-              clearTimeout(killTimer);
-              if (killWaitExpired) {
+              if (!(await settlesWithin(exited, STOP_KILL_WAIT_MS))) {
                 // Neither delivered SIGKILL nor failed delivery proves termination without
                 // an exit event; fail the stop so the owner keeps tracking the live child.
                 throw workerSshProcessError(
@@ -189,7 +151,10 @@ export function createWorkerSshRunner(): WorkerSshRunner {
                 );
               }
             }
-          })());
+          })().catch((error: unknown) => {
+            stopPromise = undefined;
+            throw error;
+          }));
         },
       };
     },

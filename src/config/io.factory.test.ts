@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,14 +17,16 @@ describe("config factory writer boundary", () => {
   });
   afterAll(() => roots.cleanup());
 
-  async function fixture() {
+  async function fixture(absent = false) {
     const home = await roots.make();
     const configPath = path.join(home, "openclaw.json");
     const raw = JSON.stringify({ gateway: { mode: "local", port: 18789 } });
-    await fs.writeFile(configPath, raw);
+    if (!absent) {
+      await fs.writeFile(configPath, raw);
+    }
     const env: NodeJS.ProcessEnv = {
       HOME: home,
-      NODE_ENV: "test",
+      ...(absent ? { OPENCLAW_STATE_DIR: home } : { NODE_ENV: "test" }),
       OPENCLAW_CONFIG_PATH: configPath,
     };
     const { createConfigIO } = await import("./io.factory.js");
@@ -34,6 +37,64 @@ describe("config factory writer boundary", () => {
     });
     return { io, env, home, configPath, raw };
   }
+
+  async function healthReader(env: NodeJS.ProcessEnv, configPath: string) {
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
+      await import("../infra/kysely-sync.js");
+    return () => {
+      const { db } = openOpenClawStateDatabase({ env });
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_health_entries">>(db)
+          .selectFrom("config_health_entries")
+          .selectAll()
+          .where("config_path", "=", configPath),
+      );
+    };
+  }
+
+  it.each([undefined, true])(
+    "initializes absent-file catalog privacy while preserving explicit %s",
+    async (enabled) => {
+      const { io, configPath } = await fixture(true);
+      await io.writeConfigFile({
+        gateway: { mode: "local" },
+        ...(enabled !== undefined
+          ? {
+              plugins: {
+                entries: {
+                  codex: { config: { sessionCatalog: { enabled } } },
+                },
+              },
+            }
+          : {}),
+      });
+      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+      expect(saved.plugins?.entries?.codex).toEqual({
+        config: { sessionCatalog: { enabled: enabled ?? false } },
+      });
+      expect(saved.plugins?.entries?.anthropic).toEqual({
+        config: { sessionCatalog: { enabled: false } },
+      });
+      expect(saved.plugins?.installs).toBeUndefined();
+      if (enabled !== true) {
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.warnings).not.toContainEqual(
+          expect.objectContaining({ path: "plugins.entries.codex" }),
+        );
+      }
+    },
+  );
+
+  it("preserves an existing unversioned configuration's omitted catalog preferences", async () => {
+    const { io, configPath } = await fixture();
+    await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(saved.plugins?.entries?.codex).toBeUndefined();
+    expect(saved.plugins?.entries?.anthropic).toBeUndefined();
+  });
 
   it("reads and records normal observation without importing the writer", async () => {
     const loadWriter = vi.fn(() => {
@@ -47,15 +108,8 @@ describe("config factory writer boundary", () => {
     expect(snapshot.configDiagnostics).toBeNull();
     expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
     expect(snapshot.sourceConfig.agents?.defaults?.compaction).toBeUndefined();
-    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
-    const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
-      await import("../infra/kysely-sync.js");
-    const { db } = openOpenClawStateDatabase({ env });
-    const query = getNodeSqliteKysely<Pick<DB, "config_health_entries">>(db)
-      .selectFrom("config_health_entries")
-      .select(["config_path", "last_known_good_json"])
-      .where("config_path", "=", configPath);
-    expect(executeSqliteQueryTakeFirstSync(db, query)).toMatchObject({
+    const health = await healthReader(env, configPath);
+    expect(health()).toMatchObject({
       config_path: configPath,
       last_known_good_json: expect.any(String),
     });
@@ -63,23 +117,46 @@ describe("config factory writer boundary", () => {
     expect(loadWriter).not.toHaveBeenCalled();
   });
 
-  it("loads the real writer on first use and reads back the persisted config", async () => {
-    const loadWriter = vi.fn(() =>
-      vi.importActual<typeof import("./io.write.js")>("./io.write.js"),
-    );
-    vi.doMock("./io.write.js", loadWriter);
-    const { io, configPath } = await fixture();
-    const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
-    expect(loadWriter).not.toHaveBeenCalled();
+  it("honors per-call unobserved mutation reads without disabling write auditing", async () => {
+    const { io, env, home, configPath } = await fixture();
+    const { listConfigAuditRecordsForTests } = await import("./io.audit.test-support.js");
+    const { transformConfigFileWithRetry } = await import("./mutate.js");
+    const health = await healthReader(env, configPath);
+    const audit = () => listConfigAuditRecordsForTests({ env, homedir: () => home });
+    await io.readConfigFileSnapshotForWrite();
+    const beforeHealth = health();
+    const beforeAudit = audit();
+    expect(beforeHealth?.last_known_good_json).toEqual(expect.any(String));
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local","port":19001}}\n');
 
-    await io.writeConfigFile(
-      { gateway: { mode: "local", port: 19001 } },
-      { ...writeOptions, baseSnapshot: snapshot },
-    );
+    const failure = new Error("mutation declined before committing");
+    await expect(
+      transformConfigFileWithRetry({
+        io,
+        writeOptions: { observe: false },
+        transform() {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toEqual(beforeAudit);
 
-    expect(loadWriter).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19001);
-    expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19001);
+    await transformConfigFileWithRetry({
+      io,
+      writeOptions: { observe: false },
+      transform: (config) => ({
+        nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
+      }),
+    });
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toContainEqual(
+      expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
+    );
+    expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+
+    await io.readConfigFileSnapshotForWrite();
+    expect(health()?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
   });
 
   it.each(["path", "snapshot"] as const)(
@@ -90,7 +167,9 @@ describe("config factory writer boundary", () => {
       vi.doMock("./io.write.js", async () => {
         entered.resolve();
         await release.promise;
-        return vi.importActual<typeof import("./io.write.js")>("./io.write.js");
+        return vi.importActual<typeof import("./io.write.js")>(
+          new URL("./io.write.js", import.meta.url).href,
+        );
       });
       const { io, env, home, configPath, raw } = await fixture();
       const secondPath = path.join(home, "second.json");

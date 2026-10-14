@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { WorkerEnvironmentStartStatusSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 import { WorkerIdentifierSchema } from "./worker-protocol-primitives.js";
@@ -73,6 +74,14 @@ export const SessionPlacementDiskSpaceSchema = closedObject({
   observedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
 });
 
+export const SessionPlacementWorkerRuntimeInstallSchema = closedObject({
+  phase: Type.Union([Type.Literal("transferring"), Type.Literal("installing")]),
+  transferredBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  totalBytes: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  startedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+
 export const SessionPlacementRunnerSchema = closedObject({
   kind: Type.Literal("device"),
   status: Type.Union([Type.Literal("available"), Type.Literal("offline")]),
@@ -83,9 +92,31 @@ const SessionPlacementDiskSpaceProperties = {
   diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
 };
 
+const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
+const WORKER_OPERATING_SYSTEM_MAX_LENGTH = 64;
+const WorkerMachineClassSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
+});
+const WorkerOperatingSystemIdSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_OPERATING_SYSTEM_MAX_LENGTH,
+});
+
+export const SessionPlacementMachineSchema = closedObject({
+  class: Type.Optional(WorkerMachineClassSchema),
+  os: Type.Optional(WorkerOperatingSystemIdSchema),
+  osLabel: Type.Optional(
+    Type.String({ minLength: 1, maxLength: WORKER_OPERATING_SYSTEM_MAX_LENGTH }),
+  ),
+  cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+  memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+});
+
 const SessionPlacementIdentityProperties = {
   providerId: Type.Optional(NonEmptyString),
   profileId: Type.Optional(NonEmptyString),
+  machine: Type.Optional(SessionPlacementMachineSchema),
 };
 
 const WorkspaceResultConflictSchema = closedObject({
@@ -96,6 +127,10 @@ const WorkspaceResultConflictSchema = closedObject({
 
 const SessionPlacementConflictProperties = {
   workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
+};
+
+const SessionPlacementWorkspaceReconciliationProperties = {
+  workspaceResultReconciling: Type.Optional(Type.Literal(true)),
 };
 
 const TerminalSessionPlacementProperties = {
@@ -142,6 +177,8 @@ const ProvisioningSessionPlacementSchema = closedObject({
   ...SessionPlacementTimingProperties,
   ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
+  workerRuntimeInstall: Type.Optional(SessionPlacementWorkerRuntimeInstallSchema),
+  startStatus: Type.Optional(WorkerEnvironmentStartStatusSchema),
 });
 
 const SyncingSessionPlacementSchema = closedObject({
@@ -163,14 +200,18 @@ const StartingSessionPlacementSchema = closedObject({
 
 const ActiveWorkerSessionPlacementSchema = closedObject({
   ...workerOwnedSessionPlacementProperties("active"),
+  inference: Type.Optional(Type.Literal("worker")),
+  ...SessionPlacementWorkspaceReconciliationProperties,
   runner: Type.Optional(SessionPlacementRunnerSchema),
+  workerRuntimeInstall: Type.Optional(SessionPlacementWorkerRuntimeInstallSchema),
 });
-const DrainingSessionPlacementSchema = closedObject(
-  workerOwnedSessionPlacementProperties("draining"),
-);
-const ReconcilingSessionPlacementSchema = closedObject(
-  workerOwnedSessionPlacementProperties("reconciling"),
-);
+const DrainingSessionPlacementSchema = closedObject({
+  ...workerOwnedSessionPlacementProperties("draining"),
+  ...SessionPlacementWorkspaceReconciliationProperties,
+});
+const ReconcilingSessionPlacementSchema = closedObject({
+  ...workerOwnedSessionPlacementProperties("reconciling"),
+});
 
 const ReclaimedSessionPlacementSchema = closedObject({
   state: Type.Literal("reclaimed"),
@@ -183,6 +224,8 @@ const FailedSessionPlacementSchema = closedObject({
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
   recoveryError: NonEmptyString,
+  recoveryAction: Type.Optional(Type.Enum(["restart", "stop-first"] as const, { type: "string" })),
+  retryOnSend: Type.Optional(Type.Literal(true)),
 });
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */
@@ -199,12 +242,6 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
-const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
-const WorkerMachineClassSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
-});
-
 /**
  * Requests one-way dispatch to an explicit or automatically selected device (`operator.write`),
  * an explicit profile (`operator.admin`), or an `operator.admin`-only
@@ -220,6 +257,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
     deviceId: Type.Optional(NonEmptyString),
     autoDevice: Type.Optional(Type.Literal(true)),
     machineClass: Type.Optional(WorkerMachineClassSchema),
+    os: Type.Optional(WorkerOperatingSystemIdSchema),
   },
   {
     additionalProperties: false,
@@ -235,6 +273,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["profileId"] },
             { required: ["autoDevice"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -245,6 +284,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["profileId"] },
             { required: ["deviceId"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -255,6 +295,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["deviceId"] },
             { required: ["autoDevice"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -270,14 +311,16 @@ export const SessionsDispatchResultSchema = closedObject({
   placement: ActiveWorkerSessionPlacementSchema,
 });
 
-/** Requests safe workspace reconciliation and teardown of an active cloud worker. */
-export const SessionsReclaimParamsSchema = Type.Object(
-  {
-    key: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+/** Stops a worker or explicitly recovers one failed placement onto the Gateway. */
+export const SessionsReclaimParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  recoverToGateway: Type.Optional(
+    closedObject({
+      expectedGeneration: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    }),
+  ),
+});
 
 /** Terminal placement returned after a worker reclaim operation. */
 export const SessionsReclaimResultPlacementSchema = Type.Union([
@@ -286,15 +329,12 @@ export const SessionsReclaimResultPlacementSchema = Type.Union([
 ]);
 
 /** Result returned once worker ownership is reclaimed or a failed placement is cleared. */
-export const SessionsReclaimResultSchema = Type.Object(
-  {
-    ok: Type.Literal(true),
-    key: NonEmptyString,
-    sessionId: NonEmptyString,
-    placement: SessionsReclaimResultPlacementSchema,
-  },
-  { additionalProperties: false },
-);
+export const SessionsReclaimResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  sessionId: NonEmptyString,
+  placement: SessionsReclaimResultPlacementSchema,
+});
 
 /** Exact active source observed before a session placement move. */
 export const SessionMoveExpectedSourceSchema = closedObject({
@@ -313,6 +353,7 @@ export const SessionMoveProfileTargetSchema = closedObject({
   kind: Type.Literal("profile"),
   profileId: WorkerIdentifierSchema,
   machineClass: Type.Optional(WorkerMachineClassSchema),
+  os: Type.Optional(WorkerOperatingSystemIdSchema),
 });
 
 /** Moves the session to one paired device worker. */
@@ -328,13 +369,6 @@ export const SessionMoveTargetSchema = Type.Union([
   SessionMoveDeviceTargetSchema,
 ]);
 
-/** Durable operator-visible progress for one placement move intent. */
-export const SessionPlacementMoveSchema = closedObject({
-  target: SessionMoveTargetSchema,
-  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
-});
-
 const SessionsMoveTargetCorrelationSchema = Type.Union([
   Type.Object({ target: SessionMoveGatewayTargetSchema }),
   Type.Object(
@@ -345,14 +379,31 @@ const SessionsMoveTargetCorrelationSchema = Type.Union([
   ),
 ]);
 
+const SessionMoveRequestProperties = {
+  expected: SessionMoveExpectedSourceSchema,
+  target: SessionMoveTargetSchema,
+  abandonSource: Type.Optional(Type.Literal(true)),
+};
+
+/** Durable progress and the original request facts needed after a failed move. */
+export const SessionPlacementMoveSchema = closedObject({
+  target: SessionMoveTargetSchema,
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+  retry: Type.Optional(
+    Type.Object(SessionMoveRequestProperties, {
+      additionalProperties: false,
+      allOf: [SessionsMoveTargetCorrelationSchema],
+    }),
+  ),
+});
+
 /** Requests one exact-source placement move without replaying active work. */
 export const SessionsMoveParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
-    expected: SessionMoveExpectedSourceSchema,
-    target: SessionMoveTargetSchema,
-    abandonSource: Type.Optional(Type.Literal(true)),
+    ...SessionMoveRequestProperties,
   },
   {
     additionalProperties: false,
@@ -385,7 +436,9 @@ export const SessionsMoveResultSchema = closedObject({
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
   SessionPlacementDiskSpace: SessionPlacementDiskSpaceSchema,
+  SessionPlacementWorkerRuntimeInstall: SessionPlacementWorkerRuntimeInstallSchema,
   SessionPlacementRunner: SessionPlacementRunnerSchema,
+  SessionPlacementMachine: SessionPlacementMachineSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
   RequestedSessionPlacement: RequestedSessionPlacementSchema,
   ProvisioningSessionPlacement: ProvisioningSessionPlacementSchema,
@@ -416,7 +469,11 @@ export const SessionPlacementProtocolSchemas = {
 
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceSchema>;
+export type SessionPlacementWorkerRuntimeInstall = Static<
+  typeof SessionPlacementWorkerRuntimeInstallSchema
+>;
 export type SessionPlacementRunner = Static<typeof SessionPlacementRunnerSchema>;
+export type SessionPlacementMachine = Static<typeof SessionPlacementMachineSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;

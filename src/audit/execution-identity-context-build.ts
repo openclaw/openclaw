@@ -1,9 +1,11 @@
 /** Worker-only canonical context construction and bounded value helpers. */
-import type { DatabaseSync } from "node:sqlite";
-import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+
+import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { pseudonymizeExecutionIdentityRef } from "./audit-identity.js";
 import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-admission.js";
+import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 const EXECUTION_IDENTITY_CONTEXT_MAX_BYTES = 16 * 1024;
@@ -35,7 +37,7 @@ export function freezeExecutionIdentityContext<T>(value: T, seen = new WeakSet<o
 }
 
 function hmacRef(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: Parameters<typeof pseudonymizeExecutionIdentityRef>[0]["kind"],
   scope: string,
   value: string,
@@ -48,16 +50,8 @@ function hmacRef(
   });
 }
 
-function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
-  return [...new Map(values.map((value) => [key(value), value])).values()].toSorted((a, b) => {
-    const left = key(a);
-    const right = key(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-}
-
 export function buildExecutionIdentityContext(
-  db: DatabaseSync,
+  db: EngineConnection,
   envelope: ExecutionIdentityAdmissionEnvelope,
   fixed: { contextId: string; createdAt: number },
 ): ExecutionIdentityContextV1 {
@@ -93,7 +87,7 @@ export function buildExecutionIdentityContext(
       : envelope.invoker?.state === "unknown"
         ? { state: "unknown" as const }
         : { state: "absent" as const };
-  const assurance = uniqueSorted(
+  const assurance = sortUniqueExecutionIdentityEntries(
     envelope.assurance.map((item) => ({
       kind: item.kind,
       evidenceRef: hmacRef(db, "evidence", `${domainRef}:${item.kind}`, item.rawEvidenceRef),
@@ -101,7 +95,7 @@ export function buildExecutionIdentityContext(
     })),
     (item) => `${item.kind}\0${item.evidenceRef}\0${item.strength}`,
   );
-  const applicableGrants = uniqueSorted(
+  const applicableGrants = sortUniqueExecutionIdentityEntries(
     envelope.applicableGrants.map((grant) => ({
       grantRef: hmacRef(db, "grant", domainRef, grant.rawGrantRef),
       state: grant.state,
@@ -146,7 +140,7 @@ export function buildExecutionIdentityContext(
         depth: lineageFacts.depth,
       }
     : undefined;
-  const missingEvidence = uniqueSorted(
+  const missingEvidence = sortUniqueExecutionIdentityEntries(
     [
       ...(envelope.invoker?.state === "present" ? [] : ["invoker.principal"]),
       ...spawnMissingEvidence,

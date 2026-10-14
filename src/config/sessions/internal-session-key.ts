@@ -1,11 +1,12 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
 const INTERNAL_SESSION_EFFECTS_SEGMENT = "internal-session-effects";
+const INTERNAL_SESSION_EFFECTS_REST_PREFIX = `${INTERNAL_SESSION_EFFECTS_SEGMENT}:`;
 
 function normalizeInternalRunId(runId: string): string {
   const readable = runId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 48) || "run";
-  const digest = crypto.createHash("sha256").update(runId).digest("hex").slice(0, 16);
+  const digest = sha256Hex(runId).slice(0, 16);
   return `${readable}-${digest}`;
 }
 
@@ -32,6 +33,9 @@ export function resolveInternalSessionEffectsIdentity(params: {
 
 /** Returns true for SQLite entries that exist only to contain suppressed run effects. */
 export function isInternalSessionEffectsKey(sessionKey: string): boolean {
-  const parts = sessionKey.split(":");
-  return parts.length >= 4 && parts[0] === "agent" && parts[2] === INTERNAL_SESSION_EFFECTS_SEGMENT;
+  if (!sessionKey.startsWith("agent:")) {
+    return false;
+  }
+  const agentEnd = sessionKey.indexOf(":", 6);
+  return agentEnd >= 0 && sessionKey.startsWith(INTERNAL_SESSION_EFFECTS_REST_PREFIX, agentEnd + 1);
 }

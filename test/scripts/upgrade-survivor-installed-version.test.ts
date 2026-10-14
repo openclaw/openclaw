@@ -1,0 +1,241 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
+const runner = resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+const baselineVersion = "2026.7.1-2";
+const candidateVersion = "2026.8.1";
+type UpdateFault = {
+  packageState: string;
+  installedVersion: string | null;
+  exitCode: number;
+  targetVersion?: string;
+};
+
+describe.skipIf(process.platform === "win32")(
+  "survivor installed version during admission and after update failure",
+  () => {
+    it.each([
+      { requested: "2026.5.31", installed: "2026.5.31", expectedCalls: [], accepted: false },
+      { requested: "latest", installed: "2026.5.31", expectedCalls: ["npm"], accepted: false },
+      {
+        requested: "latest",
+        installed: "2026.6.1",
+        expectedCalls: ["npm", "--version"],
+        accepted: true,
+      },
+    ])("admits $requested resolved to $installed before running the baseline", (fixture) => {
+      const home = tempDirs.make("survivor-baseline-floor-");
+      const paths = readUpgradeSurvivorPaths(home);
+      const calls = join(home, "calls");
+      for (const directory of [paths.packageRoot, paths.binDir]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      writeFileSync(calls, "");
+      writeFileSync(
+        join(paths.packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: fixture.installed }),
+      );
+      writeFileSync(join(paths.binDir, "npm"), '#!/bin/sh\nprintf "npm\\n" >> "$FIXTURE_CALLS"\n', {
+        mode: 0o755,
+      });
+      writeFileSync(
+        join(paths.binDir, "openclaw"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$FIXTURE_CALLS"\nprintf '%s\\n' '${fixture.installed}'\n`,
+        { mode: 0o755 },
+      );
+      const prelude = join(home, "bash-env");
+      // Exercise the real install/admission phase with inert package-manager and CLI boundaries.
+      writeFileSync(
+        prelude,
+        `install_fixture_phases() {
+  trap - DEBUG EXIT ERR
+  phase() {
+    local name="$1"
+    shift
+    if [ "$name" = install-baseline ]; then
+      "$@"
+      exit 0
+    fi
+  }
+}
+trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
+`,
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        env: {
+          PATH: `${dirname(testNodeExecPath)}:/usr/bin:/bin`,
+          HOME: home,
+          FIXTURE_CALLS: calls,
+          ...paths.env,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: fixture.requested,
+          BASH_ENV: prelude,
+        },
+      });
+      expect(result.status, result.stderr).toBe(fixture.accepted ? 0 : 1);
+      expect(readFileSync(calls, "utf8").trim().split("\n").filter(Boolean)).toEqual(
+        fixture.expectedCalls,
+      );
+      if (!fixture.accepted) {
+        expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+      }
+    });
+
+    it.each<UpdateFault>([
+      { packageState: "not-started", installedVersion: baselineVersion, exitCode: 17 },
+      { packageState: "swapped", installedVersion: candidateVersion, exitCode: 1 },
+      { packageState: "missing", installedVersion: null, exitCode: 42 },
+      { packageState: "broken", installedVersion: null, exitCode: 43 },
+      { packageState: "unchanged", installedVersion: baselineVersion, exitCode: 44 },
+      {
+        packageState: "future-swapped",
+        installedVersion: "2026.9.99-first-hop.0",
+        targetVersion: "2026.9.99-first-hop.0",
+        exitCode: 1,
+      },
+    ])("reports $packageState package bytes and preserves exit $exitCode", (fixture) => {
+      const home = tempDirs.make("survivor-installed-version-");
+      const state = join(home, "state");
+      const tmp = join(home, "tmp");
+      const paths = readUpgradeSurvivorPaths(home);
+      const { artifactRoot: artifacts, packageRoot, binDir: bin, summaryJson: summaryPath } = paths;
+      for (const directory of [state, tmp, packageRoot, bin]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      const redactor = join(home, "redactor.mjs");
+      // Unit diagnostics use the current source owner without loading a built SDK graph.
+      writeFileSync(
+        redactor,
+        `import { tsImport } from ${JSON.stringify(resolve("node_modules/tsx/dist/esm/api/index.mjs"))};
+export const { redactSensitiveText } = await tsImport(${JSON.stringify(resolve("src/logging/redact.ts"))}, import.meta.url);
+`,
+      );
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: baselineVersion }),
+      );
+      const entrypoint = join(packageRoot, "openclaw.mjs");
+      const targetVersion = fixture.targetVersion ?? candidateVersion;
+      const beforeUpdate = fixture.packageState === "not-started";
+      const failurePhase = beforeUpdate ? "install-baseline" : "update-candidate";
+      const targetPackage = join(home, fixture.targetVersion ? "future.tgz" : "candidate.tgz");
+      // Inject the package-swap/finalization fault at the executable boundary.
+      // The real update owner, package reader, assertions and exit summary still run.
+      writeFileSync(
+        entrypoint,
+        `#!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const args = process.argv.slice(2);
+fs.appendFileSync(path.join(process.env.HOME, 'calls'), JSON.stringify(args) + '\\n');
+if (args[0] === 'update') {
+  const manifest = path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json');
+  const packageState = ${JSON.stringify(fixture.packageState)};
+  if (packageState === 'missing') {
+    fs.unlinkSync(manifest);
+  } else if (packageState !== 'unchanged') {
+    const bytes = packageState === 'broken' ? '{' : JSON.stringify({name:'openclaw', version:${JSON.stringify(targetVersion)}});
+    fs.writeFileSync(manifest + '.next', bytes);
+    fs.renameSync(manifest + '.next', manifest);
+  }
+  console.log(JSON.stringify({
+    status:'error', mode:'npm', reason:'openclaw doctor',
+    before:{version:${JSON.stringify(baselineVersion)}},
+    after:{version:${JSON.stringify(targetVersion)}},
+    steps:[{name:'global update',exitCode:0},{name:'global install swap',exitCode:0},{name:'openclaw doctor',exitCode:${fixture.exitCode}}]
+  }));
+  console.error('target Doctor fixture failed');
+  process.exitCode = ${fixture.exitCode};
+} else {
+  console.error('fixture CLI probe unavailable');
+  process.exitCode = 45;
+}
+`,
+        { mode: 0o755 },
+      );
+      symlinkSync(entrypoint, join(bin, "openclaw"));
+      const prelude = join(home, "bash-env");
+      writeFileSync(
+        prelude,
+        `install_fixture_phases() {
+  trap - DEBUG
+  phase() {
+    CURRENT_PHASE="$1"
+    shift
+    case "$CURRENT_PHASE" in
+      install-baseline)
+        normalize_baseline
+        installed_version="$(read_installed_version)"
+        ${beforeUpdate ? `return ${fixture.exitCode}` : ""}
+        ;;
+      resolve-candidate) candidate_version=${candidateVersion} ;;
+      update-candidate) ${fixture.targetVersion ? `update_candidate 0 "file:${targetPackage}" "${targetVersion}"` : '"$@"'} ;;
+    esac
+  }
+}
+trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
+`,
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          PATH: `${dirname(testNodeExecPath)}:/usr/bin:/bin`,
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_HOME: home,
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
+          OPENCLAW_E2E_REDACTOR_MODULE: redactor,
+          TMPDIR: tmp,
+          ...paths.env,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
+          OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(home, "candidate.tgz"),
+          BASH_ENV: prelude,
+        },
+      });
+      expect(result.status, result.stderr).toBe(fixture.exitCode);
+      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        status: "failed",
+        updateOutcome: beforeUpdate ? "unknown" : "failed",
+        baseline: { version: baselineVersion },
+        failure: {
+          phase: failurePhase,
+          message: `phase ${failurePhase} failed with status ${fixture.exitCode}`,
+        },
+      });
+      const diagnostics = JSON.parse(
+        readFileSync(join(artifacts, "diagnostics", "raw.json"), "utf8"),
+      );
+      expect(diagnostics).toMatchObject({
+        phase: failurePhase,
+        exitStatus: fixture.exitCode,
+      });
+      expect(summary.installedVersion).toBe(fixture.installedVersion);
+      if (beforeUpdate) {
+        expect(diagnostics.logs["update.json"]).toBeNull();
+        return;
+      }
+      expect(readFileSync(paths.updateErr, "utf8")).toContain("target Doctor fixture failed");
+      const calls: string[][] = readFileSync(join(home, "calls"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      // Keep the existing failure probe; version discovery must add no CLI calls.
+      expect(calls.map((args) => args[0])).toEqual(["update", "config"]);
+      const updateCall = expectDefined(calls[0], "expected the update command");
+      expect(updateCall[updateCall.indexOf("--tag") + 1]).toBe(`file:${targetPackage}`);
+      expect(calls[1]).toEqual(["config", "validate", "--json"]);
+    });
+  },
+);

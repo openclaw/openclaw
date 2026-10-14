@@ -55,6 +55,7 @@ function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
       sessionArgs: ["--session", "{sessionId}"],
       sessionMode: "existing",
     },
+    ownsNativeCompaction: overrides.ownsNativeCompaction === true,
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     runtimeArtifact,
@@ -71,16 +72,6 @@ function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
   return overrides.ownsNativeCompaction === true
     ? { ...base, ...overrides, ownsNativeCompaction: true }
     : { ...base, ...overrides, ownsNativeCompaction: false };
-}
-
-function createBooleanOwnershipBackend(ownsNativeCompaction: boolean): CliBackendPlugin {
-  return {
-    id: "boolean-ownership-cli",
-    modelProvider: "acme",
-    config: { command: "acme" },
-    bundleMcp: false,
-    ownsNativeCompaction,
-  };
 }
 
 function runtimeEntry(
@@ -123,10 +114,6 @@ afterEach(() => {
 });
 
 describe("resolveCliBackendConfig", () => {
-  it("accepts boolean native-compaction ownership without a manual contract", () => {
-    expect(createBooleanOwnershipBackend(true).ownsNativeCompaction).toBe(true);
-  });
-
   it("returns the plugin-owned command adapter and registration metadata", () => {
     const resolved = requireBackend();
 
@@ -151,21 +138,23 @@ describe("resolveCliBackendConfig", () => {
 
   it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
     const parseJsonlEvent = vi.fn();
+    const parseJsonlLifecycleEvent = vi.fn();
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
+      ],
       resolvePluginSetupCliBackend: () => undefined,
     });
 
     expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {
-    const normalizeConfig = vi.fn(
-      (config: CliBackendConfig): CliBackendConfig => ({
-        ...config,
-        args: [...(config.args ?? []), "--normalized"],
-      }),
-    );
+    const normalizeConfig = vi.fn((config: CliBackendConfig): CliBackendConfig => ({
+      ...config,
+      args: [...(config.args ?? []), "--normalized"],
+    }));
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [runtimeEntry({ normalizeConfig })],
       resolvePluginSetupCliBackend: () => undefined,
@@ -306,12 +295,12 @@ describe("CLI backend metadata and bindings", () => {
 
   it("lists canonical provider to CLI runtime bindings", () => {
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
     expect(listCliRuntimeProviderIds()).toEqual(["acme-cli"]);
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "ACME-CLI" })).toBe("acme");
     expect(resolveCliRuntimeModelBackendBinding({ provider: "acme", runtime: "acme-cli" })).toEqual(
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     );
     expect(isCliRuntimeModelBackendForProvider({ provider: "acme", runtime: "acme-cli" })).toBe(
       true,
@@ -328,7 +317,7 @@ describe("CLI backend metadata and bindings", () => {
 
     expect(listCliRuntimeModelBackendBindings()).toEqual([]);
     expect(listCliRuntimeModelBackendBindings({ includeSetupRegistry: true })).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
   });
 });

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiTerminalReady,
@@ -17,7 +18,19 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const screenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
+const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
+let screenshotPath: string | undefined;
+beforeEach(() => {
+  screenshotPath = requestedScreenshotPath
+    ? path.join(
+        createControlUiE2eArtifactDir("terminal-repaint", path.dirname(requestedScreenshotPath)),
+        path.basename(requestedScreenshotPath),
+      )
+    : undefined;
+  if (screenshotPath) {
+    console.info(`[control-ui-e2e] screenshot: ${screenshotPath}`);
+  }
+});
 
 async function terminalCanvasDigest(canvas: Locator): Promise<string> {
   const png = await canvas.screenshot({ animations: "disabled", caret: "hide" });
@@ -29,7 +42,8 @@ suite.define(() => {
     await suite.withPage(
       {
         serviceWorkers: "block",
-        viewport: { width: 1180, height: 520 },
+        // Preserve the original terminal content width alongside the new 52px navigation rail.
+        viewport: { width: 1232, height: 520 },
       },
       async ({ page }) => {
         await page.addInitScript(() => {
@@ -68,10 +82,11 @@ suite.define(() => {
         const terminalCanvas = page.locator(".tp-host canvas");
         await terminalCanvas.waitFor({ state: "visible" });
         const blankCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+        const terminalOutput = "\u001b[?25lterminal repaint sentinel\r\n$ ";
         await gateway.emitGatewayEvent("terminal.data", {
           sessionId: "terminal-repaint-e2e",
-          seq: 0,
-          data: "\u001b[?25lterminal repaint sentinel\r\n$ ",
+          seq: terminalOutput.length,
+          data: terminalOutput,
         });
         await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);

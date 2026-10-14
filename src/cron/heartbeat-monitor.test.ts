@@ -26,7 +26,7 @@ describe("heartbeat monitor desired-state planning", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "15m" } },
-        list: [{ id: "main" }, { id: "ops" }, { id: "new" }],
+        entries: { main: {}, ops: {}, new: {} },
       },
     } as OpenClawConfig;
     const options = { schedulerSeed: "test-seed" };
@@ -83,6 +83,29 @@ describe("heartbeat monitor desired-state planning", () => {
           schedule: expect.objectContaining({ kind: "every", everyMs: 60_000 }),
         }),
       }),
+    ]);
+  });
+
+  it("removes duplicate monitors before updating the retained row", () => {
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "15m" } } },
+    } as OpenClawConfig;
+    const options = { schedulerSeed: "test-seed" };
+    const input = resolveHeartbeatMonitorPlan(cfg, [], options).specs[0]?.input;
+    if (!input) {
+      throw new Error("expected configured heartbeat monitor spec");
+    }
+    const older = { ...monitorJob(input, "older"), updatedAtMs: 1 };
+    const newer = {
+      ...monitorJob({ ...input, enabled: false }, "newer"),
+      updatedAtMs: 2,
+    };
+
+    const plan = resolveHeartbeatMonitorPlan(cfg, [older, newer], options);
+
+    expect(plan.changes).toEqual([
+      { kind: "remove", agentId: "main", job: older },
+      expect.objectContaining({ kind: "update", agentId: "main" }),
     ]);
   });
 

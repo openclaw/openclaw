@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import {
   parseBrowserNativeHostOrigins,
   runBrowserNativeHost,
@@ -24,11 +25,22 @@ async function main(): Promise<void> {
     write: (frame) => {
       responseFrame = frame;
     },
-    buildPairing: async () => {
+    buildPairing: async (boundProfile) => {
       // Config and relay-key work must remain behind the host's validation boundary.
       const { buildBrowserNativeHostPairing } =
         await import("./src/browser/extension-native-host.runtime.js");
-      return await buildBrowserNativeHostPairing();
+      const profileIndex = process.argv.indexOf("--browser-profile");
+      const profile = profileIndex >= 0 ? requiredArgument("--browser-profile") : undefined;
+      return await buildBrowserNativeHostPairing(boundProfile ?? profile);
+    },
+    ensureRelay: async (port) => {
+      const { ensureBrowserNativeRelay } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      // Resolve the sibling entry here, not relative to a shared runtime chunk.
+      return await ensureBrowserNativeRelay(
+        port,
+        fileURLToPath(new URL("./relay-daemon-entry.js", import.meta.url)),
+      );
     },
   });
   const response = responseFrame;

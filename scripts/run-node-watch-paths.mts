@@ -20,6 +20,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
   "packages/retry/src",
+  "packages/worker-runtime/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/net-policy/src",
@@ -44,30 +45,25 @@ const ignoredRunNodeRepoPathPatterns = [
 ];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
-/** Normalizes watch paths to repository-style POSIX separators. */
+/** Canonicalizes native paths without treating POSIX filename backslashes as separators. */
 export const normalizeRunNodePath = (filePath: unknown): string =>
-  (typeof filePath === "string" ? filePath : "").replaceAll("\\", "/");
+  (typeof filePath === "string" ? filePath : "").replaceAll(path.sep, "/").replace(/^\.\/+/, "");
 
-const isIgnoredSourcePath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
+export const isIgnoredRunNodeSourcePath = (relativePath: string): boolean =>
+  relativePath.endsWith(".test.ts") ||
+  relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith(".test-utils.ts") ||
+  relativePath.endsWith(".test-utils.tsx") ||
+  relativePath.endsWith("test-helpers.ts");
 
-const isBuildRelevantSourcePath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
+const isBuildRelevantSourcePath = (relativePath: string): boolean =>
+  extensionSourceFilePattern.test(relativePath) && !isIgnoredRunNodeSourcePath(relativePath);
 
 const isRestartRelevantExtensionPath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
+  if (extensionRestartMetadataFiles.has(path.posix.basename(relativePath))) {
     return true;
   }
-  return isBuildRelevantSourcePath(normalizedPath);
+  return isBuildRelevantSourcePath(relativePath);
 };
 
 const isRelevantRunNodePath = (
@@ -75,7 +71,7 @@ const isRelevantRunNodePath = (
   isRelevantBundledPluginPath: (relativePath: string) => boolean,
   generatedPluginAssetPaths: ReadonlySet<string>,
 ): boolean => {
-  const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
+  const normalizedPath = normalizeRunNodePath(repoPath);
   if (
     generatedPluginAssetPaths.has(normalizedPath) ||
     ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
@@ -86,11 +82,11 @@ const isRelevantRunNodePath = (
     return true;
   }
   if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+    return !isIgnoredRunNodeSourcePath(normalizedPath.slice("src/".length));
   }
   for (const sourceRoot of RUN_NODE_PACKAGE_SOURCE_ROOTS) {
     if (normalizedPath.startsWith(`${sourceRoot}/`)) {
-      return !isIgnoredSourcePath(normalizedPath.slice(sourceRoot.length + 1));
+      return !isIgnoredRunNodeSourcePath(normalizedPath.slice(sourceRoot.length + 1));
     }
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {

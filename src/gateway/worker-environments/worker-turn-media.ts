@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import {
   detectAndLoadPromptImages,
   hydratePromptMediaMessages,
@@ -17,7 +17,6 @@ import { resolveImageSanitizationLimits } from "../../agents/image-sanitization.
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
-import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../../logger.js";
 import { readLocalMediaFile } from "../../media/local-media-access.js";
@@ -30,17 +29,13 @@ import {
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import {
-  cloneImageContent,
-  cloneTextContent,
-  isWorkerTranscriptMessageFrameSafe,
-} from "../../worker/transcript-message.js";
+import { projectWorkerTextOrImageContent } from "../../worker/assistant-message-projection.js";
+import { DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED } from "../../worker/node-workspace-protocol.js";
+import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
-} from "./workspace-manifest.js";
+const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_WORKER_ATTACHMENT_FILES = 25_000;
 
 function prepareInput(
   content: Extract<AgentMessage, { role: "user" }>["content"],
@@ -71,17 +66,12 @@ function prepareInput(
 export async function prepareWorkerTurnMedia(params: {
   turn: SessionPlacementTurnParams;
   history: AgentMessage[];
-  localWorkspaceDir: string;
+  workspace: WorkerSessionWorkspace;
   remoteWorkspaceDir: string;
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
   signal: AbortSignal;
-}): Promise<{
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  history: AgentMessage[];
-  images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
-  imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
-}> {
+}) {
   const { turn, signal } = params;
   const assertCurrent = () => {
     signal.throwIfAborted();
@@ -96,15 +86,25 @@ export async function prepareWorkerTurnMedia(params: {
   assertCurrent();
   const recordedMedia = recorded ? readPersistedMediaFacts(recorded) : undefined;
   const media = recordedMedia?.length ? recordedMedia : (turn.media ?? []);
-  const localRoots = resolveEffectiveToolFsWorkspaceOnly({
+  const localWorkspace = params.workspace.kind === "local" ? params.workspace.path : undefined;
+  const deviceFolder = params.workspace.kind === "device-folder";
+  const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
     cfg: turn.config,
     agentId: turn.agentId,
-  })
-    ? [params.localWorkspaceDir]
-    : [...getAgentScopedMediaLocalRoots(turn.config ?? {}, turn.agentId), params.localWorkspaceDir];
+  });
+  // Repository sessions have no Gateway workspace root. An empty allowlist
+  // still admits managed inbound media without exposing agent-scoped files.
+  const localRoots = workspaceOnly
+    ? localWorkspace
+      ? [localWorkspace]
+      : []
+    : [
+        ...getAgentScopedMediaLocalRoots(turn.config ?? {}, turn.agentId),
+        ...(localWorkspace ? [localWorkspace] : []),
+      ];
   const modelHasVision = turn.modelHasVision === true;
   const mediaOptions = {
-    workspaceDir: params.localWorkspaceDir,
+    workspaceDir: localWorkspace ?? params.remoteWorkspaceDir,
     model: { input: modelHasVision ? ["text", "image"] : ["text"] },
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(turn.config).maxDimensionPx,
@@ -124,8 +124,7 @@ export async function prepareWorkerTurnMedia(params: {
       `Cloud worker could not load ${currentImages.failedMediaCount} image attachment(s); resend the attachment and retry.`,
     );
   }
-  const pruned = pruneProcessedHistoryImages(params.history) ?? params.history;
-  const history = await hydratePromptMediaMessages(pruned, mediaOptions);
+  const history = await hydratePromptMediaMessages(params.history, mediaOptions);
   assertCurrent();
 
   const current = prepareInput(
@@ -169,10 +168,7 @@ export async function prepareWorkerTurnMedia(params: {
         return remotePath;
       }
       bytes += data.length;
-      if (
-        bytes > MAX_RECONCILIATION_TOTAL_BYTES ||
-        stagedPaths.size >= MAX_RECONCILIATION_ENTRIES
-      ) {
+      if (bytes > MAX_WORKER_ATTACHMENT_BYTES || stagedPaths.size >= MAX_WORKER_ATTACHMENT_FILES) {
         throw new Error(
           "Cloud worker attachments exceed the workspace transfer budget; send fewer or smaller files.",
         );
@@ -189,7 +185,9 @@ export async function prepareWorkerTurnMedia(params: {
       stagedPaths.add(remotePath);
       return remotePath;
     };
-    for (const input of inputs) {
+    // A device folder cannot receive staged files. Replayed history keeps its text but is not
+    // staged, so one refused attachment cannot make every later turn fail.
+    for (const input of deviceFolder ? [current] : inputs) {
       for (const fact of input.media) {
         const ref = resolveMediaFactLocalRef(fact);
         if (!ref) {
@@ -201,7 +199,7 @@ export async function prepareWorkerTurnMedia(params: {
           let data: Buffer;
           try {
             source = path.resolve(
-              fact.workspaceDir ?? params.localWorkspaceDir,
+              fact.workspaceDir ?? localWorkspace ?? params.remoteWorkspaceDir,
               await resolveMediaReferenceLocalPath(ref.resolved),
             );
             assertCurrent();
@@ -235,6 +233,9 @@ export async function prepareWorkerTurnMedia(params: {
         input.files.add(await stageFile(data, identity, "image"));
       }
     }
+    if (staging && deviceFolder) {
+      throw new Error(DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED);
+    }
     if (staging) {
       if (!params.tunnel.stageAttachments) {
         throw new Error(
@@ -261,11 +262,12 @@ export async function prepareWorkerTurnMedia(params: {
   };
   const projectInput = (input: ReturnType<typeof prepareInput>) => {
     // Gateway bookkeeping is not part of the closed worker content contract.
-    const parts = input.parts.map((part) =>
-      part.type === "text"
-        ? { ...cloneTextContent(part), text: projectText(part.text) }
-        : cloneImageContent(part),
-    );
+    const parts = input.parts.map(projectWorkerTextOrImageContent);
+    for (const part of parts) {
+      if (part.type === "text") {
+        part.text = projectText(part.text);
+      }
+    }
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
     const notes = [...input.files]
       .filter((file) => !text.includes(file))

@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
-# Installs OpenClaw and Codex from npm artifacts with explicit capability consent,
-# then verifies OpenAI onboarding, managed dependencies, and doctor in Docker.
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
+CODEX_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs")"
+CODEX_DOCTOR_CHECKS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/doctor-checks.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs" \
+  "")"
+CODEX_DOCTOR_CHECKS_ENABLED=0
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_DOCTOR_CHECKS_ENABLED=1
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 run_log=""
 
@@ -20,11 +34,6 @@ run_log=""
 # Keep the package install budget above the shared default so slow npm hosts reach
 # the Codex assertions instead of failing as a silent package-install timeout.
 export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
-
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
-fi
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -41,19 +50,11 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-on-demand "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand "$PACKAGE_TGZ")"
-    return 0
-  fi
-  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    echo "OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
-    exit 1
-  fi
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand)"
-}
-
-prepare_package_tgz
+if [ -z "$PACKAGE_TGZ" ] && [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+  echo "OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+  exit 1
+fi
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand "$PACKAGE_TGZ")"
 
 if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
   [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] &&
@@ -65,19 +66,28 @@ if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
     OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
     OPENCLAW_DOCKER_ALL_TIMINGS=0 \
     node "$ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry >/dev/null
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+  export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
 fi
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-on-demand)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 codex-on-demand empty)"
+CODEX_CONTRACT_MOUNT_ARGS=(
+  -v "$CODEX_ASSERTIONS:/app/scripts/e2e/lib/codex-on-demand/assertions.mjs:ro"
+)
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_CONTRACT_MOUNT_ARGS+=(
+    -v "$CODEX_DOCTOR_CHECKS:/app/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs:ro"
+  )
+fi
 
 echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
+  -v "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
+  "${CODEX_CONTRACT_MOUNT_ARGS[@]}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
@@ -112,11 +122,6 @@ cleanup_inner() {
 }
 trap cleanup_inner EXIT
 
-configure_plugin_registry() {
-  openclaw_prepublish_plugin_registry_start_mounted \
-    /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
-}
-
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
@@ -127,7 +132,8 @@ openclaw_e2e_enable_openclaw_cli_timeout
 openclaw_e2e_assert_dep_absent "@openclaw/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 
-configure_plugin_registry
+openclaw_prepublish_plugin_registry_start_mounted \
+  /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
 
 # Non-interactive onboarding cannot grant capabilities. Use the shared fixture
 # consent flow and the exact companion when testing an unpublished candidate.
@@ -154,7 +160,9 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
-node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
+if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]; then
+  node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
+fi
 
 echo "Codex on-demand Docker E2E passed"
 EOF

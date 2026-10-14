@@ -1,33 +1,15 @@
 /** Resolves bundled document extractor providers from enabled manifest contracts. */
-import {
-  normalizeStringEntries,
-  sortUniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
-import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
-import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
+import { normalizePluginsConfig } from "./config-state.js";
+import type {
+  DocumentExtractorPlugin,
+  PluginDocumentExtractorEntry,
+} from "./document-extractor-types.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
-
-function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
-  config?: OpenClawConfig;
-  onlyPluginIds?: readonly string[];
-}): string[] | null {
-  const allow = params.config?.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return null;
-  }
-  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
-  const deniedPluginIds = new Set(params.config?.plugins?.deny ?? []);
-  const entries = params.config?.plugins?.entries ?? {};
-  return sortUniqueStrings(
-    normalizeStringEntries(allow)
-      .filter((pluginId) => !onlyPluginIdSet || onlyPluginIdSet.has(pluginId))
-      .filter((pluginId) => !deniedPluginIds.has(pluginId))
-      .filter((pluginId) => entries[pluginId]?.enabled !== false),
-  );
-}
+import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
 
 /** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
@@ -38,25 +20,38 @@ export function resolvePluginDocumentExtractors(params?: {
 }): PluginDocumentExtractorEntry[] {
   const extractors: PluginDocumentExtractorEntry[] = [];
   const loadErrors: unknown[] = [];
-  const explicitAllowedPluginIds = resolveExplicitAllowedDocumentExtractorPluginIds({
+  let onlyPluginIds = params?.onlyPluginIds;
+  const allowlist = normalizePluginsConfig(params?.config?.plugins).allow;
+  if (allowlist.length > 0) {
+    // Document allowlists stay restrictive when upgrade compatibility broadens activation.
+    const scope = createPluginIdScopeSet(onlyPluginIds);
+    onlyPluginIds = allowlist.filter((pluginId) => !scope || scope.has(pluginId));
+  }
+  for (const plugin of resolveEnabledBundledManifestContractPlugins({
     config: params?.config,
-    onlyPluginIds: params?.onlyPluginIds,
-  });
-  const pluginIds =
-    explicitAllowedPluginIds ??
-    resolveEnabledBundledManifestContractPlugins({
-      config: params?.config,
-      workspaceDir: params?.workspaceDir,
-      env: params?.env,
-      onlyPluginIds: params?.onlyPluginIds,
-      contract: "documentExtractors",
-    }).map((plugin) => plugin.id);
-  for (const pluginId of pluginIds) {
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+    onlyPluginIds,
+    contract: "documentExtractors",
+  })) {
     let loaded: PluginDocumentExtractorEntry[] | null;
     try {
-      loaded = loadBundledDocumentExtractorEntriesFromDir({
-        dirName: pluginId,
-        pluginId,
+      loaded = loadBundledPublicArtifactEntries({
+        dirName: plugin.id,
+        pluginId: plugin.id,
+        env: params?.env,
+        owner: plugin,
+        artifactCandidates: ["document-extractor.js", "document-extractor-api.js"],
+        suffix: "DocumentExtractor",
+        isArtifact: (value): value is DocumentExtractorPlugin =>
+          isRecord(value) &&
+          typeof value.id === "string" &&
+          typeof value.label === "string" &&
+          Array.isArray(value.mimeTypes) &&
+          value.mimeTypes.every((mimeType) => typeof mimeType === "string" && mimeType.trim()) &&
+          (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
+          typeof value.extract === "function",
+        partialFailureLabel: "document extractors",
       });
     } catch (error) {
       loadErrors.push(error);

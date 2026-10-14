@@ -2,11 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import {
-  buildPairedProviderApiKeyCatalog,
-  buildSingleProviderApiKeyCatalog,
-  findCatalogTemplate,
-} from "./provider-catalog.js";
+import { buildSingleProviderApiKeyCatalog, findCatalogTemplate } from "./provider-catalog.js";
 import type { ProviderCatalogContext } from "./types.js";
 
 function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
@@ -51,36 +47,43 @@ function expectCatalogTemplateMatch(params: {
   ).toEqual(params.expected);
 }
 
-function expectPairedCatalogProviders(
-  result: Awaited<ReturnType<typeof buildPairedProviderApiKeyCatalog>>,
-  expected: Record<string, ModelProviderConfig & { apiKey: string }>,
-) {
-  expect(result).toEqual({
-    providers: expected,
+describe("findCatalogTemplate", () => {
+  it("keeps template priority and the first matching catalog entry", () => {
+    const fallback = { provider: "demo", id: "fallback" };
+    const preferred = { provider: " DEMO ", id: " Preferred " };
+    const duplicate = { provider: "demo", id: "preferred" };
+    const entries = [fallback, { provider: "other", id: "preferred" }, preferred, duplicate];
+
+    expect(
+      findCatalogTemplate({
+        entries,
+        providerId: "demo",
+        templateIds: ["missing", "PREFERRED", "fallback"],
+      }),
+    ).toBe(preferred);
   });
-}
+
+  const sparseTemplateIds: string[] = [];
+  sparseTemplateIds.length = 1;
+
+  it.each([
+    { name: "empty", templateIds: [], matches: false },
+    { name: "sparse", templateIds: sparseTemplateIds, matches: false },
+    { name: "missing", templateIds: ["missing"], matches: false },
+    { name: "explicitly blank", templateIds: [""], matches: true },
+  ])("preserves $name template selection", ({ templateIds, matches }) => {
+    const entry = { provider: "demo", id: "" };
+    expect(findCatalogTemplate({ entries: [entry], providerId: "demo", templateIds })).toBe(
+      matches ? entry : undefined,
+    );
+  });
+});
 
 function createSingleCatalogProvider(overrides: Partial<ModelProviderConfig> & { apiKey: string }) {
   return {
     provider: {
       ...createProviderConfig(overrides),
       apiKey: overrides.apiKey,
-    },
-  };
-}
-
-function createPairedCatalogProviders(
-  apiKey: string,
-  overrides: Partial<ModelProviderConfig> = {},
-) {
-  return {
-    alpha: {
-      ...createProviderConfig(overrides),
-      apiKey,
-    },
-    beta: {
-      ...createProviderConfig(overrides),
-      apiKey,
     },
   };
 }
@@ -100,22 +103,6 @@ async function expectSingleCatalogResult(params: {
   });
 
   expect(result).toEqual(params.expected);
-}
-
-async function expectPairedCatalogResult(params: {
-  ctx: ProviderCatalogContext;
-  expected: Record<string, ModelProviderConfig & { apiKey: string }>;
-}) {
-  const result = await buildPairedProviderApiKeyCatalog({
-    ctx: params.ctx,
-    providerId: "test-provider",
-    buildProviders: async () => ({
-      alpha: createProviderConfig(),
-      beta: createProviderConfig(),
-    }),
-  });
-
-  expectPairedCatalogProviders(result, params.expected);
 }
 
 describe("buildSingleProviderApiKeyCatalog", () => {
@@ -219,39 +206,4 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       });
     },
   );
-
-  it("adds api key to each paired provider", async () => {
-    await expectPairedCatalogResult({
-      ctx: createCatalogContext({
-        apiKeys: { "test-provider": "secret-key" },
-      }),
-      expected: createPairedCatalogProviders("secret-key"),
-    });
-  });
-
-  it("omits unreadable paired provider catalog entries", async () => {
-    const unreadableProvider = new Proxy(createProviderConfig(), {
-      ownKeys() {
-        throw new Error("mockplugin provider config keys failed");
-      },
-    });
-    const result = await buildPairedProviderApiKeyCatalog({
-      ctx: createCatalogContext({
-        apiKeys: { fuzzplugin: "secret-key" },
-      }),
-      providerId: "fuzzplugin",
-      buildProviders: async () =>
-        ({
-          readable: createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
-          unreadable: unreadableProvider,
-        }) as Record<string, ModelProviderConfig>,
-    });
-
-    expectPairedCatalogProviders(result, {
-      readable: {
-        ...createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
-        apiKey: "secret-key",
-      },
-    });
-  });
 });

@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.text.format.Formatter
 import android.util.Base64
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -115,11 +116,6 @@ internal fun WorkspaceFilesScreen(
   }
 }
 
-internal fun isWorkspaceDirectoryRequestInFlight(
-  loading: Boolean,
-  loadingMore: Boolean,
-): Boolean = loading || loadingMore
-
 @Composable
 private fun WorkspaceDirectoryScreen(
   viewModel: MainViewModel,
@@ -136,7 +132,25 @@ private fun WorkspaceDirectoryScreen(
   var loadingMore by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
   var refreshNonce by remember(path) { mutableIntStateOf(0) }
-  val requestInFlight = isWorkspaceDirectoryRequestInFlight(loading, loadingMore)
+  val requestInFlight = loading || loadingMore
+
+  suspend fun loadDirectory(append: Boolean) {
+    try {
+      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null }, offset = if (append) entries.size else null)
+      entries =
+        if (append) {
+          val known = entries.map { it.path }.toSet()
+          entries + listing.entries.filter { it.path !in known }
+        } else {
+          listing.entries
+        }
+      totalEntries = listing.totalEntries
+    } catch (_: Throwable) {
+      errorText = nativeString("Could not load this folder.")
+    } finally {
+      if (append) loadingMore = false else loading = false
+    }
+  }
 
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
@@ -145,15 +159,7 @@ private fun WorkspaceDirectoryScreen(
     }
     loading = true
     errorText = null
-    try {
-      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null })
-      entries = listing.entries
-      totalEntries = listing.totalEntries
-    } catch (_: Throwable) {
-      errorText = nativeString("Could not load this folder.")
-    } finally {
-      loading = false
-    }
+    loadDirectory(append = false)
   }
 
   ClawScaffold(
@@ -175,7 +181,7 @@ private fun WorkspaceDirectoryScreen(
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
               text = if (path.isEmpty()) nativeString("Files") else path.substringAfterLast('/'),
-              style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
+              style = ClawTheme.type.display,
               color = ClawTheme.colors.text,
             )
             if (path.isNotEmpty()) {
@@ -197,7 +203,7 @@ private fun WorkspaceDirectoryScreen(
               icon = Icons.Outlined.Refresh,
               contentDescription = nativeString("Refresh"),
               onClick = {
-                if (!isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) {
+                if (!(loading || loadingMore)) {
                   loading = true
                   refreshNonce += 1
                 }
@@ -237,20 +243,9 @@ private fun WorkspaceDirectoryScreen(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(ClawTheme.radii.row))
                 .clickable(enabled = !requestInFlight) {
-                  if (isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) return@clickable
+                  if (loading || loadingMore) return@clickable
                   loadingMore = true
-                  scope.launch {
-                    try {
-                      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null }, offset = entries.size)
-                      val known = entries.map { it.path }.toSet()
-                      entries = entries + listing.entries.filter { it.path !in known }
-                      totalEntries = listing.totalEntries
-                    } catch (_: Throwable) {
-                      errorText = nativeString("Could not load this folder.")
-                    } finally {
-                      loadingMore = false
-                    }
-                  }
+                  scope.launch { loadDirectory(append = true) }
                 }.padding(horizontal = 10.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -310,12 +305,11 @@ private fun WorkspaceEntryRow(
 private fun workspaceEntryDetail(
   context: Context,
   entry: GatewayWorkspaceEntry,
-): String? {
-  val parts = mutableListOf<String>()
-  entry.size?.let { parts.add(Formatter.formatShortFileSize(context, it)) }
-  entry.updatedAtMs?.let { parts.add(DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it))) }
-  return parts.takeIf { it.isNotEmpty() }?.joinToString(" • ")
-}
+): String? =
+  listOfNotNull(
+    entry.size?.let { Formatter.formatShortFileSize(context, it) },
+    entry.updatedAtMs?.let { DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it)) },
+  ).takeIf { it.isNotEmpty() }?.joinToString(" • ")
 
 @Composable
 private fun WorkspaceFilePreview(
@@ -353,7 +347,7 @@ private fun WorkspaceFilePreview(
         ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
-          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
+          style = ClawTheme.type.display.copy(lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
           color = ClawTheme.colors.text,
           softWrap = true,
           modifier = Modifier.weight(1f),
@@ -368,14 +362,19 @@ private fun WorkspaceFilePreview(
       }
 
       when {
-        loading ->
+        loading -> {
           Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             CircularProgressIndicator(modifier = Modifier.size(22.dp))
           }
-        errorText != null ->
+        }
+
+        errorText != null -> {
           ClawEmptyState(title = nativeString("No preview"), body = errorText.orEmpty())
-        file != null ->
+        }
+
+        file != null -> {
           WorkspaceFileContent(file = file ?: return@Column)
+        }
       }
     }
   }
@@ -386,14 +385,21 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   if (file.isBase64 && file.mimeType.startsWith("image/")) {
     val imageState = rememberBase64ImageState(file.content)
     when {
-      imageState.image != null ->
+      imageState.image != null -> {
         Image(
           bitmap = imageState.image,
           contentDescription = file.name,
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         )
-      imageState.failed -> ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
-      else -> CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
+
+      imageState.failed -> {
+        ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
+      }
+
+      else -> {
+        CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
     }
   } else {
     // Reuse the chat renderer's code block so previews highlight and cap
@@ -420,23 +426,24 @@ private fun shareWorkspaceFile(
 ) {
   // A FileProvider grant can outlive the share sheet. Unique directories keep
   // a later same-basename export from replacing bytes behind an older grant.
-  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}").apply { mkdirs() }
-  // Server names are plain basenames; keep the guard so a hostile gateway
-  // cannot steer the temp write outside the export directory.
-  val safeName = file.name.substringAfterLast('/').ifEmpty { "file" }
-  val target = File(directory, safeName)
-  if (file.isBase64) {
-    val bytes = runCatching { Base64.decode(file.content, Base64.DEFAULT) }.getOrNull() ?: return
-    target.writeBytes(bytes)
-  } else {
-    target.writeText(file.content)
+  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}")
+  try {
+    directory.mkdirs()
+    // Server names are plain basenames; keep the guard so a hostile gateway
+    // cannot steer the temp write outside the export directory.
+    val target = File(directory, file.name.substringAfterLast('/').ifEmpty { "file" })
+    target.writeBytes(if (file.isBase64) Base64.decode(file.content, Base64.DEFAULT) else file.content.toByteArray())
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
+    val send =
+      Intent(Intent.ACTION_SEND).apply {
+        type = file.mimeType.ifEmpty { "application/octet-stream" }
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+    context.startActivity(Intent.createChooser(send, file.name))
+  } catch (_: Exception) {
+    // Only this unpublished attempt is disposable; older URI grants still own their files.
+    runCatching { directory.deleteRecursively() }
+    Toast.makeText(context, nativeString("Could not share file"), Toast.LENGTH_SHORT).show()
   }
-  val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
-  val send =
-    Intent(Intent.ACTION_SEND).apply {
-      type = file.mimeType.ifEmpty { "application/octet-stream" }
-      putExtra(Intent.EXTRA_STREAM, uri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-  context.startActivity(Intent.createChooser(send, file.name))
 }

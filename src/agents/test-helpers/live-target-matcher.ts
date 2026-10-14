@@ -144,3 +144,29 @@ export function createLiveTargetMatcher(params: {
     },
   };
 }
+
+/** Reports selectors with no candidate in their admitted provider scope. */
+export function findUnmatchedLiveModelSelectors(params: {
+  modelFilter: Set<string>;
+  providerFilter: Set<string> | null;
+  models: readonly { provider: string; id: string }[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const targetMatcher = createLiveTargetMatcher(params);
+  return [...params.modelFilter].filter((raw) => {
+    const target = parseModelTarget(raw);
+    if (!target) {
+      return true;
+    }
+    if (target.provider && !targetMatcher.matchesProvider(target.provider)) {
+      return false;
+    }
+    const selector = createLiveTargetMatcher({ ...params, modelFilter: new Set([raw]) });
+    return !params.models.some(
+      (model) =>
+        selector.matchesProvider(model.provider) && selector.matchesModel(model.provider, model.id),
+    );
+  });
+}

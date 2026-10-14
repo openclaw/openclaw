@@ -1,52 +1,43 @@
 // Commander registration for experimental Claws inspection and add previews.
 import type { Command } from "commander";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type ClawsInspectOptions = {
   json?: boolean;
 };
 
-export type ClawsCreateOptions = {
+export type ClawsCreateOptions = ClawsInspectOptions & {
   name?: string;
   agentId?: string;
-  json?: boolean;
 };
 export type ClawsValidateOptions = { json?: boolean };
 export type ClawsBuildOptions = { out: string; json?: boolean };
 export type ClawsDevOptions = { agentId?: string; workspace?: string; json?: boolean };
 
-export type ClawsAddOptions = {
+export type ClawsAddOptions = ClawsDevOptions & {
+  dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
+};
+export type ClawsMigrateOptions = {
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
   json?: boolean;
-  agentId?: string;
-  workspace?: string;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
-export type ClawsUpdateOptions = {
+export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   from?: string;
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
-  json?: boolean;
 };
-export type ClawsRemoveOptions = {
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
+export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   removeUnused?: boolean;
   removeReferenced?: string[];
   forceReferenced?: boolean;
-  json?: boolean;
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
-
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
 
 export function registerClawsCli(program: Command) {
   if (!isExperimentalClawsEnabled()) {
@@ -90,7 +81,7 @@ export function registerClawsCli(program: Command) {
 
   claws
     .command("build")
-    .description("Build a deterministic Claw package artifact")
+    .description("Build a reproducible Claw package artifact")
     .argument("[path]", "Project directory", ".")
     .requiredOption("--out <artifact>", "New .tgz artifact to create")
     .option("--json", "Print JSON", false)
@@ -135,6 +126,19 @@ export function registerClawsCli(program: Command) {
     });
 
   claws
+    .command("migrate")
+    .description("Enroll one existing local agent as a Claw without replacing its workspace")
+    .argument("<agent-id>", "Existing configured agent id")
+    .option("--dry-run", "Preview migration without creating a package or ownership record", false)
+    .option("--yes", "Apply after confirming the exact migration plan", false)
+    .option("--plan-integrity <digest>", "Bind automation consent to an exact dry-run plan")
+    .option("--json", "Print JSON", false)
+    .action(async (agentId: string, opts: ClawsMigrateOptions) => {
+      const { runClawsMigrateCommand } = await import("./claws-migrate-cli.runtime.js");
+      await runClawsMigrateCommand(agentId, opts);
+    });
+
+  claws
     .command("update")
     .description("Plan changes to one installed Claw agent")
     .argument("<claw-or-agent>", "Installed package name or final agent id")
@@ -144,7 +148,7 @@ export function registerClawsCli(program: Command) {
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
-      const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
+      const { runClawsUpdateCommand } = await import("./claws-update-cli.runtime.js");
       await runClawsUpdateCommand(target, opts);
     });
 

@@ -49,12 +49,12 @@ allowlist mode instead.
         "enabled": true,
         "llm": {
           "allowModelOverride": true,
-          "allowedCompletionModels": ["openai/gpt-5.6-sol"],
+          "allowedCompletionModels": ["openai/gpt-6-astra"],
           "allowAuthProfileOverride": true
         },
         "config": {
           "defaultProvider": "openai",
-          "defaultModel": "gpt-5.6-sol",
+          "defaultModel": "gpt-6-astra",
           "defaultAuthProfileId": "main",
           "maxTokens": 800,
           "timeoutMs": 30000
@@ -99,11 +99,16 @@ Each call starts a fresh prompt-only inference operation. It does not reuse the
 calling agent's transcript or native runtime session, run agent lifecycle hooks,
 or deliver model output to a channel. OpenClaw uses the selected provider,
 model, auth profile, and runtime exactly once; it does not fall back to another
-route when that owner cannot provide a literal zero-tool call.
+route when that owner cannot provide isolated completion.
+
+Agents API runs restricted sessions by default, without an executor or supplied
+tools, but its service may retain built-in helpers. It cannot guarantee literal
+zero-tool inference. Use another runtime when your workflow requires that
+guarantee; rejecting tool-bearing output cannot undo native helper effects.
 
 A selected agent harness must implement isolated completion. Otherwise the call
 fails before inference with a `does not support isolated completion` error.
-This fail-closed behavior prevents a JSON task from silently becoming a normal
+Rejecting the call prevents a JSON task from silently becoming a normal
 tool-capable agent turn.
 
 CLI runtimes must provide the equivalent isolated preparation guarantee. The
@@ -161,9 +166,9 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 
 - **JSON-only**: the model is instructed to return only a JSON value, no code
   fences, no commentary.
-- **No tools**: the selected runtime must expose a literal empty model-callable
-  tool surface. OpenClaw rejects tool-shaped results instead of treating them as
-  task output.
+- **No supplied tools**: runtimes enforce a literal empty model-callable tool
+  surface except for the documented Agents API native-helper limitation.
+  OpenClaw rejects tool-shaped results instead of treating them as task output.
 - **Isolated**: the run has no agent transcript, session reuse, lifecycle hooks,
   channel delivery, or provider fallback.
 - Treat output as untrusted unless you validate it with `schema`.

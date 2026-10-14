@@ -1,42 +1,101 @@
-import {
-  asFiniteNumber,
-  normalizeOptionalString,
-  readStringField,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Buffer } from "node:buffer";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 
-export { normalizeOptionalString as normalizeNonEmptyString };
+const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
+  "This content was flagged for possible biological risk.";
 
-export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
-  return normalizeOptionalString(record[key]);
+export type CodexProviderRefusal = {
+  category: "bio" | "cyber" | "misalignment";
+  message: string;
+  review?: ReturnType<typeof readCodexMisalignmentReview>;
+  nativeThreadId?: string;
+  nativeTurnId?: string;
+};
+
+/** Decode app-server v2 findings with the Codex UI's UTF-8 limits; never truncate a steer. */
+function readCodexMisalignmentReview(value: unknown) {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  const explanation = value.detailedExplanation;
+  if (
+    typeof explanation !== "string" ||
+    !explanation.trim() ||
+    Buffer.byteLength(explanation, "utf8") > 64 * 1024
+  ) {
+    return undefined;
+  }
+  const message = isJsonObject(value.steer) ? value.steer.message : undefined;
+  return {
+    explanation,
+    ...(typeof message === "string" && message.trim() && Buffer.byteLength(message, "utf8") <= 1024
+      ? { continuation: { message } }
+      : {}),
+    ...(typeof value.errorType === "string" && value.errorType.trim()
+      ? { errorType: value.errorType }
+      : {}),
+  };
 }
 
-export function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return [];
+/** Project only Codex's explicit refusal contracts; other policy errors retain their own paths. */
+export function readCodexProviderRefusal(
+  message: string | undefined,
+  codexErrorInfo: JsonValue | null | undefined,
+  options?: {
+    misalignment?: unknown;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+  },
+): CodexProviderRefusal | undefined {
+  if (!message) {
+    return undefined;
   }
-  const entries: string[] = [];
-  for (const entry of value) {
-    const normalized = normalizeOptionalString(entry);
-    if (normalized) {
-      entries.push(normalized);
-    }
+  if (codexErrorInfo === "cyberPolicy") {
+    return { category: "cyber", message };
   }
-  return entries;
+  if (codexErrorInfo === "misalignmentPolicyViolation") {
+    const review = readCodexMisalignmentReview(options?.misalignment);
+    return {
+      category: "misalignment",
+      message,
+      ...(review ? { review } : {}),
+      ...(options?.nativeThreadId ? { nativeThreadId: options.nativeThreadId } : {}),
+      ...(options?.nativeTurnId ? { nativeTurnId: options.nativeTurnId } : {}),
+    };
+  }
+  return message.startsWith(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
+    ? { category: "bio", message }
+    : undefined;
+}
+
+function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+  return {
+    provider: "openai",
+    category: refusal.category,
+    ...(refusal.review ? { review: refusal.review } : {}),
+    ...(refusal.nativeThreadId ? { nativeThreadId: refusal.nativeThreadId } : {}),
+    ...(refusal.nativeTurnId ? { nativeTurnId: refusal.nativeTurnId } : {}),
+  };
+}
+
+export function codexProviderRefusalDiagnostics(
+  refusal: CodexProviderRefusal | undefined,
+  timestamp: number,
+): Pick<AssistantMessage, "diagnostics"> {
+  return refusal
+    ? {
+        diagnostics: [
+          { type: "provider_refusal", timestamp, details: codexProviderRefusalDetails(refusal) },
+        ],
+      }
+    : {};
 }
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  return typeof value === "string" ? value : undefined;
-}
-
-export function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
-  const value = asFiniteNumber(record[key]);
-  return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
+  return value === null || typeof value === "string" ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
@@ -63,32 +122,23 @@ export function readHookOutputEntries(
   });
 }
 
-export function splitPlanText(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
-    .filter((line) => line.length > 0);
-}
-
-export function extractRawAssistantText(item: JsonObject): string | undefined {
+export function extractRawResponseItemText(
+  item: JsonObject,
+  textType: "input_text" | "output_text" = "output_text",
+): string | undefined {
   const content = Array.isArray(item.content) ? item.content : [];
   const parts = content.flatMap((entry) => {
     if (!isJsonObject(entry)) {
       return [];
     }
     const type = readStringField(entry, "type");
-    if (type !== "output_text" && type !== "text") {
+    if (type !== textType && type !== "text") {
       return [];
     }
     const value = readStringField(entry, "text");
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;
-}
-
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = (item as Record<string, unknown>)[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {

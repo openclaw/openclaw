@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Reset OpenClaw like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
@@ -11,7 +11,6 @@ APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -305,11 +304,8 @@ print_managed_openclaw_supervisor_label() {
   executable="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*program = / { print $2; exit }' <<<"${job}")"
   local properties=""
   properties="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*properties = / { print $2; exit }' <<<"${job}")"
-  local is_managed_executable=0
-  if [[ "${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}" ]]; then
-    is_managed_executable=1
-  fi
-  if [[ "${is_managed_executable}" -eq 1 && " ${properties} " == *" keepalive "* ]]; then
+  if [[ ("${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}") &&
+    " ${properties} " == *" keepalive "* ]]; then
     printf '%s\n' "${label}"
   fi
 }
@@ -380,7 +376,7 @@ else
 fi
 
 # Bundle Gateway-hosted plugin assets.
-run_step "bundle plugin assets" bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
+run_step "bundle plugin assets" /bin/bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -410,10 +406,6 @@ run_step "package app" env \
   OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}" \
   "${ROOT_DIR}/scripts/package-mac-app.sh"
 run_step "verify packaged app" /usr/bin/codesign --verify --deep --strict "${STAGED_APP_BUNDLE}"
-
-install_staged_app() {
-  replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
-}
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" ]]; then
@@ -445,8 +437,8 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
+  run_step "install gateway launch agent (unsigned)" /bin/bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" /bin/bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
@@ -491,7 +483,7 @@ else
   fi
 fi
 
-run_step "install packaged app" install_staged_app
+run_step "install packaged app" replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
 choose_app_bundle
 OPEN_ARGS=(-n "${APP_BUNDLE}")
 if [[ "$ATTACH_ONLY" -eq 1 || "$BACKGROUND_ONLY" -eq 1 ]]; then
@@ -520,5 +512,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -c "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
+  run_step "show gateway launch agent args (unsigned)" /bin/bash -c "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
 fi

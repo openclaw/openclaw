@@ -1,4 +1,3 @@
-// Command status runtime helpers collect agent/session state for plugin command status output.
 import { listAgentEntries, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildStatusReply } from "../auto-reply/reply/commands-status.js";
@@ -7,8 +6,9 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -43,7 +43,10 @@ export async function resolveDirectStatusReplyForSessionCore(
     return undefined;
   }
 
-  const statusLoaded = loadGatewaySessionEntryReadOnly(requestedSessionKey);
+  const statusLoaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: requestedSessionKey,
+  });
   const statusCfg = statusLoaded.cfg ?? params.cfg;
   const statusSessionKey = statusLoaded.canonicalKey;
   const statusEntry = statusLoaded.entry;
@@ -127,6 +130,7 @@ export async function resolveDirectStatusReplyForSessionCore(
 
   return await buildStatusReply({
     cfg: statusCfg,
+    agentId: statusAgentId,
     command,
     sessionEntry: statusEntry,
     sessionKey: statusSessionKey,

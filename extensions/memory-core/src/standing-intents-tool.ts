@@ -18,23 +18,8 @@ const INTENT_KEYWORD_MAX_COUNT = 24;
 const INTENT_KEYWORD_MAX_CHARS = 120;
 const STANDING_INTENT_AUTOMATION_GUIDANCE =
   "The system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks.";
-const STANDING_INTENT_SCOPE_GUIDANCE =
-  'Use "channel" (the default) for any "whenever I mention X" request. Use "conversation" only when the user explicitly limits the reminder to the current thread. Use "anywhere" when the user asks for it everywhere.';
 
 type IntentSenderScope = "sender" | "anyone";
-type IntentToolParams = {
-  action?: unknown;
-  id?: unknown;
-  description?: unknown;
-  triggerKeywords?: unknown;
-  scope?: unknown;
-  senderScope?: unknown;
-  expiresAt?: unknown;
-  maxFires?: unknown;
-  cooldownSeconds?: unknown;
-  status?: unknown;
-};
-
 function trimRequiredString(value: unknown, field: string, maxChars: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${field} is required`);
@@ -56,22 +41,12 @@ function renderArmedIntentMessage(scope: IntentScope): string {
   return `Intent is armed ${scopeDescription}. ${STANDING_INTENT_AUTOMATION_GUIDANCE}`;
 }
 
-function positiveInteger(value: unknown, field: string, fallback: number): number {
+function integerOption(value: unknown, field: string, fallback: number, minimum: 0 | 1): number {
   if (value === undefined) {
     return fallback;
   }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${field} must be a positive integer`);
-  }
-  return value;
-}
-
-function nonNegativeInteger(value: unknown, field: string, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${field} must be a non-negative integer`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${field} must be a ${minimum === 1 ? "positive" : "non-negative"} integer`);
   }
   return value;
 }
@@ -104,25 +79,7 @@ function parseExpiry(value: unknown, nowMs: number): number {
   return parsed;
 }
 
-function parseStatus(value: unknown): StandingIntentStatus | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const statuses: StandingIntentStatus[] = [
-    "pending",
-    "armed",
-    "fired",
-    "done",
-    "cancelled",
-    "expired",
-  ];
-  if (typeof value !== "string" || !statuses.includes(value as StandingIntentStatus)) {
-    throw new Error(`status must be one of: ${statuses.join(", ")}`);
-  }
-  return value as StandingIntentStatus;
-}
-
-function parseScope<T extends string>(
+function parseChoice<T extends string | undefined>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -131,137 +88,111 @@ function parseScope<T extends string>(
   if (value === undefined) {
     return fallback;
   }
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
+  const choice = allowed.find((candidate) => candidate === value);
+  if (choice === undefined) {
     throw new Error(`${field} must be one of: ${allowed.join(", ")}`);
   }
-  return value as T;
+  return choice;
 }
 
-export function createStandingIntentTool(options: {
+export function createStandingIntentExecutor(options: {
   agentId: string;
+  assertCurrent?: () => void;
   sourceSessionId?: string;
   conversationId?: string;
   provider?: string;
   accountId?: string;
   senderId?: string;
-}): AnyAgentTool {
-  return {
-    label: "Standing Intent",
-    name: "intent",
-    description: `Create, list, or explicitly cancel event-conditioned standing intents. Creating an intent arms it immediately. ${STANDING_INTENT_AUTOMATION_GUIDANCE} ${STANDING_INTENT_SCOPE_GUIDANCE} Use scheduled tasks for time-based reminders; use this tool only for events expressed by trigger keywords.`,
-    parameters: {
-      type: "object",
-      properties: {
-        action: { type: "string", enum: ["create", "list", "cancel"] },
-        id: { type: "string" },
-        description: { type: "string", maxLength: INTENT_DESCRIPTION_MAX_CHARS },
-        triggerKeywords: {
-          type: "array",
-          items: { type: "string", maxLength: INTENT_KEYWORD_MAX_CHARS },
-          maxItems: INTENT_KEYWORD_MAX_COUNT,
-        },
-        scope: {
-          type: "string",
-          enum: ["conversation", "channel", "anywhere"],
-          default: "channel",
-          description: STANDING_INTENT_SCOPE_GUIDANCE,
-        },
-        senderScope: {
-          type: "string",
-          enum: ["sender", "anyone"],
-          default: "sender",
-        },
-        expiresAt: { type: "string" },
-        maxFires: { type: "integer", minimum: 1 },
-        cooldownSeconds: { type: "integer", minimum: 0 },
-        status: {
-          type: "string",
-          enum: ["pending", "armed", "fired", "done", "cancelled", "expired"],
-        },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    },
-    execute: async (_toolCallId, rawParams) => {
-      const params = (rawParams ?? {}) as IntentToolParams;
-      if (params.action === "create") {
-        const provider = options.provider?.trim();
-        const senderId = options.senderId?.trim();
-        if (!provider || !senderId) {
-          const missingIdentity = !provider
-            ? senderId
-              ? "channel"
-              : "channel and sender"
-            : "sender";
-          throw new Error(
-            `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
-          );
-        }
-        const nowMs = Date.now();
-        const scope = parseScope<IntentScope>(
-          params.scope,
-          "scope",
-          ["conversation", "channel", "anywhere"],
-          "channel",
+}): AnyAgentTool["execute"] {
+  return async (_toolCallId, rawParams) => {
+    const params = (rawParams ?? {}) as Record<string, unknown>;
+    if (params.action === "create") {
+      const provider = options.provider?.trim();
+      const senderId = options.senderId?.trim();
+      if (!provider || !senderId) {
+        const missingIdentity = [provider ? null : "channel", senderId ? null : "sender"]
+          .filter(Boolean)
+          .join(" and ");
+        throw new Error(
+          `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
         );
-        const senderScope = parseScope<IntentSenderScope>(
-          params.senderScope,
-          "senderScope",
-          ["sender", "anyone"],
-          "sender",
-        );
-        const intent = createStandingIntent({
+      }
+      const nowMs = Date.now();
+      const scope = parseChoice<IntentScope>(
+        params.scope,
+        "scope",
+        ["conversation", "channel", "anywhere"],
+        "channel",
+      );
+      const senderScope = parseChoice<IntentSenderScope>(
+        params.senderScope,
+        "senderScope",
+        ["sender", "anyone"],
+        "sender",
+      );
+      const intent = await createStandingIntent({
+        agentId: options.agentId,
+        assertCurrent: options.assertCurrent,
+        description: trimRequiredString(
+          params.description,
+          "description",
+          INTENT_DESCRIPTION_MAX_CHARS,
+        ),
+        triggerKeywords: normalizeKeywords(params.triggerKeywords),
+        channelScope:
+          scope === "anywhere"
+            ? null
+            : encodeStandingIntentChannelScope({
+                scope,
+                provider: options.provider ?? "",
+                accountId: options.accountId,
+                conversationId: options.conversationId,
+              }),
+        senderScope:
+          senderScope === "anyone"
+            ? null
+            : encodeStandingIntentSenderScope({
+                provider: options.provider ?? "",
+                accountId: options.accountId,
+                senderId: options.senderId ?? "",
+              }),
+        creatorSender: senderId,
+        expiresAt: parseExpiry(params.expiresAt, nowMs),
+        maxFires: integerOption(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES, 1),
+        cooldownSeconds: integerOption(
+          params.cooldownSeconds,
+          "cooldownSeconds",
+          DEFAULT_INTENT_COOLDOWN_SECONDS,
+          0,
+        ),
+        sourceSessionId: options.sourceSessionId,
+        nowMs,
+      });
+      return jsonResult({ intent, message: renderArmedIntentMessage(scope) });
+    }
+    if (params.action === "list") {
+      return jsonResult({
+        intents: await listStandingIntents({
           agentId: options.agentId,
-          description: trimRequiredString(
-            params.description,
-            "description",
-            INTENT_DESCRIPTION_MAX_CHARS,
+          assertCurrent: options.assertCurrent,
+          status: parseChoice<StandingIntentStatus | undefined>(
+            params.status,
+            "status",
+            ["pending", "armed", "fired", "done", "cancelled", "expired"],
+            undefined,
           ),
-          triggerKeywords: normalizeKeywords(params.triggerKeywords),
-          channelScope:
-            scope === "anywhere"
-              ? null
-              : encodeStandingIntentChannelScope({
-                  scope,
-                  provider: options.provider ?? "",
-                  accountId: options.accountId,
-                  conversationId: options.conversationId,
-                }),
-          senderScope:
-            senderScope === "anyone"
-              ? null
-              : encodeStandingIntentSenderScope({
-                  provider: options.provider ?? "",
-                  accountId: options.accountId,
-                  senderId: options.senderId ?? "",
-                }),
-          creatorSender: senderId,
-          expiresAt: parseExpiry(params.expiresAt, nowMs),
-          maxFires: positiveInteger(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES),
-          cooldownSeconds: nonNegativeInteger(
-            params.cooldownSeconds,
-            "cooldownSeconds",
-            DEFAULT_INTENT_COOLDOWN_SECONDS,
-          ),
-          sourceSessionId: options.sourceSessionId,
-          nowMs,
-        });
-        return jsonResult({ intent, message: renderArmedIntentMessage(scope) });
-      }
-      if (params.action === "list") {
-        return jsonResult({
-          intents: listStandingIntents({
-            agentId: options.agentId,
-            status: parseStatus(params.status),
-          }),
-        });
-      }
-      if (params.action === "cancel") {
-        const id = trimRequiredString(params.id, "id", 200);
-        const intent = cancelStandingIntent({ agentId: options.agentId, id });
-        return jsonResult({ cancelled: intent !== null, intent });
-      }
-      throw new Error("action must be create, list, or cancel");
-    },
+        }),
+      });
+    }
+    if (params.action === "cancel") {
+      const id = trimRequiredString(params.id, "id", 200);
+      const intent = await cancelStandingIntent({
+        agentId: options.agentId,
+        id,
+        assertCurrent: options.assertCurrent,
+      });
+      return jsonResult({ cancelled: intent !== null, intent });
+    }
+    throw new Error("action must be create, list, or cancel");
   };
 }

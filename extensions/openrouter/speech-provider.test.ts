@@ -1,57 +1,26 @@
 // Openrouter tests cover speech provider plugin behavior.
+import { requireFirstPostJsonRecordRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
-    return new Uint8Array(await response.arrayBuffer());
-  }),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
+  vi.hoisted(() => ({
+    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+    postJsonRequestMock: vi.fn(),
+    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
+  }));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
-  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
-
-function requireOpenRouterConfigRequest(): Record<string, unknown> {
-  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
-  if (!call) {
-    throw new Error("expected OpenRouter speech config request");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter speech config request");
-  }
-  return request;
-}
-
-function requireOpenRouterPostRequest(): Record<string, unknown> {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected OpenRouter speech request");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter speech request");
-  }
-  return request as Record<string, unknown>;
-}
 
 function requireHeaders(value: unknown): Headers {
   if (!(value instanceof Headers)) {
@@ -64,7 +33,6 @@ describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });
@@ -146,28 +114,27 @@ describe("openrouter speech provider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(requireOpenRouterConfigRequest()).toEqual({
+    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
       baseUrl: "https://openrouter.ai/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
       allowPrivateNetwork: false,
       defaultHeaders: {
         Authorization: "Bearer sk-openrouter",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
       },
       provider: "openrouter",
       capability: "audio",
       transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     const headers = requireHeaders(request.headers);
     expect(Object.fromEntries(headers.entries())).toEqual({
       authorization: "Bearer sk-openrouter",
       "content-type": "application/json",
-      "http-referer": "https://openclaw.ai",
-      "x-openrouter-title": "OpenClaw",
     });
     expect(request).toEqual({
       url: "https://openrouter.ai/api/v1/audio/speech",
@@ -185,11 +152,6 @@ describe("openrouter speech provider", () => {
       dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
-    expect(readProviderBinaryResponseMock).toHaveBeenCalledWith(
-      expect.any(Response),
-      "OpenRouter TTS API error",
-      "audio",
-    );
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.voiceCompatible).toBe(true);
@@ -219,7 +181,10 @@ describe("openrouter speech provider", () => {
       timeoutMs: 5000,
     });
 
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     expect(request.url).toBe("https://private.example.invalid/router/v1/audio/speech");
     expect(requireHeaders(request.headers).get("authorization")).toBe(
       "Bearer synthetic-private-proxy-key",
@@ -249,7 +214,10 @@ describe("openrouter speech provider", () => {
       timeoutMs: 5000,
     });
 
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     expect(request.url).toBe("https://speech-proxy.example.invalid/router/v1/audio/speech");
     expect(requireHeaders(request.headers).get("authorization")).toBe(
       "Bearer synthetic-private-proxy-key",

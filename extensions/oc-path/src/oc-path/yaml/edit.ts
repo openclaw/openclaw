@@ -1,4 +1,3 @@
-// OC Path module implements edit behavior.
 import { Document, isMap, isSeq, LineCounter, parseDocument, type Node } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import { formatOcPath } from "../oc-path.js";
@@ -14,7 +13,7 @@ type YamlEditResult =
     };
 
 export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): YamlEditResult {
-  if (hasYamlParseErrors(ast)) {
+  if (ast.doc.errors.length > 0) {
     return { ok: false, reason: "parse-error" };
   }
   if (ast.doc.contents === null) {
@@ -43,7 +42,7 @@ export function insertYamlOcPath(
   marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number },
   newValue: unknown,
 ): YamlEditResult {
-  if (hasYamlParseErrors(ast)) {
+  if (ast.doc.errors.length > 0) {
     return { ok: false, reason: "parse-error" };
   }
   if (ast.doc.contents === null) {
@@ -112,10 +111,6 @@ function guardYamlSentinel(value: unknown, ocPath: string): void {
       guardYamlSentinel(child, `${ocPath}/${key}`);
     }
   }
-}
-
-function hasYamlParseErrors(ast: YamlAst): boolean {
-  return ast.doc.errors.length > 0;
 }
 
 function cloneDoc(doc: Document.Parsed): { doc: Document.Parsed; lineCounter: LineCounter } {

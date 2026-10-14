@@ -1,4 +1,3 @@
-// Route-first machine-readable Gateway health command.
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 type GatewayHealthRpcOpts = Parameters<
@@ -10,25 +9,13 @@ type GatewayHealthJsonRouteArgs = {
   localPortOverride?: number;
 };
 
-type GatewayHealthRouteDependencies = {
-  callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
-  readNonObservingHealthConfig?: typeof import("../../commands/health.js").readNonObservingHealthConfig;
-  emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
-  formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
-  formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
-  formatGatewayTransportErrorJson?: typeof import("../../gateway/call.js").formatGatewayTransportErrorJson;
-};
-
 async function resolveRouteRpcOptions(
   args: GatewayHealthJsonRouteArgs,
-  deps: GatewayHealthRouteDependencies,
 ): Promise<GatewayHealthRpcOpts> {
   if (args.localPortOverride === undefined) {
     return args.rpc;
   }
-  const readNonObservingHealthConfig =
-    deps.readNonObservingHealthConfig ??
-    (await import("../../commands/health.js")).readNonObservingHealthConfig;
+  const { readNonObservingHealthConfig } = await import("../../commands/health.js");
   const config = await readNonObservingHealthConfig();
   return {
     ...args.rpc,
@@ -48,41 +35,26 @@ async function resolveRouteRpcOptions(
 export async function runGatewayHealthJsonRoute(
   args: GatewayHealthJsonRouteArgs,
   runtime: RuntimeEnv,
-  deps: GatewayHealthRouteDependencies = {},
 ): Promise<void> {
-  let rpc: GatewayHealthRpcOpts | undefined;
+  const rpc = await resolveRouteRpcOptions(args);
   try {
-    rpc = await resolveRouteRpcOptions(args, deps);
-    const callGateway =
-      deps.callGateway ?? (await import("../gateway-rpc.js")).callGatewayFromCliWithTransport;
+    const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
     writeRuntimeJson(
       runtime,
-      await callGateway("health", rpc, undefined, {
+      await callGatewayFromCliWithTransport("health", rpc, undefined, {
         defaultTimeoutMs: 10_000,
         sharedStateMode: "read-only",
       }),
     );
   } catch (error) {
-    if (!rpc) {
-      throw error;
-    }
-    const [healthModule, callModule] = await Promise.all([
-      deps.emitReachableGatewayAuthDiagnostic && deps.readNonObservingHealthConfig
-        ? undefined
-        : import("../../commands/health.js"),
-      deps.formatGatewayAuthErrorJson &&
-      deps.formatGatewayClientRequestErrorJson &&
-      deps.formatGatewayTransportErrorJson
-        ? undefined
-        : import("../../gateway/call.js"),
-    ]);
-    const emitReachableGatewayAuthDiagnostic =
-      deps.emitReachableGatewayAuthDiagnostic ?? healthModule?.emitReachableGatewayAuthDiagnostic;
-    const readNonObservingHealthConfig =
-      deps.readNonObservingHealthConfig ?? healthModule?.readNonObservingHealthConfig;
-    if (!emitReachableGatewayAuthDiagnostic || !readNonObservingHealthConfig) {
-      throw error;
-    }
+    const [
+      { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig },
+      {
+        formatGatewayAuthErrorJson,
+        formatGatewayClientRequestErrorJson,
+        formatGatewayTransportErrorJson,
+      },
+    ] = await Promise.all([import("../../commands/health.js"), import("../../gateway/call.js")]);
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: rpc.config ?? (await readNonObservingHealthConfig()),
@@ -96,16 +68,10 @@ export async function runGatewayHealthJsonRoute(
     if (handled) {
       return;
     }
-    const formatGatewayAuthErrorJson =
-      deps.formatGatewayAuthErrorJson ?? callModule?.formatGatewayAuthErrorJson;
-    const formatGatewayClientRequestErrorJson =
-      deps.formatGatewayClientRequestErrorJson ?? callModule?.formatGatewayClientRequestErrorJson;
-    const formatGatewayTransportErrorJson =
-      deps.formatGatewayTransportErrorJson ?? callModule?.formatGatewayTransportErrorJson;
     const payload =
-      formatGatewayAuthErrorJson?.(error) ??
-      formatGatewayClientRequestErrorJson?.(error) ??
-      formatGatewayTransportErrorJson?.(error);
+      formatGatewayAuthErrorJson(error) ??
+      formatGatewayClientRequestErrorJson(error) ??
+      formatGatewayTransportErrorJson(error);
     if (payload) {
       writeRuntimeJson(runtime, payload);
       runtime.exit(1);

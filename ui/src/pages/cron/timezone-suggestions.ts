@@ -1,47 +1,16 @@
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CronJob } from "../../api/types.ts";
-
-function resolveBrowserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return "";
-  }
-}
-
-function resolveSupportedTimezones(): string[] {
-  try {
-    return Intl.supportedValuesOf?.("timeZone") ?? [];
-  } catch {
-    return [];
-  }
-}
-
-function uniqueInOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  return values
-    .map((value) => value.trim())
-    .filter((value) => {
-      if (!value || seen.has(value)) {
-        return false;
-      }
-      seen.add(value);
-      return true;
-    });
-}
+import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 
 export function resolveCronTimezoneSuggestions(
   cronJobs: CronJob[],
-  browserTimezone = resolveBrowserTimezone(),
-  supportedTimezones = resolveSupportedTimezones(),
+  browserTimezone?: string,
+  supportedTimezones?: string[],
 ): string[] {
-  const configuredTimezones = cronJobs.map((job) =>
-    job.schedule.kind === "cron" && typeof job.schedule.tz === "string" ? job.schedule.tz : "",
-  );
-  return uniqueInOrder([
+  return resolveTimezoneSuggestions(
+    cronJobs.map((job) =>
+      job.schedule.kind === "cron" && typeof job.schedule.tz === "string" ? job.schedule.tz : "",
+    ),
     browserTimezone,
-    "UTC",
-    ...configuredTimezones,
-    ...sortUniqueStrings(supportedTimezones.map((value) => value.trim()).filter(Boolean)),
-  ]);
+    supportedTimezones,
+  );
 }

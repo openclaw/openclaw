@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,12 +50,14 @@ type ScopeWorkflow = {
 
 type ScopeOptions = {
   diffExitCode?: number;
+  repoRoot?: string;
   draft?: boolean;
   eventName?: string;
   files?: Array<string | { filename: string; previous_filename?: string }>;
 };
 
 const tempDirs: string[] = [];
+const require = createRequire(import.meta.url);
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -64,15 +67,28 @@ function readWorkflow(workflowPath: string): ScopeWorkflow {
   return parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
 }
 
-function scopeScript(workflowPath: string): string {
-  const step = readWorkflow(workflowPath).jobs?.scope?.steps?.find(
-    (candidate) => candidate.id === "scope",
-  );
-  if (!step?.with?.script) {
+function compileScopeWorkflow(workflowPath: string) {
+  const workflow = readWorkflow(workflowPath);
+  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
+  const script = step?.with?.script;
+  if (!script) {
     throw new Error(`missing Periphery scope script in ${workflowPath}`);
   }
-  return step.with.script;
+  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
+    "context",
+    "core",
+    "exec",
+    "require",
+  ]) as (context: unknown, core: unknown, exec: unknown, require: NodeJS.Require) => Promise<void>;
+  return { workflow, script, execute };
 }
+
+const scopeWorkflows = new Map<string, ReturnType<typeof compileScopeWorkflow>>(
+  WORKFLOW_CASES.map(({ path: workflowPath }) => [
+    workflowPath,
+    compileScopeWorkflow(workflowPath),
+  ]),
+);
 
 async function runScope(workflowPath: string, options: ScopeOptions): Promise<string | undefined> {
   const outputs = new Map<string, string>();
@@ -88,30 +104,38 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
       if (options.diffExitCode !== undefined) {
         return { exitCode: options.diffExitCode };
       }
+      if (options.repoRoot) {
+        const result = spawnSync(command, args, { cwd: options.repoRoot });
+        return { exitCode: result.status ?? 128 };
+      }
       const pathspecs = args.slice(5);
       const filenames = (options.files ?? []).flatMap((file) =>
         typeof file === "string"
           ? [file]
           : [file.filename, file.previous_filename].filter((name): name is string => Boolean(name)),
       );
-      const changed = filenames.some((filename) =>
-        pathspecs.some((pathspec) =>
-          pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
-        ),
+      const matches = (filename: string, pathspec: string) =>
+        pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec;
+      const changed = filenames.some(
+        (filename) =>
+          pathspecs.some(
+            (pathspec) => !pathspec.startsWith(":(exclude)") && matches(filename, pathspec),
+          ) &&
+          !pathspecs.some(
+            (pathspec) =>
+              pathspec.startsWith(":(exclude)") && matches(filename, pathspec.slice(10)),
+          ),
       );
       return { exitCode: changed ? 1 : 0 };
     },
   };
-  const execute = compileFunction(`return (async () => {\n${scopeScript(workflowPath)}\n})();`, [
-    "context",
-    "core",
-    "exec",
-  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+  const { execute } = scopeWorkflows.get(workflowPath)!;
 
   await execute(
     context,
     { setOutput: (name: string, value: string) => outputs.set(name, value) },
     exec,
+    require,
   );
   return outputs.get("should-scan");
 }
@@ -134,10 +158,9 @@ describe("Periphery scope workflows", () => {
   it.each(WORKFLOW_CASES)(
     "uses the synthetic merge parent for $name scope",
     ({ path: workflowPath }) => {
-      const workflow = readWorkflow(workflowPath);
+      const { workflow, script } = scopeWorkflows.get(workflowPath)!;
       const steps = workflow.jobs?.scope?.steps ?? [];
       const checkout = steps.find((step) => step.name === "Checkout");
-      const script = scopeScript(workflowPath);
 
       expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
       expect(workflow.on?.pull_request?.paths).toBeUndefined();
@@ -176,6 +199,64 @@ describe("Periphery scope workflows", () => {
     },
   );
 
+  it.each(WORKFLOW_CASES)(
+    "excludes prose but keeps source, mixed changes, resources and renames for $name",
+    async ({ path: workflowPath, scopedPath }) => {
+      const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-prose-");
+      git(repoRoot, ["init", "--initial-branch=main"]);
+      git(repoRoot, ["config", "user.name", "OpenClaw Test"]);
+      git(repoRoot, ["config", "user.email", "openclaw-test@example.com"]);
+      writeFixture(repoRoot, "seed", "base\n");
+      const commit = () => {
+        git(repoRoot, ["add", "."]);
+        git(repoRoot, ["commit", "-m", "fixture"]);
+      };
+      commit();
+      const { script } = scopeWorkflows.get(workflowPath)!;
+      const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      );
+      const firstProsePath = prosePaths[0];
+      if (!firstProsePath) {
+        throw new Error(`missing prose exclusions in ${workflowPath}`);
+      }
+      for (const prosePath of prosePaths) {
+        writeFixture(repoRoot, prosePath, "documentation\n");
+      }
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("false");
+
+      writeFixture(repoRoot, firstProsePath, "updated documentation\n");
+      writeFixture(repoRoot, scopedPath, "struct Example {}\n");
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
+
+      writeFixture(
+        repoRoot,
+        path.join(path.dirname(scopedPath), "Resources/README.md"),
+        "runtime resource\n",
+      );
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
+
+      renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
+    },
+  );
+
+  it("selects shared scans from native protocol generator inputs", async () => {
+    for (const file of [
+      "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+      "scripts/protocol-gen-swift.ts",
+      "scripts/native-protocol-inputs.json",
+    ]) {
+      await expect(
+        runScope(".github/workflows/shared-openclawkit-periphery.yml", { files: [file] }),
+      ).resolves.toBe("true");
+    }
+  });
+
   it("ignores scoped files added only by base-branch drift", async () => {
     const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-scope-");
     git(repoRoot, ["init", "--initial-branch=main"]);
@@ -210,10 +291,7 @@ describe("Periphery scope workflows", () => {
     expect(oldDiff.status).toBe(1);
 
     const outputs = new Map<string, string>();
-    const execute = compileFunction(
-      `return (async () => {\n${scopeScript(".github/workflows/shared-openclawkit-periphery.yml")}\n})();`,
-      ["context", "core", "exec"],
-    ) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+    const { execute } = scopeWorkflows.get(".github/workflows/shared-openclawkit-periphery.yml")!;
     await execute(
       { eventName: "pull_request", payload: { pull_request: { draft: false, number: 123 } } },
       { setOutput: (name: string, value: string) => outputs.set(name, value) },
@@ -223,6 +301,7 @@ describe("Periphery scope workflows", () => {
           return { exitCode: result.status ?? 128 };
         },
       },
+      require,
     );
 
     expect(outputs.get("should-scan")).toBe("false");

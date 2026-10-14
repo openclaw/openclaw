@@ -7,10 +7,6 @@ import {
 } from "./runtime-forwarders.js";
 import type { ChannelOutboundAdapter } from "./types.adapters.js";
 
-type RenderPresentationParams = Parameters<
-  NonNullable<ChannelOutboundAdapter["renderPresentation"]>
->[0];
-
 describe("createRuntimeDirectoryLiveAdapter", () => {
   it("forwards live directory calls through the runtime getter", async () => {
     const self = vi.fn(async (_ctx: unknown) => ({ kind: "user" as const, id: "self" }));
@@ -34,39 +30,24 @@ describe("createRuntimeDirectoryLiveAdapter", () => {
 });
 
 describe("createRuntimeOutboundDelegates", () => {
-  it("forwards outbound methods through the runtime getter", async () => {
-    const renderPresentation = vi.fn(async (ctx: RenderPresentationParams) => ({
-      ...ctx.payload,
-      text: "rendered",
-    }));
-    const sendPayload = vi.fn(async () => ({ channel: "x", messageId: "payload-1" }));
-    const sendText = vi.fn(async () => ({ channel: "x", messageId: "1" }));
-    const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => ({ outbound: { renderPresentation, sendPayload, sendText } }),
-      renderPresentation: { resolve: (runtime) => runtime.outbound.renderPresentation },
-      sendPayload: { resolve: (runtime) => runtime.outbound.sendPayload },
-      sendText: { resolve: (runtime) => runtime.outbound.sendText },
-    });
+  it("resolves the current runtime and method for each call", async () => {
+    const firstSender = vi.fn(async () => ({ channel: "x", messageId: "first" }));
+    const secondSender = vi.fn(async () => ({ channel: "x", messageId: "second" }));
+    let sender = firstSender;
+    const params = {
+      getRuntime: vi.fn(async () => ({ sendText: sender })),
+      sendText: { resolve: (runtime: { sendText: typeof firstSender }) => runtime.sendText },
+    };
+    const outbound = createRuntimeOutboundDelegates(params);
+    const ctx = { cfg: {}, to: "a", text: "hi" };
 
-    await expect(
-      outbound.renderPresentation?.({
-        payload: { text: "raw" },
-        presentation: { blocks: [{ type: "text", text: "shown" }] },
-        ctx: {} as never,
-      }),
-    ).resolves.toEqual({
-      text: "rendered",
-    });
-    await expect(
-      outbound.sendPayload?.({ cfg: {} as never, to: "a", text: "hi", payload: { text: "hi" } }),
-    ).resolves.toEqual({ channel: "x", messageId: "payload-1" });
-    await expect(outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" })).resolves.toEqual({
-      channel: "x",
-      messageId: "1",
-    });
-    expect(renderPresentation).toHaveBeenCalled();
-    expect(sendPayload).toHaveBeenCalled();
-    expect(sendText).toHaveBeenCalled();
+    expect(params.getRuntime).not.toHaveBeenCalled();
+    await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "first" });
+    sender = secondSender;
+    await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "second" });
+    expect(params.getRuntime).toHaveBeenCalledTimes(2);
+    expect(firstSender).toHaveBeenCalledWith(ctx);
+    expect(secondSender).toHaveBeenCalledWith(ctx);
   });
 
   it("classifies unavailable outbound runtime methods as definitely not dispatched", async () => {
@@ -107,5 +88,26 @@ describe("createRuntimeOutboundDelegates", () => {
       message: "runtime import failed",
       cause: loadError,
     });
+  });
+
+  it("preserves presentation runtime loading failures without classifying dispatch", async () => {
+    const loadError = new Error("renderer import failed");
+    const outbound = createRuntimeOutboundDelegates({
+      getRuntime: async () => {
+        throw loadError;
+      },
+      renderPresentation: {
+        resolve: () => undefined,
+        unavailableMessage: "renderer unavailable",
+      },
+    });
+
+    await expect(
+      outbound.renderPresentation?.({
+        payload: { text: "raw" },
+        presentation: { blocks: [{ type: "text", text: "shown" }] },
+        ctx: { cfg: {}, to: "a", text: "raw", payload: { text: "raw" } },
+      }),
+    ).rejects.toBe(loadError);
   });
 });

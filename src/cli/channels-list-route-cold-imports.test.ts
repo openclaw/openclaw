@@ -1,4 +1,5 @@
 // The real channels-list route must project manifest facts without executing setup modules.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,9 +19,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
 vi.mock("../commands/channels/shared.js", () => ({
@@ -116,6 +114,7 @@ throw new Error("JSON inventory must not execute setup");`,
     const expected = {
       chat: {
         "cold-channel": {
+          label: "Cold Channel",
           accounts,
           installed: true,
           origin: "configured",

@@ -1,7 +1,6 @@
-// Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
-import { cancel, isCancel } from "@clack/prompts";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
+import { cancel } from "@clack/prompts";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
+import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -20,106 +19,10 @@ import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
   "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
-const RESUME_HANDOFF_MISSING =
-  "This session is no longer available. Copy a fresh command from the Control UI.";
 const RESUME_HANDOFF_UNRESOLVED =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
 
-type ParsedHandoffSessionResolveResult =
-  | { kind: "success"; key: string; agentId: string }
-  | { kind: "missing" }
-  | {
-      kind: "ambiguous";
-      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
-    }
-  | { kind: "error"; error: ErrorShape }
-  | { kind: "malformed" };
-
-function hasExactKeys(
-  value: unknown,
-  requiredKeys: readonly string[],
-  optionalKeys: readonly string[] = [],
-): value is Record<string, unknown> {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const keys = Object.keys(value);
-  return (
-    requiredKeys.every((key) => Object.hasOwn(value, key)) &&
-    keys.every((key) => requiredKeys.includes(key) || optionalKeys.includes(key))
-  );
-}
-
-function isHandoffSessionCandidate(
-  value: unknown,
-): value is { key: string; agentId: string; displayName?: string } {
-  return (
-    hasExactKeys(value, ["key", "agentId"], ["displayName"]) &&
-    typeof value.key === "string" &&
-    value.key.length > 0 &&
-    typeof value.agentId === "string" &&
-    value.agentId.length > 0 &&
-    (!Object.hasOwn(value, "displayName") || typeof value.displayName === "string")
-  );
-}
-
-function isHandoffErrorShape(value: unknown): value is ErrorShape {
-  if (
-    !hasExactKeys(value, ["code", "message"], ["details", "retryable", "retryAfterMs"]) ||
-    typeof value.code !== "string" ||
-    value.code.length === 0 ||
-    typeof value.message !== "string" ||
-    value.message.length === 0 ||
-    (Object.hasOwn(value, "retryable") && typeof value.retryable !== "boolean")
-  ) {
-    return false;
-  }
-  return (
-    !Object.hasOwn(value, "retryAfterMs") ||
-    (typeof value.retryAfterMs === "number" &&
-      Number.isInteger(value.retryAfterMs) &&
-      value.retryAfterMs >= 0)
-  );
-}
-
-function parseHandoffSessionResolveResult(value: unknown): ParsedHandoffSessionResolveResult {
-  if (
-    hasExactKeys(value, ["ok", "key", "agentId"]) &&
-    value.ok === true &&
-    typeof value.key === "string" &&
-    value.key.length > 0 &&
-    typeof value.agentId === "string" &&
-    value.agentId.length > 0
-  ) {
-    return { kind: "success", key: value.key, agentId: value.agentId };
-  }
-  if (hasExactKeys(value, ["ok", "missing"]) && value.ok === true && value.missing === true) {
-    return { kind: "missing" };
-  }
-  if (
-    hasExactKeys(value, ["ok", "ambiguous", "candidates"]) &&
-    value.ok === true &&
-    value.ambiguous === true &&
-    Array.isArray(value.candidates) &&
-    value.candidates.every(isHandoffSessionCandidate)
-  ) {
-    return { kind: "ambiguous", candidates: value.candidates };
-  }
-  if (
-    hasExactKeys(value, ["ok", "error"]) &&
-    value.ok === false &&
-    isHandoffErrorShape(value.error)
-  ) {
-    return { kind: "error", error: value.error };
-  }
-  return { kind: "malformed" };
-}
-
-function requireInteractiveResumeTerminal() {
-  if (!isTerminalInteractive()) {
-    throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
-  }
-}
+const validateHandoffSessionResolveResult = lazyCompile(SessionsResolveResultSchema);
 
 async function formatResumeConnectionError(error: unknown): Promise<Error> {
   const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
@@ -136,7 +39,7 @@ async function formatResumeConnectionError(error: unknown): Promise<Error> {
     [
       state.connectionStatus,
       state.remediation ??
-        "Ensure the Gateway is running and your --url/--token/--password are correct.",
+        "Check that the Gateway is running and your --url/--token/--password are correct.",
     ].join("\n"),
     { cause: error },
   );
@@ -152,18 +55,9 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
   });
   try {
     await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (complete: () => void) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        complete();
-      };
-      client.onConnected = () => finish(resolve);
-      client.onConnectError = (error) => finish(() => reject(error));
-      client.onDisconnected = (reason) =>
-        finish(() => reject(new Error(reason || "Gateway connection closed")));
+      client.onConnected = resolve;
+      client.onConnectError = reject;
+      client.onDisconnected = (reason) => reject(new Error(reason || "Gateway connection closed"));
       client.start();
     });
     return client;
@@ -190,18 +84,14 @@ async function resolveHandoffConnection(
     } catch {
       throw new Error(RESUME_HANDOFF_UNRESOLVED);
     }
-    const parsed = parseHandoffSessionResolveResult(result);
-    if (parsed.kind === "success") {
-      const canonicalKeyOwner = parseAgentSessionKey(parsed.key)?.agentId;
-      if (parsed.agentId !== handoff.agentId || canonicalKeyOwner !== parsed.agentId) {
-        throw new Error(RESUME_HANDOFF_UNRESOLVED);
-      }
-      return { connection: client.connection, sessionKey: parsed.key };
+    if (!validateHandoffSessionResolveResult(result) || !result.ok) {
+      throw new Error(RESUME_HANDOFF_UNRESOLVED);
     }
-    if (parsed.kind === "missing") {
-      throw new Error(RESUME_HANDOFF_MISSING);
+    const canonicalKeyOwner = parseAgentSessionKey(result.key)?.agentId;
+    if (result.agentId !== handoff.agentId || canonicalKeyOwner !== result.agentId) {
+      throw new Error(RESUME_HANDOFF_UNRESOLVED);
     }
-    throw new Error(RESUME_HANDOFF_UNRESOLVED);
+    return { connection: client.connection, sessionKey: result.key };
   } finally {
     await client.stop();
   }
@@ -241,7 +131,7 @@ async function promptResumeSession(
       hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
     })),
   });
-  if (isCancel(selected)) {
+  if (typeof selected === "symbol") {
     cancel("Cancelled.");
     return null;
   }
@@ -281,14 +171,15 @@ function resolveExplicitGlobalSessionKey(
     : undefined;
 }
 
-/** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
   const { handoff: encodedHandoff, ...connectionOptions } = opts;
   if (encodedHandoff !== undefined && (query !== undefined || opts.url !== undefined)) {
     throw new Error("--handoff cannot be combined with a positional query or --url.");
   }
   const handoff = encodedHandoff === undefined ? undefined : decodeResumeHandoff(encodedHandoff);
-  requireInteractiveResumeTerminal();
+  if (!isTerminalInteractive()) {
+    throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
+  }
   const resolvedQuery = query?.trim();
   const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
   let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
@@ -338,6 +229,5 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
-    forceProcessExitOnReturn: true,
   });
 }

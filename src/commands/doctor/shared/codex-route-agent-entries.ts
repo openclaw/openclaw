@@ -1,5 +1,4 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import type { MutableRecord } from "./codex-route-types.js";
 
@@ -10,10 +9,9 @@ type MutableCodexRouteAgentEntry = {
 };
 
 /** Lists mutable canonical agent entries, with legacy list fallback for raw Doctor input. */
-export function listMutableCodexRouteAgentEntries(
-  cfg: OpenClawConfig,
-): MutableCodexRouteAgentEntry[] {
-  const entries = asMutableRecord(cfg.agents?.entries);
+export function listMutableCodexRouteAgentEntries(cfg: unknown): MutableCodexRouteAgentEntry[] {
+  const agents = asMutableRecord(asMutableRecord(cfg)?.agents);
+  const entries = asMutableRecord(agents?.entries);
   if (entries) {
     return Object.entries(entries).flatMap(([entryId, value]) => {
       const agent = asMutableRecord(value);
@@ -23,7 +21,7 @@ export function listMutableCodexRouteAgentEntries(
     });
   }
 
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const list: unknown[] = Array.isArray(agents?.list) ? agents.list : [];
   return list.flatMap((value, index) => {
     const agent = asMutableRecord(value);
     if (!agent) {

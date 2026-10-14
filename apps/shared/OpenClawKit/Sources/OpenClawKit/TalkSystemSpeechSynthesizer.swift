@@ -37,6 +37,8 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // A cancelled caller must not retire the utterance already playing.
+        guard !Task.isCancelled else { throw SpeakError.canceled }
 
         self.stop()
         let token = UUID()
@@ -52,7 +54,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         let watchdogTimeout = Self.watchdogTimeoutSeconds(
             text: trimmed,
             language: language ?? utterance.voice?.language)
-        self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(watchdogTimeout * 1_000_000_000))
@@ -98,21 +99,12 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         //   Chinese:  5.18 SPS -> ~0.28s/char (1 char = 1 syllable)
         //   English:  6.19 SPS -> ~0.08s/char (avg ~5 chars/syllable)
         let normalizedLanguage = language?.lowercased() ?? "en"
-        let perCharSeconds: Double
-        let minSeconds: Double
-        if normalizedLanguage.hasPrefix("ko") {
-            perCharSeconds = 0.25
-            minSeconds = 10.0
-        } else if normalizedLanguage.hasPrefix("zh") {
-            perCharSeconds = 0.28
-            minSeconds = 10.0
-        } else if normalizedLanguage.hasPrefix("ja") {
-            perCharSeconds = 0.20
-            minSeconds = 10.0
-        } else {
-            perCharSeconds = 0.08
-            minSeconds = 3.0
-        }
+        let profiles: [(language: String, perCharSeconds: Double)] = [
+            ("ko", 0.25), ("zh", 0.28), ("ja", 0.20),
+        ]
+        let profile = profiles.first { normalizedLanguage.hasPrefix($0.language) }
+        let perCharSeconds = profile?.perCharSeconds ?? 0.08
+        let minSeconds = profile == nil ? 3.0 : 10.0
         let estimatedSeconds = max(minSeconds, min(300.0, Double(text.count) * perCharSeconds))
         return estimatedSeconds * 3.0
     }
@@ -134,11 +126,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.didStartCallback = nil
         let cont = self.speakContinuation
         self.speakContinuation = nil
-        if let error {
-            cont?.resume(throwing: error)
-        } else {
-            cont?.resume(returning: ())
-        }
+        if let cont { ThrowingContinuationSupport.resumeVoid(cont, error: error) }
     }
 }
 

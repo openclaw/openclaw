@@ -1,7 +1,7 @@
 // Control UI tests cover form support for transform-backed config fields.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-guidance",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("config-form-guidance");
+  }
+});
 
 function notificationStatusConfigMocks() {
   const config = { ui: { prefs: { theme: "claw" } } };
@@ -109,7 +109,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Meta", exact: true }).click();
 
         const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
-        await expect.poll(() => policyRow.locator("wa-radio").count()).toBe(4);
+        await expect.poll(() => policyRow.getByRole("radio").count()).toBe(4);
         await expect.poll(() => policyRow.getByText("open", { exact: true }).count()).toBe(1);
         await expect.poll(() => policyRow.getByText("allowlist", { exact: true }).count()).toBe(1);
         await expect.poll(() => policyRow.getByText("disabled", { exact: true }).count()).toBe(1);
@@ -122,7 +122,6 @@ suite.define(() => {
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -211,7 +210,6 @@ suite.define(() => {
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -288,7 +286,6 @@ suite.define(() => {
           .toContain("Ready");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

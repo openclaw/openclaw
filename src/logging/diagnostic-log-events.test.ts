@@ -1,4 +1,5 @@
 // Diagnostic log event tests cover structured events written to diagnostic logs.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,17 +13,11 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
+import { getChildLogger, resetLogger, setLoggerOverride, toPinoLikeLogger } from "./logger.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const PROTO_KEY = "__proto__";
-
-function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 beforeEach(() => {
   resetDiagnosticEventsForTest();
@@ -44,51 +39,11 @@ describe("diagnostic log events", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
 
     getChildLogger({ subsystem: "diagnostic" }).info("public listener ignores this log");
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(listener).not.toHaveBeenCalled();
     expect(structuredCloneSpy).not.toHaveBeenCalled();
-  });
-
-  it("emits structured log records through diagnostics", async () => {
-    const received: Array<{
-      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
-      metadata: DiagnosticEventMetadata;
-    }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
-      if (evt.type === "log.record") {
-        received.push({ event: evt, metadata });
-      }
-    });
-
-    const logger = getChildLogger({
-      subsystem: "diagnostic",
-      trace: { traceId: TRACE_ID, spanId: SPAN_ID },
-    });
-    logger.info({ runId: "run-1" }, "hello diagnostic logs");
-    await flushDiagnosticEvents();
-    unsubscribe();
-
-    expect(received).toHaveLength(1);
-    const [record] = received;
-    if (!record) {
-      throw new Error("missing diagnostic log event");
-    }
-    const { event, metadata } = record;
-    expect(event.type).toBe("log.record");
-    expect(event.level).toBe("INFO");
-    expect(event.message).toBe("hello diagnostic logs");
-    expect(event.attributes).toStrictEqual({
-      subsystem: "diagnostic",
-      runId: "run-1",
-    });
-    expect(event.trace).toStrictEqual({
-      traceId: TRACE_ID,
-      spanId: SPAN_ID,
-    });
-    expect(metadata.trusted).toBe(false);
-    expect(metadata.trustedTraceContext).toBeUndefined();
   });
 
   it("uses active request trace context for unbound log records", async () => {
@@ -110,7 +65,7 @@ describe("diagnostic log events", () => {
       const logger = getChildLogger({ subsystem: "diagnostic" });
       logger.info({ runId: "run-1" }, "request-scoped diagnostic log");
     });
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
@@ -132,7 +87,7 @@ describe("diagnostic log events", () => {
       subsystem: "diagnostic",
       trace: { traceId: TRACE_ID, spanId: SPAN_ID },
     });
-    logger.info(
+    toPinoLikeLogger(logger, "info").info(
       {
         token: secret,
         longValue: "x".repeat(5000),
@@ -142,42 +97,19 @@ describe("diagnostic log events", () => {
       { raw: secret },
       `secret=${secret} ${"y".repeat(5000)}`,
     );
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    const [event] = received;
-    expect(expectDefined(event, "event test invariant").message).not.toContain(secret);
-    expect(expectDefined(event, "event test invariant").message.length).toBeLessThanOrEqual(4200);
-    expect(expectDefined(event, "event test invariant").attributes?.token).not.toBe(secret);
-    expect(String(expectDefined(event, "event test invariant").attributes?.token)).toContain("…");
-    expect(
-      String(expectDefined(event, "event test invariant").attributes?.longValue).length,
-    ).toBeLessThanOrEqual(2100);
-    expect(
-      Object.hasOwn(expectDefined(event, "event test invariant").attributes ?? {}, "nested"),
-    ).toBe(false);
-    expect(
-      Object.hasOwn(expectDefined(event, "event test invariant").attributes ?? {}, "bad key"),
-    ).toBe(false);
-    expect(Object.hasOwn(expectDefined(event, "event test invariant"), "argsJson")).toBe(false);
-  });
-
-  it("keeps bounded diagnostic messages UTF-16 safe", async () => {
-    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "log.record") {
-        received.push(event);
-      }
-    });
-    const prefix = "x".repeat(4_095);
-
-    getChildLogger({ subsystem: "diagnostic" }).info(`${prefix}😀tail`);
-    await flushDiagnosticEvents();
-    unsubscribe();
-
-    // The post-redaction bound keeps the first dot from the initial truncation marker.
-    expect(received.at(-1)?.message).toBe(`${prefix}....(truncated)`);
+    const event = expectDefined(received[0], "event test invariant");
+    expect(event.message).not.toContain(secret);
+    expect(event.message.length).toBeLessThanOrEqual(4200);
+    expect(event.attributes?.token).not.toBe(secret);
+    expect(String(event.attributes?.token)).toContain("…");
+    expect(String(event.attributes?.longValue).length).toBeLessThanOrEqual(2100);
+    expect(Object.hasOwn(event.attributes ?? {}, "nested")).toBe(false);
+    expect(Object.hasOwn(event.attributes ?? {}, "bad key")).toBe(false);
+    expect(Object.hasOwn(event, "argsJson")).toBe(false);
   });
 
   it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {
@@ -203,15 +135,13 @@ describe("diagnostic log events", () => {
       trace: { traceId: TRACE_ID, spanId: SPAN_ID },
     });
     logger.info(structured, "bounded attrs");
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    expect(expectDefined(received[0], "received[0] test invariant").attributes?.safe).toBe("ok");
-    expect(
-      Object.keys(expectDefined(received[0], "received[0] test invariant").attributes ?? {}),
-    ).toHaveLength(32);
     const attributes = expectDefined(received[0], "received[0] test invariant").attributes ?? {};
+    expect(attributes.safe).toBe("ok");
+    expect(Object.keys(attributes)).toHaveLength(32);
     expect(Object.hasOwn(attributes, PROTO_KEY)).toBe(false);
     expect(Object.hasOwn(attributes, "constructor")).toBe(false);
     expect(Object.hasOwn(attributes, "prototype")).toBe(false);

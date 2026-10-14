@@ -1,22 +1,24 @@
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import { updateExecApprovalsSync } from "./exec-approvals-store.js";
+import { updateExecApprovalsForMaintenance } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 // Detects and removes generated exec grants that predate cwd-bound authorization.
-import { isCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
+import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
 
 function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
-  const pattern = entry.pattern.trim();
-  return (
-    entry.source === "allow-always" &&
-    !pattern.startsWith("=command:") &&
-    !pattern.startsWith("=node-command:") &&
-    !isCwdBoundHashedArgPattern(entry.argPattern)
-  );
+  // Doctor owns only the grants allow-always wrote. A manual entry that is
+  // inactive (a hand-written legacy hash) stays for the operator to delete.
+  return entry.source === "allow-always" && classifyExecAllowlistScope(entry) === "inactive";
+}
+
+export function countObsoleteGeneratedExecApprovalRules(
+  rules: readonly ExecAllowlistEntry[],
+): number {
+  return rules.filter(isObsoleteGeneratedEntry).length;
 }
 
 export function countObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): number {
   return Object.values(file.agents ?? {}).reduce(
-    (count, agent) => count + (agent.allowlist ?? []).filter(isObsoleteGeneratedEntry).length,
+    (count, agent) => count + countObsoleteGeneratedExecApprovalRules(agent.allowlist ?? []),
     0,
   );
 }
@@ -43,7 +45,7 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
 
 export function repairObsoleteGeneratedExecApprovals(): number {
   let removed = 0;
-  updateExecApprovalsSync({
+  updateExecApprovalsForMaintenance({
     update: (file) => {
       const result = removeObsoleteGeneratedExecApprovals(file);
       removed = result.removed;

@@ -5,10 +5,15 @@ import { onTestFinished } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import type { BoardStore, BoardSessionTarget } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 export function createTestBoardStore(options: { stateDir?: string } = {}): SqliteBoardStore {
@@ -18,19 +23,24 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
   const seededSessions = new Set<string>();
 
   if (ownsStateDir) {
-    onTestFinished(() => {
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });
     });
   }
 
   return new SqliteBoardStore({
-    resolveSession: (sessionKey) => {
+    resolveSession: ({ sessionKey, agentId: requestedAgentId }) => {
       const parsed = parseAgentSessionKey(sessionKey);
-      const agentId = parsed?.agentId ?? "main";
+      const agentId = requestedAgentId ?? parsed?.agentId ?? "main";
       // Mirror the Gateway resolver so shorthand keys exercise canonical persisted rows.
-      const canonicalSessionKey = parsed ? sessionKey : `agent:${agentId}:${sessionKey}`;
+      const canonicalSessionKey =
+        parsed || sessionKey === "global" || sessionKey === "unknown"
+          ? sessionKey
+          : `agent:${agentId}:${sessionKey}`;
       const identity = `${agentId}\0${canonicalSessionKey}`;
       if (!seededSessions.has(identity)) {
         const database = openOpenClawAgentDatabase({ agentId, env });
@@ -44,4 +54,20 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
     },
     env,
   });
+}
+
+export async function readBoardHtml(store: BoardStore, target: BoardSessionTarget, name: string) {
+  return await store.useWidgetDocument(target, name, (document) =>
+    document && "html" in document ? document : undefined,
+  );
+}
+
+export async function readBoardRegistered(
+  store: BoardStore,
+  target: BoardSessionTarget,
+  name: string,
+) {
+  return await store.useWidgetDocument(target, name, (document) =>
+    document && "source" in document ? document : undefined,
+  );
 }

@@ -4,6 +4,10 @@
 // before any caller imports the stream API.
 import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { getModelLlmRuntime } from "./model-runtime-binding.js";
 import "./ai-transport-host.js";
 import type {
@@ -19,16 +23,11 @@ import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
 registerBuiltInApiProviders(defaultApiRegistry);
 
-let transportRuntimeHostPromise: Promise<void> | undefined;
-
-async function ensureTransportRuntimeHost(): Promise<void> {
-  // Async completion entry points install heavy provider ports before the runtime
-  // can invoke them, without adding their plugin graph to this eager facade.
-  transportRuntimeHostPromise ??= import("../agents/ai-transport-runtime-host.js").then(
-    ({ configureAiTransportRuntimeHost }) => configureAiTransportRuntimeHost(),
-  );
-  await transportRuntimeHostPromise;
-}
+// The process host outlives requests; only provider invocation carries caller authority.
+const ensureTransportRuntimeHost = createLazyPromise(
+  () => runInDetachedAsyncContext(() => import("../agents/ai-transport-runtime-host.js")),
+  { cacheRejections: true },
+);
 
 function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {
   return {
@@ -37,16 +36,10 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     stopReason: "error",
     errorMessage: error instanceof Error ? error.message : String(error),
+    errorCode: classifyGatewayStorageFailure(error),
     timestamp: Date.now(),
   };
 }
@@ -90,8 +83,11 @@ export async function complete<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: ProviderStreamOptions,
+  assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  assertCurrent?.();
+  options?.signal?.throwIfAborted();
   return await resolveRuntime(model).complete(model, context, options);
 }
 
@@ -109,7 +105,11 @@ export async function completeSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: SimpleStreamOptions,
+  assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  // Runtime setup can outlive its caller. Admit only a current request to the provider.
+  assertCurrent?.();
+  options?.signal?.throwIfAborted();
   return await resolveRuntime(model).completeSimple(model, context, options);
 }

@@ -2,6 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { WorkerTaskError } from "../../packages/worker-runtime/src/worker-task-error.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -63,6 +66,35 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
 }
 
 describe("in-process paired-node invocation cancellation", () => {
+  it.each([true, false])(
+    "requires ok=true before waiting beyond an accepted-shaped response (ok=%s)",
+    async (ok) => {
+      const onAccepted = vi.fn();
+      const error = { code: "UNAVAILABLE", message: "rejected" };
+      const accepted = { status: "accepted", runId: "run-1" };
+      const final = { status: "ok", runId: "run-1" };
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        options.respond(ok, accepted, ok ? undefined : error);
+        options.respond(true, final);
+      });
+      await expect(
+        dispatchGatewayRequestInProcessRaw(
+          "agent",
+          {},
+          {
+            client: null,
+            context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+            expectFinal: true,
+            onAccepted,
+          },
+        ),
+      ).resolves.toMatchObject(
+        ok ? { ok: true, payload: final } : { ok: false, payload: accepted, error },
+      );
+      expect(onAccepted.mock.calls).toEqual(ok ? [[accepted]] : []);
+    },
+  );
+
   it("cancels a real first-party paired-node invocation and removes its pending work", async () => {
     const { registry, frames } = registerPairedNode();
     const controller = new AbortController();
@@ -90,7 +122,7 @@ describe("in-process paired-node invocation cancellation", () => {
       { nodeId: "paired-node", command: "ollama.chat" },
       {
         client: null,
-        context: {} as GatewayRequestContext,
+        context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
         signal: controller.signal,
       },
     );
@@ -110,6 +142,64 @@ describe("in-process paired-node invocation cancellation", () => {
     );
   });
 
+  it.each([undefined, 10_000])(
+    "observes a worker failure after its caller aborts during dispatch (timeout=%s)",
+    async (timeoutMs) => {
+      const controller = new AbortController();
+      const aborted = new Error("history caller disconnected");
+      const result = createDeferredCore();
+      const unhandled = vi.fn();
+      handleGatewayRequest.mockImplementation(async () => {
+        controller.abort(aborted);
+        await result.promise;
+      });
+      process.on("unhandledRejection", unhandled);
+      try {
+        const request = dispatchGatewayRequestInProcessRaw(
+          "chat.history",
+          { sessionKey: "synthetic" },
+          {
+            client: null,
+            context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+            signal: controller.signal,
+            timeoutMs,
+          },
+        );
+        await expect(request).rejects.toBe(aborted);
+        result.reject(
+          new WorkerTaskError("ERR_WORKER_OUT_OF_MEMORY: synthetic worker failure", "unavailable"),
+        );
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    },
+  );
+
+  it("keeps cancellation ahead of an already-delivered response with a deadline", async () => {
+    const controller = new AbortController();
+    const aborted = new Error("history caller disconnected");
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      options.respond(true, { messages: [] });
+      controller.abort(aborted);
+    });
+    await expect(
+      dispatchGatewayRequestInProcessRaw(
+        "chat.history",
+        { sessionKey: "synthetic" },
+        {
+          client: null,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+          signal: controller.signal,
+          timeoutMs: 10_000,
+        },
+      ),
+    ).rejects.toBe(aborted);
+  });
+
   it("rejects an already-canceled invocation without dispatching a Gateway request", async () => {
     const controller = new AbortController();
     controller.abort(new Error("inference already canceled"));
@@ -120,7 +210,7 @@ describe("in-process paired-node invocation cancellation", () => {
         { nodeId: "paired-node", command: "ollama.chat" },
         {
           client: null,
-          context: {} as GatewayRequestContext,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
           signal: controller.signal,
         },
       ),
@@ -135,7 +225,11 @@ describe("in-process paired-node invocation cancellation", () => {
       dispatchGatewayRequestInProcessRaw(
         "node.invoke",
         { nodeId: "paired-node", command: "ollama.chat" },
-        { client: null, context: {} as GatewayRequestContext, signal },
+        {
+          client: null,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+          signal,
+        },
       ),
     ).rejects.toMatchObject({
       name: "AbortError",
@@ -154,7 +248,7 @@ describe("in-process paired-node invocation cancellation", () => {
       dispatchGatewayRequestInProcessRaw(
         "node.invoke",
         { nodeId: "paired-node", command: "ollama.chat" },
-        { client: null, context: {} as GatewayRequestContext },
+        { client: null, context: { trackExecution: trackAsyncWork } as GatewayRequestContext },
       ),
     ).resolves.toMatchObject({ ok: true, payload: { ok: true } });
     expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");

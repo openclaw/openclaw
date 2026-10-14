@@ -75,38 +75,12 @@ type BlockedBindReason =
   | { kind: "outside_allowed_roots"; sourcePath: string; allowedRoots: string[] }
   | { kind: "reserved_target"; targetPath: string; reservedPath: string };
 
-type ParsedBindSpec = {
-  source: string;
-  target: string;
-};
-
-function parseBindSpec(bind: string): ParsedBindSpec {
-  const trimmed = bind.trim();
-  const parsed = splitSandboxBindSpec(trimmed);
-  if (!parsed) {
-    return { source: trimmed, target: "" };
-  }
-  return { source: parsed.host, target: parsed.container };
-}
-
 /**
  * Parse the host/source path from a Docker bind mount string.
  * Format: `source:target[:mode]`
  */
 function parseBindSourcePath(bind: string): string {
-  return parseBindSpec(bind).source.trim();
-}
-
-function parseBindTargetPath(bind: string): string {
-  return parseBindSpec(bind).target.trim();
-}
-
-/**
- * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
- * If it starts with the drive letter, convert it to the upper case.
- */
-function normalizeHostPath(raw: string): string {
-  return normalizeSandboxHostPath(raw);
+  return splitSandboxBindSpec(bind)?.host ?? bind;
 }
 
 /**
@@ -121,7 +95,7 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   if (!isSandboxHostPathAbsolute(sourceRaw)) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
-  const normalized = normalizeHostPath(sourceRaw);
+  const normalized = normalizeSandboxHostPath(sourceRaw);
   const blockedHostPaths = getBlockedHostPaths();
   const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
   if (directReason) {
@@ -167,10 +141,10 @@ function getBlockedHostPaths(): string[] {
   if (blockedHostPathsCache?.key === cacheKey) {
     return blockedHostPathsCache.paths;
   }
-  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
+  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeSandboxHostPath));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
+      blocked.add(normalizeSandboxHostPath(path.posix.join(home, suffix)));
     }
   }
   blockedHostPathsCache = { key: cacheKey, paths: [...blocked] };
@@ -189,7 +163,7 @@ function getBlockedHomeRoots(): string[] {
     if (!candidate) {
       continue;
     }
-    const normalized = normalizeHostPath(candidate);
+    const normalized = normalizeSandboxHostPath(candidate);
     if (normalized !== "/") {
       roots.add(normalized);
     }
@@ -205,10 +179,7 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   if (!roots?.length) {
     return [];
   }
-  const normalized = roots
-    .map((entry) => entry.trim())
-    .filter(isSandboxHostPathAbsolute)
-    .map(normalizeHostPath);
+  const normalized = roots.filter(isSandboxHostPathAbsolute).map(normalizeSandboxHostPath);
   const expanded = new Set<string>();
   for (const root of normalized) {
     expanded.add(root);
@@ -250,11 +221,11 @@ function getOutsideAllowedRootsReason(
 }
 
 function getReservedTargetReason(bind: string): BlockedBindReason | null {
-  const targetRaw = parseBindTargetPath(bind);
+  const targetRaw = splitSandboxBindSpec(bind)?.container;
   if (!targetRaw || !targetRaw.startsWith("/")) {
     return null;
   }
-  const target = normalizeHostPath(targetRaw);
+  const target = normalizeSandboxHostPath(targetRaw);
   for (const reserved of RESERVED_CONTAINER_TARGET_PATHS) {
     if (isPathInsidePolicyPath(reserved, target)) {
       return {
@@ -331,9 +302,8 @@ function validateBindMounts(
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
   const blockedHostPaths = getBlockedHostPaths();
 
-  for (const rawBind of binds) {
-    const bind = rawBind.trim();
-    if (!bind) {
+  for (const bind of binds) {
+    if (!bind.trim()) {
       continue;
     }
 
@@ -351,7 +321,7 @@ function validateBindMounts(
     }
 
     const sourceRaw = parseBindSourcePath(bind);
-    const sourceNormalized = normalizeHostPath(sourceRaw);
+    const sourceNormalized = normalizeSandboxHostPath(sourceRaw);
     enforceSourcePathPolicy({
       bind,
       sourcePath: sourceNormalized,

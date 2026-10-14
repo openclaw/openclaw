@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Run only on the disposable CI macOS worker after its normal Swift test build.
@@ -38,4 +38,5 @@ env -i \
   /usr/bin/env \
   DYLD_FRAMEWORK_PATH="$render_platform/Library/Frameworks:$render_platform/Library/PrivateFrameworks" \
   DYLD_LIBRARY_PATH="$render_build:$render_platform/usr/lib" \
-  "$render_helper" --test-bundle-path "$render_bundle" --testing-library swift-testing --filter healthSettingsRender
+  "$render_helper" --test-bundle-path "$render_bundle" --testing-library swift-testing \
+  --filter 'HealthStoreStateTests/`health settings render`'

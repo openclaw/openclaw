@@ -1,10 +1,19 @@
 // Sandbox prune tests cover runtime removal ordering and registry cleanup
 // behavior for stale sandbox entries.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SandboxConfig } from "./types.js";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import type { SandboxRegistryEntry } from "./registry.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 let maybePruneSandboxes: typeof import("./prune.js").maybePruneSandboxes;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -16,6 +25,7 @@ const backendMocks = vi.hoisted(() => ({
 }));
 
 const registryMocks = vi.hoisted(() => ({
+  assertSandboxBrowserRegistryEntryCurrent: vi.fn(),
   readBrowserRegistry: vi.fn(),
   readRegistry: vi.fn(),
   removeBrowserRegistryEntry: vi.fn(),
@@ -40,68 +50,54 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("./backend.js", () => ({
   getSandboxBackendManager: backendMocks.getSandboxBackendManager,
+  usesSandboxRuntimeReservations: () => false,
 }));
 
 vi.mock("./docker-backend.js", () => ({
   dockerSandboxBackendManager: backendMocks,
 }));
 
+// mock-isolation: Prune selection uses synthetic rows; worker predicate behavior lives in registry tests.
 vi.mock("./registry.js", () => ({
+  assertSandboxBrowserRegistryEntryCurrent: registryMocks.assertSandboxBrowserRegistryEntryCurrent,
   readBrowserRegistry: registryMocks.readBrowserRegistry,
   readRegistry: registryMocks.readRegistry,
   removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
   removeRegistryEntry: registryMocks.removeRegistryEntry,
+  removeSandboxRegistryGeneration: (
+    _kind: string,
+    entry: SandboxRegistryEntry,
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
+    return registryMocks.removeBrowserRegistryEntry(entry.containerName);
+  },
+  removeSandboxRegistryRuntime: async (
+    entry: SandboxRegistryEntry,
+    removeRuntime: (current: SandboxRegistryEntry) => Promise<void>,
+  ) => {
+    await removeRuntime(entry);
+    await registryMocks.removeRegistryEntry(entry.containerName);
+  },
+  withSandboxRegistryEntryLock: async (
+    _entry: SandboxRegistryEntry,
+    operation: () => Promise<unknown>,
+  ) => operation(),
 }));
 
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
 
-function buildPruneConfig(): SandboxConfig {
+function buildPruneConfig(): OpenClawConfig {
   return {
-    mode: "all",
-    backend: "docker",
-    scope: "session",
-    workspaceAccess: "none",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "configured",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: [],
-      network: "none",
-      capDrop: ["ALL"],
-      env: {},
-    },
-    ssh: {
-      command: "ssh",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
-    },
-    browser: {
-      enabled: true,
-      image: "openclaw-sandbox-browser:bookworm-slim",
-      containerPrefix: "openclaw-sbx-browser-",
-      network: "none",
-      cdpPort: 9222,
-      vncPort: 5900,
-      noVncPort: 6080,
-      headless: true,
-      noVncEnabled: false,
-      allowHostControl: false,
-      autoStart: true,
-      autoStartTimeoutMs: 1_000,
-    },
-    tools: {
-      allow: [],
-      deny: [],
-    },
-    prune: {
-      idleHours: 1,
-      maxAgeDays: 0,
+    agents: {
+      defaults: {
+        sandbox: {
+          mode: "all",
+          prune: { idleHours: 1, maxAgeDays: 0 },
+        },
+      },
     },
   };
 }
@@ -110,6 +106,7 @@ describe("maybePruneSandboxes", () => {
   beforeEach(async () => {
     vi.resetModules();
     configMocks.getRuntimeConfig.mockReset();
+    registryMocks.assertSandboxBrowserRegistryEntryCurrent.mockReset();
     backendMocks.getSandboxBackendManager.mockReset().mockReturnValue(backendMocks);
     backendMocks.removeRuntime.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
@@ -126,6 +123,7 @@ describe("maybePruneSandboxes", () => {
         {
           containerName: "sandbox-1",
           backendId: "docker",
+          sessionKey: "agent:main:main",
           createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
           lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
           image: "openclaw-sandbox:bookworm-slim",
@@ -143,6 +141,124 @@ describe("maybePruneSandboxes", () => {
 
     expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
+  });
+
+  it("rejects hosted custody released during registry inspection before runtime removal", async () => {
+    const root = roots.make("sandbox-prune-custody-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const owner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(),
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      const assertCurrent = await captureSandboxStateOwner();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const staleRegistry = await registryMocks.readRegistry();
+      registryMocks.readRegistry.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return staleRegistry;
+      });
+      const pruning = maybePruneSandboxes(buildPruneConfig(), assertCurrent);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pruning,
+          "Pruning skipped registry inspection",
+        );
+        owner.release();
+        resume.resolve();
+        const result = await pruning.catch((error: unknown) => error);
+        expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+        expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      } finally {
+        resume.resolve();
+        await pruning.catch(() => {});
+        owner.release();
+      }
+    });
+  });
+
+  it("uses each registry owner's prune policy for containers and browsers", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", prune: { idleHours: 1, maxAgeDays: 0 } },
+        },
+        entries: {
+          work: { sandbox: { prune: { idleHours: 24, maxAgeDays: 0 } } },
+        },
+      },
+    });
+    const entry = (containerName: string, agentId: string) => ({
+      containerName,
+      backendId: "docker",
+      sessionKey: `agent:${agentId}:main`,
+      createdAtMs: now - 4 * 60 * 60 * 1000,
+      lastUsedAtMs: now - 2 * 60 * 60 * 1000,
+      image: "openclaw-sandbox:bookworm-slim",
+    });
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [entry("main-container", "main"), entry("work-container", "work")],
+    });
+    registryMocks.readBrowserRegistry.mockResolvedValue({
+      entries: [
+        { ...entry("main-browser", "main"), cdpPort: 9222 },
+        { ...entry("work-browser", "work"), cdpPort: 9223 },
+      ],
+    });
+
+    await maybePruneSandboxes();
+
+    expect(
+      backendMocks.removeRuntime.mock.calls.map(([params]) => params.entry.containerName),
+    ).toEqual(["main-container", "main-browser"]);
+    expect(backendMocks.removeRuntime.mock.calls.map(([params]) => params.agentId)).toEqual([
+      "main",
+      "main",
+    ]);
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledExactlyOnceWith("main-container");
+    expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledExactlyOnceWith(
+      "main-browser",
+    );
+  });
+
+  it("uses global prune policy for shared runtimes despite the caller override", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: { sandbox: { mode: "all", prune: { idleHours: 24, maxAgeDays: 0 } } },
+        entries: {
+          main: { sandbox: { prune: { idleHours: 1, maxAgeDays: 0 } } },
+        },
+      },
+    });
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "shared-runtime",
+          backendId: "docker",
+          sessionKey: "shared",
+          createdAtMs: now - 4 * 60 * 60 * 1000,
+          lastUsedAtMs: now - 2 * 60 * 60 * 1000,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+      ],
+    });
+    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
+
+    await maybePruneSandboxes();
+
+    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
   });
 
   it("keeps the registry entry when runtime removal fails", async () => {
@@ -165,6 +281,7 @@ describe("maybePruneSandboxes", () => {
         {
           containerName: "openshell-1",
           backendId: "openshell",
+          sessionKey: "agent:main:main",
           createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
           lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
           image: "openclaw",
@@ -186,6 +303,7 @@ describe("maybePruneSandboxes", () => {
         {
           containerName: "sandbox-out-of-range",
           backendId: "docker",
+          sessionKey: "agent:main:main",
           createdAtMs: Date.now(),
           lastUsedAtMs: Number.MAX_SAFE_INTEGER,
           image: "openclaw-sandbox:bookworm-slim",

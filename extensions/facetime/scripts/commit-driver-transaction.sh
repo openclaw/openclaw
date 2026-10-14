@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+if test "$#" -ne 3; then
+  echo "Usage: $0 <staged-driver> <installed-driver> <codesign-path>" >&2
+  exit 2
+fi
+
+stage=$1
+target=$2
+codesign_path=$3
+parent=$(/usr/bin/dirname "$target")
+rollback="$parent/.OpenClawBridge.driver.rollback.$$"
+committed=false
+backed_up=false
+installed=false
+
+restore_on_failure() {
+  if test "$committed" != true; then
+    if test "$installed" = true && test -e "$target"; then
+      /bin/rm -rf "$target"
+    fi
+    if test "$backed_up" = true; then
+      /bin/mv "$rollback" "$target"
+    fi
+  fi
+}
+trap restore_on_failure EXIT
+
+test -d "$stage"
+/bin/chmod -R u=rwX,go=rX "$stage"
+if test -e "$target"; then
+  /bin/mv "$target" "$rollback"
+  backed_up=true
+fi
+/bin/mv "$stage" "$target"
+installed=true
+"$codesign_path" --verify --strict "$target"
+committed=true
+if test -e "$rollback"; then
+  /bin/rm -rf "$rollback"
+fi

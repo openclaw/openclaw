@@ -39,8 +39,6 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
 ]);
 const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
   "fireworks/accounts/fireworks/models/kimi-k2p5",
-  "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-pro-preview-customtools",
   "opencode/kimi-k2.6",
   "opencode-go/kimi-k2.5",
@@ -151,7 +149,7 @@ export function fileProbeTextMatches(text: string): boolean {
 }
 
 /** Returns whether image probe output contains an OK acknowledgement. */
-export function imageProbeTextMatches(text: string): boolean {
+function imageProbeTextMatches(text: string): boolean {
   return /\bok\b/i.test(text);
 }
 

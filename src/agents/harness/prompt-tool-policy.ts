@@ -1,6 +1,9 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getPluginToolMeta } from "../../plugins/tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
+import { buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -8,6 +11,7 @@ import {
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
+  buildToolSchemaDirectoryPrompt,
   restrictToolSearchCatalog,
   type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
@@ -16,7 +20,7 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type NamedTool = { name: string };
 
-function isAgentTool(tool: NamedTool): tool is AnyAgentTool {
+function isAgentTool<T extends NamedTool>(tool: T): tool is T & AnyAgentTool {
   return "execute" in tool && typeof tool.execute === "function";
 }
 
@@ -36,6 +40,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
   catalogRef?: ToolSearchCatalogRef;
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   codeModeControlsEnabled: boolean;
+  catalogPrompt?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  };
 }) {
   const baselineTools = [...params.tools];
   const currentCatalog = params.catalogRef?.current;
@@ -44,6 +55,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
+          directOnlyToolNames: params.catalogRef.baselineDirectOnlyToolNames,
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -56,8 +68,10 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       });
       const allowedTools = filterTools(baselineTools, toolsAllow);
       if (!catalog) {
+        finalizeAgentToolAvailability(allowedTools.filter(isAgentTool));
         return {
           tools: allowedTools,
+          toolSchemaDirectoryPrompt: undefined,
           callableToolNames: normalizeUniqueStringEntries(allowedTools.map((tool) => tool.name)),
         };
       }
@@ -74,11 +88,31 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         const name = normalizeToolPolicyName(tool.name);
         return allowedNames.has(name) || (catalogCount > 0 && catalog.controlNames.has(name));
       });
+      catalog.ref.directOnlyToolNames = new Set(
+        tools
+          .filter((tool) => catalog.directOnlyToolNames?.has(tool.name))
+          .map((tool) => tool.name),
+      );
       const catalogReachable =
         catalogCount > 0 &&
         tools.some((tool) => catalog.controlNames.has(normalizeToolPolicyName(tool.name)));
       return {
         tools,
+        toolSchemaDirectoryPrompt:
+          catalogReachable && params.catalogPrompt
+            ? params.codeModeControlsEnabled
+              ? buildCodeModeCatalogPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  catalog.ref.current?.entries ?? [],
+                )
+              : buildToolSchemaDirectoryPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  {
+                    contextTokenBudget: params.catalogPrompt.contextTokenBudget,
+                    toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                  },
+                )
+            : undefined,
         callableToolNames: normalizeUniqueStringEntries([
           ...tools.map((tool) => tool.name),
           ...(catalogReachable ? allowedEntries.map((entry) => entry.name) : []),

@@ -1,12 +1,29 @@
-// Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
-import { AssistantMessageComponent } from "./assistant-message.js";
+import type { TuiImageSource } from "../tui-images.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
+import { TuiImageRenderer, type TuiImageRendererOptions } from "./message-images.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
-import { UserMessageComponent } from "./user-message.js";
+
+/** Event consumers use chat operations without depending on returned UI components. */
+export type ChatLogOperations = {
+  [
+    Method in
+      | "addLiveUser"
+      | "startTool"
+      | "updateToolResult"
+      | "addSystem"
+      | "addPendingSystem"
+      | "dismissPendingSystem"
+      | "updateAssistant"
+      | "finalizeAssistant"
+      | "dropAssistant"
+  ]: (...args: Parameters<ChatLog[Method]>) => void;
+};
 
 type RepeatableSystemMessage = {
   component: Container;
@@ -18,13 +35,12 @@ type RepeatableSystemMessage = {
 type TrackedTool = {
   component: ToolExecutionComponent;
   runId?: string;
-  active: boolean;
 };
 
 type TrackedAssistantRun = {
-  streaming?: AssistantMessageComponent;
-  frozen: Set<AssistantMessageComponent>;
-  finalized: Set<AssistantMessageComponent>;
+  streaming?: MarkdownMessageComponent;
+  frozen: Set<MarkdownMessageComponent>;
+  finalized: Set<MarkdownMessageComponent>;
   committedText?: string;
   latestText?: string;
 };
@@ -32,13 +48,14 @@ type TrackedAssistantRun = {
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
+  private readonly imageRenderer?: TuiImageRenderer;
   private tools = new Map<string, TrackedTool>();
   private assistantRuns = new Map<string, TrackedAssistantRun>();
-  private userComponents = new Map<string, UserMessageComponent>();
+  private userComponents = new Map<string, MarkdownMessageComponent>();
   private pendingUsers = new Map<
     string,
     {
-      component: UserMessageComponent;
+      component: MarkdownMessageComponent;
       text: string;
     }
   >();
@@ -47,19 +64,36 @@ export class ChatLog extends Container {
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
 
-  constructor(maxComponents = 180) {
+  constructor(maxComponents = 180, imageOptions?: TuiImageRendererOptions) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
+    this.imageRenderer = imageOptions ? new TuiImageRenderer(imageOptions) : undefined;
+  }
+
+  override removeChild(component: Component) {
+    if (
+      component instanceof MarkdownMessageComponent ||
+      component instanceof ToolExecutionComponent
+    ) {
+      component.dispose();
+    }
+    super.removeChild(component);
+  }
+
+  dispose() {
+    this.imageRenderer?.dispose();
   }
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
-    for (const [toolId, tool] of this.tools.entries()) {
-      if (tool.component === component) {
-        this.tools.delete(toolId);
+    for (const entries of [this.tools, this.pendingUsers]) {
+      for (const [id, entry] of entries) {
+        if (entry.component === component) {
+          entries.delete(id);
+        }
       }
     }
-    if (component instanceof AssistantMessageComponent) {
+    if (component instanceof MarkdownMessageComponent && component.role === "assistant") {
       for (const [runId, run] of this.assistantRuns.entries()) {
         if (run.streaming === component) {
           run.streaming = undefined;
@@ -69,19 +103,11 @@ export class ChatLog extends Container {
         this.releaseAssistantRunIfEmpty(runId, run);
       }
     }
-    for (const [runId, entry] of this.pendingUsers.entries()) {
-      if (entry.component === component) {
-        this.pendingUsers.delete(runId);
-      }
-    }
-    for (const [messageId, user] of this.userComponents.entries()) {
-      if (user === component) {
-        this.userComponents.delete(messageId);
-      }
-    }
-    for (const [runId, entry] of this.pendingSystemNotices.entries()) {
-      if (entry === component) {
-        this.pendingSystemNotices.delete(runId);
+    for (const entries of [this.userComponents, this.pendingSystemNotices]) {
+      for (const [id, entry] of entries) {
+        if (entry === component) {
+          entries.delete(id);
+        }
       }
     }
     if (this.btwMessage === component) {
@@ -122,39 +148,33 @@ export class ChatLog extends Container {
     const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
     const completedTools = new Set<ToolExecutionComponent>();
     for (const tool of this.tools.values()) {
-      if (!tool.active) {
+      if (!tool.component.isActive) {
         completedTools.add(tool.component);
       }
     }
+    const laterComponents = this.children.filter(
+      (entry) => entry !== firstRunComponent && protectedComponents.has(entry),
+    );
     const evictable =
-      this.children.find(
+      laterComponents.find(
         (entry) =>
-          entry !== firstRunComponent &&
           entry !== streaming &&
-          entry instanceof AssistantMessageComponent &&
-          protectedComponents.has(entry),
+          entry instanceof MarkdownMessageComponent &&
+          entry.role === "assistant",
       ) ??
-      this.children.find(
-        (entry) =>
-          entry !== firstRunComponent &&
-          entry instanceof ToolExecutionComponent &&
-          completedTools.has(entry) &&
-          protectedComponents.has(entry),
+      laterComponents.find(
+        (entry) => entry instanceof ToolExecutionComponent && completedTools.has(entry),
       ) ??
       (streaming &&
-      firstRunComponent instanceof AssistantMessageComponent &&
+      firstRunComponent instanceof MarkdownMessageComponent &&
+      firstRunComponent.role === "assistant" &&
       firstRunComponent !== streaming
         ? firstRunComponent
         : undefined) ??
       (firstRunComponent instanceof ToolExecutionComponent && completedTools.has(firstRunComponent)
         ? firstRunComponent
         : undefined) ??
-      this.children.find(
-        (entry) =>
-          entry !== firstRunComponent &&
-          entry instanceof ToolExecutionComponent &&
-          protectedComponents.has(entry),
-      );
+      laterComponents.find((entry) => entry instanceof ToolExecutionComponent);
     if (evictable) {
       protectedComponents.delete(evictable);
     }
@@ -171,6 +191,7 @@ export class ChatLog extends Container {
   }
 
   clearAll() {
+    this.dispose();
     this.clear();
     this.tools.clear();
     this.assistantRuns.clear();
@@ -186,13 +207,6 @@ export class ChatLog extends Container {
       this.removeChild(tool.component);
     }
     this.tools.clear();
-  }
-
-  clearPendingUsers() {
-    for (const entry of this.pendingUsers.values()) {
-      this.removeChild(entry.component);
-    }
-    this.pendingUsers.clear();
   }
 
   private formatSystemText(text: string, count = 1) {
@@ -251,13 +265,15 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string, options?: { messageId?: string }) {
+  addUser(text: string, options?: { messageId?: string; images?: readonly TuiImageSource[] }) {
     const previous = options?.messageId ? this.userComponents.get(options.messageId) : undefined;
     if (previous) {
       previous.setText(text);
+      previous.setImages(options?.images ?? []);
       return previous;
     }
-    const component = new UserMessageComponent(text);
+    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
+    component.setImages(options?.images ?? []);
     if (options?.messageId) {
       this.userComponents.set(options.messageId, component);
     }
@@ -265,35 +281,42 @@ export class ChatLog extends Container {
     return component;
   }
 
-  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+  addLiveUser(
+    text: string,
+    options: {
+      messageId: string;
+      runId?: string;
+      sendId?: string;
+      images?: readonly TuiImageSource[];
+    },
+  ) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
-      existing.setText(text);
-      return existing;
+      return this.addUser(text, options);
     }
 
-    const pending = options.runId ? this.pendingUsers.get(options.runId) : undefined;
-    if (pending && options.runId && pending.text === text) {
+    // Persisted execution ownership can differ from the originating send;
+    // only the send identity may adopt its optimistic prompt.
+    const pending = options.sendId ? this.pendingUsers.get(options.sendId) : undefined;
+    if (pending && options.sendId && pending.text === text) {
       pending.component.setText(text);
-      this.pendingUsers.delete(options.runId);
+      pending.component.setImages(options.images ?? []);
+      this.pendingUsers.delete(options.sendId);
       this.userComponents.set(options.messageId, pending.component);
       return pending.component;
     }
 
-    const component = new UserMessageComponent(text);
+    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
+    component.setImages(options.images ?? []);
     this.userComponents.set(options.messageId, component);
     const protectedComponents = new Set<Component>([component]);
     if (options.runId) {
       const run = this.assistantRuns.get(options.runId);
-      for (const segment of run?.frozen ?? []) {
+      for (const segment of [...(run?.frozen ?? []), ...(run?.finalized ?? [])]) {
         protectedComponents.add(segment);
       }
-      const streaming = run?.streaming;
-      if (streaming) {
-        protectedComponents.add(streaming);
-      }
-      for (const segment of run?.finalized ?? []) {
-        protectedComponents.add(segment);
+      if (run?.streaming) {
+        protectedComponents.add(run.streaming);
       }
       for (const tool of this.tools.values()) {
         if (tool.runId === options.runId) {
@@ -325,7 +348,7 @@ export class ChatLog extends Container {
       existing.component.setText(text);
       return existing.component;
     }
-    const component = new UserMessageComponent(text);
+    const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
     this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
     return component;
@@ -359,10 +382,6 @@ export class ChatLog extends Container {
 
   countPendingUsers() {
     return this.pendingUsers.size;
-  }
-
-  private resolveRunId(runId?: string) {
-    return runId ?? "default";
   }
 
   private getAssistantRun(runId: string): TrackedAssistantRun {
@@ -442,73 +461,58 @@ export class ChatLog extends Container {
     }
   }
 
-  startAssistant(text: string, runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
-    const run = this.getAssistantRun(effectiveRunId);
-    run.finalized.clear();
-    run.latestText = text;
-    const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
-    const existing = run.streaming;
-    if (existing) {
-      existing.setText(segmentText);
-      return existing;
+  reserveAssistantSlot(runId = "default") {
+    if (!this.assistantRuns.get(runId)?.streaming) {
+      this.updateAssistantSegment("", runId, true);
     }
-    const component = new AssistantMessageComponent(segmentText);
-    run.streaming = component;
-    this.appendNonSystem(component);
-    return component;
   }
 
-  reserveAssistantSlot(runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
-    const existing = this.assistantRuns.get(effectiveRunId)?.streaming;
-    if (existing) {
-      return existing;
-    }
-    return this.startAssistant("", runId);
+  updateAssistant(text: string, runId = "default") {
+    this.updateAssistantSegment(text, runId, false);
   }
 
-  updateAssistant(text: string, runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
-    const run = this.getAssistantRun(effectiveRunId);
+  private updateAssistantSegment(text: string, runId: string, reserveEmpty: boolean) {
+    const run = this.getAssistantRun(runId);
     run.latestText = text;
-    const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
-    const existing = run.streaming;
-    if (!existing) {
-      if (!segmentText && run.committedText !== undefined) {
-        return;
-      }
-      this.startAssistant(text, runId);
+    const segmentText = this.resolveAssistantSegment(runId, text);
+    if (run.streaming) {
+      run.streaming.setText(segmentText);
       return;
     }
-    existing.setText(segmentText);
+    if (!reserveEmpty && !segmentText && run.committedText !== undefined) {
+      return;
+    }
+    run.finalized.clear();
+    const component = new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
+    run.streaming = component;
+    this.appendNonSystem(component);
   }
 
-  finalizeAssistant(text: string, runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+  finalizeAssistant(text: string, runId?: string, images: readonly TuiImageSource[] = []) {
+    const effectiveRunId = runId ?? "default";
     const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = run.streaming;
     const finalized = new Set(run.frozen);
-    let lastAssistant: AssistantMessageComponent | undefined;
+    let lastAssistant: MarkdownMessageComponent | undefined;
     run.frozen.clear();
     run.committedText = undefined;
     run.latestText = undefined;
-    if (existing) {
-      if (segmentText) {
+    if (segmentText || images.length > 0) {
+      lastAssistant =
+        existing ?? new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
+      if (existing) {
         existing.setText(segmentText);
-        lastAssistant = existing;
       } else {
-        this.removeChild(existing);
+        this.appendNonSystem(lastAssistant);
       }
-      run.streaming = undefined;
-    } else if (segmentText) {
-      const component = new AssistantMessageComponent(segmentText);
-      this.appendNonSystem(component);
-      lastAssistant = component;
+    } else if (existing) {
+      this.removeChild(existing);
     }
+    run.streaming = undefined;
 
     if (lastAssistant) {
+      lastAssistant.setImages(images);
       finalized.add(lastAssistant);
     }
     for (const segment of finalized) {
@@ -526,7 +530,7 @@ export class ChatLog extends Container {
   }
 
   dropAssistant(runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const run = this.assistantRuns.get(effectiveRunId);
     if (!run) {
       return;
@@ -567,17 +571,31 @@ export class ChatLog extends Container {
     return this.btwMessage !== null;
   }
 
-  startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
+  startTool(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    runId?: string,
+    activity?: AgentItemEventData | null,
+  ) {
     const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.component.setArgs(args);
+      if (args !== undefined) {
+        existing.component.setArgs(args);
+      }
+      if (activity !== undefined) {
+        existing.component.setActivity(activity);
+      }
       return existing.component;
     }
     const owningRunId = runId ?? this.resolveSingleStreamingRunId();
     this.freezeStreamingAssistants();
-    const component = new ToolExecutionComponent(toolName, args);
+    const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
+    if (activity !== undefined) {
+      component.setActivity(activity);
+    }
     component.setExpanded(this.toolsExpanded);
-    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
+    this.tools.set(toolCallId, { component, runId: owningRunId });
     this.appendNonSystem(component);
     return component;
   }
@@ -587,19 +605,7 @@ export class ChatLog extends Container {
     result: unknown,
     opts?: { isError?: boolean; partial?: boolean },
   ) {
-    const existing = this.tools.get(toolCallId);
-    if (!existing) {
-      return;
-    }
-    if (opts?.partial) {
-      existing.active = true;
-      existing.component.setPartialResult(result as Record<string, unknown>);
-      return;
-    }
-    existing.active = false;
-    existing.component.setResult(result as Record<string, unknown>, {
-      isError: opts?.isError,
-    });
+    this.tools.get(toolCallId)?.component.setResult(result as Record<string, unknown>, opts);
   }
 
   setToolsExpanded(expanded: boolean) {

@@ -45,6 +45,7 @@ export function validReview(headSha = REVIEWED_HEAD) {
 
 export type ReviewArtifactFixtureOptions = {
   files?: string[];
+  prNumber?: number;
   markdownIdentityLine?: string;
   metaEnvPrNumber?: number;
   mode?: "pr" | "main";
@@ -57,13 +58,14 @@ export function writeReviewArtifacts(
   options: ReviewArtifactFixtureOptions = {},
 ) {
   const headSha = options.headSha ?? REVIEWED_HEAD;
+  const prNumber = options.prNumber ?? REVIEWED_PR;
   const localDir = join(fixtureRoot, ".local");
   mkdirSync(localDir, { recursive: true });
   writeFileSync(join(localDir, "review.json"), `${JSON.stringify(review)}\n`);
   writeFileSync(
     join(localDir, "review.md"),
     [
-      options.markdownIdentityLine ?? `Review artifact for PR #${REVIEWED_PR} at ${headSha}`,
+      options.markdownIdentityLine ?? `Review artifact for PR #${prNumber} at ${headSha}`,
       "A)",
       "B)",
       "C)",
@@ -78,12 +80,12 @@ export function writeReviewArtifacts(
   );
   writeFileSync(
     join(localDir, "pr-meta.env"),
-    `PR_URL=https://example.invalid/pr/42\nPR_NUMBER=${options.metaEnvPrNumber ?? REVIEWED_PR}\nPR_HEAD_SHA=${headSha}\n`,
+    `PR_URL=https://example.invalid/pr/42\nPR_NUMBER=${options.metaEnvPrNumber ?? prNumber}\nPR_HEAD_SHA=${headSha}\n`,
   );
   writeFileSync(
     join(localDir, "pr-meta.json"),
     `${JSON.stringify({
-      number: REVIEWED_PR,
+      number: prNumber,
       headRefOid: headSha,
       files: (options.files ?? []).map((path) => ({ path })),
     })}\n`,

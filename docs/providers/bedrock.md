@@ -17,6 +17,14 @@ not an API key.
 | Auth     | AWS credentials (env vars, shared config, or instance role) |
 | Region   | `AWS_REGION` or `AWS_DEFAULT_REGION` (default: `us-east-1`) |
 
+Custom provider IDs (for example, `amazon-bedrock-east1`) can use
+`api: "bedrock-converse-stream"` and `auth: "aws-sdk"`. They activate the same
+Bedrock plugin. The region comes from the selected provider's standard
+`bedrock-runtime.<region>.amazonaws.com` URL, then the resolved model URL,
+then the plugin discovery region. Without one of these, the AWS SDK region
+environment and profile settings apply. A custom route does not inherit the
+stock `amazon-bedrock` provider's region.
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -136,6 +144,20 @@ Choose your preferred auth method and follow the setup steps.
 OpenClaw can automatically discover Bedrock models that support **streaming**
 and **text output**. Discovery uses `bedrock:ListFoundationModels` and
 `bedrock:ListInferenceProfiles`, and results are cached (default: 1 hour).
+
+Both lists, including every inference-profile page, must succeed before OpenClaw
+caches the result. A failed refresh reports unavailable or rejected catalog access
+and preserves compatible last-good models. Restore access to both list operations
+and refresh again. A successful empty list clears discovered membership.
+
+At startup without a compatible previous catalog, a failed inference-profile
+list also prevents foundation-only inventory. Grant both list permissions or
+use an explicit `models.providers["amazon-bedrock"].models` list.
+
+Programmatic callers of the plugin's public discovery helpers keep the advisory
+defaults from v2026.9.2. Pass `discoveryMode: "strict"` to propagate acquisition
+failures and retain successful empty provider results, as the bundled catalog
+hooks do. Advisory partial results are not cached as complete inventory.
 
 How the implicit provider is enabled:
 
@@ -347,7 +369,8 @@ openclaw models list
     Use `amazon-bedrock/anthropic.claude-fable-5` in `us-east-1`, or the
     regional inference ids such as `us.anthropic.claude-fable-5`.
     OpenClaw applies Fable's 1M context window, 128K output limit, always-on
-    adaptive thinking, and supported effort mapping. `/think off` and
+    adaptive thinking, and supported effort mapping. Fable 5 and 5.1 default
+    to `medium` effort; explicit effort settings take precedence. `/think off` and
     `/think minimal` map to `low`; temperature and forced tool choice controls
     are omitted, matching the Opus 4.7/4.8 route. Streaming output is held
     until Bedrock returns a terminal status so mid-stream refusals do not
@@ -487,6 +510,12 @@ openclaw models list
   </Card>
   <Card title="Memory config reference" href="/reference/memory-config#bedrock-embedding-config" icon="database">
     Full Bedrock embedding model list and dimension options.
+  </Card>
+  <Card title="Bedrock Mantle" href="/providers/bedrock-mantle" icon="layer-group">
+    Bedrock Mantle OpenAI-compatible and Claude Messages models.
+  </Card>
+  <Card title="Prompt caching" href="/reference/prompt-caching" icon="database">
+    How prompt caching works across providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     General troubleshooting and FAQ.

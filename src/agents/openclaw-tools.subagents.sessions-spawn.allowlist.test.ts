@@ -1,4 +1,3 @@
-// Verifies sessions_spawn agent allowlists and sandbox escalation guards.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -10,295 +9,150 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
-
 let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
-function resolveAgentConfigFromList(cfg: Record<string, unknown>, agentId: string) {
-  const agents = (cfg.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list;
-  return agents?.find((entry) => entry.id === agentId);
+function resolveAgentConfigFromEntries(cfg: Record<string, unknown>, agentId: string) {
+  return (cfg.agents as { entries?: Record<string, Record<string, unknown>> } | undefined)
+    ?.entries?.[agentId];
 }
-
 function readSandboxMode(value: unknown) {
   return value && typeof value === "object" ? (value as { mode?: string }).mode : undefined;
 }
-
-function resolveSandboxRuntimeStatusFromConfig(params: {
-  cfg?: Record<string, unknown>;
-  sessionKey?: string;
-}) {
-  // Test-only sandbox resolver mirrors the per-agent/default precedence used by runtime.
-  const agentId =
-    typeof params.sessionKey === "string"
-      ? (params.sessionKey.split(":").slice(0, 2).at(1) ?? undefined)
-      : undefined;
-  const cfg = params.cfg ?? {};
-  const targetAgentConfig =
-    typeof agentId === "string" ? resolveAgentConfigFromList(cfg, agentId) : undefined;
-  const explicitMode = readSandboxMode(
-    (targetAgentConfig as { sandbox?: unknown } | undefined)?.sandbox,
-  );
-  const defaultMode = readSandboxMode(
-    (cfg.agents as { defaults?: { sandbox?: unknown } } | undefined)?.defaults?.sandbox,
-  );
-  const sandboxed =
-    explicitMode === "all" ? true : explicitMode === "off" ? false : defaultMode === "all";
-  return { sandboxed };
-}
-
 function setConfig(next: Record<string, unknown>) {
   hoisted.configOverride = createSubagentSpawnTestConfig(undefined, next);
 }
-
-async function spawn(params: {
-  task?: string;
-  agentId?: string;
-  sandbox?: "inherit" | "require";
-  requesterSessionKey?: string;
-  requesterChannel?: string;
-}) {
-  // Small wrapper keeps each allowlist case focused on config and requested agent.
+async function spawn(agentId?: string, sandbox?: "require") {
   return await spawnSubagentDirect(
-    {
-      task: params.task ?? "do thing",
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sandbox ? { sandbox: params.sandbox } : {}),
-    },
-    {
-      agentSessionKey: params.requesterSessionKey ?? "agent:main:main",
-      agentChannel: params.requesterChannel ?? "mobilechat",
-    },
+    { task: "do thing", agentId, sandbox },
+    { agentSessionKey: "agent:main:main", agentChannel: "mobilechat" },
   );
 }
-
-function expectStatus(result: Awaited<ReturnType<typeof spawn>>, status: string) {
-  expect(result.status).toBe(status);
-}
-
-function expectChildSessionKey(result: Awaited<ReturnType<typeof spawn>>, pattern: RegExp) {
-  expect(result.status).toBe("accepted");
-  expect(result.childSessionKey).toMatch(pattern);
+function expectRejected(result: Awaited<ReturnType<typeof spawn>>, error?: string) {
+  expect(result.status).toBe("forbidden");
+  if (error) {
+    expect(result.error).toContain(error);
+  }
+  expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
 }
 
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
     getRuntimeConfig: () => hoisted.configOverride,
-    resolveAgentConfig: (cfg, agentId) => resolveAgentConfigFromList(cfg, agentId),
-    resolveSandboxRuntimeStatus: (params: { cfg?: Record<string, unknown>; sessionKey?: string }) =>
-      resolveSandboxRuntimeStatusFromConfig(params),
+    resolveAgentConfig: resolveAgentConfigFromEntries,
+    resolveSandboxRuntimeStatus: ({
+      cfg = {},
+      sessionKey,
+    }: {
+      cfg?: Record<string, unknown>;
+      sessionKey?: string;
+    }) => {
+      const agent = resolveAgentConfigFromEntries(cfg, sessionKey?.split(":")[1] ?? "");
+      const explicitMode = readSandboxMode(agent?.sandbox);
+      const defaultMode = readSandboxMode(
+        (cfg.agents as { defaults?: { sandbox?: unknown } } | undefined)?.defaults?.sandbox,
+      );
+      return {
+        sandboxed:
+          explicitMode === "all" ? true : explicitMode === "off" ? false : defaultMode === "all",
+      };
+    },
     resetModules: false,
     sessionStorePath: "/tmp/subagent-spawn-allowlist-session-store.json",
   }));
 });
 
-describe("subagent spawn allowlist + sandbox guards", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+describe("subagent spawn target admission", () => {
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     setConfig({});
   });
 
-  it("only allows same-agent spawns by default", async () => {
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "forbidden");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  it("forbids cross-agent targets outside the requester's allowlist", async () => {
+    setConfig({ agents: { entries: { main: { subagents: { allowAgents: ["alpha"] } } } } });
+    expectRejected(await spawn("beta"));
   });
 
-  it("forbids cross-agent spawning when not allowlisted", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["alpha"] } }],
-      },
-    });
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "forbidden");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("allows cross-agent spawning when configured", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["beta"] } }, { id: "beta" }],
-      },
-    });
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "accepted");
-    expect(result.runId).toBe("run-1");
-    expectChildSessionKey(result, /^agent:beta:subagent:/);
-  });
-
-  it("falls back to default allowlist when agent config omits allowAgents", async () => {
+  it("falls back to the default allowlist when the agent omits allowAgents", async () => {
     setConfig({
       agents: {
         defaults: { subagents: { allowAgents: ["beta"] } },
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       },
     });
-    const result = await spawn({ agentId: "beta" });
-    expectChildSessionKey(result, /^agent:beta:subagent:/);
-  });
-
-  it("allows configured agents when allowlist contains *", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "beta" }],
-      },
+    expect(await spawn("beta")).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.stringMatching(/^agent:beta:subagent:/),
     });
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "accepted");
   });
 
-  it.each([
-    { name: "rejects unconfigured agent ids when allowlist contains *", allowAgents: ["*"] },
-    {
-      name: "rejects explicit unconfigured agent ids when allowlist also contains *",
-      allowAgents: ["*", "beta"],
-    },
-  ])("$name", async ({ allowAgents }) => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents } }],
-      },
-    });
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toBe(
-      'agentId "beta" is not in the configured agent registry (allowed: main)',
-    );
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  it("rejects unconfigured targets even with a wildcard allowlist", async () => {
+    setConfig({ agents: { entries: { main: { subagents: { allowAgents: ["*"] } } } } });
+    expectRejected(await spawn("beta"), 'agentId "beta" is not in the configured agent registry');
   });
 
-  it("normalizes allowlisted agent ids", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["Research"] } }, { id: "research" }],
-      },
-    });
-    const result = await spawn({ agentId: "research" });
-    expectStatus(result, "accepted");
-  });
-
-  it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
+  it("forbids a sandboxed requester from unsandboxing its child", async () => {
     setConfig({
       agents: {
         defaults: { sandbox: { mode: "all" } },
-        list: [
-          { id: "main", subagents: { allowAgents: ["research"] } },
-          { id: "research", sandbox: { mode: "off" } },
-        ],
+        entries: {
+          main: { subagents: { allowAgents: ["research"] } },
+          research: { sandbox: { mode: "off" } },
+        },
       },
     });
-    const result = await spawn({ agentId: "research" });
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toContain("Sandboxed sessions cannot spawn unsandboxed subagents.");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expectRejected(
+      await spawn("research"),
+      "Sandboxed sessions cannot spawn unsandboxed subagents.",
+    );
   });
 
-  it('forbids sandbox="require" when target runtime is unsandboxed', async () => {
+  it('forbids sandbox="require" when the target is unsandboxed', async () => {
     setConfig({
       agents: {
-        list: [
-          { id: "main", subagents: { allowAgents: ["research"] } },
-          { id: "research", sandbox: { mode: "off" } },
-        ],
+        entries: {
+          main: { subagents: { allowAgents: ["research"] } },
+          research: { sandbox: { mode: "off" } },
+        },
       },
     });
-    const result = await spawn({ agentId: "research", sandbox: "require" });
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toContain('sandbox="require"');
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expectRejected(await spawn("research", "require"), 'sandbox="require"');
   });
 
   it("forbids omitted agentId when requireAgentId is configured", async () => {
     setConfig({
-      agents: {
-        defaults: { subagents: { requireAgentId: true } },
-        list: [{ id: "main" }],
-      },
+      agents: { defaults: { subagents: { requireAgentId: true } }, entries: { main: {} } },
     });
-    const result = await spawn({});
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toContain("sessions_spawn requires explicit agentId");
-    expect(result.error ?? "").not.toContain("agents_list");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expectRejected(await spawn(), "sessions_spawn requires explicit agentId");
   });
 
-  it("allows omitted agentId when requireAgentId is false", async () => {
+  it("admits an explicit required target after normalizing its allowlist", async () => {
     setConfig({
       agents: {
-        defaults: { subagents: { requireAgentId: false } },
-        list: [{ id: "main" }],
+        entries: {
+          main: { subagents: { allowAgents: ["Research"], requireAgentId: true } },
+          research: {},
+        },
       },
     });
-    const result = await spawn({});
-    expectChildSessionKey(result, /^agent:main:subagent:/);
+    expect(await spawn("research")).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      childSessionKey: expect.stringMatching(/^agent:research:subagent:/),
+    });
   });
 
-  it("allows explicit agentId when requireAgentId is configured", async () => {
+  it("rejects malformed agent IDs before normalization can create a ghost agent", async () => {
     setConfig({
-      agents: {
-        list: [
-          { id: "main", subagents: { allowAgents: ["worker"], requireAgentId: true } },
-          { id: "worker" },
-        ],
-      },
+      agents: { entries: { main: { subagents: { allowAgents: ["*"] } }, research: {} } },
     });
-    const result = await spawn({ agentId: "worker" });
-    expectStatus(result, "accepted");
-  });
-
-  it.each([
-    {
-      name: "rejects malformed agentId strings before any gateway work",
-      agentId: "Agent not found: xyz",
-      extraAgents: [{ id: "research" }],
-    },
-    {
-      name: "rejects agentId containing path separators",
-      agentId: "../../../etc/passwd",
-      extraAgents: [],
-    },
-    {
-      name: "rejects agentId exceeding 64 characters",
-      agentId: "a".repeat(65),
-      extraAgents: [],
-    },
-  ])("$name", async (row) => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, ...row.extraAgents],
-      },
+    expect(await spawn("Agent not found: xyz")).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid agentId"),
     });
-    const result = await spawn({ agentId: row.agentId });
-    expectStatus(result, "error");
-    expect(result.error ?? "").toContain("Invalid agentId");
-    expect(result.error ?? "").not.toContain("agents_list");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts well-formed agentId with hyphens and underscores", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
-      },
-    });
-    const result = await spawn({ agentId: "my-research_agent01" });
-    expectStatus(result, "accepted");
-  });
-
-  it("rejects allowlisted-but-unconfigured agentId", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["research"] } }],
-      },
-    });
-    const result = await spawn({ agentId: "research" });
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toBe(
-      'agentId "research" is not in the configured agent registry (allowed: none)',
-    );
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 });

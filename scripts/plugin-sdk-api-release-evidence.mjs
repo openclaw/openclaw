@@ -3,8 +3,63 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA = "openclaw.plugin-sdk-api-release-evidence/v1";
+const PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA =
+  "openclaw.plugin-sdk-api-release-evidence-set/v1";
+
+const PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA =
+  "openclaw.plugin-sdk-api-release-evidence-set/v2";
+const PLUGIN_SDK_API_DIFF_SET_SCHEMA = "openclaw.plugin-sdk-api-diff-set/v1";
+
+// A versioned transport, not a new logical acknowledgement format.
+// 16 MiB fits the existing 17 MiB publish manifest reader with its 1 MiB
+// metadata allowance. Expansion is separately bounded before JSON parsing.
+const ENCODED_SDK_SCHEMA = "openclaw.plugin-sdk-api-encoded/v1";
+const MAX_ENCODED_SDK_BYTES = 16 * 1024 * 1024;
+const MAX_EXPANDED_SDK_BYTES = 64 * 1024 * 1024;
+
+export function encodePluginSdkApiArtifact(value) {
+  const bytes = Buffer.from(JSON.stringify(value), "utf8");
+  if (bytes.length > MAX_EXPANDED_SDK_BYTES) {
+    throw new Error("Plugin SDK API expanded artifact exceeds its byte limit");
+  }
+  const encoded = {
+    schema: ENCODED_SDK_SCHEMA,
+    encoding: "gzip+base64",
+    data: gzipSync(bytes, { level: 9 }).toString("base64"),
+  };
+  if (Buffer.byteLength(JSON.stringify(encoded), "utf8") > MAX_ENCODED_SDK_BYTES) {
+    throw new Error("Plugin SDK API encoded artifact exceeds its byte limit");
+  }
+  return encoded;
+}
+
+export function decodePluginSdkApiArtifact(value) {
+  if (value?.schema !== ENCODED_SDK_SCHEMA) {
+    return value;
+  }
+  if (
+    Object.keys(value).length !== 3 ||
+    value.encoding !== "gzip+base64" ||
+    typeof value.data !== "string" ||
+    value.data.length > MAX_ENCODED_SDK_BYTES ||
+    Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENCODED_SDK_BYTES
+  ) {
+    throw new Error("Plugin SDK API encoded artifact is invalid or exceeds its byte limit");
+  }
+  const compressed = Buffer.from(value.data, "base64");
+  if (!value.data || compressed.toString("base64") !== value.data) {
+    throw new Error("Plugin SDK API encoded artifact contains invalid base64");
+  }
+  const expanded = gunzipSync(compressed, { maxOutputLength: MAX_EXPANDED_SDK_BYTES });
+  const logical = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(expanded));
+  if (!isReleaseEvidenceObject(logical) || logical.schema === ENCODED_SDK_SCHEMA) {
+    throw new Error("Plugin SDK API encoded artifact must contain one logical artifact");
+  }
+  return logical;
+}
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -78,15 +133,146 @@ export function createPluginSdkApiReleaseEvidence({
   };
 }
 
+function requireSelectors(selectors) {
+  if (
+    !isReleaseEvidenceObject(selectors) ||
+    Object.keys(selectors).length !== 2 ||
+    !Object.hasOwn(selectors, "beta") ||
+    !Object.hasOwn(selectors, "latest")
+  ) {
+    throw new Error("Plugin SDK API selector evidence must bind beta and latest");
+  }
+}
+
+// The renderer already reuses comparisons by predecessor commit. Preserve that
+// sharing on disk without changing the v1 logical diff or acknowledgement digest.
+export function createPluginSdkApiDiffSet(selectors) {
+  requireSelectors(selectors);
+  /** @type {Record<string, ReturnType<typeof diffPayload> & { digest: string }>} */
+  const diffs = {};
+  /** @type {Record<string, string>} */
+  const references = {};
+  for (const [selector, diff] of Object.entries(selectors)) {
+    const payload = diffPayload(diff);
+    const digest = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+    if (diff.digest !== digest) {
+      throw new Error("Plugin SDK API diff digest does not match its payload");
+    }
+    if (Object.hasOwn(diffs, digest) && JSON.stringify(diffs[digest]) !== JSON.stringify(diff)) {
+      throw new Error("Plugin SDK API pooled diffs disagree for the same digest");
+    }
+    diffs[digest] = diff;
+    references[selector] = digest;
+  }
+  return { schema: PLUGIN_SDK_API_DIFF_SET_SCHEMA, selectors: references, diffs };
+}
+
+export function expandPluginSdkApiDiffSet(input) {
+  const value = decodePluginSdkApiArtifact(input);
+  if (
+    !isReleaseEvidenceObject(value) ||
+    value.schema !== PLUGIN_SDK_API_DIFF_SET_SCHEMA ||
+    Object.keys(value).length !== 3 ||
+    !isReleaseEvidenceObject(value.diffs)
+  ) {
+    throw new Error("Plugin SDK API pooled diff set is invalid");
+  }
+  requireSelectors(value.selectors);
+  const references = Object.values(value.selectors);
+  if (
+    references.some((ref) => typeof ref !== "string" || !DIGEST_PATTERN.test(ref)) ||
+    Object.keys(value.diffs).length !== new Set(references).size ||
+    references.some((ref) => !Object.hasOwn(value.diffs, ref) || value.diffs[ref]?.digest !== ref)
+  ) {
+    throw new Error("Plugin SDK API pooled diff references are invalid");
+  }
+  const selectors = Object.fromEntries(
+    Object.entries(value.selectors).map(([selector, ref]) => [selector, value.diffs[ref]]),
+  );
+  // Hash the complete payload, including the unselected channel; a pool reference
+  // never replaces payload verification or the selected channel's acknowledgement.
+  createPluginSdkApiDiffSet(selectors);
+  return selectors;
+}
+
+export function selectPluginSdkApiReleaseEvidence({ evidence: input, npmDistTag }) {
+  const evidence = decodePluginSdkApiArtifact(input);
+  const pooled = evidence?.schema === PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA;
+  if (!pooled && evidence?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA) {
+    return evidence;
+  }
+  const selectors = evidence.selectors;
+  if (
+    Object.keys(evidence).length !== (pooled ? 3 : 2) ||
+    !isReleaseEvidenceObject(selectors) ||
+    Object.keys(selectors).length !== 2 ||
+    ["beta", "latest"].some(
+      (selector) => selectors[selector]?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA,
+    ) ||
+    selectors.beta.headSha !== selectors.latest.headSha ||
+    selectors.beta.workflowSha !== selectors.latest.workflowSha
+  ) {
+    throw new Error(
+      "Plugin SDK API selector evidence must bind beta and latest to one release and tooling SHA",
+    );
+  }
+  if (npmDistTag !== "beta" && npmDistTag !== "latest") {
+    throw new Error("Plugin SDK API selector evidence requires the beta or latest npm dist-tag");
+  }
+  if (!pooled) {
+    return selectors[npmDistTag];
+  }
+  const diffs = expandPluginSdkApiDiffSet({
+    schema: PLUGIN_SDK_API_DIFF_SET_SCHEMA,
+    selectors: Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [selector, receipt.diff]),
+    ),
+    diffs: evidence.diffs,
+  });
+  return { ...selectors[npmDistTag], diff: diffs[npmDistTag] };
+}
+
+export function createPluginSdkApiReleaseEvidenceSet(selectors) {
+  // Check the existing identity contract before compacting either channel.
+  selectPluginSdkApiReleaseEvidence({
+    evidence: { schema: PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA, selectors },
+    npmDistTag: "beta",
+  });
+  const pool = createPluginSdkApiDiffSet(
+    Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [selector, receipt.diff]),
+    ),
+  );
+  return {
+    schema: PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA,
+    selectors: Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [
+        selector,
+        { ...receipt, diff: pool.selectors[selector] },
+      ]),
+    ),
+    diffs: pool.diffs,
+  };
+}
+
+export class PluginSdkApiAcknowledgementError extends Error {
+  constructor(digest) {
+    super(`Plugin SDK API changes require acknowledgement digest ${digest}`);
+    this.digest = digest;
+  }
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",
   currentSelectorSha = "",
-  evidence,
+  evidence: inputEvidence,
   expectedHeadSha,
   expectedWorkflowSha,
+  npmDistTag = "",
   targetRef = "",
 }) {
+  const evidence = selectPluginSdkApiReleaseEvidence({ evidence: inputEvidence, npmDistTag });
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
   if (
     !isReleaseEvidenceObject(evidence) ||
@@ -146,9 +332,7 @@ export function validatePluginSdkApiReleaseEvidence({
   }
   const expectedAcknowledgement = digest.slice(0, 8);
   if (changed && acknowledgement !== expectedAcknowledgement) {
-    throw new Error(
-      `Plugin SDK API changes require acknowledgement digest ${expectedAcknowledgement}`,
-    );
+    throw new PluginSdkApiAcknowledgementError(expectedAcknowledgement);
   }
   return {
     acknowledgement: changed ? expectedAcknowledgement : null,
@@ -158,10 +342,6 @@ export function validatePluginSdkApiReleaseEvidence({
   };
 }
 
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
 function readArgs(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -169,7 +349,7 @@ function readArgs(argv) {
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) {
       throw new Error(
-        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --workflow-sha <sha> [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
+        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --workflow-sha <sha> [--npm-dist-tag <tag>] [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
       );
     }
     values.set(flag, value);
@@ -184,7 +364,7 @@ function readArgs(argv) {
 
 function main() {
   const args = readArgs(process.argv.slice(2));
-  const manifest = readJson(args.get("--manifest"));
+  const manifest = JSON.parse(fs.readFileSync(args.get("--manifest"), "utf8"));
   const result = validatePluginSdkApiReleaseEvidence({
     acknowledgement: args.get("--acknowledge") ?? "",
     currentSelectorRef: args.get("--current-selector-ref"),
@@ -192,6 +372,7 @@ function main() {
     evidence: manifest.pluginSdkApi,
     expectedHeadSha: args.get("--head"),
     expectedWorkflowSha: args.get("--workflow-sha"),
+    npmDistTag: args.get("--npm-dist-tag"),
     targetRef: args.get("--target-ref"),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);

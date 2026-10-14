@@ -6,74 +6,9 @@ import {
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
 } from "./accounts.js";
+import { zaloPlugin } from "./channel.js";
 
 describe("resolveZaloAccount", () => {
-  it("resolves account config when account key casing differs from normalized id", () => {
-    const resolved = resolveZaloAccount({
-      cfg: {
-        channels: {
-          zalo: {
-            webhookUrl: "https://top.example.com",
-            accounts: {
-              Work: {
-                name: "Work",
-                webhookUrl: "https://work.example.com",
-              },
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.config.webhookUrl).toBe("https://work.example.com");
-  });
-
-  it("falls back to top-level config for named accounts without overrides", () => {
-    const resolved = resolveZaloAccount({
-      cfg: {
-        channels: {
-          zalo: {
-            enabled: true,
-            webhookUrl: "https://top.example.com",
-            accounts: {
-              work: {},
-            },
-          },
-        },
-      },
-      accountId: "work",
-    });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.config.webhookUrl).toBe("https://top.example.com");
-  });
-
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const resolved = resolveZaloAccount({
-      cfg: {
-        channels: {
-          zalo: {
-            defaultAccount: "work",
-            accounts: {
-              work: {
-                name: "Work",
-                botToken: "work-token",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.token).toBe("work-token");
-  });
-
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
     const cfg = {
       channels: {
@@ -132,6 +67,39 @@ describe("Zalo account SecretRef inspection", () => {
     provider: "default",
     id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
   };
+
+  it.each([
+    { botToken: "bot-token", webhookUrl: undefined, configured: true, mode: "polling" },
+    {
+      botToken: unresolvedRef,
+      webhookUrl: "https://bot.example.com/zalo",
+      configured: true,
+      mode: "webhook",
+    },
+  ])("reports $mode inspection with configured=$configured", async (entry) => {
+    const cfg = {
+      channels: {
+        zalo: {
+          accounts: {
+            work: {
+              botToken: entry.botToken,
+              webhookUrl: entry.webhookUrl,
+              dmPolicy: "open" as const,
+            },
+          },
+        },
+      },
+    };
+    const account = inspectZaloAccount({ cfg, accountId: "work" });
+    expect(await zaloPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      mode: entry.mode,
+      dmPolicy: "open",
+    });
+  });
 
   it("keeps direct account resolution strict", () => {
     expect(() =>

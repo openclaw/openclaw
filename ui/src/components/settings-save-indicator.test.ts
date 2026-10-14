@@ -2,8 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
-import "./settings-save-indicator.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import "./settings-save-indicator.tsx";
 
 type SettingsSaveIndicatorElement = HTMLElement & {
   props?: SettingsSaveIndicatorProps;
@@ -20,6 +20,7 @@ function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSav
     applying: false,
     applyDisabled: false,
     onRetry: vi.fn(),
+    onSave: vi.fn(),
     onReload: vi.fn(),
     onApply: vi.fn(),
     ...overrides,
@@ -77,6 +78,9 @@ describe("settings save indicator", () => {
     expect(indicator.querySelector(".settings-save-indicator__claw--saved")).not.toBeNull();
     expect(indicator.querySelector(".settings-save-indicator__check")).not.toBeNull();
 
+    // Shell refreshes replace the props object without changing the save status.
+    await update(props({ status: "saved", needsApply: true }));
+    expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(1_999);
     expect(indicator.textContent).toContain("Saved");
     await vi.advanceTimersByTimeAsync(1);
@@ -106,6 +110,35 @@ describe("settings save indicator", () => {
     expect(onReload).toHaveBeenCalledOnce();
   });
 
+  it("explains validation rejection locally with a reason and retry action", async () => {
+    const onRetry = vi.fn();
+    await update(
+      props({ status: "rejected", lastError: "logging.level: Invalid option", onRetry }),
+    );
+
+    expect(indicator.querySelector('[role="status"]')?.textContent).toContain(
+      "Settings not applied",
+    );
+    expect(indicator.textContent).toContain("Current settings are unchanged.");
+    expect(indicator.querySelector("details")?.textContent).toContain(
+      "logging.level: Invalid option",
+    );
+    expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+    button("Retry")?.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("submits the paused draft through Save instead of retrying a failed patch", async () => {
+    const onSave = vi.fn();
+    const onRetry = vi.fn();
+    await update(props({ status: "paused", onSave, onRetry }));
+
+    button("Save")?.click();
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("applies pending changes and reports the in-flight state", async () => {
     const onApply = vi.fn();
     await update(props({ needsApply: true, onApply }));
@@ -121,14 +154,14 @@ describe("settings save indicator", () => {
 
   it("cleans the saved timer when disconnected", async () => {
     vi.useFakeTimers();
-    const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     await update(props({ status: "saving" }));
+    expect(vi.getTimerCount()).toBe(0);
     await update(props({ status: "saved" }));
+    expect(vi.getTimerCount()).toBe(1);
 
-    const callsBeforeDisconnect = clearTimeout.mock.calls.length;
     indicator.remove();
+    await Promise.resolve();
 
-    expect(clearTimeout).toHaveBeenCalledTimes(callsBeforeDisconnect + 1);
-    await vi.runAllTimersAsync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

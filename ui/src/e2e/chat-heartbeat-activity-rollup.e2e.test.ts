@@ -1,7 +1,16 @@
 // Control UI E2E covers pooling reply-less wake activity (heartbeats) into one rollup row.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+
+let artifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  artifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-heartbeat-activity-rollup", parent)
+    : undefined;
+});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -12,11 +21,9 @@ const suite = createControlUiE2eSuite({
 });
 
 async function captureProof(page: import("playwright").Page, name: string) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
@@ -43,6 +50,7 @@ function heartbeatWake(index: number): Array<Record<string, unknown>> {
       toolCallId: callId,
       toolName: "heartbeat_respond",
       content: "ok",
+      isError: false,
       runId,
       timestamp: timestamp + 100,
     },
@@ -56,16 +64,18 @@ suite.define(() => {
       const wakeCount = 6;
       await installMockGateway(page, {
         sessionKey,
-        historyMessages: [
-          { role: "user", content: "Watch the queue.", timestamp: 1_000, runId: "reply-run" },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Watching." }],
-            timestamp: 2_000,
-            runId: "reply-run",
-          },
-          ...Array.from({ length: wakeCount }, (_, index) => heartbeatWake(index + 1)).flat(),
-        ],
+        methodResponses: {
+          "chat.history": prepareChatHistoryFixture([
+            { role: "user", content: "Watch the queue.", timestamp: 1_000, runId: "reply-run" },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Watching." }],
+              timestamp: 2_000,
+              runId: "reply-run",
+            },
+            ...Array.from({ length: wakeCount }, (_, index) => heartbeatWake(index + 1)).flat(),
+          ]),
+        },
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -76,7 +86,7 @@ suite.define(() => {
       await rollup.waitFor();
       await expect
         .poll(async () => rollup.locator(".chat-activity-group__label").textContent())
-        .toBe(`Used Heartbeat Respond ×${wakeCount}`);
+        .toBe(`${wakeCount} other operations`);
       // One pooled row owns all wakes; no per-wake rows remain in the transcript.
       expect(await rollup.count()).toBe(1);
       expect(await page.locator(".chat-tool-row").count()).toBe(0);

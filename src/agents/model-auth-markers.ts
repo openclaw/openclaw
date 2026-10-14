@@ -7,8 +7,8 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import type { SecretRefSource } from "../config/types.secrets.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
@@ -23,8 +23,6 @@ export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 /** Marker for Google Vertex credentials resolved outside plain API-key env vars. */
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
-/** Marker for a secret-ref-managed credential that is not stored as an env var. */
-export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 /** Prefix for secret-ref header markers that name an env-backed source. */
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -65,7 +63,7 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 /** List non-secret auth markers known from core and bundled plugin manifests. */
-function listKnownNonSecretApiKeyMarkers(): string[] {
+function listKnownNonSecretApiKeyMarkers(): readonly string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
@@ -74,7 +72,7 @@ function listKnownNonSecretApiKeyMarkers(): string[] {
         : [],
     ),
   ]);
-  return [...knownNonSecretApiKeyMarkersCache];
+  return knownNonSecretApiKeyMarkersCache;
 }
 
 /** Return true for AWS SDK env marker values that represent ambient auth. */
@@ -96,16 +94,6 @@ export function resolveOAuthApiKeyMarker(providerId: string): string {
 /** Return true when a marker value points at provider OAuth auth. */
 export function isOAuthApiKeyMarker(value: string): boolean {
   return value.trim().startsWith(OAUTH_API_KEY_MARKER_PREFIX);
-}
-
-/** Resolve the API-key placeholder for a non-env secret-ref source. */
-export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
-  return NON_ENV_SECRETREF_MARKER;
-}
-
-/** Resolve the header-value placeholder for a non-env secret-ref source. */
-export function resolveNonEnvSecretRefHeaderValueMarker(_source: SecretRefSource): string {
-  return NON_ENV_SECRETREF_MARKER;
 }
 
 /** Resolve the header-value placeholder for an env-backed secret-ref source. */

@@ -1,6 +1,7 @@
 import { ChildProcess } from "node:child_process";
 import { constants } from "node:os";
-import { expect, test, vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   getActiveBackgroundExecSessionCount,
   listRunningSessions,
@@ -8,6 +9,7 @@ import {
 import { resetProcessRegistryForTests } from "../../../../src/agents/bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "../../../../src/agents/bash-tools.js";
 import { getProcessSupervisor } from "../../../../src/process/supervisor/index.js";
+import { withinTest } from "../../../helpers/promise.js";
 
 type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
@@ -23,6 +25,13 @@ type ProcessDetails = {
 };
 
 const POLL_OPTIONS = { timeout: 10_000, interval: 25 };
+let cleanupProcesses: (() => Promise<void>) | undefined;
+
+afterEach(async () => {
+  // Shared runtime hooks run before onTestFinished; join physical cleanup first.
+  await cleanupProcesses?.();
+  cleanupProcesses = undefined;
+});
 
 function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
@@ -55,6 +64,41 @@ function pidExists(pid: number): boolean {
   }
 }
 
+// Process removal does not expose an extinction join, and its owner may remove child listeners.
+async function waitForExitedPids(pids: readonly number[], signal?: AbortSignal): Promise<void> {
+  const check = async () => {
+    while (pids.some(pidExists)) {
+      await delay(25, undefined, { signal });
+    }
+  };
+  await (signal ? withinTest(check(), signal) : check()).catch((cause: unknown) => {
+    throw new Error("tracked process PIDs did not exit before test cancellation", { cause });
+  });
+}
+
+function injectKillPermissionError(child: ChildProcess): void {
+  if (process.versions.bun) {
+    // Bun keeps its native handle private; inject the public, nonterminal error event.
+    expect(
+      child.emit(
+        "error",
+        Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }),
+      ),
+    ).toBe(true);
+    return;
+  }
+  const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- Native kill errno exercises Node's real error path without ending the child.
+    ._handle;
+  const originalKill = handle.kill;
+  try {
+    handle.kill = () => -constants.errno.EPERM;
+    expect(child.kill("SIGTERM")).toBe(false);
+  } finally {
+    handle.kill = originalKill;
+  }
+}
+
 async function pollTerminal(processTool: ProcessTool, sessionId: string) {
   let terminal: Awaited<ReturnType<ProcessTool["execute"]>> | undefined;
   await expect
@@ -81,7 +125,10 @@ async function clearFinished(processTool: ProcessTool, sessionId: string): Promi
   expect(cleared.details).toMatchObject({ status: "completed" });
 }
 
-test("OpenClaw executes and controls the complete real process lifecycle", async () => {
+test("OpenClaw executes and controls the complete real process lifecycle", async ({
+  signal,
+  onTestFinished,
+}) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
   const execTool = createExecTool({
@@ -103,6 +150,27 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
   });
   const processTool = createProcessTool({ scopeKey });
   const cleanupPids = new Set<number>();
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
+        await processTool.execute(`cleanup-${session.id}`, {
+          action: "remove",
+          sessionId: session.id,
+        });
+      }
+      for (const pid of cleanupPids) {
+        if (pidExists(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      }
+      // Body cancellation must not cancel the physical-extinction join or let
+      // registry reset forget children whose SIGKILL has not settled yet.
+      await waitForExitedPids([...cleanupPids]);
+      resetProcessRegistryForTests();
+    })());
+  cleanupProcesses = cleanup;
+  onTestFinished(cleanup);
 
   try {
     const missingRunId = `missing-command-${process.pid}`;
@@ -112,14 +180,8 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
         argv: ["/definitely/not/a/real-openclaw-command"],
         env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
         runId: missingRunId,
-        sessionId: missingRunId,
-        backendId: "qa-process-lifecycle",
       }),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(getProcessSupervisor().getRecord(missingRunId)).toMatchObject({
-      state: "exited",
-      terminationReason: "spawn-error",
-    });
 
     const shellMarker = `shell-route-${process.pid}`;
     const foregroundCommand =
@@ -211,6 +273,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 
     const killMarker = `kill-target-${process.pid}`;
     const spawnedChildren = new Map<number, ChildProcess>();
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with each child's receiver via originalEmit.call(this, ...).
     const originalEmit = ChildProcess.prototype.emit;
     const captureSpawn = vi.spyOn(ChildProcess.prototype, "emit").mockImplementation(function (
       this: ChildProcess,
@@ -240,36 +303,25 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     if (!child) {
       throw new Error(`missing spawned child ${killedSession.pid}`);
     }
-    const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
-      ._handle;
-    const originalKill = handle.kill;
+    expect(child.listenerCount("error")).toBeGreaterThan(0);
     const observedErrors: Array<NodeJS.ErrnoException> = [];
     child.on("error", (error) => {
       observedErrors.push(error);
     });
     const errorListenerCount = child.listenerCount("error");
 
-    try {
-      handle.kill = () => -constants.errno.EPERM;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        expect(child.kill("SIGTERM")).toBe(false);
-        expect(child.listenerCount("error")).toBe(errorListenerCount);
-        expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
-        await Promise.resolve();
-        expect(getProcessSupervisor().getRecord(killedSession.sessionId)).toMatchObject({
-          state: "running",
-          pid: killedSession.pid,
-        });
-        expect(listRunningSessions()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id: killedSession.sessionId, exited: false }),
-          ]),
-        );
-        expect(getActiveBackgroundExecSessionCount()).toBe(1);
-        expect(pidExists(killedSession.pid)).toBe(true);
-      }
-    } finally {
-      handle.kill = originalKill;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      injectKillPermissionError(child);
+      expect(child.listenerCount("error")).toBe(errorListenerCount);
+      expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
+      await Promise.resolve();
+      expect(listRunningSessions()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: killedSession.sessionId, exited: false }),
+        ]),
+      );
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(pidExists(killedSession.pid)).toBe(true);
     }
 
     const killed = await processTool.execute("kill-session", {
@@ -279,11 +331,12 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     expect(killed.details).toMatchObject({ status: "completed" });
     const killedTerminal = await pollTerminal(processTool, killedSession.sessionId);
     expect(killedTerminal.details).toMatchObject({
-      status: "failed",
+      status: "completed",
       exitReason: "manual-cancel",
     });
     await clearFinished(processTool, killedSession.sessionId);
-    await expect.poll(() => pidExists(killedSession.pid), POLL_OPTIONS).toBe(false);
+    await waitForExitedPids([killedSession.pid], signal);
+    expect(pidExists(killedSession.pid)).toBe(false);
     expect(child.listenerCount("error")).toBe(0);
     expect(child.listenerCount("exit")).toBe(0);
     expect(child.listenerCount("close")).toBe(0);
@@ -294,18 +347,6 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toEqual([]);
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   } finally {
-    for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
-      await processTool.execute(`cleanup-${session.id}`, {
-        action: "remove",
-        sessionId: session.id,
-      });
-    }
-    for (const pid of cleanupPids) {
-      if (pidExists(pid)) {
-        process.kill(pid, "SIGKILL");
-      }
-    }
-    await expect.poll(() => [...cleanupPids].filter(pidExists).length, POLL_OPTIONS).toBe(0);
-    resetProcessRegistryForTests();
+    await cleanup();
   }
 }, 30_000);

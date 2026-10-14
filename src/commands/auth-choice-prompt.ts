@@ -1,9 +1,7 @@
 // Interactive grouped auth-choice prompt used by onboarding and agent setup.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import {
   buildAuthChoiceGroups,
@@ -20,30 +18,18 @@ const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
 type KeepCurrentAuthChoice = typeof KEEP_CURRENT_AUTH_CHOICE;
 type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
 type AuthChoiceOrBack = PromptAuthChoiceResult | typeof BACK_VALUE;
-type PromptAuthChoiceGroupedParams = {
+type PromptAuthChoiceGroupedParams = Parameters<typeof buildAuthChoiceGroups>[0] & {
   prompter: WizardPrompter;
-  store: AuthProfileStore;
-  includeSkip: boolean;
-  assistantVisibleOnly?: boolean;
   allowedChoices?: ReadonlySet<string>;
   additionalGroups?: readonly AuthChoiceGroup[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   allowKeepCurrentProvider?: boolean;
-  detectedProviderIds?: ReadonlySet<string>;
 };
 
 export function isKeepCurrentAuthChoice(value: unknown): value is KeepCurrentAuthChoice {
   return value === KEEP_CURRENT_AUTH_CHOICE;
 }
 
-function resolveConfiguredModelRef(config?: OpenClawConfig): string | undefined {
-  return resolveAgentModelPrimaryValue(config?.agents?.defaults?.model);
-}
-
-function resolveConfiguredProvider(config?: OpenClawConfig): string | undefined {
-  const modelRef = resolveConfiguredModelRef(config);
+function resolveConfiguredProvider(modelRef: string | undefined): string | undefined {
   const slashIndex = modelRef?.indexOf("/") ?? -1;
   if (!modelRef || slashIndex <= 0) {
     return undefined;
@@ -100,7 +86,6 @@ export async function promptAuthChoiceGrouped(
     (group) => group.options.length > 0,
   );
   const availableGroups = [...availableBuiltInGroups, ...additionalGroups];
-  const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
   const isDetectedGroup = (group: AuthChoiceGroup) =>
     [...(params.detectedProviderIds ?? [])].some((provider) =>
       groupMatchesProvider(group, provider),
@@ -120,9 +105,9 @@ export async function promptAuthChoiceGrouped(
   const moreGroups = availableBuiltInGroups
     .filter((group) => !isDetectedGroup(group) && !isFeaturedAuthChoiceGroup(group))
     .toSorted(compareAuthChoiceGroups);
-  const configuredModelRef = resolveConfiguredModelRef(params.config);
+  const configuredModelRef = resolveAgentModelPrimaryValue(params.config?.agents?.defaults?.model);
   const configuredProvider = params.allowKeepCurrentProvider
-    ? resolveConfiguredProvider(params.config)
+    ? resolveConfiguredProvider(configuredModelRef)
     : undefined;
 
   const pickMethod = async (group: AuthChoiceGroup): Promise<AuthChoiceOrBack> => {
@@ -136,118 +121,64 @@ export async function promptAuthChoiceGrouped(
     if (group.options.length === 1 && !keepCurrentOption) {
       return expectDefined(group.options[0], "options entry at 0").value;
     }
-    return (await params.prompter.select({
+    return await params.prompter.select({
       message: group.methodMessage ?? `${group.label} auth method`,
       options: [
         ...(keepCurrentOption ? [keepCurrentOption] : []),
         ...group.options,
         { value: BACK_VALUE, label: "Back" },
       ],
-    })) as AuthChoiceOrBack;
+    });
   };
 
-  const pickFromMore = async (): Promise<AuthChoiceOrBack> => {
-    while (true) {
-      const options: WizardSelectOption[] = moreGroups.map((group) =>
-        groupToOption(group, configuredProvider, params.detectedProviderIds),
-      );
+  // Without featured providers, the searchable catalog is the root page.
+  const hasFeaturedGroups = featuredGroups.length > 0;
+  let showingMore = false;
+  while (true) {
+    const searchable = showingMore || !hasFeaturedGroups;
+    const pageGroups = searchable ? moreGroups : featuredGroups;
+    const options: WizardSelectOption[] = pageGroups.map((group) =>
+      groupToOption(group, configuredProvider, params.detectedProviderIds),
+    );
+    if (showingMore) {
       options.push({ value: BACK_VALUE, label: "Back" });
-      const selection = await params.prompter.select({
-        message: "Model/auth provider",
-        options,
-        searchable: true,
-      });
-      if (selection === BACK_VALUE) {
-        return BACK_VALUE;
+    } else {
+      if (hasFeaturedGroups && moreGroups.length > 0) {
+        options.push({ value: MORE_VALUE, label: "More…" });
       }
-      const group = groupById.get(selection);
-      if (!group) {
-        continue;
-      }
-      const method = await pickMethod(group);
-      if (method === BACK_VALUE) {
-        continue;
-      }
-      return method;
-    }
-  };
-
-  // No featured groups available → fall back to the original flat list so we
-  // never strand the user behind an empty "More…" indirection.
-  const runFlat = async (): Promise<PromptAuthChoiceResult> => {
-    while (true) {
-      const flatOptions: WizardSelectOption[] = moreGroups.map((group) =>
-        groupToOption(group, configuredProvider, params.detectedProviderIds),
-      );
       if (skipOption) {
-        flatOptions.push({ value: skipOption.value, label: skipOption.label });
+        options.push({ value: skipOption.value, label: skipOption.label });
       }
-      const selection = await params.prompter.select({
-        message: "Model/auth provider",
-        options: flatOptions,
-        searchable: true,
-      });
-      if (selection === "skip") {
-        return "skip";
-      }
-      const group = groupById.get(selection);
-      if (!group || group.options.length === 0) {
+    }
+    const selection = await params.prompter.select({
+      message: "Model/auth provider",
+      options,
+      ...(searchable ? { searchable: true } : {}),
+    });
+    if (showingMore && selection === BACK_VALUE) {
+      showingMore = false;
+      continue;
+    }
+    if (!showingMore && selection === "skip") {
+      return "skip";
+    }
+    if (!showingMore && hasFeaturedGroups && selection === MORE_VALUE) {
+      showingMore = true;
+      continue;
+    }
+    const group = availableGroups.findLast((candidate) => candidate.value === selection);
+    if (!group || group.options.length === 0) {
+      if (!showingMore) {
         await params.prompter.note(
           "No auth methods available for that provider.",
           "Model/auth choice",
         );
-        continue;
       }
-      const method = await pickMethod(group);
-      if (method === BACK_VALUE) {
-        continue;
-      }
-      return method;
-    }
-  };
-
-  if (featuredGroups.length === 0) {
-    return runFlat();
-  }
-
-  while (true) {
-    const topTier: WizardSelectOption[] = featuredGroups.map((group) =>
-      groupToOption(group, configuredProvider, params.detectedProviderIds),
-    );
-    if (moreGroups.length > 0) {
-      topTier.push({ value: MORE_VALUE, label: "More…" });
-    }
-    if (skipOption) {
-      topTier.push({ value: skipOption.value, label: skipOption.label });
-    }
-
-    const topSelection = await params.prompter.select({
-      message: "Model/auth provider",
-      options: topTier,
-    });
-
-    if (topSelection === "skip") {
-      return "skip";
-    }
-    if (topSelection === MORE_VALUE) {
-      const more = await pickFromMore();
-      if (more === BACK_VALUE) {
-        continue;
-      }
-      return more;
-    }
-    const group = groupById.get(topSelection);
-    if (!group || group.options.length === 0) {
-      await params.prompter.note(
-        "No auth methods available for that provider.",
-        "Model/auth choice",
-      );
       continue;
     }
     const method = await pickMethod(group);
-    if (method === BACK_VALUE) {
-      continue;
+    if (method !== BACK_VALUE) {
+      return method;
     }
-    return method;
   }
 }

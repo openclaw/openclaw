@@ -413,7 +413,15 @@ export function describeGithubCopilotProviderAuthContract(
       });
 
       try {
-        const result = await provider.auth[0]?.run(buildAuthContext() as never);
+        const result = await provider.auth[0]?.run({
+          ...buildAuthContext(),
+          existingProfiles: [
+            {
+              profileId: "github-copilot:github",
+              credential: state.authStore.profiles["github-copilot:github"],
+            },
+          ],
+        } as never);
         expect(result).toEqual({
           profiles: [
             {
@@ -507,6 +515,10 @@ export function describeGithubCopilotProviderAuthContract(
               provider: "github-copilot",
               token: "github-device-token",
             },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
+            },
           },
         ],
         defaultModel,
@@ -558,6 +570,10 @@ export function describeGithubCopilotProviderAuthContract(
               type: "token",
               provider: "github-copilot",
               token: "rpc-client-token",
+            },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
             },
           },
         ]);

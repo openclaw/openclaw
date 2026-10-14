@@ -38,6 +38,14 @@ enum OpenClawChatTypography {
         body(size: self.bodySize, weight: .regular, relativeTo: .body)
     }
 
+    static var formControl: Font {
+        #if os(macOS)
+        OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body)
+        #else
+        OpenClawChatTypography.body
+        #endif
+    }
+
     #if os(iOS)
     static var bodyUIFont: UIFont {
         let base = UIFont(name: self.bodyPostScriptName, size: self.bodySize) ??
@@ -108,6 +116,12 @@ enum OpenClawChatTypography {
     private static let monoSemiBoldPostScriptName = "JetBrainsMono-SemiBold"
 
     #if os(macOS)
+    /// Navigation badges retain the system constructor and contextual design.
+    /// Using body here would alter font resolution and text-style scaling.
+    static func navigationAvatar(size: CGFloat) -> Font {
+        Font.system(size: size, weight: .medium)
+    }
+
     private static func macSystemFontName(size: CGFloat) -> String {
         NSFont.systemFont(ofSize: size).fontName
     }
@@ -116,4 +130,16 @@ enum OpenClawChatTypography {
         NSFont.monospacedSystemFont(ofSize: size, weight: .regular).fontName
     }
     #endif
+}
+
+func chatActionLabel(_ title: Text, systemImage: String) -> some View {
+    Label {
+        title.font(OpenClawChatTypography.body)
+    } icon: {
+        Image(systemName: systemImage)
+    }
+}
+
+func chatActionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    chatActionLabel(Text(title), systemImage: systemImage)
 }

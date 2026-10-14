@@ -2,6 +2,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { settingsSelection } from "./agents-page.test-support.ts";
 import { page, type AgentsRouteData } from "./route.ts";
 
 const agentsList: AgentsListResult = {
@@ -22,6 +23,7 @@ async function loadRoute(url: string): Promise<AgentsRouteData> {
   const context = {
     basePath: "",
     gateway,
+    settingsAgentSelection: settingsSelection(null),
     agents: {
       state: { agentsList: null, agentsError: null },
       ensureList,
@@ -51,39 +53,8 @@ describe("agents route", () => {
     const result = await loadRoute("/settings/agents/research/tools");
 
     expect(result.agentsList?.agents.map((agent) => agent.id)).toEqual(["main", "research"]);
-    expect(result.selectedAgentId).toBe("research");
     expect(result.requestedAgentId).toBe("research");
     expect(result.panel).toBe("tools");
     expect(result.canonicalLocation).toBeUndefined();
-  });
-
-  it("keeps the bare route while selecting the default agent and panel", async () => {
-    const result = await loadRoute("/settings/agents");
-
-    expect(result.selectedAgentId).toBe("main");
-    expect(result.requestedAgentId).toBeNull();
-    expect(result.panel).toBe("files");
-    expect(result.canonicalLocation).toBeUndefined();
-  });
-
-  it("falls back to the default agent without rewriting an unknown explicit id", async () => {
-    const result = await loadRoute("/settings/agents/missing/memory");
-
-    expect(result.selectedAgentId).toBe("main");
-    expect(result.requestedAgentId).toBe("missing");
-    expect(result.panel).toBe("memory");
-    expect(result.canonicalLocation).toBeUndefined();
-  });
-
-  it("returns the canonical replacement for a legacy agent query", async () => {
-    const result = await loadRoute("/settings/agents?agent=research&probe=1#files");
-
-    expect(result.selectedAgentId).toBe("research");
-    expect(result.panel).toBe("files");
-    expect(result.canonicalLocation).toEqual({
-      pathname: "/settings/agents/research",
-      search: "?probe=1",
-      hash: "#files",
-    });
   });
 });

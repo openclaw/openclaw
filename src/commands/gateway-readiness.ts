@@ -1,66 +1,16 @@
-/** Ensures the managed gateway is available before commands that need it run. */
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { sleep } from "../utils/sleep.js";
 import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
 
-const daemonStatusModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/status.gather.js"),
-);
-const daemonInstallModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/install.runtime.js"),
-);
-const daemonLifecycleModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/lifecycle.js"),
-);
-
-/** Result returned after checking, optionally installing, and optionally starting the gateway. */
-type GatewayReadinessResult =
-  | {
-      ready: true;
-      status: DaemonStatus;
-      recovered: boolean;
-    }
-  | {
-      ready: false;
-      status: DaemonStatus;
-      reason: string;
-      recoverable: boolean;
-    };
-
-type GatewayReadinessDeps = {
-  gatherStatus?: () => Promise<DaemonStatus>;
-  confirm?: (message: string, defaultYes?: boolean) => Promise<boolean>;
-  installGateway?: () => Promise<void>;
-  startGateway?: () => Promise<void>;
-};
-
-/** Inputs controlling readiness checks, recovery prompts, and injectable test seams. */
 type GatewayReadinessOptions = {
   runtime: RuntimeEnv;
-  operation: string;
   yes?: boolean;
   allowInstall?: boolean;
-  requireRpc?: boolean;
   probeUrl?: string;
-  readyWhenReachable?: boolean;
   interactive?: boolean;
-  deps?: GatewayReadinessDeps;
 };
-
-async function defaultGatherStatus(params: {
-  requireRpc: boolean;
-  probeUrl?: string;
-}): Promise<DaemonStatus> {
-  const { gatherDaemonStatus } = await daemonStatusModuleLoader.load();
-  return gatherDaemonStatus({
-    rpc: params.probeUrl ? { url: params.probeUrl } : {},
-    probe: true,
-    requireRpc: params.requireRpc,
-    deep: false,
-  });
-}
 
 function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
   const probeUrl = status.rpc?.url ?? status.gateway?.probeUrl;
@@ -79,39 +29,24 @@ function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
   return status.port;
 }
 
-function gatewayIsRunning(status: DaemonStatus): boolean {
-  return status.rpc?.ok === true;
-}
-
-function gatewayProbeSawGateway(status: DaemonStatus): boolean {
-  return Boolean(status.rpc && gatewayProbeResultSawGateway(status.rpc));
-}
-
-function gatewayLooksReachable(status: DaemonStatus): boolean {
-  if (gatewayIsRunning(status)) {
-    return true;
-  }
-  const port = activeProbePortStatus(status);
-  if (port?.status !== "busy") {
-    return false;
-  }
+function gatewayIsReady(status: DaemonStatus): boolean {
   // A busy port alone is not enough: pair it with probe evidence so another
   // local service on the same port cannot satisfy gateway readiness.
-  return gatewayProbeSawGateway(status);
-}
-
-function gatewayIsReady(status: DaemonStatus, options: { readyWhenReachable?: boolean }): boolean {
   return (
-    gatewayIsRunning(status) ||
-    (options.readyWhenReachable === true && gatewayLooksReachable(status))
+    status.rpc?.ok === true ||
+    (activeProbePortStatus(status)?.status === "busy" &&
+      Boolean(status.rpc && gatewayProbeResultSawGateway(status.rpc)))
   );
 }
 
 function gatewayLooksStopped(status: DaemonStatus): boolean {
-  if (status.rpc?.ok === true) {
+  if (status.rpc && gatewayProbeResultSawGateway(status.rpc)) {
     return false;
   }
   const port = activeProbePortStatus(status);
+  if (port?.status === "busy") {
+    return false;
+  }
   if (port?.status === "free") {
     return true;
   }
@@ -136,18 +71,18 @@ function readinessFailureReason(status: DaemonStatus): string {
     return "Gateway is not running.";
   }
   return status.rpc?.error
-    ? `Gateway probe failed: ${status.rpc.error}`
+    ? `Gateway check failed: ${status.rpc.error}`
     : "Gateway is not healthy.";
 }
 
 function printGatewayNotReadyHints(
   runtime: RuntimeEnv,
   reason: string,
-  nativeServiceCanRecover = true,
+  canStartService = true,
 ): void {
   runtime.log(reason);
   runtime.log("Run `openclaw gateway status --deep` for details.");
-  if (!nativeServiceCanRecover) {
+  if (!canStartService) {
     runtime.log(
       "Use the owning environment or supervisor to start or repair the selected Gateway.",
     );
@@ -157,123 +92,67 @@ function printGatewayNotReadyHints(
   runtime.log("Run `openclaw gateway run` for a foreground gateway.");
 }
 
-async function confirmRecovery(params: {
-  message: string;
-  yes?: boolean;
-  interactive?: boolean;
-  confirm: (message: string, defaultYes?: boolean) => Promise<boolean>;
-}): Promise<boolean> {
-  if (params.yes) {
-    return true;
-  }
-  if (!(params.interactive ?? process.stdin.isTTY)) {
-    return false;
-  }
-  return params.confirm(params.message, true);
-}
-
-async function waitForGatewayReady(params: {
-  gatherStatus: () => Promise<DaemonStatus>;
-  readyWhenReachable?: boolean;
-  attempts?: number;
-  delayMs?: number;
-}): Promise<DaemonStatus> {
-  const attempts = params.attempts ?? 20;
-  const delayMs = params.delayMs ?? 500;
-  let latest = await params.gatherStatus();
-  for (
-    let attempt = 1;
-    attempt < attempts &&
-    !gatewayIsReady(latest, { readyWhenReachable: params.readyWhenReachable });
-    attempt += 1
-  ) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
+export async function ensureDashboardGatewayReady(options: GatewayReadinessOptions) {
+  const gatherStatus = async () => {
+    const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+    return gatherDaemonStatus({
+      rpc: options.probeUrl ? { url: options.probeUrl } : {},
+      probe: true,
+      requireRpc: false,
+      deep: false,
     });
-    latest = await params.gatherStatus();
-  }
-  return latest;
-}
-
-/** Checks readiness and, when approved, recovers by installing or starting the gateway. */
-export async function ensureGatewayReadyForOperation(
-  options: GatewayReadinessOptions,
-): Promise<GatewayReadinessResult> {
-  const requireRpc = options.requireRpc ?? false;
-  const gatherStatus =
-    options.deps?.gatherStatus ??
-    (() => defaultGatherStatus({ requireRpc, probeUrl: options.probeUrl }));
-  const confirm = options.deps?.confirm ?? promptYesNo;
-  const installGateway =
-    options.deps?.installGateway ??
-    (async () => {
-      const { runDaemonInstall } = await daemonInstallModuleLoader.load();
-      await runDaemonInstall({ json: false });
-    });
-  const startGateway =
-    options.deps?.startGateway ??
-    (async () => {
-      const { runDaemonStart } = await daemonLifecycleModuleLoader.load();
-      await runDaemonStart({ json: false });
-    });
+  };
 
   const initialStatus = await gatherStatus();
-  if (gatewayIsReady(initialStatus, { readyWhenReachable: options.readyWhenReachable })) {
-    return { ready: true, status: initialStatus, recovered: false };
+  if (gatewayIsReady(initialStatus)) {
+    return { ready: true as const, status: initialStatus, recovered: false };
   }
 
   const reason = readinessFailureReason(initialStatus);
   const nativeServiceCanRecover = nativeServiceTargetsGateway(initialStatus);
-  if (!gatewayLooksStopped(initialStatus) || !nativeServiceCanRecover) {
-    printGatewayNotReadyHints(options.runtime, reason, nativeServiceCanRecover);
-    return { ready: false, status: initialStatus, reason, recoverable: false };
-  }
-
-  const serviceInstalled = gatewayServiceIsInstalled(initialStatus);
-  const shouldInstall = !serviceInstalled;
-  if (shouldInstall && options.allowInstall === false) {
-    printGatewayNotReadyHints(options.runtime, reason);
-    return { ready: false, status: initialStatus, reason, recoverable: false };
+  const canStartService = gatewayLooksStopped(initialStatus) && nativeServiceCanRecover;
+  const shouldInstall = canStartService && !gatewayServiceIsInstalled(initialStatus);
+  if (!canStartService || (shouldInstall && options.allowInstall === false)) {
+    printGatewayNotReadyHints(options.runtime, reason, canStartService);
+    return { ready: false as const, status: initialStatus, reason, recoverable: false };
   }
 
   const prompt = shouldInstall
-    ? `Gateway is not installed. Install and start it now so OpenClaw can ${options.operation}?`
-    : `Gateway is not running. Start it now so OpenClaw can ${options.operation}?`;
-  const approved = await confirmRecovery({
-    message: prompt,
-    yes: options.yes,
-    interactive: options.interactive,
-    confirm,
-  });
+    ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
+    : "The background Gateway service is not running. Start it to open the dashboard?";
+  const approved =
+    options.yes ||
+    ((options.interactive ?? process.stdin.isTTY) && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(options.runtime, reason);
-    return { ready: false, status: initialStatus, reason, recoverable: true };
+    return { ready: false as const, status: initialStatus, reason, recoverable: true };
   }
 
   if (shouldInstall) {
-    await installGateway();
+    const { runDaemonInstall } = await import("../cli/daemon-cli/install.runtime.js");
+    await runDaemonInstall({ json: false });
   } else {
-    await startGateway();
+    const { runDaemonStart } = await import("../cli/daemon-cli/lifecycle.js");
+    await runDaemonStart({ json: false });
   }
 
-  const recoveredStatus = await waitForGatewayReady({
-    gatherStatus,
-    readyWhenReachable: options.readyWhenReachable,
-  });
-  if (gatewayIsReady(recoveredStatus, { readyWhenReachable: options.readyWhenReachable })) {
-    return { ready: true, status: recoveredStatus, recovered: true };
+  let recoveredStatus = await gatherStatus();
+  for (let attempt = 1; attempt < 20 && !gatewayIsReady(recoveredStatus); attempt += 1) {
+    await sleep(500);
+    recoveredStatus = await gatherStatus();
+  }
+  if (gatewayIsReady(recoveredStatus)) {
+    return { ready: true as const, status: recoveredStatus, recovered: true };
   }
 
   const recoveredReason = readinessFailureReason(recoveredStatus);
-  printGatewayNotReadyHints(
-    options.runtime,
-    recoveredReason,
-    nativeServiceTargetsGateway(recoveredStatus),
-  );
+  const recoverable =
+    gatewayLooksStopped(recoveredStatus) && nativeServiceTargetsGateway(recoveredStatus);
+  printGatewayNotReadyHints(options.runtime, recoveredReason, recoverable);
   return {
-    ready: false,
+    ready: false as const,
     status: recoveredStatus,
     reason: recoveredReason,
-    recoverable: true,
+    recoverable,
   };
 }

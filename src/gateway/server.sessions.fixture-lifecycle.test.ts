@@ -1,39 +1,76 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { vi, type TestContext } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
+import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
 // Run the actual fixture hooks with controlled setup/teardown overlap instead
 // of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
+type FixtureHookContext = Pick<TestContext, "signal">;
+type FixtureHook = (context: FixtureHookContext) => unknown;
 const hooks = vi.hoisted(() => ({
-  setup: [] as Array<() => unknown>,
-  cleanup: [] as Array<() => unknown>,
+  setup: [] as FixtureHook[],
+  cleanup: [] as FixtureHook[],
 }));
+const caseHooks = vi.hoisted(() => ({
+  setup: [] as FixtureHook[],
+  cleanup: [] as FixtureHook[],
+}));
+const startupPreparation = vi.hoisted(() => ({
+  held: false,
+  entered: Promise.withResolvers<void>(),
+  release: Promise.withResolvers<void>(),
+}));
+// mock-isolation: Fake server acquisition owns this fixture; gate preparation without loading Gateway state.
+vi.mock("./server-start.js", async () => {
+  startupPreparation.entered.resolve();
+  if (startupPreparation.held) {
+    await startupPreparation.release.promise;
+  }
+  return {};
+});
 vi.mock("vitest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("vitest")>()),
-  beforeAll: (fn: () => unknown) => hooks.setup.push(fn),
-  afterAll: (fn: () => unknown) => hooks.cleanup.push(fn),
-  beforeEach: () => {},
-  afterEach: () => {},
+  beforeAll: (fn: FixtureHook) => hooks.setup.push(fn),
+  afterAll: (fn: FixtureHook) => hooks.cleanup.push(fn),
+  beforeEach: (fn: FixtureHook) => caseHooks.setup.push(fn),
+  afterEach: (fn: FixtureHook) => caseHooks.cleanup.push(fn),
   test: Object.assign(() => {}, { each: () => () => {} }),
+}));
+vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
+  resetPreparedModelCatalogStateForTest: async () => {},
 }));
 
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
 // The fixture owns a disposable server, not Gateway business logic. Keep its
 // real port, socket, harness and environment lifetime; fork tests cover RPC boot.
+vi.mock("./server-runtime-state.js", () => ({
+  createGatewayHttpTransport: async (params: { testListener?: import("node:http").Server }) => {
+    if (!params.testListener) {
+      throw new Error("Gateway fixture did not adopt its reserved listener");
+    }
+    return { httpServer: params.testListener };
+  },
+}));
 vi.mock("./server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server.js")>()),
-  resetPreparedModelCatalogForTest: async () => {},
   startGatewayServer: async (port: number) => {
-    const { createServer } = await import("node:net");
-    const listener = createServer();
+    const { createGatewayHttpTransport } = await import("./server-runtime-state.js");
+    // The harness dispatcher injects its bound listener into this transport call.
+    const { httpServer: listener } = await createGatewayHttpTransport({
+      port,
+    } as Parameters<typeof createGatewayHttpTransport>[0]);
     listeners.add(listener);
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(port, "127.0.0.1", resolve);
-    });
     return {
       startupSettled: Promise.resolve(),
       getTailscaleIngressEndpoint: () => undefined,
@@ -48,9 +85,10 @@ vi.mock("./server.js", async (importOriginal) => ({
   },
 }));
 
-const { afterEach, beforeEach, expect, test } =
+const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
-await import("./server.sessions.create.test.js");
+const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
+await import("./server.sessions.create.worktrees.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
@@ -58,6 +96,8 @@ const gatewayHelpers = await import("./test-helpers.server.js");
 const startHarness = serverHarness.startGatewayServerHarness;
 let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
+  caseHooks.setup.length = 0;
+  caseHooks.cleanup.length = 0;
   env = captureEnv([
     "HOME",
     "USERPROFILE",
@@ -90,26 +130,58 @@ afterEach(async () => {
   env.restore();
 });
 
+const uninterruptedContext: FixtureHookContext = { signal: new AbortController().signal };
+
 async function setup(fixture: typeof hooks) {
   for (const hook of fixture.setup) {
-    await hook();
+    await hook(uninterruptedContext);
   }
 }
 
-async function cleanup(fixture: typeof hooks) {
+async function cleanup(fixture: typeof hooks, context = uninterruptedContext) {
   for (const hook of fixture.cleanup.toReversed()) {
-    await hook();
+    await hook(context);
   }
 }
 
 // Red runs still release resources if the broken consumer aborts teardown.
-async function emergencyCleanup(fixture: typeof hooks) {
+async function emergencyCleanup(fixture: typeof hooks, context = uninterruptedContext) {
   for (const hook of fixture.cleanup.toReversed()) {
     await Promise.resolve()
-      .then(hook)
+      .then(() => hook(context))
       .catch(() => {});
   }
 }
+
+test("suite setup joins Gateway implementation preparation before releasing its home", async () => {
+  startupPreparation.held = true;
+  gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  let setupFinished = false;
+  const pendingSetup = setup(fixture).then(() => {
+    setupFinished = true;
+  });
+  let pendingCleanup: Promise<void> | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      startupPreparation.entered.promise,
+      pendingSetup,
+      "fixture setup completed before Gateway implementation preparation",
+    );
+    expect(setupFinished).toBe(false);
+    const home = process.env.HOME!;
+    expect(fsSync.existsSync(home)).toBe(true);
+    pendingCleanup = cleanup(fixture);
+    startupPreparation.release.resolve();
+    await Promise.all([pendingSetup, pendingCleanup]);
+    expect(fsSync.existsSync(home)).toBe(false);
+  } finally {
+    startupPreparation.held = false;
+    startupPreparation.release.resolve();
+    await Promise.allSettled([pendingSetup, pendingCleanup]);
+    await emergencyCleanup(fixture);
+  }
+});
 
 test("shared setup failure skips consumer acquisition without adding an invalid-path error", async () => {
   const failure = new Error("injected shared setup failure");
@@ -336,10 +408,20 @@ test("a server cleanup error does not skip session directory or environment clea
   const homeBefore = process.env.HOME;
   const failure = new Error("injected server cleanup failure");
   let restoreClose: (() => void) | undefined;
+  let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+  let memoryOwner: ReturnType<typeof memorySessionActorOwners.get> | undefined;
   try {
     await setup(fixture);
     const home = process.env.HOME!;
     const { dir } = await fixtureApi.createSessionStoreDir();
+    database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(dir, "openclaw-agent.sqlite"),
+    });
+    memoryOwner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
     const server = fixtureApi.getHarness();
     const closeServer = server.close;
     const close = vi.spyOn(server, "close").mockImplementation(async () => {
@@ -348,11 +430,20 @@ test("a server cleanup error does not skip session directory or environment clea
     });
     restoreClose = () => close.mockRestore();
     await expect(cleanup(fixture)).rejects.toBe(failure);
+    expect(database.db.isOpen).toBe(false);
+    expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
+    expect(memoryOwner.assertCurrent).toThrow("closed");
     expect(fsSync.existsSync(dir)).toBe(false);
     expect(fsSync.existsSync(home)).toBe(false);
     expect(process.env.HOME).toBe(homeBefore);
   } finally {
     restoreClose?.();
+    if (database) {
+      closeOpenClawAgentDatabaseByPath(database.path);
+    }
+    if (memoryOwner) {
+      memorySessionActorOwners.closeDatabase(memoryOwner);
+    }
     await emergencyCleanup(fixture);
   }
 });
@@ -372,3 +463,279 @@ test("skipped environment setup does not release an enclosing suite's home", asy
     await emergencyCleanup(parent);
   }
 });
+
+function retainedGatewayFixtureSource(repoRoot: string, root: string): string {
+  const source = (file: string) => JSON.stringify(path.join(repoRoot, file));
+  return `
+import fs from "node:fs";
+import path from "node:path";
+import { vi } from "vitest";
+const hooks = vi.hoisted(() => ({ setup: [], cleanup: [], reset: [], afterEach: [] }));
+vi.mock("vitest", async (importOriginal) => ({
+  ...(await importOriginal()),
+  beforeAll: (fn) => hooks.setup.push(fn),
+  afterAll: (fn) => hooks.cleanup.push(fn),
+  beforeEach: (fn) => hooks.reset.push(fn),
+  afterEach: (fn) => hooks.afterEach.push(fn),
+}));
+const { test } = await vi.importActual("vitest");
+fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
+const sessions = await import(${source("src/gateway/test/server-sessions.test-helpers.ts")});
+const gatewayHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
+const kernelModule = await import(${source("src/gateway/server-kernel.ts")});
+const { createDeferredCore } = await import(${source("src/shared/deferred.ts")});
+const takeHooks = () => Object.fromEntries(
+  Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
+);
+async function runHooks(callbacks) {
+  const context = { signal: new AbortController().signal };
+  for (const callback of callbacks) await callback(context);
+}
+const fault = new Error("synthetic received-connection cleanup failure");
+function containsFault(error) {
+  return error === fault || (error instanceof Error && (
+    containsFault(error.cause) ||
+    (error instanceof AggregateError && error.errors.some(containsFault))
+  ));
+}
+async function observeFailure(run) {
+  try {
+    await run();
+    return { rejected: false, faultPreserved: false };
+  } catch (error) {
+    return { rejected: true, faultPreserved: containsFault(error) };
+  }
+}
+
+test("observes retained Gateway owners through fixture teardown", async () => {
+  let kernel;
+  const createKernel = kernelModule.createGatewayKernel;
+  const factory = vi.spyOn(kernelModule, "createGatewayKernel").mockImplementation(async (...args) => {
+    kernel = await createKernel(...args);
+    return kernel;
+  });
+  const fixtureApi = sessions.setupGatewaySessionsTestHarness();
+  const fixture = takeHooks();
+  await runHooks(fixture.setup);
+  await runHooks(fixture.reset);
+  const harness = fixtureApi.getHarness();
+  await harness.server.startupSettled;
+  if (!kernel) throw new Error("expected the real Gateway kernel");
+  const { dir } = await fixtureApi.createSessionStoreDir();
+  const { ws } = await harness.openClient();
+  const home = process.env.HOME;
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!home || !stateDir) throw new Error("expected isolated Gateway fixture selectors");
+  // A changed synthetic selector makes the harness's earlier token snapshot observable.
+  process.env.OPENCLAW_GATEWAY_TOKEN = "synthetic-retained-gateway-token";
+  const selectors = new Map([
+    "HOME", "USERPROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_AGENT_DIR", "OPENCLAW_GATEWAY_TOKEN",
+  ].map(key => [key, process.env[key]]));
+  const markers = { home: path.join(home, "owned.txt"), state: path.join(stateDir, "owned.txt"),
+    sessions: path.join(dir, "owned.txt") };
+  for (const file of Object.values(markers)) fs.writeFileSync(file, "owned");
+  const readState = () => ({
+    ...Object.fromEntries(Object.entries(markers).map(([name, file]) => {
+      try { return [name, fs.readFileSync(file, "utf8") === "owned"]; }
+      catch { return [name, false]; }
+    })),
+    selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
+  });
+  const releaseProducer = createDeferredCore();
+  let phase = "before-cleanup";
+  const producer = releaseProducer.promise.then(() => {
+    const observation = { ...readState(), phase, writeSucceeded: false };
+    try {
+      fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
+      observation.writeSucceeded = true;
+    } catch { /* The outer assertion reports a lost producer input, not a cleanup substitute. */ }
+    return observation;
+  });
+  let stopCalls = 0;
+  // This independent producer belongs to the generic owner, not the connection scope.
+  kernel.registerGatewayLifetimeSidecars({ stop: async () => {
+    stopCalls++;
+    releaseProducer.resolve();
+    await producer;
+  } });
+  let connectionCleanupFinished = false;
+  const trackCleanup = kernel.connectionWork.trackCleanup.bind(kernel.connectionWork);
+  vi.spyOn(kernel.connectionWork, "trackCleanup").mockImplementationOnce(run =>
+    trackCleanup(async () => {
+      await run();
+      connectionCleanupFinished = true;
+      throw fault;
+    }),
+  );
+  try {
+    const close = await observeFailure(() => harness.close());
+    const afterClose = readState();
+    const afterEach = await observeFailure(() => runHooks(fixture.afterEach));
+    let successorCaseStarted = false;
+    const caseReset = await observeFailure(async () => {
+      await runHooks(fixture.reset);
+      successorCaseStarted = true;
+    });
+    const afterCaseReset = readState();
+    const cleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
+    const repeatedCleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
+    const afterCleanup = readState();
+    let harnessRetained = false;
+    try { harnessRetained = fixtureApi.getHarness() === harness; } catch { /* Observe release. */ }
+    phase = "after-cleanup";
+    releaseProducer.resolve();
+    const producerObservation = await producer;
+    // Retained ownership must outlive the module that originally acquired the Gateway.
+    vi.resetModules();
+    const freshHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
+    freshHelpers.installGatewayTestHooks({ scope: "suite" });
+    const successor = takeHooks();
+    let successorSuiteStarted = false;
+    const suiteSetup = await observeFailure(async () => {
+      await runHooks(successor.setup);
+      successorSuiteStarted = true;
+    });
+    fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
+      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
+      afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
+      producer: producerObservation, connectionCleanupFinished, stopCalls,
+      harnessRetained, successorCaseStarted, successorSuiteStarted,
+    }));
+  } finally {
+    releaseProducer.resolve();
+    await producer;
+    ws.terminate();
+    factory.mockRestore();
+    // No unpoison/reset escape hatch: native Vitest owns this disposable fork's exit.
+  }
+});
+`;
+}
+
+test("retains fixture state and fences successors after a required Gateway close failure", (context) =>
+  runGatewayFixtureFork(context, retainedGatewayFixtureSource, (journal, text) => {
+    const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
+    expect(journal, text).toMatchObject({
+      close: { rejected: true, faultPreserved: true },
+      caseReset: { rejected: true },
+      cleanup: { rejected: true, faultPreserved: true },
+      repeatedCleanup: { rejected: true, faultPreserved: true },
+      suiteSetup: { rejected: true },
+      connectionCleanupFinished: true,
+      stopCalls: 0,
+      harnessRetained: true,
+      successorCaseStarted: false,
+      successorSuiteStarted: false,
+      afterClose: retained,
+      afterCaseReset: retained,
+      afterCleanup: retained,
+      afterModuleReset: retained,
+      producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
+    });
+  }));
+
+test.each([
+  { scope: "test", interrupted: false },
+  { scope: "test", interrupted: true },
+  { scope: "suite", interrupted: false },
+  { scope: "suite", interrupted: true },
+] as const)(
+  "$scope teardown closes a late test-body startup and reports leaks (interrupted=$interrupted)",
+  async ({ scope, interrupted }) => {
+    gatewayHelpers.installGatewayTestHooks({ scope });
+    const registered = scope === "suite" ? hooks : caseHooks;
+    const fixture = { setup: registered.setup.splice(0), cleanup: registered.cleanup.splice(0) };
+    const suiteCase =
+      scope === "suite"
+        ? { setup: caseHooks.setup.splice(0), cleanup: caseHooks.cleanup.splice(0) }
+        : undefined;
+    const controller = new AbortController();
+    const context: FixtureHookContext = { signal: controller.signal };
+    const serverModule = await import("./server.js");
+    const entered = createDeferredCore();
+    const releaseStartup = createDeferredCore();
+    const closeEntered = createDeferredCore();
+    const releaseClose = createDeferredCore();
+    const homeBefore = process.env.HOME;
+    let closeCalls = 0;
+    let home: string | undefined;
+    const server = {
+      startupSettled: Promise.resolve(),
+      getTailscaleIngressEndpoint: () => undefined,
+      close: async () => {
+        closeCalls++;
+        closeEntered.resolve();
+        await releaseClose.promise;
+        expect(process.env.HOME).toBe(home);
+        expect(fsSync.existsSync(home!)).toBe(true);
+      },
+    } satisfies import("./server.js").GatewayServer;
+    const start = vi.spyOn(serverModule, "startGatewayServer").mockImplementation(async () => {
+      entered.resolve();
+      await releaseStartup.promise;
+      return server;
+    });
+    const releaseClaim = vi.fn(async () => {});
+    let starting: Promise<import("./server.js").GatewayServer> | undefined;
+    let pendingCleanup: Promise<void> | undefined;
+    try {
+      await setup(fixture);
+      if (suiteCase) {
+        await setup(suiteCase);
+      }
+      home = process.env.HOME!;
+      starting = gatewayHelpers.startTestGatewayServer({ port: 12345, release: releaseClaim });
+      await awaitGateBeforeSettlement(entered.promise, starting, "startup settled before its gate");
+      if (interrupted) {
+        controller.abort(new Error("synthetic test interruption"));
+      }
+      pendingCleanup = (async () => {
+        if (suiteCase) {
+          await cleanup(suiteCase, context);
+        }
+        await cleanup(fixture, context);
+      })();
+      void pendingCleanup.catch(() => {});
+      releaseStartup.resolve();
+      await awaitGateBeforeSettlement(
+        closeEntered.promise,
+        pendingCleanup,
+        "teardown released state before closing the acquired Gateway",
+      );
+      expect(process.env.HOME).toBe(home);
+      expect(fsSync.existsSync(home)).toBe(true);
+      releaseClose.resolve();
+      await starting;
+      if (interrupted) {
+        await expect(pendingCleanup).resolves.toBeUndefined();
+      } else {
+        await expect(pendingCleanup).rejects.toThrow(
+          `${scope} left a Gateway open; closed during teardown`,
+        );
+      }
+      expect(closeCalls).toBe(1);
+      expect(releaseClaim).toHaveBeenCalledTimes(1);
+      expect(process.env.HOME).toBe(homeBefore);
+      expect(fsSync.existsSync(home)).toBe(false);
+
+      gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+      const successor = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+      try {
+        await setup(successor);
+        expect(fsSync.existsSync(process.env.HOME!)).toBe(true);
+      } finally {
+        await cleanup(successor);
+      }
+    } finally {
+      releaseStartup.resolve();
+      releaseClose.resolve();
+      await Promise.allSettled([starting, pendingCleanup]);
+      if (starting) {
+        await (await starting).close();
+      }
+      await emergencyCleanup(fixture, context);
+      start.mockRestore();
+    }
+  },
+);

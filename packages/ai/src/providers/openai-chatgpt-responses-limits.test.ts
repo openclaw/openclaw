@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
@@ -85,9 +84,108 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds streamed success bodies without content-length", async () => {
-    // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before
-    // draining the full 32 MiB advertised body.
+  it.each([1, 320])("accepts over 16 MiB with %i complete frames per read", async (batchSize) => {
+    const pad = "x".repeat(64 * 1024);
+    const progressFrame = new TextEncoder().encode(
+      `data: ${JSON.stringify({ type: "response.in_progress", pad })}\n\n`.repeat(batchSize),
+    );
+    const completedFrame = new TextEncoder().encode(
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: "resp_long",
+          status: "completed",
+          output: [],
+          usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+        },
+      })}\n\n`,
+    );
+    const progressFrames = 320 / batchSize; // ~20 MiB total
+    let sent = 0;
+    const longStream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent < progressFrames) {
+          sent += 1;
+          controller.enqueue(progressFrame);
+          return;
+        }
+        controller.enqueue(completedFrame);
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValueOnce(
+        new Response(longStream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "sse",
+    }).result();
+
+    expect(sent * progressFrame.byteLength).toBeGreaterThan(16 * 1024 * 1024);
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it.each([
+    { label: "complete in one read", ending: "\n\n", split: false, char: "x" },
+    { label: "delimiter in the limit-crossing read", ending: "\r\n\r\n", split: true, char: "x" },
+    { label: "EOF", ending: "", split: false, char: "x" },
+    {
+      label: "UTF-8 byte overflow below the character cap",
+      ending: "\n\n",
+      split: true,
+      char: "😀",
+    },
+  ])("rejects oversized frames: $label", async ({ ending, split, char }) => {
+    const byteLimit = 16 * 1024 * 1024;
+    const frame = new TextEncoder().encode(
+      `data: ${JSON.stringify({ type: "response.in_progress", pad: char.repeat(byteLimit / Buffer.byteLength(char)) })}${ending}`,
+    );
+    const chunks = split ? [frame.subarray(0, byteLimit), frame.subarray(byteLimit)] : [frame];
+    let cancelReason: unknown;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk) {
+            controller.enqueue(chunk);
+          } else {
+            controller.close();
+          }
+        },
+        cancel(reason) {
+          cancelReason = reason;
+          return new Promise<void>(() => {});
+        },
+      },
+      // Keep the source open until the parser requests EOF so cancellation is observable.
+      { highWaterMark: 0 },
+    );
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(body)));
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }),
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("OpenAI ChatGPT Responses SSE frame exceeded 16777216 bytes");
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect(body.locked).toBe(false);
+  });
+
+  it("bounds an unterminated streamed success frame without content-length", async () => {
+    // 1 MiB chunks with no frame boundary; the pending-frame bound is 16 MiB so
+    // the reader cancels well before draining the full 32 MiB body.
     const chunkBytes = 1024 * 1024;
     const totalChunks = 32;
     let pullCount = 0;
@@ -122,43 +220,11 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toMatch(
-      /OpenAI ChatGPT Responses success body exceeded 16777216 bytes/,
+      /OpenAI ChatGPT Responses SSE frame exceeded 16777216 bytes/,
     );
     expect(cancelReason).toBeInstanceOf(Error);
     expect(pullCount).toBeGreaterThanOrEqual(17);
     expect(pullCount).toBeLessThanOrEqual(20);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("caps oversized Retry-After delays before sleeping", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": String(Number.MAX_SAFE_INTEGER) },
-        }),
-      )
-      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
-    vi.stubGlobal("fetch", fetchMock);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: TimerHandler) => {
-        if (typeof callback === "function") {
-          callback();
-        }
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      });
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

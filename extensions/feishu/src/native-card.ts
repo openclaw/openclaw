@@ -4,6 +4,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+export type FeishuNativeCard = Record<string, unknown> & {
+  body: { elements: Record<string, unknown>[] };
+};
+
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -29,18 +33,7 @@ export function resolveFeishuCardTemplate(template?: string): string | undefined
 }
 
 export function escapeFeishuCardMarkdownText(text: string): string {
-  return text.replace(/[&<>]/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      default:
-        return char;
-    }
-  });
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 export function escapeFeishuCardPlainText(text: string): string {
@@ -49,15 +42,8 @@ export function escapeFeishuCardPlainText(text: string): string {
 
 export function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(trimmed);
+  return parsed?.protocol === "https:" || parsed?.protocol === "http:" ? trimmed : undefined;
 }
 
 function sanitizeNativeFeishuButtonBehavior(
@@ -77,6 +63,14 @@ function sanitizeNativeFeishuButtonBehavior(
   return undefined;
 }
 
+export function resolveFeishuButtonType(style: unknown): "primary" | "danger" | "default" {
+  return style === "primary" || style === "success"
+    ? "primary"
+    : style === "danger"
+      ? "danger"
+      : "default";
+}
+
 function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
   if (!isRecord(button)) {
     return undefined;
@@ -88,15 +82,9 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   if (!text?.trim()) {
     return undefined;
   }
-  const style =
-    button.type === "danger"
-      ? "danger"
-      : button.type === "primary" || button.type === "success"
-        ? "primary"
-        : undefined;
   const behaviors = Array.isArray(button.behaviors)
     ? button.behaviors
-        .map((behavior) => sanitizeNativeFeishuButtonBehavior(behavior))
+        .map(sanitizeNativeFeishuButtonBehavior)
         .filter((behavior): behavior is Record<string, unknown> => Boolean(behavior))
     : [];
   const rootSafeUrl = resolveSafeFeishuButtonUrl(button.url);
@@ -112,7 +100,7 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   return {
     tag: "button",
     text: { tag: "plain_text", content: text },
-    type: style === "danger" ? "danger" : style === "primary" ? "primary" : "default",
+    type: resolveFeishuButtonType(button.type),
     behaviors,
   };
 }
@@ -134,19 +122,13 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
   }
   if (element.tag === "div" && isRecord(element.text)) {
     const text = element.text;
-    if (text.tag === "lark_md" && typeof text.content === "string") {
+    if ((text.tag === "lark_md" || text.tag === "plain_text") && typeof text.content === "string") {
       return [
         {
           tag: "markdown",
-          content: escapeFeishuCardMarkdownText(text.content),
-        },
-      ];
-    }
-    if (text.tag === "plain_text" && typeof text.content === "string") {
-      return [
-        {
-          tag: "markdown",
-          content: escapeFeishuCardPlainText(text.content),
+          content: (text.tag === "plain_text"
+            ? escapeFeishuCardPlainText
+            : escapeFeishuCardMarkdownText)(text.content),
         },
       ];
     }
@@ -158,7 +140,7 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
   }
   if (element.tag === "action" && Array.isArray(element.actions)) {
     return element.actions
-      .map((action) => sanitizeNativeFeishuCardButton(action))
+      .map(sanitizeNativeFeishuCardButton)
       .filter((action): action is Record<string, unknown> => Boolean(action));
   }
   return [];
@@ -166,7 +148,7 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
 
 export function sanitizeNativeFeishuCard(
   card: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+): FeishuNativeCard | undefined {
   const normalizedCard = card.type === "interactive" && isRecord(card.card) ? card.card : card;
   const body = isRecord(normalizedCard.body) ? normalizedCard.body : undefined;
   const rawElements = Array.isArray(body?.elements)
@@ -174,9 +156,7 @@ export function sanitizeNativeFeishuCard(
     : Array.isArray(normalizedCard.elements)
       ? normalizedCard.elements
       : [];
-  const elements = rawElements
-    .flatMap((element) => sanitizeNativeFeishuCardElements(element))
-    .filter((element): element is Record<string, unknown> => Boolean(element));
+  const elements = rawElements.flatMap(sanitizeNativeFeishuCardElements);
   if (elements.length === 0) {
     return undefined;
   }
@@ -207,7 +187,7 @@ export function sanitizeNativeFeishuCard(
 export function readNativeFeishuCardJson(
   text: string | undefined,
   options?: { responsePrefix?: string },
-): Record<string, unknown> | undefined {
+): FeishuNativeCard | undefined {
   let trimmed = text?.trim();
   const responsePrefix = options?.responsePrefix;
   if (trimmed && responsePrefix && trimmed.startsWith(responsePrefix)) {

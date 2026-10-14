@@ -1,5 +1,6 @@
 {
   "id": "tencent",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -7,17 +8,21 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub", "tencent-tokenplan"],
   "modelCatalog": {
+    "modelsDev": {
+      "tencent-tokenhub": "tencent-tokenhub",
+      "tencent-tokenplan": "tencent-token-plan"
+    },
     "providers": {
       "tencent-tokenhub": {
         "baseUrl": "https://tokenhub.tencentmaas.com/v1",
         "api": "openai-completions",
-        "defaultModel": "hy3",
+        "defaultModel": "hy4-preview",
         "models": [
           {
             "id": "hy3-preview",
             "name": "Hy3 preview (TokenHub)",
             "status": "deprecated",
-            "replacedBy": "hy3",
+            "replacedBy": "hy4-preview",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
@@ -73,7 +78,26 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "high"]
+              "supportedReasoningEfforts": ["none", "high"]
+            }
+          },
+          {
+            "id": "hy4-preview",
+            "name": "Hy4 preview (TokenHub)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1024000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0.834,
+              "output": 2.501,
+              "cacheRead": 0.042,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"]
             }
           }
         ]
@@ -81,7 +105,7 @@
       "tencent-tokenplan": {
         "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
         "api": "openai-completions",
-        "defaultModel": "hy3",
+        "defaultModel": "hy4-preview",
         "models": [
           {
             "id": "hy3",
@@ -93,7 +117,26 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "high"]
+              "supportedReasoningEfforts": ["none", "high"]
+            }
+          },
+          {
+            "id": "hy4-preview",
+            "name": "Hy4 preview (TokenPlan)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1024000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0.834,
+              "output": 2.501,
+              "cacheRead": 0.042,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"]
             }
           }
         ]
@@ -120,7 +163,8 @@
     "compatibilityMigrationPaths": [
       "models.providers.tencent-tokenhub",
       "agents.defaults.models.tencent-tokenhub/hy3",
-      "agents.defaults.models.tencent-tokenhub/hy3-preview"
+      "agents.defaults.models.tencent-tokenhub/hy3-preview",
+      "agents.defaults.models.tencent-tokenhub/hy4-preview"
     ]
   },
   "providerAuthChoices": [

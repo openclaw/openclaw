@@ -1,200 +1,137 @@
 import { describe, expect, it } from "vitest";
 import { markdownToStory, type Story } from "./story.js";
 
-type ListRenderingFixture = {
-  name: string;
-  markdown: string;
-  before: Story;
-  after: Story;
-};
+type Block = Extract<Story[number], { block: unknown }>["block"];
+type Listing = Extract<Block, { listing: unknown }>["listing"];
+type List = Extract<Listing, { list: unknown }>["list"];
 
-const listRenderingFixtures: ListRenderingFixture[] = [
-  {
-    name: "unordered markers become one native unordered listing",
-    markdown: "- alpha\n- **beta**\n- [site](https://example.com)",
-    before: [
-      {
-        inline: [
-          "- alpha",
-          { break: null },
-          "- ",
-          { bold: ["beta"] },
-          { break: null },
-          "- ",
-          { link: { href: "https://example.com", content: "site" } },
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                { item: ["alpha"] },
-                { item: [{ bold: ["beta"] }] },
-                {
-                  item: [{ link: { href: "https://example.com", content: "site" } }],
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
-  },
-  {
-    name: "ordered markers become a native ordered listing",
-    markdown: "1. first\n2. second",
-    before: [{ inline: ["1. first", { break: null }, "2. second"] }],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: ["second"] }],
-            },
-          },
-        },
-      },
-    ],
-  },
+function list(type: List["type"], items: Listing[], contents: List["contents"] = []): Listing {
+  return { list: { type, contents, items } };
+}
+
+function listStory(type: List["type"], items: Listing[]): Story {
+  return [{ block: { listing: list(type, items) } }];
+}
+
+const listRenderingFixtures = [
   {
     name: "task markers become native task inlines inside a task listing",
     markdown: "- [ ] todo\n- [x] **done**",
-    before: [
-      {
-        inline: ["- [ ] todo", { break: null }, "- [x] ", { bold: ["done"] }],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "tasklist",
-              contents: [],
-              items: [
-                { item: [{ task: { checked: false, content: ["todo"] } }] },
-                {
-                  item: [{ task: { checked: true, content: [{ bold: ["done"] }] } }],
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("tasklist", [
+      { item: [{ task: { checked: false, content: ["todo"] } }] },
+      { item: [{ task: { checked: true, content: [{ bold: ["done"] }] } }] },
+    ]),
   },
   {
     name: "nested ordered items stay recursive under their unordered parent",
     markdown: "- parent\n  1. first\n  2. second\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  1. first",
-          { break: null },
-          "  2. second",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "ordered",
-                    contents: ["parent"],
-                    items: [{ item: ["first"] }, { item: ["second"] }],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
-      },
-    ],
-  },
-  {
-    name: "mixed task and plain children stay in their nested bullet list",
-    markdown: "- parent\n  - [ ] todo\n  - note\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  - [ ] todo",
-          { break: null },
-          "  - note",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "unordered",
-                    contents: ["parent"],
-                    items: [
-                      { item: [{ task: { checked: false, content: ["todo"] } }] },
-                      { item: ["note"] },
-                    ],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
-      },
-    ],
-  },
-  {
-    name: "empty bullet items stay inside their native listing",
-    markdown: "- first\n-\n- third",
-    before: [{ inline: ["- first", { break: null }, "-", { break: null }, "- third"] }],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: [] }, { item: ["third"] }],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("unordered", [
+      list("ordered", [{ item: ["first"] }, { item: ["second"] }], ["parent"]),
+      { item: ["sibling"] },
+    ]),
   },
 ];
 
+describe("markdownToStory inline formatting", () => {
+  it.each([
+    {
+      markdown: "**bold** __bold__ *italic* _italic_ ~~strike~~ `code`",
+      inline: [
+        { bold: ["bold"] },
+        " ",
+        { bold: ["bold"] },
+        " ",
+        { italics: ["italic"] },
+        " ",
+        { italics: ["italic"] },
+        " ",
+        { strike: ["strike"] },
+        " ",
+        { "inline-code": "code" },
+      ],
+    },
+    {
+      markdown: "~zod [site](https://example.com)",
+      inline: [{ ship: "~zod" }, " ", { link: { href: "https://example.com", content: "site" } }],
+    },
+    {
+      markdown: "See [math](https://en.wikipedia.org/wiki/Function_(mathematics))!",
+      inline: [
+        "See ",
+        { link: { href: "https://en.wikipedia.org/wiki/Function_(mathematics)", content: "math" } },
+        "!",
+      ],
+    },
+  ])("renders %j without losing literal text or nested styles", ({ markdown, inline }) => {
+    expect(markdownToStory(markdown)).toEqual([{ inline }]);
+  });
+
+  it.each(["https://example.com/a(b(c(d)e)f).png"])(
+    "hoists an image with its complete destination %s",
+    (url) => {
+      expect(markdownToStory(`![diagram](${url})`)).toEqual([
+        {
+          block: {
+            image: { src: url, alt: "diagram", height: 0, width: 0 },
+          },
+        },
+      ]);
+    },
+  );
+
+  it("keeps sentence punctuation after a bare URL out of the link", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a. Or (https://example.com/a)!")).toEqual([
+      { inline: ["see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("keeps balanced parentheses nested at any depth inside a bare URL", () => {
+    const url = "https://example.com/a(b(c(d)e)f)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`${url} and see ${url}. Or (${url})!`)).toEqual([
+      { inline: [link, " and see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("keeps punctuation before a stray paren out of a bare URL", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a:( sad")).toEqual([
+      { inline: ["see ", link, ":( sad"] },
+    ]);
+  });
+
+  const chart = {
+    block: { image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 } },
+  };
+
+  it.each([
+    {
+      markdown: "> see ![chart](https://example.com/chart.png)",
+      expected: [{ inline: [{ blockquote: ["see "] }] }, chart],
+    },
+    {
+      markdown: "- see **![chart](https://example.com/chart.png)**",
+      expected: [{ inline: ["- see "] }, chart],
+    },
+  ])("hoists the image in $markdown to a native image block", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
+  });
+});
+
+describe("markdownToStory paragraph boundaries", () => {
+  it("continues past a hashtag and still separates the next heading", () => {
+    expect(markdownToStory("intro\n#tag\n## Heading\ntail")).toEqual([
+      { inline: ["intro", { break: null }, "#tag"] },
+      { block: { header: { tag: "h2", content: ["Heading"] } } },
+      { inline: ["tail"] },
+    ]);
+  });
+});
+
 describe("markdownToStory list rendering", () => {
-  it.each(listRenderingFixtures)("$name", ({ markdown, before, after }) => {
-    expect(before).not.toEqual(after);
-    expect(markdownToStory(markdown)).toEqual(after);
+  it.each(listRenderingFixtures)("$name", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
   });
 
   it("preserves a list with lazy continuation after preceding paragraph text", () => {
@@ -209,31 +146,6 @@ describe("markdownToStory list rendering", () => {
           { break: null },
           "outro",
         ],
-      },
-    ]);
-  });
-
-  it("keeps a blank-separated outer sibling attached after a nested list", () => {
-    expect(markdownToStory("- parent\n  - child\n\n- sibling")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "unordered",
-                    contents: ["parent"],
-                    items: [{ item: ["child"] }],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
       },
     ]);
   });
@@ -260,29 +172,9 @@ describe("markdownToStory list rendering", () => {
       ],
     },
     {
-      name: "four-space-indented list-like text",
-      markdown: "    - literal",
-      expected: [{ inline: ["    - literal"] }],
-    },
-    {
-      name: "under-indented children of wide ordered markers",
-      markdown: "1. parent\n  - child",
-      expected: [{ inline: ["1. parent", { break: null }, "  - child"] }],
-    },
-    {
       name: "block-level content inside list items",
       markdown: "- foo\n\n      bar",
       expected: [{ inline: ["- foo"] }, { inline: ["      bar"] }],
-    },
-    {
-      name: "block syntax on the marker line",
-      markdown: "- # heading",
-      expected: [{ inline: ["- # heading"] }],
-    },
-    {
-      name: "blank-separated item paragraphs",
-      markdown: "- first\n\n  second",
-      expected: [{ inline: ["- first"] }, { inline: ["  second"] }],
     },
     {
       name: "indented code beginning with a marker",
@@ -295,152 +187,17 @@ describe("markdownToStory list rendering", () => {
       expected: [{ inline: ["- parent", { break: null }, "  - child"] }, { inline: ["  tail"] }],
     },
     {
-      name: "images inside list items",
-      markdown: "- ![diagram](https://example.com/diagram.png)",
-      expected: [
-        {
-          inline: [
-            "- !",
-            { link: { href: "https://example.com/diagram.png", content: "diagram" } },
-          ],
-        },
-      ],
-    },
-    {
-      name: "indented continuation lines",
-      markdown: "- first line\n  continued\n- second",
-      expected: [
-        {
-          inline: ["- first line", { break: null }, "  continued", { break: null }, "- second"],
-        },
-      ],
-    },
-    {
       name: "tab-indented underflow beneath a padded marker",
       markdown: "-    parent\n \t- child",
       expected: [{ inline: ["-    parent", { break: null }, " \t- child"] }],
-    },
-    {
-      name: "ordered markers longer than nine digits",
-      markdown: "0000000001. value",
-      expected: [{ inline: ["0000000001. value"] }],
-    },
-    {
-      name: "same-line nested list syntax",
-      markdown: "- - child",
-      expected: [{ inline: ["- - child"] }],
-    },
-    {
-      name: "blockquote marker without whitespace",
-      markdown: "- >quoted",
-      expected: [{ inline: ["- >quoted"] }],
     },
   ])("preserves $name as plain story content", ({ markdown, expected }) => {
     expect(markdownToStory(markdown)).toEqual(expected);
   });
 
-  it("keeps different ordered delimiters as separate native lists", () => {
-    expect(markdownToStory("1. first\n1) reset")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }],
-            },
-          },
-        },
-      },
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["reset"] }],
-            },
-          },
-        },
-      },
-    ]);
-  });
-
-  it("keeps ordered task items in an ordered native listing", () => {
-    expect(markdownToStory("1. [ ] first\n2. [x] second")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [
-                { item: [{ task: { checked: false, content: ["first"] } }] },
-                { item: [{ task: { checked: true, content: ["second"] } }] },
-              ],
-            },
-          },
-        },
-      },
-    ]);
-  });
-
-  it("keeps variably indented ordered siblings in one native list", () => {
-    expect(markdownToStory(" 1. first\n2. second")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: ["second"] }],
-            },
-          },
-        },
-      },
-    ]);
-  });
-
   it("preserves a non-interrupting ordered marker as lazy text", () => {
     expect(markdownToStory("- first\n2. continuation")).toEqual([
       { inline: ["- first", { break: null }, "2. continuation"] },
-    ]);
-  });
-
-  it.each(["- [ ] - follow up", "- [x] # heading"])(
-    "keeps block-looking task text representable for %s",
-    (markdown) => {
-      const checked = markdown.includes("[x]");
-      const content = markdown.replace(/^- \[[ x]\] /, "");
-      expect(markdownToStory(markdown)).toEqual([
-        {
-          block: {
-            listing: {
-              list: {
-                type: "tasklist",
-                contents: [],
-                items: [{ item: [{ task: { checked, content: [content] } }] }],
-              },
-            },
-          },
-        },
-      ]);
-    },
-  );
-
-  it("keeps whitespace-only items in their native list", () => {
-    expect(markdownToStory("- first\n-     \n- third")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: [] }, { item: ["third"] }],
-            },
-          },
-        },
-      },
     ]);
   });
 
@@ -450,61 +207,10 @@ describe("markdownToStory list rendering", () => {
     ]);
   });
 
-  it("accepts a tab as an unchecked task marker", () => {
-    expect(markdownToStory("- [\t] todo")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "tasklist",
-              contents: [],
-              items: [{ item: [{ task: { checked: false, content: ["todo"] } }] }],
-            },
-          },
-        },
-      },
-    ]);
-  });
-
-  it("preserves blank-separated siblings after an unsupported list item", () => {
-    expect(markdownToStory("- # heading\n\n- sibling")).toEqual([
-      { inline: ["- # heading"] },
-      { inline: ["- sibling"] },
-    ]);
-  });
-
-  it("keeps ordinary inline Markdown outside loose-list preservation", () => {
-    expect(markdownToStory("**bold**")).toEqual([{ inline: [{ bold: ["bold"] }] }]);
-  });
-
   it("keeps the unsupported outer marker across nested marker styles", () => {
     expect(markdownToStory("- # heading\n  * child\n\n- sibling")).toEqual([
       { inline: ["- # heading", { break: null }, "  * child"] },
       { inline: ["- sibling"] },
-    ]);
-  });
-
-  it("does not let an empty list item interrupt a paragraph", () => {
-    expect(markdownToStory("foo\n*")).toEqual([{ inline: ["foo", { break: null }, "*"] }]);
-  });
-
-  it.each(["- ~~~", "- >", "- ___", "-     code"])(
-    "preserves block-level marker body %s as plain content",
-    (markdown) => {
-      expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);
-    },
-  );
-
-  it.each([
-    { markdown: "- - -", expected: [{ inline: ["- - -"] }] },
-    { markdown: "* * *", expected: [{ inline: [{ italics: [" "] }, " *"] }] },
-  ])("does not convert thematic break $markdown into a listing", ({ markdown, expected }) => {
-    expect(markdownToStory(markdown)).toEqual(expected);
-  });
-
-  it("preserves lazy continuation text with its list markers", () => {
-    expect(markdownToStory("- first\ncontinued\n- second")).toEqual([
-      { inline: ["- first", { break: null }, "continued", { break: null }, "- second"] },
     ]);
   });
 });

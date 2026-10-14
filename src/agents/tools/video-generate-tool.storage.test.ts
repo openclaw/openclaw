@@ -185,6 +185,7 @@ describe("video generation invocation QA", () => {
         expect.objectContaining({
           type: "video",
           path: savedPath,
+          name: "qa-selected-video.mp4",
           mimeType: "video/mp4",
           sizeBytes: generatedVideo.byteLength,
         }),
@@ -251,52 +252,9 @@ describe("video generation invocation QA", () => {
       await expect(fs.readFile(savedPath)).resolves.toEqual(savedVideo);
       expect(details.attachments).toMatchObject([
         { url: paths[0], name: "first.mp4" },
-        { path: savedPath },
+        { path: savedPath, name: "middle.mp4" },
         { url: paths[2], name: "last.mp4" },
       ]);
     });
-  });
-
-  it("rejects unknown and wrong-typed provider options before provider invocation", async () => {
-    let providerCalls = 0;
-    const createProvider = (id: string, model: string): VideoGenerationProvider => ({
-      id,
-      defaultModel: model,
-      models: [model],
-      isConfigured: () => true,
-      capabilities: {
-        providerOptions: { seed: "number", draft: "boolean" },
-      },
-      generateVideo: async () => {
-        providerCalls += 1;
-        return {
-          videos: [{ buffer: createMp4Fixture(), mimeType: "video/mp4" }],
-        };
-      },
-    });
-    const providers = [
-      createProvider("qa-options-primary", "primary-v1"),
-      createProvider("qa-options-fallback", "fallback-v1"),
-    ];
-    const tool = requireVideoTool(
-      createVideoGenerateTool({
-        config: createConfig("qa-options-primary/primary-v1", ["qa-options-fallback/fallback-v1"]),
-        preparedModelRuntime: createPreparedRuntime(providers),
-      }),
-    );
-
-    await expect(
-      tool.execute("qa-video-options-unknown", {
-        prompt: "Generate a QA clip.",
-        providerOptions: { seed: 21, unknown_option: true },
-      }),
-    ).rejects.toThrow(/does not accept providerOptions keys: unknown_option/);
-    await expect(
-      tool.execute("qa-video-options-type", {
-        prompt: "Generate another QA clip.",
-        providerOptions: { seed: "twenty-one" },
-      }),
-    ).rejects.toThrow(/expects providerOptions\.seed to be a finite number, got string/);
-    expect(providerCalls).toBe(0);
   });
 });

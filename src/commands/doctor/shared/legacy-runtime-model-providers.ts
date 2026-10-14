@@ -11,8 +11,6 @@ type LegacyRuntimeModelProviderAlias = {
   runtime: string;
   /** True when the runtime is a CLI backend rather than an embedded harness. */
   cli: boolean;
-  /** True when doctor must write a runtime policy even if the target runtime is the default. */
-  requiresRuntimePolicy: boolean;
 };
 
 const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
@@ -21,28 +19,24 @@ const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
     provider: "openai",
     runtime: "codex",
     cli: false,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "codex-cli",
     provider: "openai",
     runtime: "codex",
     cli: false,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "claude-cli",
     provider: "anthropic",
     runtime: "claude-cli",
     cli: true,
-    requiresRuntimePolicy: true,
   },
   {
     legacyProvider: "google-gemini-cli",
     provider: "google",
     runtime: "google-gemini-cli",
     cli: true,
-    requiresRuntimePolicy: true,
   },
 ] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
 
@@ -58,20 +52,7 @@ const LEGACY_ALIAS_BY_PROVIDER = new Map(
   ]),
 );
 
-/** List legacy model-provider aliases that doctor can migrate to provider/runtime policy. */
-export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
-  return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
-}
-
-/** Return true when a legacy provider alias requires writing explicit runtime policy. */
-export function legacyRuntimeModelAliasRequiresRuntimePolicy(provider: string): boolean {
-  return (
-    LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider))
-      ?.requiresRuntimePolicy === true
-  );
-}
-
-function resolveLegacyRuntimeModelProviderAlias(
+export function resolveLegacyRuntimeModelProviderAlias(
   provider: string,
 ): LegacyRuntimeModelProviderAlias | undefined {
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider));

@@ -1,118 +1,95 @@
-/** Doctor checks and repairs for Control UI assets after gateway protocol changes. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import {
   ensureControlUiAssetsBuilt,
+  formatControlUiSourceCommand,
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "../infra/control-ui-assets.js";
+import {
+  formatInstallOwnerMessage,
+  readInstallOwner,
+  type InstallOwner,
+} from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type UiProtocolFreshnessIssue =
-  | {
-      readonly kind: "missing-assets";
-      readonly root: string;
-      readonly uiIndexPath: string;
-      readonly canBuild: boolean;
-    }
-  | {
-      readonly kind: "stale-assets";
-      readonly root: string;
-      readonly uiIndexPath: string;
-      readonly changesSinceBuild: readonly string[];
-      readonly canBuild: boolean;
-    };
+type UiProtocolFreshnessIssue = {
+  readonly root: string;
+  readonly uiIndexPath: string;
+  readonly canBuild: boolean;
+  readonly installOwner?: InstallOwner;
+} & (
+  | { readonly kind: "missing-assets" }
+  | { readonly kind: "stale-assets"; readonly changesSinceBuild: readonly string[] }
+);
 
-/** Detects missing or stale Control UI build artifacts relative to protocol schema changes. */
-export async function detectUiProtocolFreshnessIssues(
-  opts: {
-    readonly root?: string;
-    readonly argv1?: string;
-    readonly cwd?: string;
-    readonly collectChangesSinceBuild?: (
-      root: string,
-      uiMtime: Date,
-    ) => Promise<readonly string[] | null>;
-  } = {},
-): Promise<readonly UiProtocolFreshnessIssue[]> {
-  const root =
-    opts.root ??
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: opts.argv1 ?? process.argv[1],
-      cwd: opts.cwd ?? process.cwd(),
-    }));
+export async function detectUiProtocolFreshnessIssues(): Promise<
+  readonly UiProtocolFreshnessIssue[]
+> {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
   if (!root) {
     return [];
   }
+  const installOwner = await readInstallOwner(root);
 
-  const uiHealth = await resolveControlUiAssetHealth({ root });
+  // Doctor checks its loaded install; updater callers may inspect a newer target build.
+  const uiHealth = await resolveControlUiAssetHealth({
+    root,
+    expectedBuildId: resolveRuntimeServiceBuildId(),
+  });
   const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
-  const uiSourcesPath = path.join(root, "ui/package.json");
 
   try {
-    const [uiStats, uiSourcesStats] = await Promise.all([
-      fs.stat(uiIndexPath).catch(() => null),
-      fs.stat(uiSourcesPath).catch(() => null),
-    ]);
-    const canBuild = uiSourcesStats !== null;
-    if (!uiStats || uiHealth.kind !== "ready") {
-      return [{ kind: "missing-assets", root, uiIndexPath, canBuild }];
+    const canBuild =
+      !installOwner &&
+      (await fs.stat(path.join(root, "ui/package.json")).then(
+        () => true,
+        () => false,
+      ));
+    const issue = { root, uiIndexPath, canBuild, ...(installOwner ? { installOwner } : {}) };
+    if (uiHealth.kind !== "ready") {
+      return [
+        uiHealth.kind === "stale"
+          ? { ...issue, kind: "stale-assets", changesSinceBuild: [] }
+          : { ...issue, kind: "missing-assets" },
+      ];
     }
     if (!canBuild) {
       return [];
     }
-    const changesSinceBuild = await (
-      opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
-    )(root, uiStats.mtime);
-    if (changesSinceBuild === null || changesSinceBuild.length === 0) {
+    const uiMtime = (await fs.stat(uiIndexPath)).mtime;
+    const gitLog = await runCommandWithTimeout(
+      [
+        "git",
+        "-C",
+        root,
+        "log",
+        `--since=${uiMtime.toISOString()}`,
+        "--format=%h %s",
+        "packages/gateway-protocol/src",
+      ],
+      { timeoutMs: 5000 },
+    );
+    const output = gitLog.code === 0 ? gitLog.stdout.trim() : "";
+    if (!output) {
       return [];
     }
-    return [
-      {
-        kind: "stale-assets",
-        root,
-        uiIndexPath,
-        changesSinceBuild,
-        canBuild,
-      },
-    ];
+    return [{ ...issue, kind: "stale-assets", changesSinceBuild: output.split("\n") }];
   } catch {
     return [];
   }
 }
 
-async function collectProtocolSchemaChangesSince(
-  root: string,
-  uiMtime: Date,
-): Promise<readonly string[] | null> {
-  const gitLog = await runCommandWithTimeout(
-    [
-      "git",
-      "-C",
-      root,
-      "log",
-      `--since=${uiMtime.toISOString()}`,
-      "--format=%h %s",
-      "packages/gateway-protocol/src",
-    ],
-    { timeoutMs: 5000 },
-  ).catch(() => null);
-  if (!gitLog || gitLog.code !== 0) {
-    return null;
-  }
-  if (!gitLog.stdout.trim()) {
-    return [];
-  }
-  return gitLog.stdout.trim().split("\n");
-}
-
-/** Converts a UI protocol freshness issue into a doctor lint health finding. */
 export function uiProtocolFreshnessIssueToHealthFinding(
   issue: UiProtocolFreshnessIssue,
 ): HealthFinding {
@@ -121,15 +98,16 @@ export function uiProtocolFreshnessIssueToHealthFinding(
     severity: "warning",
     message: formatUiProtocolFreshnessIssue(issue),
     path: issue.uiIndexPath,
-    fixHint: issue.canBuild
-      ? issue.kind === "missing-assets"
-        ? "Run `openclaw doctor --fix` to build Control UI assets."
-        : "Run `openclaw doctor --fix --force` to rebuild Control UI assets, or run `pnpm ui:build`."
-      : "Reinstall OpenClaw to restore bundled Control UI assets.",
+    fixHint: issue.installOwner
+      ? formatInstallOwnerMessage(issue.installOwner)
+      : issue.canBuild
+        ? issue.kind === "missing-assets"
+          ? "Run `openclaw doctor --fix` to build Control UI assets."
+          : `Run \`openclaw doctor --fix --force\` to rebuild Control UI assets, or run \`${formatControlUiSourceCommand(issue.root, "build")}\`.`
+        : "Reinstall OpenClaw to restore bundled Control UI assets.",
   };
 }
 
-/** Converts a UI freshness issue into the process repair effect used by lint dry runs. */
 export function uiProtocolFreshnessIssueToRepairEffects(
   issue: UiProtocolFreshnessIssue,
 ): readonly HealthRepairEffect[] {
@@ -148,23 +126,22 @@ export function uiProtocolFreshnessIssueToRepairEffects(
 }
 
 function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string {
-  if (issue.kind === "missing-assets") {
-    return [
-      "- Control UI assets are missing.",
-      issue.canBuild
-        ? "- Run: pnpm ui:build"
+  const message =
+    issue.kind === "missing-assets"
+      ? "- Control UI assets are missing or incomplete."
+      : issue.changesSinceBuild.length === 0
+        ? "Control UI assets do not match the current Gateway build."
+        : `UI assets are older than the protocol schema.\nFunctional changes since last build:\n${issue.changesSinceBuild.map((line) => `- ${line}`).join("\n")}`;
+  return [
+    message,
+    issue.installOwner
+      ? formatInstallOwnerMessage(issue.installOwner)
+      : issue.canBuild
+        ? `- Run: ${formatControlUiSourceCommand(issue.root, "build")}`
         : "- Reinstall OpenClaw to restore bundled Control UI assets.",
-    ].join("\n");
-  }
-  if (issue.changesSinceBuild.length === 0) {
-    return "UI assets are older than the protocol schema.";
-  }
-  return `UI assets are older than the protocol schema.\nFunctional changes since last build:\n${issue.changesSinceBuild
-    .map((line) => `- ${line}`)
-    .join("\n")}`;
+  ].join("\n");
 }
 
-/** Prompts to build or rebuild Control UI assets when doctor detects missing or stale output. */
 export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -172,38 +149,33 @@ export async function maybeRepairUiProtocolFreshness(
   for (const issue of await detectUiProtocolFreshnessIssues()) {
     const stale = issue.kind === "stale-assets";
     note(formatUiProtocolFreshnessIssue(issue), stale ? "UI Freshness" : "UI");
+    if (issue.installOwner) {
+      continue;
+    }
     if (!issue.canBuild) {
       note(`Skipping UI ${stale ? "rebuild" : "build"}: ui/ sources not present.`, "UI");
       continue;
     }
-    const shouldRepair = stale
-      ? await prompter.confirmAggressiveAutoFix({
-          message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
-          initialValue: true,
-        })
-      : await prompter.confirmAutoFix({
-          message: "Build Control UI assets now?",
-          initialValue: true,
-        });
+    const shouldRepair = await prompter[stale ? "confirmAggressiveAutoFix" : "confirmAutoFix"]({
+      message: stale ? "Rebuild stale Control UI assets now?" : "Build Control UI assets now?",
+      initialValue: true,
+    });
     if (!shouldRepair) {
       continue;
     }
     const result = await ensureControlUiAssetsBuilt(runtime, {
       root: issue.root,
+      expectedBuildId: resolveRuntimeServiceBuildId(),
       force: stale,
       onBuildStart: () =>
         note(
-          stale
-            ? "Rebuilding stale UI assets... (this may take a moment)"
-            : "Building Control UI assets... (this may take a moment)",
+          `${stale ? "Rebuilding stale" : "Building Control"} UI assets... (this may take a moment)`,
           "UI",
         ),
     });
     note(
       result.ok
-        ? stale
-          ? "UI rebuild complete."
-          : "UI build complete."
+        ? `UI ${stale ? "rebuild" : "build"} complete.`
         : (result.message ?? `UI ${stale ? "rebuild" : "build"} failed.`),
       "UI",
     );

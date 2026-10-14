@@ -1,8 +1,8 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("config-form-defaults");
+  }
+});
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
@@ -36,6 +36,84 @@ function settingsRow(page: Page, title: string): Locator {
 }
 
 suite.define(() => {
+  it("shows node automatic updates as inherited enabled and restores omission after opting out", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    const schema = buildConfigSchemaCore();
+    const config = (enabled?: boolean) => ({
+      nodeHost: {
+        autoUpdate: enabled === undefined ? {} : { enabled },
+        browserProxy: { enabled: false },
+      },
+    });
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initial = config();
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": {
+              appliedConfigHash: "node-auto-update-initial",
+              config: initial,
+              configRevisionHash: "node-auto-update-initial",
+              hash: "node-auto-update-initial",
+              issues: [],
+              raw: JSON.stringify(initial),
+              valid: true,
+            },
+            "config.schema": schema,
+          },
+        });
+        await page.goto(
+          `${suite.server.baseUrl}settings/infrastructure?section=nodeHost&advanced=1`,
+        );
+        const control = page.locator('select[aria-label="Node Automatic Updates Enabled"]');
+        const reveal = async () => {
+          await expect.poll(() => control.count()).toBe(1);
+          for (const details of await control.locator("xpath=ancestor::details").all()) {
+            if ((await details.getAttribute("open")) === null) {
+              await details.locator(":scope > summary").click();
+            }
+          }
+          await expect.poll(() => control.isVisible()).toBe(true);
+        };
+        await reveal();
+        expect((await control.locator("option:checked").textContent())?.trim()).toBe(
+          "Default (enabled)",
+        );
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
+        for (const [label, enabled] of [
+          ["Off", false],
+          ["Default (enabled)", undefined],
+        ] as const) {
+          const before = (await gateway.getRequests("config.set")).length;
+          await gateway.deferNext("config.set");
+          await control.selectOption({ label });
+          const request = await gateway.waitForRequest("config.set", { after: before });
+          expect(requestRaw(request)).toEqual(config(enabled));
+          await gateway.resolveDeferred("config.set");
+          await expect
+            .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+            .toContain("Saved");
+          await page.reload();
+          await reveal();
+          expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
+        }
+        if (captureUiProofEnabled) {
+          await page.locator("#config-section-nodeHost").screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "03-node-automatic-updates-default.png"),
+          });
+        }
+      },
+    );
+  });
+
   it("shows defaults and removes cleared optional scalars from config.set", async () => {
     await suite.withPage(
       {
@@ -152,12 +230,11 @@ suite.define(() => {
         await expect.poll(() => payloadRow.textContent()).toContain('Default: {"mode":"balanced"}');
         await expect
           .poll(() => profileBlock.textContent())
-          .toContain('Default: {"enabled":true,"mode":"balanced"}');
+          .not.toContain('{"enabled":true,"mode":"balanced"}');
         await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
         await expect.poll(() => tagsBlock.textContent()).toContain('Default: ["stable","default"]');
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await panel.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-explicit-overrides.png"),
@@ -189,15 +266,12 @@ suite.define(() => {
           .poll(() => retriesRow.getByRole("spinbutton").getAttribute("placeholder"))
           .toBe("Default: 3");
 
-        const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
         await gateway.resolveDeferred("config.set");
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
         expect((await page.reload())?.status()).toBe(200);
-        await expect
-          .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(configGetsBeforeReload + 1);
+        await gateway.waitForRequest("config.get");
 
         const reloadedPanel = page.locator("#config-section-panel");
         const reloadedModeRow = settingsRow(page, "Mode");

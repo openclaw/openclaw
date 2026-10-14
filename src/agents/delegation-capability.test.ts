@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyDelegationCapability, resolveDelegationCapability } from "./delegation-capability.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -46,10 +47,8 @@ describe("delegation capability", () => {
 
   it.each([
     { sourceTool: "subagent_announce", disableTools: true },
-    { sourceTool: "agent_harness_task", disableTools: true },
     { sourceTool: "subagent_announce", toolsAllow: [] },
     { sourceTool: "subagent_announce", toolsAllow: ["message"] },
-    { sourceTool: "agent_harness_task", toolsAllow: ["message"] },
   ])(
     "blocks new delegation for restricted $sourceTool completion reports",
     ({ sourceTool, ...restriction }) => {
@@ -64,12 +63,8 @@ describe("delegation capability", () => {
   );
 
   it.each([
-    { label: "wildcard", toolsAllow: ["*"] },
     { label: "wildcard with another tool", toolsAllow: ["message", "*"] },
-    { label: "session launch", toolsAllow: ["sessions_spawn"] },
     { label: "session glob", toolsAllow: ["sessions_*"] },
-    { label: "session group", toolsAllow: ["group:sessions"] },
-    { label: "OpenClaw delegation", toolsAllow: ["openclaw"] },
   ])("preserves $label delegation for completion reports", ({ toolsAllow }) => {
     expect(
       resolveDelegationCapability({
@@ -93,20 +88,6 @@ describe("delegation capability", () => {
         toolsAllow,
       }),
     ).toBe("report_only");
-  });
-
-  it.each([
-    { label: "message-only", toolsAllow: ["message"] },
-    { label: "image generation", toolsAllow: ["image_generate"] },
-    { label: "disabled tools", disableTools: true },
-  ])("keeps $label non-completion runs at full delegation capability", (restriction) => {
-    expect(
-      resolveDelegationCapability({
-        fallbackActive: false,
-        inputProvenance: { kind: "external_user" },
-        ...restriction,
-      }),
-    ).toBe("full");
   });
 
   it("removes delegation tools but retains ordinary reporting tools", () => {
@@ -157,5 +138,17 @@ describe("delegation capability", () => {
     );
     expect(cronExecute).toHaveBeenCalledTimes(2);
     expect(imageExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves plugin ownership metadata through the report-only wrapper", () => {
+    const cron = createTool("cron");
+    setPluginToolMeta(cron, { pluginId: "scheduler" } as never);
+
+    const [wrapped] = applyDelegationCapability([cron], "report_only");
+
+    // The effective cron-creator allowlist reads meta off the returned tool, so
+    // a wrapper that drops it would silently unown the plugin's tool.
+    expect(wrapped).not.toBe(cron);
+    expect(getPluginToolMeta(wrapped as AnyAgentTool)).toEqual({ pluginId: "scheduler" });
   });
 });

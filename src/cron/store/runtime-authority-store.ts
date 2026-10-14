@@ -1,11 +1,17 @@
 /** Downgrade-stable persistence for runtime-private cron authority. */
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
@@ -14,24 +20,10 @@ import type { CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 const CRON_RUNTIME_AUTHORITY_TABLE = "cron_job_runtime_authorities";
 const CRON_RUNTIME_AUTHORITY_FINGERPRINT_VERSION = 1;
 
-const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  authority_json TEXT,
-  authority_input_fingerprint TEXT,
-  recovery_required INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id),
-  FOREIGN KEY (store_key, job_id)
-    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
-  CHECK (recovery_required IN (0, 1)),
-  CHECK (
-    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
-    OR
-    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
-  )
-) STRICT;
-`;
+const ensureCronRuntimeAuthorityTable = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql(CRON_RUNTIME_AUTHORITY_TABLE),
+  { tables: [CRON_RUNTIME_AUTHORITY_TABLE] },
+);
 
 type CronAuthorityDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -45,7 +37,7 @@ type CronRuntimeAuthorityLoadResult = {
   repairJobIds: string[];
 };
 
-function getCronAuthorityKysely(db: DatabaseSync) {
+function getCronAuthorityKysely(db: EngineConnection) {
   return getNodeSqliteKysely<CronAuthorityDatabase>(db);
 }
 
@@ -78,15 +70,10 @@ function cronRuntimeAuthorityInputFingerprint(job: CronStoredJob): string {
     .digest("hex")}`;
 }
 
-/** Creates the additive table only when authority state is first persisted. */
-function ensureCronRuntimeAuthorityTable(db: DatabaseSync): void {
-  // sqlite-allow-raw -- feature-local additive schema DDL; data access uses Kysely.
-  db.exec(CRON_RUNTIME_AUTHORITY_SCHEMA_SQL);
-}
-
 function loadCronRuntimeAuthorityRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
+  jobIds: Iterable<string>,
 ): CronRuntimeAuthorityRow[] {
   if (!tableExists(db, CRON_RUNTIME_AUTHORITY_TABLE)) {
     return [];
@@ -96,7 +83,8 @@ function loadCronRuntimeAuthorityRows(
     getCronAuthorityKysely(db)
       .selectFrom("cron_job_runtime_authorities")
       .selectAll()
-      .where("store_key", "=", storeKey),
+      .where("store_key", "=", storeKey)
+      .where("job_id", "in", sqliteStringSet([...jobIds])),
   ).rows;
 }
 
@@ -121,13 +109,13 @@ function applyCronRuntimeAuthorityRow(
 
 /** Applies stored authority only when its authorization inputs still match exactly. */
 export function loadCronRuntimeAuthorities(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: CronStoredJob[];
 }): CronRuntimeAuthorityLoadResult {
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   const repairJobIds: string[] = [];
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, jobsById.keys())) {
     const job = jobsById.get(row.job_id);
     if (!job) {
       continue;
@@ -139,7 +127,7 @@ export function loadCronRuntimeAuthorities(params: {
   return { repairJobIds };
 }
 
-function writeRecoveryRow(db: DatabaseSync, storeKey: string, jobId: string): void {
+function writeRecoveryRow(db: EngineConnection, storeKey: string, jobId: string): void {
   executeSqliteQuerySync(
     db,
     getCronAuthorityKysely(db)
@@ -163,7 +151,7 @@ function writeRecoveryRow(db: DatabaseSync, storeKey: string, jobId: string): vo
 
 /** Revalidates downgrade-detected drift before retiring stale authority durably. */
 export function repairCronRuntimeAuthorityRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: CronStoredJob[];
   jobIds: readonly string[];
@@ -174,7 +162,7 @@ export function repairCronRuntimeAuthorityRows(params: {
   const requested = new Set(params.jobIds);
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   let repaired = false;
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, requested)) {
     if (!requested.has(row.job_id)) {
       continue;
     }
@@ -192,9 +180,11 @@ export function repairCronRuntimeAuthorityRows(params: {
 
 /** Reconciles child rows inside the same transaction as their owning cron rows. */
 export function replaceCronRuntimeAuthorityRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: readonly CronStoredJob[];
+  preserveExistingForJobIds?: ReadonlySet<string>;
+  writeMissingForJobIds?: ReadonlySet<string>;
 }): void {
   const hasPersistedAuthority = params.jobs.some(
     (job) => job.runtimeAuthority || job.runtimeAuthorityRecoveryRequired === true,
@@ -204,7 +194,30 @@ export function replaceCronRuntimeAuthorityRows(params: {
   }
   ensureCronRuntimeAuthorityTable(params.db);
   const database = getCronAuthorityKysely(params.db);
+  const existingRowsByJobId = params.preserveExistingForJobIds
+    ? new Map(
+        loadCronRuntimeAuthorityRows(
+          params.db,
+          params.storeKey,
+          params.jobs.map((job) => job.id),
+        ).map((row) => [row.job_id, row]),
+      )
+    : undefined;
   for (const job of params.jobs) {
+    // Doctor must not replay a pre-prompt authority snapshot. Keep the current
+    // child only while its inputs match; missing stays missing unless legacy job_json owns it.
+    if (params.preserveExistingForJobIds?.has(job.id)) {
+      const existingRow = existingRowsByJobId?.get(job.id);
+      if (existingRow) {
+        if (applyCronRuntimeAuthorityRow(job, existingRow) === "repair") {
+          writeRecoveryRow(params.db, params.storeKey, job.id);
+        }
+        continue;
+      }
+      if (!params.writeMissingForJobIds?.has(job.id)) {
+        continue;
+      }
+    }
     if (job.runtimeAuthorityRecoveryRequired === true) {
       writeRecoveryRow(params.db, params.storeKey, job.id);
       continue;

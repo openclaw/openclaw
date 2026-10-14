@@ -1,4 +1,6 @@
-// Final tag helpers detect final-answer tag regions in assistant text.
+import { skipWhitespace } from "../../../packages/tool-call-repair/src/grammar.js";
+import { findCodeRegions } from "./code-regions.js";
+
 type FinalTagMatch = {
   index: number;
   text: string;
@@ -8,81 +10,21 @@ type FinalTagMatch = {
 
 const FINAL_TAG_CANDIDATE_RE = /<[^<>]*>/g;
 
-function isWhitespace(char: string): boolean {
-  return /\s/.test(char);
-}
-
 function parseAttributeList(text: string): boolean {
-  let index = 0;
+  const attribute = /[^\s=/"'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?/y;
+  let index = skipWhitespace(text, 0);
   while (index < text.length) {
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (index >= text.length) {
-      return true;
-    }
-
-    const nameStart = index;
-    while (index < text.length) {
-      const char = text[index] ?? "";
-      if (isWhitespace(char) || char === "=") {
-        break;
-      }
-      if (char === "/" || char === '"' || char === "'" || char === "<" || char === ">") {
-        return false;
-      }
-      index += 1;
-    }
-    if (index === nameStart) {
+    attribute.lastIndex = index;
+    if (!attribute.test(text)) {
       return false;
     }
-
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (text[index] !== "=") {
-      continue;
-    }
-    index += 1;
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (index >= text.length) {
-      return false;
-    }
-
-    const quote = text[index];
-    if (quote === '"' || quote === "'") {
-      index += 1;
-      const end = text.indexOf(quote, index);
-      if (end === -1) {
-        return false;
-      }
-      index = end + 1;
-      continue;
-    }
-
-    const valueStart = index;
-    while (index < text.length && !isWhitespace(text[index] ?? "")) {
-      const char = text[index] ?? "";
-      if (char === '"' || char === "'" || char === "<" || char === ">") {
-        return false;
-      }
-      index += 1;
-    }
-    if (index === valueStart) {
-      return false;
-    }
+    index = skipWhitespace(text, attribute.lastIndex);
   }
   return true;
 }
 
 /** Parses a candidate `<final>` tag while rejecting lookalike names and malformed attributes. */
 function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
-  if (!text.startsWith("<") || !text.endsWith(">")) {
-    return null;
-  }
-
   let body = text.slice(1, -1).trimStart();
   let isClose = false;
   if (body.startsWith("/")) {
@@ -94,7 +36,7 @@ function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | nu
     return null;
   }
   const boundary = body[5] ?? "";
-  if (boundary && !isWhitespace(boundary) && boundary !== "/") {
+  if (boundary && !/\s/.test(boundary) && boundary !== "/") {
     return null;
   }
 
@@ -130,11 +72,27 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
   return matches;
 }
 
-/** Removes valid `<final>` tags while preserving their enclosed visible answer text. */
+/** Removes final-answer markers outside Markdown code while preserving their enclosed answer. */
 export function stripFinalTags(text: string): string {
+  const matches = findFinalTagMatches(text);
+  if (matches.length === 0) {
+    return text;
+  }
+  // Literal examples must survive the final delivery sanitizer, just as they do reasoning cleanup.
+  const codeRegions = findCodeRegions(text);
+  let codeIndex = 0;
   let output = "";
   let lastIndex = 0;
-  for (const match of findFinalTagMatches(text)) {
+  for (const match of matches) {
+    // Both lists are ordered; advance once rather than rescanning every code region per tag.
+    let codeRegion = codeRegions[codeIndex];
+    while (codeRegion && codeRegion.end <= match.index) {
+      codeIndex += 1;
+      codeRegion = codeRegions[codeIndex];
+    }
+    if (codeRegion && codeRegion.start <= match.index) {
+      continue;
+    }
     output += text.slice(lastIndex, match.index);
     lastIndex = match.index + match.text.length;
   }

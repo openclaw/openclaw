@@ -36,7 +36,7 @@ export function createNativeBootstrapController(params: {
     pairing: { relayUrl: string; token: string; gatewayUrl?: string };
     accessMode: "all";
     source: "native";
-    generation: number;
+    isCurrent(): boolean;
   }): Promise<{ ok?: boolean; existing?: boolean } | undefined>;
 }): {
   attempt(): Promise<NativeBootstrapResult>;
@@ -51,6 +51,16 @@ type RetiredCopilotStorage = {
     session: Pick<NativeBootstrapStorageArea, "remove">;
   };
 };
+
+export function requestRelayEnsure(
+  relayPort: number,
+  chromeApi?: {
+    runtime: {
+      connectNative(name: string): NativeMessagePort;
+      lastError?: { message?: string };
+    };
+  },
+): Promise<{ status: "spawned" | "running" | "skipped" | "unavailable" }>;
 
 export function prepareRetiredCopilotState(
   chromeApi?: RetiredCopilotStorage,

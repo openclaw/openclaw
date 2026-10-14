@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { verifySystemAgentInferenceWithFallback } from "./inference-fallback.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type { VerifySetupInferenceResult } from "./setup-inference.js";
 
 const runtime = {} as RuntimeEnv;
 
@@ -11,6 +12,7 @@ function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
     runner: "embedded",
     agentHarnessRuntimeOverride: "openclaw",
     runConfig: {},
+    sourceConfig: {},
     modelLabel: `${provider}/model`,
     provider,
     model: "model",
@@ -25,13 +27,54 @@ const config: OpenClawConfig = {
       model: { primary: "zeta/model" },
       systemAgent: { agentId: "requester" },
     },
-    list: [
-      { id: "requester", default: true, model: "zeta/model" },
-      { id: "beta", model: "beta/model" },
-      { id: "alpha", model: "alpha/model" },
-    ],
+    entries: {
+      requester: { model: "zeta/model" },
+      beta: { model: "beta/model" },
+      alpha: { model: "alpha/model" },
+    },
   },
 };
+
+async function verifyAfterFailure(
+  failure: Extract<VerifySetupInferenceResult, { ok: false }>,
+  {
+    includeBeta = false,
+    successfulAgentId = "alpha-other",
+  }: { includeBeta?: boolean; successfulAgentId?: "alpha-other" | "beta" } = {},
+) {
+  const attempts: string[] = [];
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: { model: { primary: "alpha/model" } },
+      entries: {
+        requester: { model: "alpha/model" },
+        "alpha-other": { model: "alpha/model" },
+        ...(includeBeta ? { beta: { model: "beta/model" } } : {}),
+      },
+    },
+  };
+  const result = await verifySystemAgentInferenceWithFallback({
+    requestingAgentId: "requester",
+    runtime,
+    deps: {
+      readConfig: async () => cfg,
+      resolveRoute: async (_cfg, agentId) => route(agentId, agentId === "beta" ? "beta" : "alpha"),
+      hasAuth: async () => true,
+      verify: async ({ agentId }) => {
+        attempts.push(agentId);
+        return agentId === successfulAgentId
+          ? ({
+              ok: true,
+              modelRef: agentId === "beta" ? "beta/model" : "alpha/model",
+              latencyMs: 1,
+              binding: {},
+            } as never)
+          : { ...failure };
+      },
+    },
+  });
+  return { result, attempts };
+}
 
 describe("system-agent inference fallback", () => {
   it("does not claim providers are unconfigured when no route can be verified", async () => {
@@ -121,11 +164,11 @@ describe("system-agent inference fallback", () => {
     const duplicateProviderConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "zeta/model" } },
-        list: [
-          { id: "requester", model: "zeta/model" },
-          { id: "alpha-bad", model: "alpha/model" },
-          { id: "alpha-good", model: "alpha/model" },
-        ],
+        entries: {
+          requester: { model: "zeta/model" },
+          "alpha-bad": { model: "alpha/model" },
+          "alpha-good": { model: "alpha/model" },
+        },
       },
     };
 
@@ -151,31 +194,10 @@ describe("system-agent inference fallback", () => {
   });
 
   it("tries another credential owner of the same provider after an auth failure", async () => {
-    const attempts: string[] = [];
-    const sameProviderConfig: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
-      },
-    };
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => sameProviderConfig,
-        resolveRoute: async (_cfg, agentId) => route(agentId, "alpha"),
-        hasAuth: async () => true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "alpha-other"
-            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "auth", error: "stale key" } as const);
-        },
-      },
+    const { result, attempts } = await verifyAfterFailure({
+      ok: false,
+      status: "auth",
+      error: "stale key",
     });
 
     expect(result.ok).toBe(true);
@@ -183,31 +205,10 @@ describe("system-agent inference fallback", () => {
   });
 
   it("treats a rate limit as credential-scoped and tries another owner", async () => {
-    const attempts: string[] = [];
-    const sameProviderConfig: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-        ],
-      },
-    };
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => sameProviderConfig,
-        resolveRoute: async (_cfg, agentId) => route(agentId, "alpha"),
-        hasAuth: async () => true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "alpha-other"
-            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "rate_limit", error: "429" } as const);
-        },
-      },
+    const { result, attempts } = await verifyAfterFailure({
+      ok: false,
+      status: "rate_limit",
+      error: "429",
     });
 
     expect(result.ok).toBe(true);
@@ -215,68 +216,20 @@ describe("system-agent inference fallback", () => {
   });
 
   it("tries another route of the same provider after a malformed response", async () => {
-    const attempts: string[] = [];
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
-      },
-    };
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => cfg,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "beta" ? "beta" : "alpha"),
-        hasAuth: async () => true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "alpha-other"
-            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "format", error: "bad response" } as const);
-        },
-      },
-    });
+    const { result, attempts } = await verifyAfterFailure(
+      { ok: false, status: "format", error: "bad response" },
+      { includeBeta: true },
+    );
 
     expect(result.ok).toBe(true);
     expect(attempts).toEqual(["requester", "alpha-other"]);
   });
 
   it("retires the whole provider after a provider-wide failure", async () => {
-    const attempts: string[] = [];
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "alpha/model" } },
-        list: [
-          { id: "requester", model: "alpha/model" },
-          { id: "alpha-other", model: "alpha/model" },
-          { id: "beta", model: "beta/model" },
-        ],
-      },
-    };
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => cfg,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "beta" ? "beta" : "alpha"),
-        hasAuth: async () => true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "beta"
-            ? ({ ok: true, modelRef: "beta/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "unavailable", error: "down" } as const);
-        },
-      },
-    });
+    const { result, attempts } = await verifyAfterFailure(
+      { ok: false, status: "unavailable", error: "down" },
+      { includeBeta: true, successfulAgentId: "beta" },
+    );
 
     expect(result.ok).toBe(true);
     expect(attempts).toEqual(["requester", "beta"]);

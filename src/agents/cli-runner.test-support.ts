@@ -1,14 +1,13 @@
-/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
+/** Shared CLI runner test doubles for supervisor, bootstrap, and session-event seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export {
   createManagedRun,
-  enqueueSystemEventMock,
-  requestHeartbeatMock,
+  enqueueSessionEventMock,
   supervisorSpawnMock,
 } from "./cli-runner/execute.test-support.js";
 

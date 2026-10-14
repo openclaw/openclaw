@@ -1,5 +1,6 @@
 {
   "id": "kilocode",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -8,6 +9,9 @@
   "modelPricing": {
     "providers": {
       "kilocode": {
+        "modelsDev": {
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },
@@ -48,6 +52,15 @@
     "properties": {}
   },
   "modelCatalog": {
+    "aliases": {
+      "kilo": {
+        "provider": "kilocode",
+        "api": "openai-completions"
+      }
+    },
+    "modelsDev": {
+      "kilocode": "kilo"
+    },
     "providers": {
       "kilocode": {
         "baseUrl": "https://api.kilo.ai/api/gateway/",

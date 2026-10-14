@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it } from "vitest";
@@ -8,6 +9,7 @@ import plugin from "../../extensions/codex/index.js";
 import { setRuntimeConfigSnapshot } from "../../src/config/config.js";
 import { loadTranscriptEvents } from "../../src/config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../src/gateway/session-create-service.js";
+import { acquireGatewayStateOwner } from "../../src/infra/gateway-state-owner.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import {
   markPluginRegistryActive,
@@ -15,6 +17,7 @@ import {
 } from "../../src/plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
@@ -22,7 +25,17 @@ it("adopts duplicate native titles without claiming labels or replacing local na
   await withOpenClawTestState({ label: "native-adoption-naming" }, async (state) => {
     const nativeHome = state.path("native-home");
     await fs.mkdir(nativeHome);
-    await withEnvAsync({ CODEX_HOME: nativeHome }, async () => {
+    // Catalog persistence and foreground adoption share the serving Gateway's custody.
+    const lease = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+      },
+    });
+    const run = async () => {
       // Only the native service is synthetic. The public plugin, real client,
       // registry, creator, SQLite history, and binding owner all execute.
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -81,8 +94,12 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           "",
           ` ${"界".repeat(499)}${"🦞".repeat(300)} `,
         ];
+        // WebSocket supervision selects the agent's native home, not process CODEX_HOME.
+        const sessionsRoot = path.join(state.agentDir(), "codex-home", "sessions");
+        await fs.mkdir(sessionsRoot, { recursive: true });
         const threads = titles.map((name, index) => ({
           id: `01980000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+          path: path.join(sessionsRoot, `rollout-${index}.jsonl`),
           name,
           cwd: state.workspaceDir,
           projectId: null,
@@ -106,6 +123,26 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             },
           ],
         }));
+        for (const thread of threads) {
+          const timestamp = new Date(thread.createdAt * 1000).toISOString();
+          await fs.writeFile(
+            thread.path,
+            `${JSON.stringify({
+              timestamp,
+              type: "session_meta",
+              payload: {
+                session_id: thread.id,
+                id: thread.id,
+                timestamp,
+                cwd: thread.cwd,
+                source: thread.source,
+                originator: "codex_cli_rs",
+                cli_version: "0.151.0",
+                model_provider: thread.modelProvider,
+              },
+            })}\n`,
+          );
+        }
         server.on("connection", (socket) => {
           socket.on("message", (data) => {
             const request = JSON.parse(rawDataToString(data)) as {
@@ -140,6 +177,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
         });
         builder.registry.plugins.push(record);
         markPluginRegistryActive(builder.registry);
+        let phase = "register Codex plugin";
         try {
           plugin.register(
             builder.createApi(record, {
@@ -150,18 +188,22 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           const provider = builder.registry.sessionCatalogs.find(
             (entry) => entry.provider.id === "codex",
           )!.provider;
-          const continueThread = (threadId: string) =>
-            provider.continueSession!({
+          const continueThread = (threadId: string) => {
+            phase = `continue native thread ${threadId}`;
+            return provider.continueSession!({
               agentId: "main",
               hostId: "gateway:local",
               threadId,
               clientScopes: ["operator.admin"],
             });
-          const getEntry = (sessionKey: string) =>
-            runtime.agent.session.getSessionEntry({
+          };
+          const getEntry = (sessionKey: string) => {
+            phase = `read session entry ${sessionKey}`;
+            return runtime.agent.session.getSessionEntry({
               sessionKey,
               readConsistency: "latest",
             })!;
+          };
 
           // Preserve the reported order: the second same-agent adoption used to
           // fail unique-label admission after the first had durably committed.
@@ -176,6 +218,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(entry.displayName).toBe("Shared native title");
             expect(entry.label).toBeUndefined();
             expect(entry.initializationPending).toBeUndefined();
+            phase = `load transcript ${result.sessionKey}`;
             const transcript = await loadTranscriptEvents({
               sessionKey: result.sessionKey,
               sessionId: entry.sessionId,
@@ -184,11 +227,13 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(JSON.stringify(transcript)).toContain(`Answer ${index}`);
           }
 
+          phase = `patch operator label ${first.sessionKey}`;
           await runtime.agent.session.patchSessionEntry({
             sessionKey: first.sessionKey,
             update: () => ({ label: "Operator chosen label" }),
           });
           // Equality with the old source name cannot identify label authorship.
+          phase = `patch source-matching label ${second.sessionKey}`;
           await runtime.agent.session.patchSessionEntry({
             sessionKey: second.sessionKey,
             update: () => ({ label: "Shared native title" }),
@@ -206,6 +251,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             });
           }
 
+          phase = "create first explicit-label session";
           const explicitA = await createGatewaySession({
             cfg: config,
             key: "agent:main:explicit-a",
@@ -213,6 +259,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             commandSource: "test",
             operatorRoleActor: { kind: "system" },
           });
+          phase = "create duplicate explicit-label session";
           const explicitB = await createGatewaySession({
             cfg: config,
             key: "agent:main:explicit-b",
@@ -236,6 +283,8 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(entry.displayName).toBe(thread.name?.trim() ? "界".repeat(499) : undefined);
           }
           expect(keys.size).toBe(titles.length);
+        } catch (cause) {
+          throw new Error(`Native adoption naming failed during: ${phase}`, { cause });
         } finally {
           for (const { harness } of builder.registry.agentHarnesses) {
             await harness.dispose?.();
@@ -250,6 +299,15 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           server.close((error) => (error ? reject(error) : resolve()));
         });
       }
-    });
+    };
+    try {
+      await withEnvAsync({ CODEX_HOME: nativeHome }, run);
+    } finally {
+      try {
+        await state.restoreEnv();
+      } finally {
+        lease.release();
+      }
+    }
   });
 });

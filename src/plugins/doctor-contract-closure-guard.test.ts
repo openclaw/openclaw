@@ -1,13 +1,16 @@
 // Doctor contract closure guard tests keep enumeration paths dependency-light.
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
-import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
 const FORBIDDEN_SPECIFIER = "openclaw/plugin-sdk/agent-runtime";
 type ClosureKind = "doctor-contract" | "legacy-setup";
@@ -16,6 +19,15 @@ type ClosureKind = "doctor-contract" | "legacy-setup";
 // legacy-setup closures (telegram sent-message-cache, discord thread-bindings.state)
 // still share sync runtime modules with these barrels and are a named follow-up.
 const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<ClosureKind> }>([
+  [
+    "matrix-js-sdk/lib/matrix.js",
+    {
+      reason:
+        "the Matrix SDK barrel loads the live client, crypto and WebRTC graph; " +
+        "keep persisted-state codecs separate from live client stores",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
   [
     FORBIDDEN_SPECIFIER,
     {
@@ -144,6 +156,15 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     },
   ],
   [
+    "openclaw/plugin-sdk/memory-core-host-engine-schema",
+    {
+      reason:
+        "the memory schema barrel loads SQLite/FTS migration helpers during doctor enumeration; " +
+        "defer sidecar writers behind a dynamic import after legacy state is found",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
     "openclaw/plugin-sdk/memory-host-core",
     {
       reason:
@@ -195,12 +216,12 @@ function resolveRelativeSourceModule(importerPath: string, specifier: string): s
 }
 
 function propertyNameText(name: ts.PropertyName): string | null {
-  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : null;
+  return ts.isIdentifier(name) || ts.isStringLiteralLikeNode(name) ? name.text : null;
 }
 
 function collectLegacySetupSpecifiers(setupEntryPath: string): string[] {
   const source = fs.readFileSync(setupEntryPath, "utf8");
-  const sourceFile = ts.createSourceFile(setupEntryPath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(setupEntryPath, source);
   const specifiers = new Set<string>();
 
   const visit = (node: ts.Node) => {
@@ -213,13 +234,13 @@ function collectLegacySetupSpecifiers(setupEntryPath: string): string[] {
         if (
           ts.isPropertyAssignment(property) &&
           propertyNameText(property.name) === "specifier" &&
-          ts.isStringLiteralLike(property.initializer)
+          ts.isStringLiteralLikeNode(property.initializer)
         ) {
           specifiers.add(property.initializer.text);
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return [...specifiers].toSorted();
@@ -227,16 +248,19 @@ function collectLegacySetupSpecifiers(setupEntryPath: string): string[] {
 
 function collectStaticValueReferenceKeys(sourceFile: ts.SourceFile): Set<string> {
   const keys = new Set<string>();
-  const add = (kind: "commonjs-require" | "import" | "export", specifier: ts.StringLiteralLike) => {
+  const add = (
+    kind: "commonjs-require" | "import" | "export",
+    specifier: ts.StringLiteralLikeNode,
+  ) => {
     const line = sourceFile.getLineAndCharacterOfPosition(specifier.getStart(sourceFile)).line + 1;
     keys.add(`${kind}\0${line}\0${specifier.text}`);
   };
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLikeNode(node.moduleSpecifier)) {
       const clause = node.importClause;
       const hasValueBinding =
         !clause ||
-        (!clause.isTypeOnly &&
+        (clause.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
           (Boolean(clause.name) ||
             (clause.namedBindings !== undefined &&
               (ts.isNamespaceImport(clause.namedBindings) ||
@@ -248,7 +272,7 @@ function collectStaticValueReferenceKeys(sourceFile: ts.SourceFile): Set<string>
       ts.isExportDeclaration(node) &&
       !node.isTypeOnly &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       const clause = node.exportClause;
       if (
@@ -263,21 +287,20 @@ function collectStaticValueReferenceKeys(sourceFile: ts.SourceFile): Set<string>
       !node.isTypeOnly &&
       ts.isExternalModuleReference(node.moduleReference) &&
       node.moduleReference.expression &&
-      ts.isStringLiteralLike(node.moduleReference.expression)
+      ts.isStringLiteralLikeNode(node.moduleReference.expression)
     ) {
       add("commonjs-require", node.moduleReference.expression);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return keys;
 }
 
 function collectStaticValueReferences(filePath: string, source: string): ModuleReference[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
-  return collectModuleReferencesFromSource(source, {
-    fileName: filePath,
+  return collectModuleReferencesFromSource(sourceFile, {
     acceptSpecifier: (specifier) =>
       FORBIDDEN_SPECIFIER_RULES.has(specifier) || specifier.startsWith("."),
   }).filter((reference) =>
@@ -293,7 +316,11 @@ function collectClosureEntries(): ClosureEntry[] {
   };
   for (const record of loadBundledPluginManifestRegistry({ env }).plugins) {
     const pluginRoot = path.resolve(record.rootDir);
-    const doctorContractPath = resolvePluginDoctorContractArtifactPath(pluginRoot);
+    const doctorContractPath = resolvePluginDoctorContractArtifact({
+      ...record,
+      rootDir: pluginRoot,
+      sourcePreferred: true,
+    })?.modulePath;
     // A declaration listing no surface gates the artifact off every enumeration
     // path, exactly as `resolvePluginDoctorContracts` does, so its closure cost
     // is never paid. Absent declarations still load eagerly and are enforced.
@@ -411,10 +438,9 @@ function isKyselySpecifier(specifier: string): boolean {
 // specifiers are node builtins or npm/workspace packages; only the repo root
 // depends on kysely, so every kysely edge is reachable through this resolution.
 function collectTraversalValueReferences(filePath: string, source: string): ModuleReference[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
-  return collectModuleReferencesFromSource(source, {
-    fileName: filePath,
+  return collectModuleReferencesFromSource(sourceFile, {
     acceptSpecifier: (specifier) =>
       isKyselySpecifier(specifier) ||
       specifier.startsWith(".") ||
