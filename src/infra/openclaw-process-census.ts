@@ -32,10 +32,47 @@ type ProcessArtifactCustody =
   | { kind: "non-holder" }
   | { kind: "unresolved"; reason: string };
 
+function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
+  return (
+    command !== undefined &&
+    "argv" in command &&
+    command.argv.length === 2 &&
+    command.argv[1] === "--user" &&
+    (command.argv[0] === "/usr/lib/systemd/systemd" || command.argv[0] === "/lib/systemd/systemd")
+  );
+}
+
+function isStandardSystemdLoginProcess(
+  command: ProcessCommand | undefined,
+  parentCommand: ProcessCommand | undefined,
+  inspectorUid: number | undefined,
+): boolean {
+  if (
+    process.platform !== "linux" ||
+    inspectorUid === undefined ||
+    command?.uid !== inspectorUid ||
+    !("argv" in command)
+  ) {
+    return false;
+  }
+  // The manager changes to / before serving, including on reexec. A census
+  // during early initialization can miss its inherited cwd, which it does not
+  // use for OpenClaw artifacts. PAM's child only settles that login session;
+  // require its same-account manager parent, never its process name alone.
+  return (
+    isStandardSystemdUserManager(command) ||
+    (command.argv.length === 1 &&
+      command.argv[0] === "(sd-pam)" &&
+      parentCommand?.uid === command.uid &&
+      isStandardSystemdUserManager(parentCommand))
+  );
+}
+
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
+  parentCommand: ProcessCommand | undefined,
 ): ProcessArtifactCustody {
   try {
     const argv = command && "argv" in command ? command.argv : [];
@@ -75,14 +112,7 @@ function classifyProcessArtifactCustody(
         command.uid !== undefined &&
         inspectorUid !== undefined &&
         (command.uid !== inspectorUid ||
-          // systemd's user manager changes to / before serving, including on reexec.
-          // Its non-dumpable process can deny /proc cwd even to the same account.
-          // A brief pre-initialization census may miss its inherited cwd; the
-          // manager does not consume OpenClaw artifacts before that directory change.
-          (process.platform === "linux" &&
-            argv.length === 2 &&
-            argv[1] === "--user" &&
-            (argv[0] === "/usr/lib/systemd/systemd" || argv[0] === "/lib/systemd/systemd")))
+          isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
       ) {
         return { kind: "non-holder" };
       }
@@ -255,12 +285,21 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           result.matchingPids.push(pid);
           continue;
         }
+        const inspectorUid = process.getuid?.();
         const foreign =
           observation?.foreignOwner ||
           (command?.uid !== undefined &&
-            process.getuid?.() !== undefined &&
-            command.uid !== process.getuid?.());
-        if ((!argv || cwd === undefined) && !foreign) {
+            inspectorUid !== undefined &&
+            command.uid !== inspectorUid);
+        if (
+          (!argv || cwd === undefined) &&
+          !foreign &&
+          !isStandardSystemdLoginProcess(
+            command,
+            byPid.get(command?.ppid ?? 0)?.command,
+            inspectorUid,
+          )
+        ) {
           result.unverifiedPids.push(pid);
           if (windows) {
             result.error = "Retry update repair as Administrator using the same Windows account.";
@@ -268,7 +307,12 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
+      const custody = classifyProcessArtifactCustody(
+        command,
+        pid,
+        directories.get(pid),
+        byPid.get(command?.ppid ?? 0)?.command,
+      );
       if (custody.kind === "unresolved") {
         throw new Error(`Could not classify PID ${pid}: ${custody.reason}`);
       }

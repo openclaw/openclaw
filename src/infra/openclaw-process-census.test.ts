@@ -527,6 +527,55 @@ it.each(["/usr/lib/systemd/systemd", "/lib/systemd/systemd"])(
   },
 );
 
+it("excludes only the same-account PAM helper of a standard user manager", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  rows.get(peer + 1)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer + 1] });
+  rows.get(peer + 1)!.cwd = denied();
+  rows.get(peer + 1)!.ppid = 1;
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    error: expect.stringContaining(
+      `Could not classify PID ${peer + 1}: working directory is unavailable`,
+    ),
+  });
+});
+
+it("does not let protected systemd login processes block update-repair evidence", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+  const handoffRefs = {
+    runId: "systemd-update-run",
+    artifactPaths: ["/tmp/openclaw-update-runtime-Ab1234"],
+  };
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [],
+    unverifiedPids: [],
+  });
+  rows.get(peer + 1)!.cwd = handoffRefs.artifactPaths[0];
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [peer + 1],
+    unverifiedPids: [],
+  });
+  rows.get(peer + 1)!.cwd = denied();
+  rows.get(peer + 1)!.ppid = 1;
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [],
+    unverifiedPids: [peer + 1],
+  });
+});
+
 it.each(["foreign", "same", "unknown process", "unknown inspector"])(
   "requires a positively foreign UID to exclude systemd with denied cwd (%s)",
   (owner) => {
