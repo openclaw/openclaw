@@ -59,14 +59,15 @@ function createGatewayDiscoveryBeacon(): GatewayBonjourBeacon {
 }
 
 describe("promptRemoteGatewayConfig", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "OPENCLAW_GATEWAY_TOKEN"]);
 
   async function runRemotePrompt(params: {
+    cfg?: OpenClawConfig;
     text: WizardPrompter["text"];
     selectResponses: Partial<Record<string, string>>;
     confirm: boolean;
   }) {
-    const cfg = {} as OpenClawConfig;
+    const cfg = params.cfg ?? {};
     const prompter = createPrompter({
       confirm: vi.fn(async () => params.confirm),
       select: createSelectPrompter(params.selectResponses),
@@ -87,75 +88,194 @@ describe("promptRemoteGatewayConfig", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it.each([
-    ["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }],
-    ["clears", "wss://other.example/rpc", undefined],
-  ])("%s edge auth based on the remote Gateway scope", async (_label, nextUrl, expected) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example/rpc/",
-          edgeAuth: { "X-Edge-Auth": "test-secret" },
-        },
-      },
+    { name: "trimmed URL", auth: "token", url: " wss://gateway.example/rpc " },
+    { name: "changed path", auth: "token", url: "wss://gateway.example/other" },
+    {
+      name: "changed URL seeded by onboarding",
+      auth: "token",
+      url: "wss://other.example/rpc",
+      seededUrl: "wss://other.example/rpc",
+    },
+    {
+      name: "seeded URL edited back to the original endpoint",
+      auth: "token",
+      url: "wss://gateway.example/rpc",
+      seededUrl: "wss://other.example/rpc",
+    },
+    {
+      name: "seeded URL without a previously configured endpoint",
+      auth: "token",
+      url: "wss://other.example/rpc",
+      seededUrl: "wss://other.example/rpc",
+      noOriginalUrl: true,
+    },
+  ])("scopes saved remote settings for $name", async ({ auth, url, seededUrl, noOriginalUrl }) => {
+    const remote = {
+      url: noOriginalUrl ? undefined : " wss://gateway.example/rpc ",
+      transport: "direct" as const,
+      remotePort: 19443,
+      token: "existing-token",
+      password: "existing-password",
+      edgeAuth: { "X-Edge-Auth": "test-secret" },
+      tlsFingerprint: "ab".repeat(32),
+      sshTarget: "operator@gateway.example",
+      sshIdentity: "/tmp/test-identity",
+      sshHostKeyPolicy: "strict" as const,
     };
-    const prompter = createPrompter({
-      confirm: vi.fn(async () => false),
-      select: createSelectPrompter({ "Gateway auth": "off" }),
-      text: vi.fn(async (params) =>
-        params.message === "Gateway WebSocket URL" ? nextUrl : "",
-      ) as WizardPrompter["text"],
-    });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
-
-    expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
-  });
-
-  it("defaults discovered direct remote URLs to wss://", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { mode: "remote", remote: { ...remote, url: seededUrl ?? remote.url } },
+    };
     detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
-
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        expect(params.initialValue).toBe("wss://gateway.tailnet.ts.net:18789");
-        expect(params.validate?.(String(params.initialValue))).toBeUndefined();
-        return String(params.initialValue);
-      }
-      if (params.message === "Gateway token") {
-        return "token-123";
-      }
-      return "";
-    }) as WizardPrompter["text"];
-
-    const { next, prompter } = await runRemotePrompt({
-      text,
-      confirm: true,
-      selectResponses: {
-        "Select gateway": "0",
-        "Connection method": "direct",
-        "Gateway auth": "token",
-      },
+    const prompter = createPrompter({
+      confirm: vi.fn(async ({ message }) => message === "Continue without a Gateway secret?"),
+      select: createSelectPrompter({}),
+      text: vi.fn(async ({ message }) =>
+        message === "Gateway WebSocket URL" ? url : auth === "token" ? "entered-secret" : "",
+      ),
     });
 
-    expect(next.gateway?.mode).toBe("remote");
-    expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
-    expect(next.gateway?.remote?.token).toBe("token-123");
-    expect(next.gateway?.remote?.tlsFingerprint).toBe("sha256:abc123");
-    expect(prompter.note).toHaveBeenCalledWith(
-      [
-        "Direct remote access defaults to TLS.",
-        "Using: wss://gateway.tailnet.ts.net:18789",
-        "TLS pin: sha256:abc123",
-        "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
-      ].join("\n"),
-      "Direct remote",
-    );
+    const next = await promptRemoteGatewayConfig(cfg, prompter, {
+      secretInputMode: "plaintext",
+      ...(seededUrl ? { remoteOriginUrl: remote.url } : {}),
+    });
+
+    const unchanged = url.trim() === remote.url?.trim();
+    expect(next.gateway?.remote).toEqual({
+      ...(unchanged ? remote : {}),
+      url: url.trim(),
+      token: auth === "token" ? "entered-secret" : undefined,
+      password: undefined,
+    });
+    expect(cfg.gateway?.remote).toEqual({ ...remote, url: seededUrl ?? remote.url });
+    expect(discoverGatewayBeacons).not.toHaveBeenCalled();
   });
+
+  it.each([["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }]])(
+    "%s edge auth based on the remote Gateway scope",
+    async (_label, nextUrl, expected) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example/rpc/",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+          },
+        },
+      };
+      const prompter = createPrompter({
+        confirm: vi.fn(async ({ message }) => message === "Continue without a Gateway secret?"),
+        select: createSelectPrompter({}),
+        text: vi.fn(async (params) =>
+          params.message === "Gateway WebSocket URL" ? nextUrl : "",
+        ) as WizardPrompter["text"],
+      });
+
+      const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+      expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
+    },
+  );
+
+  it.each(["wss://gateway.tailnet.ts.net:18789"])(
+    "pins a trusted discovery endpoint with previous URL %s",
+    async (previousUrl) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
+
+      const text: WizardPrompter["text"] = vi.fn(async (params) => {
+        if (params.message === "Gateway WebSocket URL") {
+          expect(params.initialValue).toBe("wss://gateway.tailnet.ts.net:18789");
+          expect(params.validate?.(String(params.initialValue))).toBeUndefined();
+          return String(params.initialValue);
+        }
+        if (params.message === "Gateway secret") {
+          return "token-123";
+        }
+        return "";
+      }) as WizardPrompter["text"];
+
+      const { next, prompter } = await runRemotePrompt({
+        cfg: {
+          gateway: {
+            remote: {
+              url: previousUrl,
+              transport: "ssh",
+              sshTarget: "operator@old.example",
+              tlsFingerprint: "sha256:old-pin",
+            },
+          },
+        },
+        text,
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "direct",
+        },
+      });
+
+      expect(next.gateway?.mode).toBe("remote");
+      expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
+      expect(next.gateway?.remote?.transport).toBe("direct");
+      expect(next.gateway?.remote?.token).toBe("token-123");
+      expect(next.gateway?.remote?.tlsFingerprint).toBe("sha256:abc123");
+      expect(prompter.note).toHaveBeenCalledWith(
+        [
+          "Direct remote access defaults to TLS.",
+          "Using: wss://gateway.tailnet.ts.net:18789",
+          "TLS pin: sha256:abc123",
+          "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+        ].join("\n"),
+        "Direct remote",
+      );
+    },
+  );
+
+  it.each([
+    { port: 18789, sshPort: undefined },
+    { port: 29443, sshPort: 2222 },
+  ])(
+    "uses discovered Gateway port $port and SSH port $sshPort without retaining an old route",
+    async ({ port, sshPort }) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([
+        { ...createGatewayDiscoveryBeacon(), port, gatewayPort: 41111, sshPort },
+      ]);
+      const { next, prompter } = await runRemotePrompt({
+        cfg: {
+          gateway: {
+            remote: {
+              url: "ws://127.0.0.1:18789",
+              transport: "ssh",
+              sshTarget: "operator@old.example",
+              sshIdentity: "/tmp/old-identity",
+              sshHostKeyPolicy: "openssh",
+              remotePort: 19443,
+              token: "old-tunnel-secret",
+            },
+          },
+        },
+        text: vi.fn(async (params) =>
+          params.message === "Gateway WebSocket URL" ? String(params.initialValue) : "",
+        ),
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "ssh",
+        },
+      });
+
+      expect(next.gateway?.remote).toEqual({ url: "ws://127.0.0.1:18789" });
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.tailnet.ts.net${sshPort ? ` -p ${sshPort}` : ""}`,
+        ),
+        "SSH tunnel",
+      );
+    },
+  );
 
   it("falls back to manual URL entry when discovery trust is declined", async () => {
     detectBinary.mockResolvedValue(true);
@@ -188,7 +308,7 @@ describe("promptRemoteGatewayConfig", () => {
       if (params.message.startsWith("Trust this gateway")) {
         return false;
       }
-      return false;
+      return params.message === "Continue without a Gateway secret?";
     });
 
     const prompter = createPrompter({
@@ -204,62 +324,70 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
   });
 
-  it("trusts discovery endpoint without fingerprint and omits tlsFingerprint", async () => {
-    detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([
-      {
-        instanceName: "gw",
-        displayName: "Gateway",
-        host: "gw.example",
-        port: 18789,
-      },
-    ]);
+  it.each([undefined, "sha256:existing-pin"])(
+    "trusts discovery without an advertised fingerprint and retains existing pin %s",
+    async (tlsFingerprint) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([
+        {
+          instanceName: "gw",
+          displayName: "Gateway",
+          host: "gw.example",
+          port: 18789,
+        },
+      ]);
 
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        return String(params.initialValue);
-      }
-      return "";
-    }) as WizardPrompter["text"];
+      const text: WizardPrompter["text"] = vi.fn(async (params) => {
+        if (params.message === "Gateway WebSocket URL") {
+          return String(params.initialValue);
+        }
+        return "";
+      }) as WizardPrompter["text"];
 
-    const { next } = await runRemotePrompt({
-      text,
-      confirm: true,
-      selectResponses: {
-        "Select gateway": "0",
-        "Connection method": "direct",
-        "Gateway auth": "off",
-      },
-    });
+      const { next } = await runRemotePrompt({
+        cfg: { gateway: { remote: { url: "wss://gw.example:18789", tlsFingerprint } } },
+        text,
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "direct",
+        },
+      });
 
-    expect(next.gateway?.remote?.url).toBe("wss://gw.example:18789");
-    expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
-  });
+      expect(next.gateway?.remote?.url).toBe("wss://gw.example:18789");
+      expect(next.gateway?.remote?.tlsFingerprint).toBe(tlsFingerprint);
+    },
+  );
 
-  it("drops discovery tlsFingerprint when the URL is edited after trust confirmation", async () => {
-    detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
+  it.each([undefined, "wss://other.example:443"])(
+    "scopes discovery and saved pins after URL edits with previous URL %s",
+    async (previousUrl) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
 
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        return "wss://other.example:443";
-      }
-      return "";
-    }) as WizardPrompter["text"];
+      const text: WizardPrompter["text"] = vi.fn(async (params) => {
+        if (params.message === "Gateway WebSocket URL") {
+          return "wss://other.example:443";
+        }
+        return "";
+      }) as WizardPrompter["text"];
 
-    const { next } = await runRemotePrompt({
-      text,
-      confirm: true,
-      selectResponses: {
-        "Select gateway": "0",
-        "Connection method": "direct",
-        "Gateway auth": "off",
-      },
-    });
+      const { next } = await runRemotePrompt({
+        cfg: { gateway: { remote: { url: previousUrl, tlsFingerprint: "sha256:old-pin" } } },
+        text,
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "direct",
+        },
+      });
 
-    expect(next.gateway?.remote?.url).toBe("wss://other.example:443");
-    expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
-  });
+      expect(next.gateway?.remote?.url).toBe("wss://other.example:443");
+      expect(next.gateway?.remote?.tlsFingerprint).toBe(
+        previousUrl === "wss://other.example:443" ? "sha256:old-pin" : undefined,
+      );
+    },
+  );
 
   it("does not route from TXT-only discovery metadata", async () => {
     detectBinary.mockResolvedValue(true);
@@ -277,9 +405,6 @@ describe("promptRemoteGatewayConfig", () => {
     const select: WizardPrompter["select"] = vi.fn(async (params) => {
       if (params.message === "Select gateway") {
         return "0" as never;
-      }
-      if (params.message === "Gateway auth") {
-        return "off" as never;
       }
       return (params.options[0]?.value ?? "") as never;
     });
@@ -320,8 +445,8 @@ describe("promptRemoteGatewayConfig", () => {
 
     const { next } = await runRemotePrompt({
       text,
-      confirm: false,
-      selectResponses: { "Gateway auth": "off" },
+      confirm: true,
+      selectResponses: {},
     });
 
     expect(next.gateway?.mode).toBe("remote");
@@ -342,12 +467,33 @@ describe("promptRemoteGatewayConfig", () => {
 
     const { next } = await runRemotePrompt({
       text,
-      confirm: false,
-      selectResponses: { "Gateway auth": "off" },
+      confirm: true,
+      selectResponses: {},
     });
 
     expect(next.gateway?.mode).toBe("remote");
     expect(next.gateway?.remote?.url).toBe("ws://openclaw-gateway.ai:18789");
+  });
+
+  it("allows explicit no-auth confirmation even when reference storage is selected", async () => {
+    const prompter = createPrompter({
+      text: vi.fn(async () => "wss://remote.example.com:18789"),
+      confirm: vi.fn(async () => true),
+    });
+    const next = await promptRemoteGatewayConfig(
+      {
+        gateway: { remote: { url: "wss://remote.example.com:18789", password: "saved-password" } },
+      },
+      prompter,
+      { secretInputMode: "ref" },
+    );
+    expect(next.gateway?.remote?.token).toBeUndefined();
+    expect(next.gateway?.remote?.password).toBeUndefined();
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Continue without a Gateway secret?",
+      initialValue: false,
+    });
+    expect(prompter.select).not.toHaveBeenCalled();
   });
 
   it("supports storing remote auth as an external env secret ref", async () => {
@@ -363,13 +509,10 @@ describe("promptRemoteGatewayConfig", () => {
     }) as WizardPrompter["text"];
 
     const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Gateway auth") {
-        return "token" as never;
-      }
-      if (params.message === "How do you want to provide this gateway token?") {
+      if (params.message === "How do you want to provide this Gateway secret?") {
         return "ref" as never;
       }
-      if (params.message === "Where is this gateway token stored?") {
+      if (params.message === "Where is this Gateway secret stored?") {
         return "env" as never;
       }
       return (params.options[0]?.value ?? "") as never;
@@ -393,79 +536,95 @@ describe("promptRemoteGatewayConfig", () => {
     });
   });
 
-  it("keeps an existing remote gateway token when user confirms via masked-preview prompt", async () => {
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        return "wss://remote.example.com:18789";
-      }
-      return "";
-    }) as WizardPrompter["text"];
+  it.each([
+    {
+      name: "plaintext password",
+      remote: { password: "existing-password" },
+      expected: "existing-password",
+    },
+  ] as const)(
+    "keeps an existing $name as the remote token after blank input and confirmation",
+    async ({ remote, expected }) => {
+      const url = "wss://remote.example.com:18789";
+      const text = vi.fn(async ({ message }: Parameters<WizardPrompter["text"]>[0]) =>
+        message === "Gateway WebSocket URL" ? url : "",
+      );
+      const { next, prompter } = await runRemotePrompt({
+        cfg: { gateway: { remote: { url, ...remote } } },
+        text,
+        confirm: true,
+        selectResponses: {},
+      });
 
-    const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Gateway auth") {
-        return "token" as never;
-      }
-      if (params.message === "How do you want to provide this gateway token?") {
-        return "plaintext" as never;
-      }
-      return (params.options[0]?.value ?? "") as never;
-    });
+      expect(next.gateway?.remote?.token).toEqual(expected);
+      expect(next.gateway?.remote?.password).toBeUndefined();
+      expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+        message: "Keep the existing Gateway secret?",
+        initialValue: true,
+      });
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway secret", sensitive: true }),
+      );
+    },
+  );
 
-    const confirm: WizardPrompter["confirm"] = vi.fn(async (params) => {
-      if (params.message.startsWith("Use existing gateway token")) {
-        return true;
-      }
-      return false;
-    });
-
-    const cfg = {
-      gateway: { remote: { token: "preexisting-remote-token" } },
-    } as OpenClawConfig;
-    const prompter = createPrompter({ confirm, select, text });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
-
-    expect(next.gateway?.remote?.token).toBe("preexisting-remote-token");
-    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Gateway token",
+  it.each([
+    {
+      name: "an existing credential the operator declines to keep",
+      remote: { url: "wss://remote.example.com:18789", token: "old-secret" },
+    },
+  ])("requires explicit confirmation for no auth with $name", async ({ remote }) => {
+    const confirm = vi.fn(
+      async ({ message }: Parameters<WizardPrompter["confirm"]>[0]) =>
+        message === "Continue without a Gateway secret?",
     );
+    const prompter = createPrompter({
+      confirm,
+      select: createSelectPrompter({}),
+      text: vi.fn(async ({ message }) =>
+        message === "Gateway WebSocket URL" ? "wss://remote.example.com:18789" : "",
+      ),
+    });
+    const next = await promptRemoteGatewayConfig({ gateway: { remote } }, prompter);
+
+    expect(next.gateway?.remote?.token).toBeUndefined();
+    expect(next.gateway?.remote?.password).toBeUndefined();
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Continue without a Gateway secret?",
+      initialValue: false,
+    });
+    const confirmationMessages = confirm.mock.calls.map(([params]) => params.message);
+    if (remote.url === "wss://remote.example.com:18789") {
+      expect(confirmationMessages).toEqual([
+        "Keep the existing Gateway secret?",
+        "Continue without a Gateway secret?",
+      ]);
+    } else {
+      expect(confirmationMessages).toEqual(["Continue without a Gateway secret?"]);
+    }
   });
 
-  it("keeps an existing remote gateway password when user confirms via masked-preview prompt", async () => {
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        return "wss://remote.example.com:18789";
-      }
-      return "";
-    }) as WizardPrompter["text"];
-
-    const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Gateway auth") {
-        return "password" as never;
-      }
-      if (params.message === "How do you want to provide this gateway password?") {
-        return "plaintext" as never;
-      }
-      return (params.options[0]?.value ?? "") as never;
+  it("asks for the secret again when the operator declines to continue without one", async () => {
+    const text = vi
+      .fn<WizardPrompter["text"]>()
+      .mockResolvedValueOnce("wss://remote.example.com:18789")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("replacement-secret");
+    const { next, prompter } = await runRemotePrompt({
+      text,
+      confirm: false,
+      selectResponses: {},
     });
 
-    const confirm: WizardPrompter["confirm"] = vi.fn(async (params) => {
-      if (params.message.startsWith("Use existing gateway password")) {
-        return true;
-      }
-      return false;
+    expect(next.gateway?.remote?.token).toBe("replacement-secret");
+    expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+      message: "Continue without a Gateway secret?",
+      initialValue: false,
     });
-
-    const cfg = {
-      gateway: { remote: { password: "preexisting-remote-password" } },
-    } as OpenClawConfig;
-    const prompter = createPrompter({ confirm, select, text });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
-
-    expect(next.gateway?.remote?.password).toBe("preexisting-remote-password");
-    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Gateway password",
-    );
+    expect(text.mock.calls.map(([params]) => params.message)).toEqual([
+      "Gateway WebSocket URL",
+      "Gateway secret",
+      "Gateway secret",
+    ]);
   });
 });

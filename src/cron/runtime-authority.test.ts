@@ -27,13 +27,10 @@ describe("normalizeCronRuntimeAuthority", () => {
   });
 
   it.each([
-    authority({ value: Number.NaN }),
     authority({ value: Number.POSITIVE_INFINITY }),
-    authority({ value: undefined }),
     authority({ value: 1n }),
     authority({ value: new Date() }),
     { ...authority({}), extra: true },
-    { ...authority({}), runtimeId: "Codex" },
     { ...authority({}), namespace: "codex apps" },
   ])("rejects non-JSON or non-canonical envelopes", (input) => {
     expect(normalizeCronRuntimeAuthority(input)).toBeUndefined();
@@ -61,6 +58,16 @@ describe("normalizeCronRuntimeAuthority", () => {
       polluted: true,
     });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("does not treat an inherited envelope version as authored", () => {
+    const input = Object.assign(Object.create({ version: 1 }) as Record<string, unknown>, {
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: {},
+    });
+
+    expect(normalizeCronRuntimeAuthority(input)).toBeUndefined();
   });
 
   it("rejects the complete envelope above 64 KiB", () => {

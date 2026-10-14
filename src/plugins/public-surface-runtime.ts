@@ -1,20 +1,18 @@
 // Loads plugin public runtime surfaces through documented entrypoints.
-import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
-
-export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
+import {
+  isTypeScriptPackageEntry,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
+import { isPathInside } from "./path-safety.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
 /** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
-export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
+function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
     path.posix.isAbsolute(artifactBasename) ||
     path.win32.isAbsolute(artifactBasename) ||
@@ -68,7 +66,7 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(sourceCandidate)) {
+    if (pluginCacheExistsSync(sourceCandidate)) {
       return sourceCandidate;
     }
   }
@@ -79,33 +77,75 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
 export function resolvePluginRootPublicSurfacePath(params: {
   pluginRoot: string;
   artifactBasename: string;
+  pluginId?: string;
+  entrySource?: string;
 }): string | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const pluginRoot = path.resolve(params.pluginRoot);
-  for (const candidate of [
-    path.join(pluginRoot, artifactBasename),
-    path.join(pluginRoot, "dist", artifactBasename),
-  ]) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
+  const record = resolvePluginRuntimeRecord(params);
+  const instance = record ? getPluginInstance(record) : undefined;
+  const exists = (source: string) =>
+    instance?.hasModuleSource(source) ?? pluginCacheExistsSync(source);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const candidate = path.join(pluginRoot, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  const entrySource = record?.source ?? params.entrySource;
+  const entryDir = entrySource
+    ? path.resolve(
+        pluginRoot,
+        path.relative(record?.rootDir ?? pluginRoot, path.dirname(path.resolve(entrySource))),
+      )
+    : undefined;
+  if (entryDir && !isPathInside(pluginRoot, entryDir)) {
+    throw new Error(`Plugin public surface entry must stay inside its plugin root: ${entrySource}`);
+  }
+  const sourceArtifacts = PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) => `${sourceBaseName}${ext}`);
+  // Sidecars share the registered entry's source/build family and captured membership;
+  // otherwise a stale build can split API state from the active source instance.
+  const preferredArtifacts =
+    entrySource && isTypeScriptPackageEntry(entrySource)
+      ? sourceArtifacts.filter(isTypeScriptPackageEntry)
+      : [];
+  const entryArtifacts = [
+    ...preferredArtifacts,
+    artifactBasename,
+    ...sourceArtifacts.filter((artifact) => !isTypeScriptPackageEntry(artifact)),
+  ];
+  const checkedPaths = new Set<string>();
+  for (const [directory, artifacts] of [
+    [entryDir, entryArtifacts],
+    [pluginRoot, [...preferredArtifacts, artifactBasename, path.join("dist", artifactBasename)]],
+    [entryDir, sourceArtifacts],
+    [pluginRoot, sourceArtifacts],
+  ] as const) {
+    if (!directory) {
+      continue;
+    }
+    for (const artifact of artifacts) {
+      const candidate = path.join(directory, artifact);
+      if (checkedPaths.has(candidate)) {
+        continue;
+      }
+      checkedPaths.add(candidate);
+      if (exists(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;
 }
 
-function resolvePackageFallbackForBundledDir(params: {
+function resolvePublicSurfaceFromBundledDir(params: {
   rootDir: string;
   bundledPluginsDir: string;
   dirName: string;
   artifactBasename: string;
 }): string | null {
+  const resolved = resolvePluginRootPublicSurfacePath({
+    pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
+    artifactBasename: params.artifactBasename,
+  });
+  if (resolved !== null) {
+    return resolved;
+  }
   const normalizedBundledDir = path.resolve(params.bundledPluginsDir);
   const normalizedRootDir = path.resolve(params.rootDir);
   const packageBundledDirs = [
@@ -120,23 +160,48 @@ function resolvePackageFallbackForBundledDir(params: {
       continue;
     }
     const builtCandidate = path.join(packageBundledDir, params.dirName, params.artifactBasename);
-    if (fs.existsSync(builtCandidate)) {
+    if (pluginCacheExistsSync(builtCandidate)) {
       return builtCandidate;
     }
   }
-  return resolveBundledPluginSourcePublicSurfacePath({
-    sourceRoot: path.join(normalizedRootDir, "extensions"),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
+  return (
+    resolveRetainedDoctorPath(params) ??
+    resolveBundledPluginSourcePublicSurfacePath({
+      sourceRoot: path.join(normalizedRootDir, "extensions"),
+      dirName: params.dirName,
+      artifactBasename: params.artifactBasename,
+    })
+  );
 }
 
-function sameExistingPath(left: string, right: string): boolean {
-  try {
-    return fs.realpathSync.native(left) === fs.realpathSync.native(right);
-  } catch {
-    return false;
+export function resolveRetainedDoctorPath(params: {
+  rootDir: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  const dirName = normalizeBundledPluginDirName(params.dirName);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const directory =
+    artifactBasename === "config-doctor-api.js"
+      ? "config-doctor"
+      : artifactBasename === "state-retention-api.js"
+        ? "state-retention"
+        : undefined;
+  if (!directory) {
+    return null;
   }
+  // Host-retained Doctor contracts remain available after runtime externalization.
+  for (const dist of ["dist", "dist-runtime"]) {
+    const candidate = path.resolve(params.rootDir, dist, directory, `${dirName}.js`);
+    if (pluginCacheExistsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.join(params.rootDir, "extensions"),
+    dirName,
+    artifactBasename,
+  });
 }
 
 function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
@@ -148,38 +213,10 @@ function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | u
   if (!bundledPluginsDir) {
     return undefined;
   }
-  const requestedDir = resolveUserPath(envOverride, env);
-  return sameExistingPath(requestedDir, bundledPluginsDir) ? bundledPluginsDir : undefined;
-}
-
-function resolvePublicSurfaceFromBundledDir(params: {
-  rootDir: string;
-  bundledPluginsDir: string;
-  dirName: string;
-  artifactBasename: string;
-}): string | null {
-  const pluginDir = path.resolve(params.bundledPluginsDir, params.dirName);
-  const builtCandidate = path.join(pluginDir, params.artifactBasename);
-  if (fs.existsSync(builtCandidate)) {
-    return builtCandidate;
-  }
-  const packageLocalBuiltCandidate = path.join(pluginDir, "dist", params.artifactBasename);
-  if (fs.existsSync(packageLocalBuiltCandidate)) {
-    return packageLocalBuiltCandidate;
-  }
-  return (
-    resolveBundledPluginSourcePublicSurfacePath({
-      sourceRoot: params.bundledPluginsDir,
-      dirName: params.dirName,
-      artifactBasename: params.artifactBasename,
-    }) ??
-    resolvePackageFallbackForBundledDir({
-      rootDir: params.rootDir,
-      bundledPluginsDir: params.bundledPluginsDir,
-      dirName: params.dirName,
-      artifactBasename: params.artifactBasename,
-    })
-  );
+  const requestedDir = pluginCacheRealpathSync(resolveUserPath(envOverride, env));
+  return requestedDir !== null && requestedDir === pluginCacheRealpathSync(bundledPluginsDir)
+    ? bundledPluginsDir
+    : undefined;
 }
 
 /** Resolves a bundled plugin public surface artifact across source, dist, and package layouts. */
@@ -241,9 +278,9 @@ export function resolveBundledPluginPublicSurfacePath(params: {
     path.resolve(params.rootDir, "dist", "extensions", dirName, artifactBasename),
     path.resolve(params.rootDir, "dist-runtime", "extensions", dirName, artifactBasename),
   ]) {
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
-  return null;
+  return resolveRetainedDoctorPath({ ...params, dirName, artifactBasename });
 }

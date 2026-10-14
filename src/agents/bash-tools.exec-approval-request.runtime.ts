@@ -3,7 +3,8 @@
  * Kept separate so importing approval request code does not load the command
  * explainer until command spans are explicitly requested.
  */
-import { explainShellCommand, formatCommandSpans } from "../infra/command-explainer/index.js";
+import { explainShellCommand } from "../infra/command-explainer/extract.js";
+import { formatCommandSpans } from "../infra/command-explainer/format.js";
 import type { ExecApprovalCommandSpan } from "../infra/exec-approvals.js";
 
 /** Resolve command spans used to highlight exec approval prompts. */

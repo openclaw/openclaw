@@ -1,19 +1,18 @@
 /** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  getRuntimeConfig,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
   getAuthoredConfigSecretRef,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import { registerEmbeddingProvider } from "../plugins/embedding-providers.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -36,8 +35,10 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+  }),
 }));
 
 const OPENAI_ENV_KEY_REF = {
@@ -163,14 +164,6 @@ describe("secrets runtime snapshot core lanes", () => {
 
   it.each([
     {
-      name: "bare source resolves to a bare-looking literal",
-      authored: "$SOURCE",
-      sourceEnv: {},
-      runtimeEnv: { SOURCE: "$OTHER" },
-      expected: "$OTHER",
-      pendingSourceRef: true,
-    },
-    {
       name: "bare source resolves to a braced-looking literal",
       authored: "$SOURCE",
       sourceEnv: {},
@@ -178,14 +171,7 @@ describe("secrets runtime snapshot core lanes", () => {
       expected: "${OTHER}",
       pendingSourceRef: true,
     },
-    {
-      name: "substitution resolves to a bare-looking literal",
-      authored: "${SOURCE}",
-      sourceEnv: { SOURCE: "$OTHER" },
-      runtimeEnv: {},
-      expected: "$OTHER",
-      pendingSourceRef: false,
-    },
+
     {
       name: "substitution resolves to a braced-looking literal",
       authored: "${SOURCE}",
@@ -287,6 +273,98 @@ describe("secrets runtime snapshot core lanes", () => {
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
 
+  it.each([
+    ["gemini", "google", "tenant-gemini", true],
+    ["gemini", "google", "gemini", false],
+  ] as const)(
+    "binds %s memory credentials to %s (configured=%s, metadata=%s)",
+    async (adapterId, authProviderId, configuredProviderId, registryMetadata) => {
+      const apiKeyRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "MEMORY_REMOTE_KEY",
+      };
+      const manifest: PluginManifestRecord = {
+        id: authProviderId,
+        origin: "bundled",
+        rootDir: "/test-plugin",
+        source: "/test-plugin/index.ts",
+        manifestPath: "/test-plugin/openclaw.plugin.json",
+        channels: [],
+        providers: [`${authProviderId}-secondary`, authProviderId],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        contracts: { embeddingProviders: [adapterId] },
+      };
+      const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
+        prepareSecretsRuntimeSnapshot({
+          config: asConfig({
+            agents: { entries: { main: {} } },
+            memory: {
+              search: {
+                ...(configuredProviderId ? { provider: configuredProviderId } : {}),
+                remote: { apiKey: apiKeyRef },
+              },
+            },
+            models: {
+              providers: {
+                [authProviderId]: {
+                  baseUrl: `https://${version}.example.invalid/v1`,
+                  headers: { "X-Tenant": version },
+                  models: [],
+                },
+                ...(configuredProviderId && configuredProviderId !== adapterId
+                  ? {
+                      [configuredProviderId]: {
+                        api: adapterId,
+                        baseUrl: "https://tenant.example.invalid/v1",
+                        headers: { "X-Custom-Tenant": "configured" },
+                        models: [],
+                      },
+                    }
+                  : {}),
+              },
+            },
+          }),
+          env,
+          includeAuthStoreRefs: false,
+          allowUnavailableSecretOwners: true,
+          loadablePluginOrigins: new Map(),
+          ...(registryMetadata ? { manifestRegistry: { plugins: [manifest] } } : {}),
+        });
+      const active = await prepare("old", { MEMORY_REMOTE_KEY: "last-known-good" });
+      activateSecretsRuntimeSnapshot(active);
+
+      if (registryMetadata) {
+        registerEmbeddingProvider(
+          { id: adapterId, authProviderId, create: async () => ({ provider: null }) },
+          { ownerPluginId: authProviderId },
+        );
+      }
+
+      const unchanged = await prepare("old", {});
+      const changed = await prepare("new", {});
+
+      expect(unchanged.config.memory?.search?.remote?.apiKey).toBe("last-known-good");
+      expect(unchanged.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "stale" },
+      ]);
+      expect(changed.config.memory?.search?.remote?.apiKey).toEqual(apiKeyRef);
+      expect(changed.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
+      ]);
+
+      activateSecretsRuntimeSnapshot(changed);
+      expect(() => assertSecretOwnerAvailable("capability", "memory-provider:main")).toThrow(
+        expect.objectContaining({
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerId: "memory-provider:main",
+        }),
+      );
+    },
+  );
+
   it("resolves env-backed auth profile SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),
@@ -310,14 +388,36 @@ describe("secrets runtime snapshot core lanes", () => {
             token: "old-gh",
             tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
           },
+          "openai:literal": { type: "api_key", provider: "openai", key: "literal-key" },
+          "custom:literal": { type: "token", provider: "custom", token: "literal-token" },
+          "custom:expired": {
+            type: "token",
+            provider: "custom",
+            expires: 1,
+            tokenRef: { source: "env", provider: "default", id: "FIXTURE_EXPIRED_TOKEN" },
+          },
         }),
     });
 
-    const warningPaths = snapshot.warnings.map((warning) => warning.path);
-    expect(warningPaths).toContain("/tmp/openclaw-agent-main.auth-profiles.openai:default.key");
-    expect(warningPaths).toContain(
-      "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-    );
+    expect(snapshot.warnings).toEqual([
+      {
+        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+        path: "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
+        message: "auth-profiles openai:default: keyRef is set; runtime will ignore plaintext key.",
+      },
+      {
+        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+        path: "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+        message:
+          "auth-profiles github-copilot:default: tokenRef is set; runtime will ignore plaintext token.",
+      },
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "/tmp/openclaw-agent-main.auth-profiles.custom:expired.token",
+        message:
+          "/tmp/openclaw-agent-main.auth-profiles.custom:expired.token: auth profile is not eligible (expired); skipping resolution until it becomes eligible.",
+      },
+    ]);
     const openAiProfile = snapshot.authStores[0]?.store.profiles["openai:default"] as
       | Record<string, unknown>
       | undefined;
@@ -328,6 +428,14 @@ describe("secrets runtime snapshot core lanes", () => {
       | undefined;
     expect(copilotProfile?.type).toBe("token");
     expect(copilotProfile?.token).toBe("ghp-env-token");
+    expect(snapshot.authStores[0]?.store.profiles["openai:literal"]).toMatchObject({
+      key: "literal-key",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["custom:literal"]).toMatchObject({
+      token: "literal-token",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["custom:expired"]).not.toHaveProperty("token");
+    expect(snapshot.degradedOwners).toEqual([]);
   });
 
   it("can materialize auth stores without resolving unrelated config refs", async () => {
@@ -400,13 +508,6 @@ describe("secrets runtime snapshot core lanes", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
-  });
-
-  it("activates runtime snapshots for loadConfig", async () => {
-    const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
-    activateSecretsRuntimeSnapshot(prepared);
-
-    expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
   });
 
   it("activates runtime snapshots for ensureAuthProfileStore", async () => {

@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { HealthSummary } from "../../../../src/gateway/health/types.js";
 import { healthHandlers } from "../../../../src/gateway/server-methods/health.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts";
@@ -184,7 +185,7 @@ export async function runHandlerBoundaryProof() {
   };
 }
 
-export async function createFixturePlugin() {
+async function createFixturePlugin() {
   // openclaw-temp-dir: standalone producer removes this fixture root in its finally block
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cached-health-tool-"));
   const pluginDir = path.join(root, FIXTURE_PLUGIN_ID);
@@ -229,7 +230,7 @@ export async function createFixturePlugin() {
   return { pluginDir, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
-export function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
+function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
   return {
     ...config,
     plugins: {
@@ -263,9 +264,10 @@ function containsString(value: unknown, needle: string): boolean {
 
 async function runPluginToolProof(repoRoot: string) {
   const fixture = await createFixturePlugin();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
@@ -288,7 +290,7 @@ async function runPluginToolProof(repoRoot: string) {
       healthAfterTool: after.ok && Boolean(after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
     };
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await fixture.cleanup();
   }
 }

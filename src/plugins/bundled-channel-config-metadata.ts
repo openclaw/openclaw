@@ -1,5 +1,4 @@
 /** Loads bundled channel config schema metadata from source or public surface modules. */
-import fs from "node:fs";
 import path from "node:path";
 import {
   buildChannelConfigSchema,
@@ -17,30 +16,22 @@ import type {
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 
-const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
-  path.join("src", "config-schema.ts"),
-  path.join("src", "config-schema.js"),
-  path.join("src", "config-schema.mts"),
-  path.join("src", "config-schema.mjs"),
-  path.join("src", "config-schema.cts"),
-  path.join("src", "config-schema.cjs"),
-] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
+const CONFIG_SCHEMA_CANDIDATES = [
+  ...[".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"].map((extension) =>
+    path.join("src", `config-schema${extension}`),
+  ),
+  ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) => `channel-config-api${extension}`),
+];
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
 };
-
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -90,46 +81,24 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     }
   }
 
-  for (const value of Object.values(imported)) {
-    if (isBuiltChannelConfigSchema(value)) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
-    modulePath,
-    importerUrl: import.meta.url,
-    preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-  });
+  return Object.values(imported).find(isBuiltChannelConfigSchema) ?? null;
 }
 
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
-  for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
-    const candidate = path.join(pluginDir, relativePath);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  for (const basename of PUBLIC_CONFIG_SURFACE_BASENAMES) {
-    for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-      const candidate = path.join(pluginDir, `${basename}${extension}`);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
+  return CONFIG_SCHEMA_CANDIDATES.map((relativePath) => path.join(pluginDir, relativePath)).find(
+    pluginCacheExistsSync,
+  );
 }
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
+    const load = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      preferBuiltDist: true,
+      loaderFilename: import.meta.url,
+    });
+    const imported = load(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -165,49 +134,30 @@ export function collectBundledChannelConfigsCore(params: {
     const existing = existingChannelConfigs[channelId];
     const channelMeta = resolvePackageChannelMeta(params.packageManifest, channelId);
     const preferOver = normalizeBundledPluginStringList(channelMeta?.preferOver);
-    const uiHints: Record<string, PluginConfigUiHint> | undefined =
-      surface?.uiHints || existing?.uiHints
-        ? {
-            ...(surface?.uiHints && Object.keys(surface.uiHints).length > 0 ? surface.uiHints : {}),
-            ...(existing?.uiHints && Object.keys(existing.uiHints).length > 0
-              ? existing.uiHints
-              : {}),
-          }
-        : undefined;
+    const uiHints = { ...surface?.uiHints, ...existing?.uiHints };
 
     if (!surface?.schema && !existing?.schema) {
       continue;
     }
+    const runtime = surface?.runtime ?? existing?.runtime;
+    const label =
+      trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label);
+    const description =
+      trimBundledPluginString(existing?.description) ?? trimBundledPluginString(channelMeta?.blurb);
+    const commands = existing?.commands ?? channelMeta?.commands;
 
     existingChannelConfigs[channelId] = {
       schema: surface?.schema ?? existing?.schema ?? {},
-      ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
-      ...((surface?.runtime ?? existing?.runtime)
-        ? { runtime: surface?.runtime ?? existing?.runtime }
-        : {}),
-      ...((trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label))
-        ? {
-            label:
-              trimBundledPluginString(existing?.label) ??
-              trimBundledPluginString(channelMeta?.label)!,
-          }
-        : {}),
-      ...((trimBundledPluginString(existing?.description) ??
-      trimBundledPluginString(channelMeta?.blurb))
-        ? {
-            description:
-              trimBundledPluginString(existing?.description) ??
-              trimBundledPluginString(channelMeta?.blurb)!,
-          }
-        : {}),
+      ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
       ...(existing?.preferOver?.length
         ? { preferOver: existing.preferOver }
         : preferOver.length > 0
           ? { preferOver }
           : {}),
-      ...((existing?.commands ?? channelMeta?.commands)
-        ? { commands: existing?.commands ?? channelMeta?.commands }
-        : {}),
+      ...(commands ? { commands } : {}),
     };
   }
 

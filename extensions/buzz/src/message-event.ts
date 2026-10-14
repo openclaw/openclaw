@@ -56,18 +56,13 @@ export interface BuzzInboundMessage {
   diff?: BuzzDiffMetadata;
 }
 
-function tagValue(event: Event, name: string): string | undefined {
-  const value = event.tags.find((tag) => tag[0] === name)?.[1]?.trim();
-  return value ? value : undefined;
-}
-
 function markerTagValue(event: Event, marker: string): string | undefined {
   const value = event.tags.find((tag) => tag[0] === "e" && tag[3] === marker)?.[1]?.trim();
   return value ? value : undefined;
 }
 
-function isHexAtLeast(value: string, minimumLength: number): boolean {
-  return value.length >= minimumLength && /^[a-f0-9]+$/iu.test(value);
+function isCommitSha(value: string): boolean {
+  return value.length >= 7 && /^[a-f0-9]+$/iu.test(value);
 }
 
 function parseBuzzDiffMetadata(event: Event): BuzzDiffMetadata | null {
@@ -97,7 +92,7 @@ function parseBuzzDiffMetadata(event: Event): BuzzDiffMetadata | null {
         repoUrl ??= value;
         break;
       case "commit":
-        if (!isHexAtLeast(value, 7)) {
+        if (!isCommitSha(value)) {
           return null;
         }
         commitSha ??= value;
@@ -106,7 +101,7 @@ function parseBuzzDiffMetadata(event: Event): BuzzDiffMetadata | null {
         filePath ??= value;
         break;
       case "parent-commit":
-        if (!isHexAtLeast(value, 7)) {
+        if (!isCommitSha(value)) {
           return null;
         }
         parentCommitSha ??= value;
@@ -224,7 +219,7 @@ export function parseBuzzMessageEvent(event: Event): BuzzInboundMessage | null {
   ) {
     return null;
   }
-  const channelId = tagValue(event, "h");
+  const channelId = event.tags.find((tag) => tag[0] === "h")?.[1]?.trim();
   if (!channelId) {
     return null;
   }

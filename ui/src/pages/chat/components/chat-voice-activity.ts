@@ -2,8 +2,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+import { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
 
 const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
 const MICROPHONE_ACTIVITY_TAG = "openclaw-microphone-activity";
@@ -56,11 +56,8 @@ class MicrophoneActivityElement extends HTMLElement {
   private renderLevel(level: number): void {
     this.dataset.level = String(level);
     for (const [index, bar] of [...this.children].entries()) {
-      const gain = BAR_GAINS[index] ?? 1;
-      (bar as HTMLElement).style.setProperty(
-        "--talk-bar-scale",
-        String(0.18 + level * gain * 0.82),
-      );
+      const scale = 0.18 + level * (BAR_GAINS[index] ?? 1) * 0.82;
+      (bar as HTMLElement).style.setProperty("--talk-bar-scale", String(scale));
     }
   }
 }
@@ -69,27 +66,20 @@ if (!customElements.get(MICROPHONE_ACTIVITY_TAG)) {
   customElements.define(MICROPHONE_ACTIVITY_TAG, MicrophoneActivityElement);
 }
 
-function activeStatus(
-  status: RealtimeTalkStatus | undefined,
-): "connecting" | "listening" | "thinking" {
-  return status === "connecting" || status === "thinking" ? status : "listening";
-}
-
 export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
   detail: string | null | undefined,
 ) {
-  const explicitDetail = detail?.trim();
-  if (explicitDetail) {
-    return explicitDetail;
-  }
-  if (status === "thinking") {
-    return t("chat.voice.asking");
-  }
-  if (status === "connecting") {
-    return t("chat.voice.connecting");
-  }
-  return t("chat.voice.listening");
+  return (
+    detail?.trim() ||
+    t(
+      status === "thinking"
+        ? "chat.voice.asking"
+        : status === "connecting"
+          ? "chat.voice.connecting"
+          : "chat.voice.listening",
+    )
+  );
 }
 
 type MicrophoneActivityProps = {
@@ -104,7 +94,7 @@ export function renderMicrophoneActivity(props: MicrophoneActivityProps): Templa
   return html`
     <openclaw-microphone-activity
       class="agent-chat__voice-activity"
-      data-status=${activeStatus(props.status)}
+      data-status=${props.status === "connecting" || props.status === "thinking" ? props.status : "listening"}
       data-source="microphone"
       aria-hidden="true"
       .signal=${props.inputLevel ?? EMPTY_LEVEL_SIGNAL}
@@ -113,33 +103,64 @@ export function renderMicrophoneActivity(props: MicrophoneActivityProps): Templa
   `;
 }
 
-type ChatVoiceErrorProps = {
+type ChatVoiceStatusProps = {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
+  onUseSystemDefaultMicrophone?: () => Promise<void>;
 };
 
-export function renderChatVoiceError(props: ChatVoiceErrorProps): TemplateResult | typeof nothing {
+export function renderChatVoiceStatus(
+  props: ChatVoiceStatusProps,
+): TemplateResult | typeof nothing {
+  if (props.status === "connecting") {
+    return html`<div
+      class="callout agent-chat__talk-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      ${voiceStatusLabel(props.status, props.detail)}
+    </div>`;
+  }
   if (props.status !== "error" || !props.detail) {
     return nothing;
   }
   return html`
-    <div class="agent-chat__stt-interim agent-chat__talk-status" role="alert">
-      <span class="agent-chat__talk-status-text">${props.detail}</span>
-      ${props.onDismissError
-        ? html`
-            <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
-              <button
-                class="callout__dismiss"
-                type="button"
-                @click=${props.onDismissError}
-                aria-label=${t("chat.composer.dismissVoiceInputError")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
+    <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
+      <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
+        <span class="agent-chat__composer-error-icon" aria-hidden="true"
+          >${icons.alertTriangle}</span
+        >
+        <div class="callout__content">
+          <div class="agent-chat__talk-status-text">${props.detail}</div>
+          ${
+            props.onUseSystemDefaultMicrophone
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${props.onUseSystemDefaultMicrophone}
+                >
+                  ${t("chat.composer.useSystemDefaultMicrophoneForCall")}
+                </button>`
+              : nothing
+          }
+        </div>
+        ${
+          props.onDismissError
+            ? html`
+                <button
+                  class="callout__dismiss"
+                  type="button"
+                  @click=${props.onDismissError}
+                  aria-label=${t("chat.composer.dismissVoiceInputError")}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
+      </div>
     </div>
   `;
 }

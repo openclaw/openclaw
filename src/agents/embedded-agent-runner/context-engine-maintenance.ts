@@ -1,165 +1,93 @@
-/**
- * Schedules and runs deferred context-engine turn maintenance.
- */
-import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
-import type {
-  ContextEngine,
-  ContextEngineMaintenanceResult,
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
-  ContextEngineSessionTarget,
-} from "../../context-engine/types.js";
+import {
+  hasSameContextEngineInstance,
+  isContextEngineAbortRejection,
+} from "../../context-engine/registry.js";
+import type { ContextEngine, ContextEngineMaintenanceResult } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   enqueueCommandInLane,
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-  startTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
+  createSessionMaintenanceOwner,
+  waitForSessionMaintenance,
+} from "../session-maintenance/coordinator.js";
+import { executeContextEngineMaintenance } from "./context-engine-maintenance-execution.js";
 import {
-  cancelTaskByIdForOwner,
-  findTaskByRunIdForOwner,
-  updateTaskNotifyPolicyForOwner,
-} from "../../tasks/task-owner-access.js";
-import { findActiveSessionTask } from "../session-async-task-status.js";
-import { SessionManager } from "../sessions/index.js";
-import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
+  disposeDeferredMaintenanceContextEngine,
+  runContextEngineMaintenanceWork,
+  type ContextEngineMaintenanceResources,
+} from "./context-engine-maintenance-work.js";
+import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
-import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
 
-const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
-const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
-const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
-  "openclaw.contextEngineTurnMaintenanceAbortState",
-);
-type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type ContextEngineMaintenanceParams = {
-  contextEngine?: ContextEngine;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
-  sessionFile: string;
-  reason: "bootstrap" | "compaction" | "turn";
-  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
-  withSessionManagerRewriteLock?: SessionManagerRewriteLock;
-  runtimeContext?: ContextEngineRuntimeContext;
-  runtimeSettings?: ContextEngineRuntimeSettings;
-  agentId?: string;
-  contextEngineAgentId?: string;
-  executionMode?: "foreground" | "background";
-  onDeferredMaintenance?: (promise: Promise<void>) => void;
-  onDeferredMaintenanceFailure?: (error: unknown) => void;
-  config?: OpenClawConfig;
-  disposeDeferredContextEngineAfterMaintenance?: boolean;
-};
 
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   contextEngine: ContextEngine;
   sessionKey: string;
+  runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   disposeContextEngineAfterMaintenance?: boolean;
-  onScheduleFailure?: (error: unknown) => void;
+  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
 };
 
 type DeferredTurnMaintenanceRunState = {
+  maintenance: ReturnType<typeof createSessionMaintenanceOwner>;
   promise: Promise<void>;
-  rerunRequested: boolean;
-  latestParams: DeferredTurnMaintenanceScheduleParams;
+  activeEngine: ContextEngine;
+  pendingParams?: DeferredTurnMaintenanceScheduleParams;
+  engines: DeferredTurnMaintenanceScheduleParams[];
+  disposedEngines: WeakRef<ContextEngine>[];
+  disposals: Set<Promise<void>>;
+  closing: boolean;
 };
 
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
 
-type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
-type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
-  Partial<Pick<NodeJS.Process, "listenerCount" | "kill" | "pid">> & {
-    [DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY]?: DeferredTurnMaintenanceAbortState;
-  };
-type DeferredTurnMaintenanceAbortState = {
-  controllers: Set<AbortController>;
-  cleanupHandlers: Map<DeferredTurnMaintenanceSignal, () => void>;
+const maintenanceAbortControllers = new Set<AbortController>();
+const maintenanceSignalHandlers = {
+  SIGINT: () => abortDeferredMaintenance("SIGINT"),
+  SIGTERM: () => abortDeferredMaintenance("SIGTERM"),
 };
 
-function unregisterDeferredTurnMaintenanceAbortSignalHandlers(
-  processLike: DeferredTurnMaintenanceProcessLike,
-  state: DeferredTurnMaintenanceAbortState,
-): void {
-  for (const [signal, handler] of state.cleanupHandlers) {
-    processLike.off(signal, handler);
-  }
-  state.cleanupHandlers.clear();
-}
-
-async function disposeDeferredMaintenanceContextEngine(
-  contextEngine: ContextEngine,
-): Promise<void> {
-  try {
-    await contextEngine.dispose?.();
-  } catch (err) {
-    log.warn("context engine dispose failed after deferred maintenance", {
-      errorMessage: formatErrorMessage(err),
-    });
+function unregisterDeferredTurnMaintenanceAbortSignalHandlers(): void {
+  for (const [signal, handler] of Object.entries(maintenanceSignalHandlers)) {
+    process.off(signal, handler);
   }
 }
 
-function createDeferredTurnMaintenanceAbortSignal(params?: {
-  processLike?: DeferredTurnMaintenanceProcessLike;
-}): {
-  abortSignal: AbortSignal;
-  dispose: () => void;
-} {
-  const processLike = (params?.processLike ?? process) as DeferredTurnMaintenanceProcessLike;
-  const state = (processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY] ??= {
-    controllers: new Set<AbortController>(),
-    cleanupHandlers: new Map<DeferredTurnMaintenanceSignal, () => void>(),
-  });
-  const handleTerminationSignal = (signalName: DeferredTurnMaintenanceSignal) => {
-    const shouldReraise = processLike.listenerCount?.(signalName) === 1;
-    for (const activeController of state.controllers) {
-      if (!activeController.signal.aborted) {
-        activeController.abort(
-          new Error(`received ${signalName} while waiting for deferred maintenance`),
-        );
-      }
-    }
-    state.controllers.clear();
-    unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
-    if (shouldReraise && typeof processLike.kill === "function") {
-      try {
-        processLike.kill(processLike.pid ?? process.pid, signalName);
-      } catch {
-        // Ignore shutdown-path failures.
-      }
-    }
-  };
-  if (state.cleanupHandlers.size === 0) {
-    for (const signal of ["SIGINT", "SIGTERM"] as const) {
-      const handler = () => handleTerminationSignal(signal);
-      state.cleanupHandlers.set(signal, handler);
-      processLike.on(signal, handler);
+function abortDeferredMaintenance(signal: "SIGINT" | "SIGTERM"): void {
+  const shouldReraise = process.listenerCount(signal) === 1;
+  for (const controller of maintenanceAbortControllers) {
+    controller.abort(new Error(`received ${signal} while waiting for deferred maintenance`));
+  }
+  maintenanceAbortControllers.clear();
+  unregisterDeferredTurnMaintenanceAbortSignalHandlers();
+  if (shouldReraise) {
+    process.kill(process.pid, signal);
+  }
+}
+
+function createDeferredTurnMaintenanceAbortSignal() {
+  if (maintenanceAbortControllers.size === 0) {
+    for (const [signal, handler] of Object.entries(maintenanceSignalHandlers)) {
+      process.on(signal, handler);
     }
   }
-
   const controller = new AbortController();
-  state.controllers.add(controller);
+  const abortSignal = AbortSignal.any([controller.signal, getGatewayRestartDrainSignal()]);
+  maintenanceAbortControllers.add(controller);
   return {
-    abortSignal: controller.signal,
+    abortSignal,
     dispose: () => {
-      state.controllers.delete(controller);
-      if (state.controllers.size === 0) {
-        unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
+      maintenanceAbortControllers.delete(controller);
+      if (maintenanceAbortControllers.size === 0) {
+        unregisterDeferredTurnMaintenanceAbortSignalHandlers();
       }
     },
   };
@@ -167,391 +95,201 @@ function createDeferredTurnMaintenanceAbortSignal(params?: {
 
 function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
-  const processLike = process as DeferredTurnMaintenanceProcessLike;
-  const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
-  if (!state) {
-    return;
-  }
-  state.controllers.clear();
-  unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
-  delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+  maintenanceAbortControllers.clear();
+  unregisterDeferredTurnMaintenanceAbortSignalHandlers();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.contextEngineMaintenanceTestApi")
   ] = {
-    createDeferredTurnMaintenanceAbortSignal,
     resetDeferredTurnMaintenanceStateForTest,
   };
 }
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
-  const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey) {
-    return;
-  }
-  await activeDeferredTurnMaintenanceRuns.get(normalizedSessionKey)?.promise;
-}
-
-function buildTurnMaintenanceTaskDescriptor(params: {
-  sessionKey: string;
-  runId?: string;
-  notifyPolicy?: "silent" | "done_only" | "state_changes";
-  deliveryStatus?: "not_applicable" | "pending";
-}) {
-  const runId =
-    params.runId ??
-    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
-  return createQueuedTaskRun({
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-    sourceId: TURN_MAINTENANCE_TASK_KIND,
-    requesterSessionKey: params.sessionKey,
-    ownerKey: params.sessionKey,
-    scopeKind: "session",
-    runId,
-    label: "Context engine turn maintenance",
-    task: "Deferred context-engine maintenance after turn.",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    // Fast maintenance stays silent and must not create a one-task flow.
-    // Long-running and failed workers promote it to pending before notifying.
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    preferMetadata: true,
-  });
-}
-
-/**
- * Attach runtime-owned transcript rewrite helpers to an existing
- * context-engine runtime context payload.
- */
-function buildContextEngineMaintenanceRuntimeContext(
-  params: Omit<ContextEngineMaintenanceParams, "reason"> & {
-    allowDeferredCompactionExecution?: boolean;
-    purpose?: string;
-    contextEnginePluginId?: string;
-  },
-): ContextEngineRuntimeContext {
-  return {
-    ...params.runtimeContext,
-    ...resolveContextEngineCapabilities({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      explicitAgentId: params.contextEngineAgentId,
-      authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
-      contextEnginePluginId: params.contextEnginePluginId,
-      purpose: params.purpose ?? "context-engine.maintenance",
-    }),
-    ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
-    ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
-    rewriteTranscriptEntries: async (request) => {
-      const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
-      const runtimeSessionKey = normalizeOptionalString(
-        params.sessionTarget?.sessionKey ?? params.sessionKey,
-      );
-      if (!runtimeSessionKey) {
-        throw new Error("Context-engine transcript rewrite requires a session key");
-      }
-      const runtimeStorePath =
-        params.sessionTarget?.storePath ??
-        (runtimeAgentId
-          ? resolveSessionStorePathCore(params.config?.session?.store, { agentId: runtimeAgentId })
-          : undefined);
-      let runtimeTarget: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>> | undefined;
-      let sessionManager = params.sessionManager;
-      if (!sessionManager) {
-        runtimeTarget = await resolveRuntimeTranscriptReadTarget({
-          sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
-          sessionKey: runtimeSessionKey,
-          sessionFile: params.sessionFile,
-          ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
-          ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
-        });
-        sessionManager = SessionManager.open(runtimeTarget);
-      }
-      const rewriteSessionManagerEntries = () =>
-        rewriteTranscriptEntriesInSessionManager({
-          sessionManager,
-          replacements: request.replacements,
-        });
-      const result = params.withSessionManagerRewriteLock
-        ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
-        : rewriteSessionManagerEntries();
-      if (result.changed && runtimeTarget) {
-        await publishTranscriptUpdate(runtimeTarget);
-      }
-      return result;
-    },
-  };
-}
-
-async function executeContextEngineMaintenance(
-  params: ContextEngineMaintenanceParams & {
-    contextEngine: ContextEngine;
-    executionMode: "foreground" | "background";
-  },
-): Promise<ContextEngineMaintenanceResult | undefined> {
-  if (typeof params.contextEngine.maintain !== "function") {
-    return undefined;
-  }
-  const result = await params.contextEngine.maintain({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionTarget: params.sessionTarget,
-    sessionFile: params.sessionFile,
-    runtimeSettings: params.runtimeSettings,
-    runtimeContext: buildContextEngineMaintenanceRuntimeContext({
-      ...params,
-      sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
-      withSessionManagerRewriteLock:
-        params.executionMode === "background" ? undefined : params.withSessionManagerRewriteLock,
-      allowDeferredCompactionExecution: params.executionMode === "background",
-      purpose: `context-engine.${params.reason}.maintenance`,
-      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
-    }),
-  });
-  if (result.changed) {
-    log.info(
-      `[context-engine] maintenance(${params.reason}) changed transcript ` +
-        `rewrittenEntries=${result.rewrittenEntries} bytesFreed=${result.bytesFreed} ` +
-        `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-    );
-  }
-  return result;
-}
-
-async function runDeferredTurnMaintenanceWorker(
-  params: DeferredTurnMaintenanceScheduleParams & {
-    runId: string;
-  },
-): Promise<void> {
-  let surfacedUserNotice = false;
-  let longRunningTimer: ReturnType<typeof setTimeout> | undefined;
-  const shutdownAbort = createDeferredTurnMaintenanceAbortSignal();
-  const taskRun = { runId: params.runId, runtime: "acp" as const, sessionKey: params.sessionKey };
-  const makeTaskVisible = (notifyPolicy: "done_only" | "state_changes") =>
-    buildTurnMaintenanceTaskDescriptor({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      notifyPolicy,
-      deliveryStatus: "pending",
-    });
-
-  try {
-    const runningAt = Date.now();
-    startTaskRunByRunId({
-      ...taskRun,
-      startedAt: runningAt,
-      lastEventAt: runningAt,
-      progressSummary: "Running deferred maintenance.",
-      eventSummary: "Starting deferred maintenance.",
-    });
-    longRunningTimer = setTimeout(() => {
-      try {
-        makeTaskVisible("state_changes");
-        surfacedUserNotice = true;
-        const summary = "Deferred maintenance is still running.";
-        recordTaskRunProgressByRunId({
-          ...taskRun,
-          lastEventAt: Date.now(),
-          progressSummary: summary,
-          eventSummary: summary,
-        });
-      } catch (error) {
-        log.warn(`failed to surface deferred maintenance progress: ${String(error)}`);
-      }
-    }, TURN_MAINTENANCE_LONG_WAIT_MS);
-
-    const result = await executeContextEngineMaintenance({
-      ...params,
-      executionMode: "background",
-    });
-    const endedAt = Date.now();
-    completeTaskRunByRunId({
-      ...taskRun,
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary: result?.changed
-        ? "Deferred maintenance completed with transcript changes."
-        : "Deferred maintenance completed.",
-      terminalSummary: result?.changed
-        ? `Rewrote ${result.rewrittenEntries} transcript entr${result.rewrittenEntries === 1 ? "y" : "ies"} and freed ${result.bytesFreed} bytes.`
-        : "No transcript changes were needed.",
-    });
-  } catch (err) {
-    if (shutdownAbort.abortSignal.aborted) {
-      const task = findTaskByRunIdForOwner({
-        runId: params.runId,
-        callerOwnerKey: params.sessionKey,
-        callerAgentId: params.agentId,
-        config: params.config,
-      });
-      if (task) {
-        cancelTaskByIdForOwner({
-          taskId: task.taskId,
-          callerOwnerKey: params.sessionKey,
-          callerAgentId: params.agentId,
-          config: params.config,
-          endedAt: Date.now(),
-          terminalSummary: "Deferred maintenance cancelled during shutdown.",
-        });
-      }
-      return;
-    }
-    const endedAt = Date.now();
-    const reason = formatErrorMessage(err);
-    if (!surfacedUserNotice) {
-      makeTaskVisible("done_only");
-    }
-    failTaskRunByRunId({
-      ...taskRun,
-      endedAt,
-      lastEventAt: endedAt,
-      error: reason,
-      progressSummary: "Deferred maintenance failed.",
-      terminalSummary: reason,
-    });
-    log.warn(`deferred context engine maintenance failed: ${reason}`);
-  } finally {
-    if (longRunningTimer) {
-      clearTimeout(longRunningTimer);
-    }
-    shutdownAbort.dispose();
-    if (params.disposeContextEngineAfterMaintenance) {
-      await disposeDeferredMaintenanceContextEngine(params.contextEngine);
-    }
-  }
+  await waitForSessionMaintenance(sessionKey);
 }
 
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return undefined;
-  }
+  const { sessionKey } = params;
   if (isGatewayDraining()) {
-    params.onScheduleFailure?.(new GatewayDrainingError());
+    params.onDeferredMaintenanceFailure?.(new GatewayDrainingError());
     return undefined;
   }
 
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
-    const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
-    activeRun.rerunRequested = true;
-    activeRun.latestParams = { ...params, sessionKey };
+    if (activeRun.closing) {
+      params.onDeferredMaintenanceFailure?.(
+        new Error("Deferred maintenance is finishing cleanup; try again on the next turn"),
+      );
+      return undefined;
+    }
+    activeRun.disposedEngines = activeRun.disposedEngines.filter(
+      (ref) => ref.deref() !== undefined,
+    );
     if (
-      supersededParams?.disposeContextEngineAfterMaintenance &&
-      supersededParams.contextEngine !== params.contextEngine
+      activeRun.disposedEngines.some((ref) => {
+        const engine = ref.deref();
+        return engine !== undefined && hasSameContextEngineInstance(engine, params.contextEngine);
+      })
     ) {
-      void disposeDeferredMaintenanceContextEngine(supersededParams.contextEngine);
+      params.onDeferredMaintenanceFailure?.(
+        new Error("Context engine was disposed before deferred maintenance could be scheduled"),
+      );
+      return undefined;
+    }
+    const superseded = activeRun.pendingParams;
+    activeRun.pendingParams = params;
+    retainEngine(activeRun, params);
+    if (
+      superseded &&
+      !hasSameContextEngineInstance(superseded.contextEngine, activeRun.activeEngine) &&
+      !hasSameContextEngineInstance(superseded.contextEngine, params.contextEngine)
+    ) {
+      const disposal = disposeRetainedEngine(activeRun, superseded.contextEngine);
+      activeRun.disposals.add(disposal);
+      void disposal.finally(() => activeRun.disposals.delete(disposal));
     }
     return activeRun.promise;
   }
 
-  const existingTask = findActiveSessionTask({
-    sessionKey,
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-  });
-  const reusableTask = existingTask?.runId?.trim() ? existingTask : undefined;
-  if (existingTask && !reusableTask) {
-    updateTaskNotifyPolicyForOwner({
-      taskId: existingTask.taskId,
-      callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
-      notifyPolicy: "silent",
-    });
-    cancelTaskByIdForOwner({
-      taskId: existingTask.taskId,
-      callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
-      endedAt: Date.now(),
-      terminalSummary: "Superseded by refreshed deferred maintenance task.",
-    });
-  }
-  const task =
-    reusableTask ??
-    buildTurnMaintenanceTaskDescriptor({
-      sessionKey,
-    });
-  if (!task) {
-    log.warn("[context-engine] failed to create deferred turn maintenance task", {
-      sessionKey,
-    });
-    return undefined;
-  }
-  const lane = `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
-  log.info(
-    `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
-      `taskId=${task.taskId} sessionKey=${sessionKey} lane=${lane}`,
-  );
-
-  const cancelFailedTask = (error: unknown) => {
-    const errorMessage = formatErrorMessage(error);
-    log.warn(`failed to schedule deferred context engine maintenance: ${errorMessage}`);
-    cancelTaskByIdForOwner({
-      taskId: task.taskId,
-      callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
-      endedAt: Date.now(),
-      terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
-    });
-  };
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
-  let runPromise: Promise<void>;
-  try {
-    runPromise = enqueueCommandInLane(lane, () =>
-      runDeferredTurnMaintenanceWorker({ ...params, sessionKey, runId: task.runId! }),
-    );
-  } catch (err) {
-    schedulerAbort.dispose();
-    cancelFailedTask(err);
-    return undefined;
-  }
-  const cleanupDeferredTurnMaintenance = async () => {
-    schedulerAbort.dispose();
-    const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
-    if (current !== state) {
-      return;
-    }
-    const shutdownTriggered = schedulerAbort.abortSignal.aborted;
-    const rerunParams =
-      current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
-    const discardedRerunParams =
-      current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
-    activeDeferredTurnMaintenanceRuns.delete(sessionKey);
-    if (rerunParams) {
-      await scheduleDeferredTurnMaintenance(rerunParams);
-    } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
-      await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
-    }
-  };
-  const trackedPromise = runPromise
-    .catch((err: unknown) => {
-      params.onScheduleFailure?.(err);
-      cancelFailedTask(err);
-    })
-    .then(cleanupDeferredTurnMaintenance, async (error: unknown) => {
-      await cleanupDeferredTurnMaintenance();
-      throw error;
-    });
+  const maintenance = createSessionMaintenanceOwner({
+    sessionKey,
+    abortSignal: schedulerAbort.abortSignal,
+  });
+  const completion = createDeferredCore();
   const state: DeferredTurnMaintenanceRunState = {
-    promise: trackedPromise,
-    rerunRequested: false,
-    latestParams: { ...params, sessionKey },
+    maintenance,
+    promise: maintenance.track(completion.promise),
+    activeEngine: params.contextEngine,
+    engines: [params],
+    disposedEngines: [],
+    disposals: new Set(),
+    closing: false,
   };
   activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
-  void trackedPromise;
-  return trackedPromise;
+  const run = async () => {
+    try {
+      const lane = `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
+      await enqueueCommandInLane(lane, () =>
+        params.runInContext(() =>
+          maintenance.run(async () => {
+            let current: DeferredTurnMaintenanceScheduleParams | undefined = params;
+            while (current && !maintenance.signal.aborted) {
+              const request = current;
+              state.activeEngine = request.contextEngine;
+              await request.runInContext(() =>
+                maintenance.run(() =>
+                  runContextEngineMaintenanceWork(async () => {
+                    const workerParams = {
+                      ...request,
+                      abortSignal: maintenance.signal,
+                      assertActive: () => {
+                        maintenance.assertCurrent();
+                        request.assertActive?.();
+                      },
+                      sessionKey,
+                    };
+                    try {
+                      await executeContextEngineMaintenance({
+                        ...workerParams,
+                        executionMode: "background",
+                      });
+                    } catch (error) {
+                      if (!isContextEngineAbortRejection(error, workerParams.abortSignal)) {
+                        workerParams.onDeferredMaintenanceFailure?.(error);
+                        log.warn(
+                          "Deferred context engine maintenance failed: " +
+                            formatErrorMessage(error),
+                        );
+                      }
+                    }
+                  }, maintenance.signal),
+                ),
+              );
+              current = state.pendingParams;
+              state.pendingParams = undefined;
+              state.activeEngine = current?.contextEngine ?? request.contextEngine;
+              if (
+                !current ||
+                !hasSameContextEngineInstance(request.contextEngine, current.contextEngine)
+              ) {
+                await disposeRetainedEngine(state, request.contextEngine);
+              }
+              current = state.pendingParams ?? current;
+              state.pendingParams = undefined;
+            }
+          }),
+        ),
+      );
+    } catch (error) {
+      params.onDeferredMaintenanceFailure?.(error);
+      log.warn(
+        "Failed to schedule deferred context engine maintenance: " + formatErrorMessage(error),
+      );
+    }
+  };
+  void (async () => {
+    try {
+      // Preparation descendants belong to maintenance, and must join before resource disposal.
+      await params.runInContext(() => runContextEngineMaintenanceWork(run, maintenance.signal));
+    } finally {
+      try {
+        state.closing = true;
+        while (state.engines.length > 0) {
+          const engine = state.engines[0]!;
+          await disposeRetainedEngine(state, engine.contextEngine);
+        }
+        await Promise.all(state.disposals);
+      } finally {
+        activeDeferredTurnMaintenanceRuns.delete(sessionKey);
+        schedulerAbort.dispose();
+      }
+    }
+  })().then(completion.resolve, completion.reject);
+  return state.promise;
 }
 
-/**
- * Run optional context-engine transcript maintenance and normalize the result.
- */
+async function disposeRetainedEngine(
+  state: DeferredTurnMaintenanceRunState,
+  contextEngine: ContextEngine,
+): Promise<void> {
+  const index = state.engines.findIndex((entry) =>
+    hasSameContextEngineInstance(entry.contextEngine, contextEngine),
+  );
+  if (index < 0) {
+    return;
+  }
+  const [entry] = state.engines.splice(index, 1);
+  if (entry?.disposeContextEngineAfterMaintenance) {
+    state.disposedEngines = state.disposedEngines.filter((ref) => ref.deref() !== undefined);
+    state.disposedEngines.push(new WeakRef(entry.contextEngine));
+    await disposeDeferredMaintenanceContextEngine(entry, state.maintenance);
+  }
+}
+
+function retainEngine(
+  state: DeferredTurnMaintenanceRunState,
+  params: DeferredTurnMaintenanceScheduleParams,
+): void {
+  const existing = state.engines.find((entry) =>
+    hasSameContextEngineInstance(entry.contextEngine, params.contextEngine),
+  );
+  if (!existing) {
+    state.engines.push(params);
+    return;
+  }
+  existing.disposeContextEngineAfterMaintenance ||= params.disposeContextEngineAfterMaintenance;
+  for (const resources of params.factoryResourceOwners) {
+    existing.factoryResourceOwners.add(resources);
+  }
+}
+
 export async function runContextEngineMaintenance(
   params: ContextEngineMaintenanceParams,
 ): Promise<ContextEngineMaintenanceResult | undefined> {
@@ -560,8 +298,15 @@ export async function runContextEngineMaintenance(
     return undefined;
   }
 
-  const executionMode = params.executionMode ?? "foreground";
+  // Caller memory cannot be reopened by a deferred worker. Keep its manager,
+  // rewrite lock, and lifetime together even when background work is requested.
+  const ownsMemoryTranscript =
+    params.sessionManager !== undefined && params.sessionManager.getSessionTarget() === undefined;
+  const executionMode = ownsMemoryTranscript
+    ? "foreground"
+    : (params.executionMode ?? "foreground");
   const shouldDefer =
+    !ownsMemoryTranscript &&
     params.reason === "turn" &&
     executionMode !== "background" &&
     contextEngine.info.turnMaintenanceMode === "background";
@@ -575,12 +320,14 @@ export async function runContextEngineMaintenance(
         );
         return undefined;
       }
+      // The scheduler takes resource custody synchronously before the foreground transfer callback.
       const deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
         sessionKey,
+        runInContext: AsyncLocalStorage.snapshot(),
+        factoryResourceOwners: new Set(params.factoryResources ? [params.factoryResources] : []),
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
-        onScheduleFailure: params.onDeferredMaintenanceFailure,
       });
       if (deferred) {
         params.onDeferredMaintenance?.(deferred);
@@ -594,6 +341,8 @@ export async function runContextEngineMaintenance(
   try {
     return await executeContextEngineMaintenance({ ...params, contextEngine, executionMode });
   } catch (err) {
+    params.abortSignal?.throwIfAborted();
+    params.assertActive?.();
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
     return undefined;
   }

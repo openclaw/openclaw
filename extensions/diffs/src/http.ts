@@ -1,10 +1,12 @@
-// Diffs plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAuthRateLimiter, type AuthRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
-import type { PluginLogger } from "../api.js";
-import { resolveRequestClientIp } from "../runtime-api.js";
+import {
+  createAuthRateLimiter,
+  resolveRequestClientIp,
+  type AuthRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
@@ -30,10 +32,7 @@ const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
   logger?: PluginLogger;
-  allowRemoteViewer?: boolean;
-  trustedProxies?: readonly string[];
-  allowRealIpFallback?: boolean;
-  resolveAccessConfig?: () => {
+  resolveAccessConfig: () => {
     allowRemoteViewer?: boolean;
     trustedProxies?: readonly string[];
     allowRealIpFallback?: boolean;
@@ -49,7 +48,7 @@ export function createDiffsHttpHandler(params: {
   });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const parsed = parseRequestUrl(req.url);
+    const parsed = req.url ? URL.parse(req.url, "http://127.0.0.1") : null;
     if (!parsed) {
       return false;
     }
@@ -62,11 +61,7 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const accessConfig = params.resolveAccessConfig?.() ?? {
-      allowRemoteViewer: params.allowRemoteViewer,
-      trustedProxies: params.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback,
-    };
+    const accessConfig = params.resolveAccessConfig();
     const access = resolveViewerAccess(req, {
       trustedProxies: accessConfig.trustedProxies,
       allowRealIpFallback: accessConfig.allowRealIpFallback,
@@ -84,10 +79,8 @@ export function createDiffsHttpHandler(params: {
     if (!access.localRequest) {
       const throttled = viewerFailureLimiter.check(access.remoteKey);
       if (!throttled.allowed) {
-        res.statusCode = 429;
-        setSharedHeaders(res, "text/plain; charset=utf-8");
         res.setHeader("Retry-After", String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))));
-        res.end("Too Many Requests");
+        respondText(res, 429, "Too Many Requests");
         return true;
       }
     }
@@ -135,17 +128,6 @@ export function createDiffsHttpHandler(params: {
   };
 }
 
-function parseRequestUrl(rawUrl?: string): URL | null {
-  if (!rawUrl) {
-    return null;
-  }
-  try {
-    return new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
-}
-
 async function serveAsset(
   req: IncomingMessage,
   res: ServerResponse,
@@ -170,6 +152,7 @@ async function serveAsset(
       asset.contentType,
       pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
     );
+    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -186,6 +169,9 @@ async function serveAsset(
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so error responses keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("content-length", String(Buffer.byteLength(body)));
   res.end(body);
 }
 
@@ -206,10 +192,6 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
     return "unknown";
   }
   return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
-}
-
-function isLoopbackClientIp(clientIp: string): boolean {
-  return isLoopbackHost(clientIp);
 }
 
 function hasProxyForwardingHints(req: IncomingMessage): boolean {
@@ -246,7 +228,7 @@ function resolveViewerAccess(
       : req.socket?.remoteAddress;
   const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
   const localRequest =
-    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
+    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackHost(remoteKey);
   return { remoteKey, localRequest };
 }
 

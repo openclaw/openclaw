@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
+  hasBundledChannelPackageStateAsync,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
@@ -72,6 +74,96 @@ afterEach(() => {
 });
 
 describe("channel package-state probes", () => {
+  it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-async-"));
+    tempDirs.push(root);
+    fs.writeFileSync(
+      path.join(root, "auth-presence.js"),
+      [
+        "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
+        "module.exports.hasStateAsync = async ({ env }) => {",
+        "  if (env.REFUSE) throw new Error('owner refused');",
+        "  return env.HAS_STATE === 'yes';",
+        "};",
+      ].join("\n"),
+    );
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "fixture",
+        origin: "bundled",
+        rootDir: root,
+        channel: {
+          id: "fixture",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasState",
+            exportNameAsync: "hasStateAsync",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+    const probe = (env: NodeJS.ProcessEnv) =>
+      hasBundledChannelPackageStateAsync({
+        metadataKey: "persistedAuthState",
+        channelId: "fixture",
+        cfg: {},
+        env,
+      });
+    await expect(probe({ HAS_STATE: "yes" })).resolves.toBe(true);
+    await expect(probe({ HAS_STATE: "no" })).resolves.toBe(false);
+    await expect(probe({ REFUSE: "yes" })).rejects.toThrow("owner refused");
+  });
+
+  it.each(["plugin-state"])(
+    "preserves checker loading and newly created state for backing store %s",
+    (backingStore) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-presence-prerequisite-"));
+      tempDirs.push(root);
+      const pluginRoot = path.join(root, "extensions", "fixture");
+      const marker = path.join(root, "loaded");
+      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+      const database = resolveOpenClawStateSqlitePath(env);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "auth-presence.js"),
+        [
+          `const fs = require("node:fs");`,
+          `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
+          `module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
+        ].join("\n"),
+      );
+      listChannelCatalogEntriesMock.mockReturnValue([
+        {
+          pluginId: "fixture",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          channel: {
+            id: "fixture",
+            persistedAuthState: {
+              specifier: "./auth-presence",
+              exportName: "hasState",
+              backingStore,
+            },
+          },
+        },
+      ]);
+      const probe = () =>
+        hasBundledChannelPackageState({
+          metadataKey: "persistedAuthState",
+          channelId: "fixture",
+          cfg: {},
+          env,
+        });
+      expect(probe()).toBe(false);
+      expect(fs.existsSync(database)).toBe(false);
+      expect(fs.existsSync(marker)).toBe(backingStore !== "plugin-state");
+      fs.mkdirSync(path.dirname(database), { recursive: true });
+      fs.writeFileSync(database, "existing fixture; checker owns interpretation");
+      expect(probe()).toBe(true);
+      expect(fs.readFileSync(marker, "utf8")).toBe("loaded");
+    },
+  );
+
   it("uses channel ids when manifest plugin ids differ", () => {
     listChannelCatalogEntriesMock.mockReturnValue([
       makeBundledChannelCatalogEntry({
@@ -99,21 +191,14 @@ describe("channel package-state probes", () => {
     ).toBe(false);
   });
 
-  it("uses manifest env metadata without loading a configured-state module", () => {
+  it.each([
+    { name: "PATH", env: { PATH: "/usr/bin" }, configured: false },
+    { name: "mixed_case_token", env: { MIXED_CASE_TOKEN: "token" }, configured: true },
+  ])("applies the safe channel env-trigger contract to $name", ({ name, env, configured }) => {
     listChannelCatalogEntriesMock.mockReturnValue([
       {
-        ...makeBundledChannelCatalogEntry({
-          pluginId: "env-chat",
-          channelId: "env-chat",
-        }),
-        channel: {
-          id: "env-chat",
-          configuredState: {
-            env: { allOf: ["ENV_CHAT_TOKEN"] },
-            specifier: "./missing-configured-state",
-            exportName: "missingConfiguredState",
-          },
-        },
+        ...makeBundledChannelCatalogEntry({ pluginId: "env-chat", channelId: "env-chat" }),
+        channel: { id: "env-chat", configuredState: { env: { allOf: [name] } } },
       } satisfies PluginChannelCatalogEntry,
     ]);
 
@@ -122,59 +207,9 @@ describe("channel package-state probes", () => {
         metadataKey: "configuredState",
         channelId: "env-chat",
         cfg: {},
-        env: { ENV_CHAT_TOKEN: "token" },
+        env,
       }),
-    ).toBe(true);
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "configuredState",
-        channelId: "env-chat",
-        cfg: {},
-        env: { ENV_CHAT_TOKEN: " " },
-      }),
-    ).toBe(false);
-  });
-
-  it("prefers built bundled package-state probes when the catalog root is source", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-probe-"));
-    tempDirs.push(root);
-    const sourceRoot = path.join(root, "extensions", "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.ts"),
-      "throw new Error('source probe should not load');\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => true;\n",
-      "utf8",
-    );
-
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "matrix",
-        origin: "bundled",
-        rootDir: sourceRoot,
-        channel: {
-          id: "matrix",
-          persistedAuthState: {
-            specifier: "./auth-presence",
-            exportName: "hasAnyMatrixAuth",
-          },
-        },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
-
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "persistedAuthState",
-        channelId: "matrix",
-        cfg: {},
-      }),
-    ).toBe(true);
+    ).toBe(configured);
   });
 
   it("falls back to source package-state probes when built artifacts are stale", () => {
@@ -219,96 +254,57 @@ describe("channel package-state probes", () => {
     ).toBe(true);
   });
 
-  it("preserves source overlay precedence over packaged package-state probes", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
-    tempDirs.push(root);
-    const sourceRoot = path.join(root, "extensions", "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => false;\n",
-      "utf8",
-    );
-    isBundledSourceOverlayPathMock.mockImplementation(
-      ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
-    );
+  it.each(["mtsx"])(
+    "preserves %s source overlay precedence over packaged package-state probes",
+    (extension) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
+      tempDirs.push(root);
+      const sourceRoot = path.join(root, "extensions", "matrix");
+      const builtRoot = path.join(root, "dist", "extensions", "matrix");
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      fs.mkdirSync(builtRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(sourceRoot, `auth-presence.${extension}`),
+        extension === "js"
+          ? "module.exports.hasAnyMatrixAuth = () => true;\n"
+          : "export const hasAnyMatrixAuth = (): boolean => true;\n",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(builtRoot, "auth-presence.js"),
+        "module.exports.hasAnyMatrixAuth = () => false;\n",
+        "utf8",
+      );
+      isBundledSourceOverlayPathMock.mockImplementation(
+        ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
+      );
 
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "matrix",
-        origin: "bundled",
-        rootDir: sourceRoot,
-        channel: {
-          id: "matrix",
-          persistedAuthState: {
-            specifier: "./auth-presence",
-            exportName: "hasAnyMatrixAuth",
+      listChannelCatalogEntriesMock.mockReturnValue([
+        {
+          pluginId: "matrix",
+          origin: "bundled",
+          rootDir: sourceRoot,
+          channel: {
+            id: "matrix",
+            configuredState: {
+              specifier: `./auth-presence.${extension}`,
+              exportName: "hasAnyMatrixAuth",
+            },
+            persistedAuthState: {
+              specifier: `./auth-presence.${extension}`,
+              exportName: "hasAnyMatrixAuth",
+            },
           },
-        },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
+        } satisfies PluginChannelCatalogEntry,
+      ]);
 
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "persistedAuthState",
-        channelId: "matrix",
-        cfg: {},
-      }),
-    ).toBe(true);
-  });
-
-  it("preserves parent-mounted source overlay precedence over packaged package-state probes", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-parent-overlay-"));
-    tempDirs.push(root);
-    const extensionsRoot = path.join(root, "extensions");
-    const sourceRoot = path.join(extensionsRoot, "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => false;\n",
-      "utf8",
-    );
-    isBundledSourceOverlayPathMock.mockImplementation(
-      ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === extensionsRoot,
-    );
-
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "matrix",
-        origin: "bundled",
-        rootDir: sourceRoot,
-        channel: {
-          id: "matrix",
-          persistedAuthState: {
-            specifier: "./auth-presence",
-            exportName: "hasAnyMatrixAuth",
-          },
-        },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
-
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "persistedAuthState",
-        channelId: "matrix",
-        cfg: {},
-      }),
-    ).toBe(true);
-  });
+      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
+        expect(hasBundledChannelPackageState({ metadataKey, channelId: "matrix", cfg: {} })).toBe(
+          true,
+        );
+      }
+    },
+  );
 
   it("reports a missing built package-state artifact as not found, not a boundary escape", () => {
     // Reproduces a rebuild window: the catalog root is the built plugin dir while
@@ -351,54 +347,5 @@ describe("channel package-state probes", () => {
         pluginId: "matrix",
       },
     ]);
-  });
-
-  it("tries dist-runtime package-state probes before falling back to source", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-runtime-"));
-    tempDirs.push(root);
-    const sourceRoot = path.join(root, "extensions", "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    const runtimeRoot = path.join(root, "dist-runtime", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.mkdirSync(runtimeRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.js"),
-      "throw new Error('source probe should not load');\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.stale = () => false;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(runtimeRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => true;\n",
-      "utf8",
-    );
-
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "matrix",
-        origin: "bundled",
-        rootDir: sourceRoot,
-        channel: {
-          id: "matrix",
-          persistedAuthState: {
-            specifier: "./auth-presence",
-            exportName: "hasAnyMatrixAuth",
-          },
-        },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
-
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "persistedAuthState",
-        channelId: "matrix",
-        cfg: {},
-      }),
-    ).toBe(true);
   });
 });

@@ -1,0 +1,13 @@
+{
+  "id": "browser-login-fixture",
+  "providers": ["browser-login-fixture"],
+  "modelCatalog": { "discovery": { "browser-login-fixture": "refreshable" } },
+  "providerAuthChoices": [{
+    "provider": "browser-login-fixture", "method": "oauth", "choiceId": "browser",
+    "choiceLabel": "Fixture browser sign-in", "appGuidedAuth": "oauth", "credentialOnly": true
+  }],
+  "configSchema": {
+    "type": "object", "additionalProperties": false,
+    "properties": { "origin": { "type": "string" } }, "required": ["origin"]
+  }
+}

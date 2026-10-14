@@ -1,14 +1,12 @@
-// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import zlib from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { encodePngRgba } from "../../media/png-encode.js";
 
-/** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
   x: number;
   y: number;
@@ -16,11 +14,10 @@ type Rect = {
   height: number;
 };
 
-type Rgba = {
+type Rgb = {
   r: number;
   g: number;
   b: number;
-  a: number;
 };
 
 type TreemapLeaf = {
@@ -31,7 +28,7 @@ type TreemapLeaf = {
 type TreemapGroup = {
   name: string;
   value: number;
-  color: Rgba;
+  color: Rgb;
   leaves: TreemapLeaf[];
 };
 
@@ -98,23 +95,17 @@ const FONT: Record<string, string[]> = {
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
 };
 
-function rgba(r: number, g: number, b: number, a = 255): Rgba {
-  return { r, g, b, a };
+function rgb(r: number, g: number, b: number): Rgb {
+  return { r, g, b };
 }
 
-function mixColor(a: Rgba, b: Rgba, amount: number): Rgba {
+function mixColor(a: Rgb, b: Rgb, amount: number): Rgb {
   const t = Math.max(0, Math.min(1, amount));
-  return rgba(
-    a.r + (b.r - a.r) * t,
-    a.g + (b.g - a.g) * t,
-    a.b + (b.b - a.b) * t,
-    a.a + (b.a - a.a) * t,
-  );
+  return rgb(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
 }
 
-function formatInt(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatSize(value: number): string {
   return `${formatInt(value)} CH / ~${formatInt(estimateTokensFromChars(value))} TOK`;
@@ -132,95 +123,70 @@ function sanitizeLabel(value: string): string {
     .toUpperCase();
 }
 
-function truncateLabel(value: string, maxChars: number): string {
-  if (maxChars <= 0) {
-    return "";
-  }
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 2) {
-    return value.slice(0, maxChars);
-  }
-  return value.slice(0, maxChars - 1);
-}
-
-function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): PositionedItem<T>[] {
+function layoutBinary<T extends { value: number }>(
+  rawItems: T[],
+  bounds: Rect,
+): PositionedItem<T>[] {
   const items = rawItems.filter((item) => item.value > 0).toSorted((a, b) => b.value - a.value);
-  if (items.length === 0 || rect.width <= 0 || rect.height <= 0) {
-    return [];
-  }
-  if (items.length === 1) {
-    return [{ item: expectDefined(items[0], "items entry at 0"), rect }];
-  }
-  const total = totalValue(items);
-  let splitIndex = 1;
-  let splitSum = items[0]?.value ?? 0;
-  for (let i = 1; i < items.length - 1; i += 1) {
-    const next = splitSum + expectDefined(items[i], "items entry at i").value;
-    if (Math.abs(total / 2 - next) > Math.abs(total / 2 - splitSum)) {
-      break;
+  const positioned: PositionedItem<T>[] = [];
+  // Child ranges retain the stable descending order; sum each range from zero
+  // to preserve floating-point split decisions and pixel boundaries.
+  function visit(start: number, end: number, rect: Rect): void {
+    if (start === end || rect.width <= 0 || rect.height <= 0) {
+      return;
     }
-    splitSum = next;
-    splitIndex = i + 1;
+    if (end - start === 1) {
+      positioned.push({ item: expectDefined(items[start], "items entry at start"), rect });
+      return;
+    }
+    let total = 0;
+    for (let i = start; i < end; i += 1) {
+      total += expectDefined(items[i], "items entry at i").value;
+    }
+    let splitIndex = start + 1;
+    let splitSum = items[start]?.value ?? 0;
+    for (let i = start + 1; i < end - 1; i += 1) {
+      const next = splitSum + expectDefined(items[i], "items entry at i").value;
+      if (Math.abs(total / 2 - next) > Math.abs(total / 2 - splitSum)) {
+        break;
+      }
+      splitSum = next;
+      splitIndex = i + 1;
+    }
+    const ratio = splitSum / total;
+    const dimension = rect.width >= rect.height ? "width" : "height";
+    const position = dimension === "width" ? "x" : "y";
+    const firstSize = rect[dimension] * ratio;
+    visit(start, splitIndex, { ...rect, [dimension]: firstSize });
+    visit(splitIndex, end, {
+      ...rect,
+      [position]: rect[position] + firstSize,
+      [dimension]: rect[dimension] - firstSize,
+    });
   }
-  const first = items.slice(0, splitIndex);
-  const second = items.slice(splitIndex);
-  const ratio = splitSum / total;
-  if (rect.width >= rect.height) {
-    const firstWidth = rect.width * ratio;
-    return [
-      ...layoutBinary(first, { ...rect, width: firstWidth }),
-      ...layoutBinary(second, {
-        x: rect.x + firstWidth,
-        y: rect.y,
-        width: rect.width - firstWidth,
-        height: rect.height,
-      }),
-    ];
-  }
-  const firstHeight = rect.height * ratio;
-  return [
-    ...layoutBinary(first, { ...rect, height: firstHeight }),
-    ...layoutBinary(second, {
-      x: rect.x,
-      y: rect.y + firstHeight,
-      width: rect.width,
-      height: rect.height - firstHeight,
-    }),
-  ];
+  visit(0, items.length, bounds);
+  return positioned;
 }
 
 /** Tiny in-process RGBA canvas used to avoid runtime image dependencies. */
 class PngCanvas {
   readonly data = Buffer.alloc(WIDTH * HEIGHT * 4);
 
-  fill(color: Rgba): void {
-    for (let i = 0; i < this.data.length; i += 4) {
-      this.data[i] = color.r;
-      this.data[i + 1] = color.g;
-      this.data[i + 2] = color.b;
-      this.data[i + 3] = color.a;
-    }
-  }
-
-  rect(rect: Rect, color: Rgba): void {
+  rect(rect: Rect, color: Rgb): void {
     const x0 = Math.max(0, Math.floor(rect.x));
     const y0 = Math.max(0, Math.floor(rect.y));
     const x1 = Math.min(WIDTH, Math.ceil(rect.x + rect.width));
     const y1 = Math.min(HEIGHT, Math.ceil(rect.y + rect.height));
+    if (!(x1 > x0 && y1 > y0)) {
+      return;
+    }
+    const pixel = Buffer.from([color.r, color.g, color.b, 255]);
     for (let y = y0; y < y1; y += 1) {
-      for (let x = x0; x < x1; x += 1) {
-        const offset = (y * WIDTH + x) * 4;
-        this.data[offset] = color.r;
-        this.data[offset + 1] = color.g;
-        this.data[offset + 2] = color.b;
-        this.data[offset + 3] = color.a;
-      }
+      this.data.fill(pixel, (y * WIDTH + x0) * 4, (y * WIDTH + x1) * 4);
     }
   }
 
-  stroke(rect: Rect, color: Rgba, width: number): void {
+  stroke(rect: Rect, color: Rgb, width: number): void {
     this.rect({ x: rect.x, y: rect.y, width: rect.width, height: width }, color);
     this.rect(
       { x: rect.x, y: rect.y + rect.height - width, width: rect.width, height: width },
@@ -230,7 +196,7 @@ class PngCanvas {
     this.rect({ x: rect.x + rect.width - width, y: rect.y, width, height: rect.height }, color);
   }
 
-  text(x: number, y: number, text: string, color: Rgba, scale: number): void {
+  text(x: number, y: number, text: string, color: Rgb, scale: number): void {
     let cursorX = Math.floor(x);
     const cursorY = Math.floor(y);
     for (const rawChar of text) {
@@ -271,7 +237,7 @@ function drawLabel(
   canvas: PngCanvas,
   rect: Rect,
   lines: string[],
-  color: Rgba,
+  color: Rgb,
   scale: number,
 ): void {
   const charWidth = 6 * scale;
@@ -281,65 +247,22 @@ function drawLabel(
   if (maxChars < 4 || maxLines < 1) {
     return;
   }
-  const clipped = lines
-    .slice(0, maxLines)
-    .map((line) => truncateLabel(sanitizeLabel(line), maxChars));
-  clipped.forEach((line, index) => {
-    canvas.text(rect.x + 7, rect.y + 7 + index * lineHeight, line, color, scale);
+  lines.slice(0, maxLines).forEach((line, index) => {
+    const label = sanitizeLabel(line);
+    canvas.text(
+      rect.x + 7,
+      rect.y + 7 + index * lineHeight,
+      label.length > maxChars ? label.slice(0, maxChars - 1) : label,
+      color,
+      scale,
+    );
   });
 }
 
-function crc32(buffer: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc ^= byte;
-    for (let i = 0; i < 8; i += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuffer = Buffer.from(type, "ascii");
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length, 0);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
-  return Buffer.concat([length, typeBuffer, data, crc]);
-}
-
-function encodePng(data: Buffer): Buffer {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(WIDTH, 0);
-  ihdr.writeUInt32BE(HEIGHT, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
-  const stride = WIDTH * 4;
-  const raw = Buffer.alloc((stride + 1) * HEIGHT);
-  for (let y = 0; y < HEIGHT; y += 1) {
-    const rowStart = y * (stride + 1);
-    raw[rowStart] = 0;
-    data.copy(raw, rowStart + 1, y * stride, (y + 1) * stride);
-  }
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", zlib.deflateSync(raw)),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-function treemapGroup(params: { name: string; color: Rgba; leaves: TreemapLeaf[] }): TreemapGroup {
-  return { ...params, value: totalValue(params.leaves) };
-}
-
-function buildGroups(params: {
-  report: SessionSystemPromptReport;
-  conversation: TreemapLeaf[];
-}): TreemapGroup[] {
-  const { report } = params;
+function buildGroups(
+  report: SessionSystemPromptReport,
+  conversation: TreemapLeaf[],
+): TreemapGroup[] {
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
     (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
     0,
@@ -351,14 +274,14 @@ function buildGroups(params: {
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
   const groups = [
-    treemapGroup({
+    {
       name: "Conversation",
-      color: rgba(201, 82, 96),
-      leaves: params.conversation,
-    }),
-    treemapGroup({
+      color: rgb(201, 82, 96),
+      leaves: conversation,
+    },
+    {
       name: "Workspace files",
-      color: rgba(58, 145, 91),
+      color: rgb(58, 145, 91),
       leaves: [
         ...report.injectedWorkspaceFiles
           .filter((file) => file.injectionStatus !== "native_unverified")
@@ -368,40 +291,42 @@ function buildGroups(params: {
           })),
         { name: "Project context frame", value: projectFrameChars },
       ],
-    }),
-    treemapGroup({
+    },
+    {
       name: "System prompt",
-      color: rgba(222, 138, 46),
+      color: rgb(222, 138, 46),
       leaves: [{ name: "Base instructions", value: systemBaseChars }],
-    }),
-    treemapGroup({
+    },
+    {
       name: "Tool schemas",
-      color: rgba(59, 118, 184),
+      color: rgb(59, 118, 184),
       leaves: tools,
-    }),
-    treemapGroup({
+    },
+    {
       name: "Skills",
-      color: rgba(132, 91, 173),
+      color: rgb(132, 91, 173),
       leaves: report.skills.entries.map((skill) => ({
         name: skill.name,
         value: skill.blockChars,
       })),
-    }),
+    },
   ];
-  return groups.filter((group) => group.value > 0);
+  return groups
+    .map((group) => Object.assign(group, { value: totalValue(group.leaves) }))
+    .filter((group) => group.value > 0);
 }
 
 function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): void {
   const groupRects = layoutBinary(groups, rect);
   groupRects.forEach(({ item: group, rect: groupRect }, groupIndex) => {
-    const groupFill = mixColor(group.color, rgba(18, 22, 27), 0.16);
+    const groupFill = mixColor(group.color, rgb(18, 22, 27), 0.16);
     canvas.rect(groupRect, groupFill);
-    canvas.stroke(groupRect, rgba(14, 18, 22), 3);
+    canvas.stroke(groupRect, rgb(14, 18, 22), 3);
     drawLabel(
       canvas,
       { x: groupRect.x + 4, y: groupRect.y + 4, width: groupRect.width - 8, height: 38 },
       [group.name, formatSize(group.value)],
-      rgba(248, 250, 252),
+      rgb(248, 250, 252),
       groupRect.width > 260 && groupRect.height > 120 ? 2 : 1,
     );
     const childRect = inset(
@@ -413,19 +338,18 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
       },
       0,
     );
-    const leaves = group.leaves.filter((leaf) => leaf.value > 0);
-    const leafRects = layoutBinary(leaves, childRect);
+    const leafRects = layoutBinary(group.leaves, childRect);
     leafRects.forEach(({ item: leaf, rect: leafRect }, leafIndex) => {
       const shade = (leafIndex % 7) / 10 + (groupIndex % 2) * 0.08;
-      const fill = mixColor(group.color, rgba(255, 255, 255), shade);
+      const fill = mixColor(group.color, rgb(255, 255, 255), shade);
       const inner = inset(leafRect, 1.5);
       canvas.rect(inner, fill);
-      canvas.stroke(inner, rgba(8, 12, 16), 1);
+      canvas.stroke(inner, rgb(8, 12, 16), 1);
       if (inner.width * inner.height > 5200) {
         const textColor =
           fill.r * 0.299 + fill.g * 0.587 + fill.b * 0.114 > 150
-            ? rgba(16, 23, 31)
-            : rgba(248, 250, 252);
+            ? rgb(16, 23, 31)
+            : rgb(248, 250, 252);
         drawLabel(canvas, inner, [leaf.name, formatSize(leaf.value)], textColor, 1);
       }
     });
@@ -433,40 +357,39 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
 }
 
 function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total: number): void {
-  canvas.rect(rect, rgba(245, 247, 250));
-  canvas.stroke(rect, rgba(213, 220, 228), 1);
-  canvas.text(rect.x + 18, rect.y + 18, "LEGEND", rgba(30, 41, 59), 2);
+  canvas.rect(rect, rgb(245, 247, 250));
+  canvas.stroke(rect, rgb(213, 220, 228), 1);
+  canvas.text(rect.x + 18, rect.y + 18, "LEGEND", rgb(30, 41, 59), 2);
   let y = rect.y + 58;
   groups.forEach((group) => {
     canvas.rect({ x: rect.x + 18, y, width: 18, height: 18 }, group.color);
-    canvas.stroke({ x: rect.x + 18, y, width: 18, height: 18 }, rgba(15, 23, 42), 1);
+    canvas.stroke({ x: rect.x + 18, y, width: 18, height: 18 }, rgb(15, 23, 42), 1);
     const pct = total > 0 ? `${Math.round((group.value / total) * 100)} PCT` : "0 PCT";
     drawLabel(
       canvas,
       { x: rect.x + 46, y: y - 1, width: rect.width - 62, height: 38 },
       [group.name, pct],
-      rgba(30, 41, 59),
+      rgb(30, 41, 59),
       1,
     );
     y += 54;
   });
 }
 
-/** Renders a prompt context treemap PNG and returns the written file path. */
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;
   conversation: TreemapLeaf[];
 }): Promise<{ path: string; trackedChars: number; caption: string }> {
-  const groups = buildGroups({ report: params.report, conversation: params.conversation });
+  const groups = buildGroups(params.report, params.conversation);
   const conversationChars = totalValue(params.conversation);
   const trackedChars = totalValue(groups);
   const canvas = new PngCanvas();
-  canvas.fill(rgba(238, 241, 245));
-  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEADER_HEIGHT }, rgba(20, 26, 34));
-  canvas.text(PADDING, 24, "CONTEXT TREEMAP", rgba(248, 250, 252), 3);
+  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEIGHT }, rgb(238, 241, 245));
+  canvas.rect({ x: 0, y: 0, width: WIDTH, height: HEADER_HEIGHT }, rgb(20, 26, 34));
+  canvas.text(PADDING, 24, "CONTEXT TREEMAP", rgb(248, 250, 252), 3);
   const sourceLine = `${params.report.source.toUpperCase()} / ${params.report.provider ?? "provider"} / ${params.report.model ?? "model"}`;
-  canvas.text(PADDING, 58, sanitizeLabel(sourceLine), rgba(176, 196, 222), 1);
+  canvas.text(PADDING, 58, sanitizeLabel(sourceLine), rgb(176, 196, 222), 1);
   const treemapRect = {
     x: PADDING,
     y: HEADER_HEIGHT + PADDING,
@@ -498,14 +421,14 @@ export async function renderContextTreemapPng(params: {
     PADDING,
     footerY,
     `${formatSize(trackedChars)} / ${actual} / ${window}`,
-    rgba(51, 65, 85),
+    rgb(51, 65, 85),
     1,
   );
   const outPath = path.join(
     resolvePreferredOpenClawTmpDir(),
     `openclaw-context-map-${crypto.randomUUID()}.png`,
   );
-  await writeFile(outPath, encodePng(canvas.data));
+  await writeFile(outPath, encodePngRgba(canvas.data, WIDTH, HEIGHT));
   const caption = [
     "Context treemap",
     `Source: ${params.report.source}`,

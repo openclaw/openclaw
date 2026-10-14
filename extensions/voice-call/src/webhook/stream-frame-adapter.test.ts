@@ -1,10 +1,10 @@
 // Voice Call tests cover stream frame adapter plugin behavior.
 import { describe, expect, it } from "vitest";
-import { TelnyxStreamFrameAdapter, TwilioStreamFrameAdapter } from "./stream-frame-adapter.js";
+import { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
-describe("TwilioStreamFrameAdapter", () => {
+describe("Twilio stream frames", () => {
   it("parses Twilio start, media, mark, stop, and ignores junk", () => {
-    const adapter = new TwilioStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("twilio");
 
     expect(
       adapter.parseInbound(
@@ -26,7 +26,6 @@ describe("TwilioStreamFrameAdapter", () => {
       kind: "media",
       payloadBase64: "AAA=",
       timestampMs: 20,
-      track: "inbound",
     });
 
     expect(
@@ -49,7 +48,7 @@ describe("TwilioStreamFrameAdapter", () => {
   });
 
   it("ignores partial numeric media timestamps", () => {
-    const adapter = new TwilioStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("twilio");
 
     expect(
       adapter.parseInbound(
@@ -62,7 +61,7 @@ describe("TwilioStreamFrameAdapter", () => {
   });
 
   it("serializes outbound frames with the streamSid captured at start", () => {
-    const adapter = new TwilioStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("twilio");
     adapter.parseInbound(
       JSON.stringify({
         event: "start",
@@ -87,9 +86,9 @@ describe("TwilioStreamFrameAdapter", () => {
   });
 });
 
-describe("TelnyxStreamFrameAdapter", () => {
+describe("Telnyx stream frames", () => {
   it("parses Telnyx start with top-level stream_id and start.call_control_id", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
 
     expect(
       adapter.parseInbound(
@@ -112,7 +111,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("ignores Telnyx start frames without stream_id or call_control_id", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
 
     expect(adapter.parseInbound(JSON.stringify({ event: "start", start: {} }))).toEqual({
       kind: "ignored",
@@ -129,7 +128,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("parses media, mark, and stop with no streamSid", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
 
     expect(
       adapter.parseInbound(
@@ -143,7 +142,6 @@ describe("TelnyxStreamFrameAdapter", () => {
       kind: "media",
       payloadBase64: "AAA=",
       timestampMs: 40,
-      track: "inbound_track",
     });
 
     expect(
@@ -154,7 +152,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("surfaces Telnyx WS error frames so failures don't get swallowed", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
 
     expect(
       adapter.parseInbound(
@@ -177,7 +175,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("serializes outbound frames without streamSid", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
 
     expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
       event: "media",
@@ -191,7 +189,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("ignores junk and unknown events", () => {
-    const adapter = new TelnyxStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter("telnyx");
     expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
     expect(

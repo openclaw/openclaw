@@ -1,5 +1,5 @@
-// Memory Core tests cover manager reindex state plugin behavior.
 import {
+  hashText,
   MEMORY_CHUNKING_VERSION,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -30,20 +30,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
 }
 
 function createIdentityParams(
-  overrides: {
-    meta?: MemoryIndexMeta | null;
-    provider?: { id: string; model: string } | null;
-    providerKey?: string;
-    providerAliases?: Array<{ model: string; providerKey: string }>;
-    providerKeyKnown?: boolean;
-    configuredSources?: MemorySource[];
-    configuredScopeHash?: string;
-    chunkTokens?: number;
-    chunkOverlap?: number;
-    vectorReady?: boolean;
-    hasIndexedChunks?: boolean;
-    ftsTokenizer?: string;
-  } = {},
+  overrides: Partial<Parameters<typeof resolveMemoryIndexIdentityState>[0]> = {},
 ) {
   return {
     meta: createMeta(),
@@ -67,23 +54,161 @@ function isMemoryIndexIdentityDirty(
 }
 
 describe("memory reindex state", () => {
-  it.each([
-    {
-      name: "missing provenance version",
-      meta: { provenanceVersion: undefined },
-      reason: "index provenance classifier changed",
-    },
-    {
-      name: "missing chunking version",
-      meta: { chunkingVersion: undefined },
-      reason: "index chunking implementation changed",
-    },
-  ])("invalidates indexes with $name", ({ meta, reason }) => {
+  it("automatically upgrades raw EmbeddingGemma indexes before checking the changed cache key", () => {
     expect(
-      resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ model: "embeddinggemma", providerKey: "raw-inputs" }),
+          provider: { id: "openai", model: "embeddinggemma" },
+        }),
+      ),
     ).toEqual({
       status: "mismatched",
-      reason,
+      reason: "index embedding input format changed",
+      code: "embedding_input_format",
+      owner: "openclaw",
+      versionOrder: "older",
+      lexicalCompatible: true,
+    });
+  });
+
+  it("upgrades opaque aliases using their provider's canonical model format", () => {
+    const params = createIdentityParams({
+      meta: createMeta({ model: "/cache/opaque.gguf", providerKey: "raw-inputs" }),
+      provider: { id: "openai", model: "embeddinggemma" },
+      providerAliases: [{ model: "/cache/opaque.gguf", providerKey: "prefixed-inputs" }],
+    });
+    expect(resolveMemoryIndexIdentityState(params)).toMatchObject({
+      code: "embedding_input_format",
+      owner: "openclaw",
+      versionOrder: "older",
+      lexicalCompatible: true,
+    });
+    expect(
+      resolveMemoryIndexIdentityState({
+        ...params,
+        meta: createMeta({
+          model: "/cache/opaque.gguf",
+          providerKey: "prefixed-inputs",
+          embeddingInputFormatVersion: 1,
+        }),
+      }),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("keeps a model switch configuration-owned after an embedding format upgrade", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ model: "embeddinggemma", embeddingInputFormatVersion: 1 }),
+        }),
+      ),
+    ).toMatchObject({ status: "mismatched", code: "model", owner: "configuration" });
+    expect(resolveMemoryIndexIdentityState(createIdentityParams())).toEqual({ status: "valid" });
+  });
+
+  it("does not serve a changed corpus while an embedding format rebuild is pending", () => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        meta: createMeta({ model: "embeddinggemma", scopeHash: "old-corpus" }),
+        provider: { id: "openai", model: "embeddinggemma" },
+      }),
+    );
+    expect(state).toMatchObject({ code: "embedding_input_format", owner: "openclaw" });
+    expect(state).not.toHaveProperty("lexicalCompatible", true);
+  });
+
+  it("preserves newer embedding formats even when the chunker is older", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({
+            model: "embeddinggemma",
+            embeddingInputFormatVersion: 2,
+            chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+          }),
+        }),
+      ),
+    ).toMatchObject({ code: "embedding_input_format", versionOrder: "newer" });
+  });
+
+  it("excludes raw-input cache identities for every alias without invalidating other models", () => {
+    const provider = { id: "local", model: "embeddinggemma" };
+    const alias = { model: "/cache/renamed.gguf", cacheKeyData: { source: "cached-model" } };
+    const identities = resolveMemoryIndexProviderIdentities({ provider, aliases: [alias] });
+    expect(identities[0]?.providerKey).not.toBe(
+      hashText(JSON.stringify({ provider: "local", model: "embeddinggemma" })),
+    );
+    expect(identities[1]?.providerKey).not.toBe(hashText(JSON.stringify(alias.cacheKeyData)));
+    // Host formatting must not overwrite an adapter's own cache settings.
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider,
+        cacheKeyData: { embeddingInputFormatVersion: 1 },
+      }),
+    ).not.toEqual(
+      resolveMemoryIndexProviderIdentities({
+        provider,
+        cacheKeyData: { embeddingInputFormatVersion: 2 },
+      }),
+    );
+    expect(
+      resolveMemoryIndexProviderIdentities({ provider: { id: "local", model: "other" } }),
+    ).toMatchObject([
+      { providerKey: hashText(JSON.stringify({ provider: "local", model: "other" })) },
+    ]);
+  });
+  it("invalidates indexes with missing provenance version as OpenClaw-owned", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index provenance classifier changed",
+      code: "provenance_version",
+      owner: "openclaw",
+      versionOrder: "older",
+    });
+  });
+
+  it.each([undefined, MEMORY_CHUNKING_VERSION - 1])(
+    "invalidates indexes with missing or previous chunking version %s",
+    (chunkingVersion) => {
+      expect(
+        resolveMemoryIndexIdentityState(
+          createIdentityParams({
+            meta: createMeta({ chunkingVersion }),
+          }),
+        ),
+      ).toEqual({
+        status: "mismatched",
+        reason: "index chunking implementation changed",
+        code: "chunking_version",
+        owner: "openclaw",
+        versionOrder: "older",
+        chunkingVersionOnly: true,
+      });
+    },
+  );
+
+  it("classifies missing metadata as OpenClaw-owned", () => {
+    expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    });
+  });
+
+  it.each([
+    { name: "chunk settings", params: { chunkTokens: 3999 }, code: "chunking" },
+    { name: "FTS tokenizer", params: { ftsTokenizer: "porter" }, code: "fts_tokenizer" },
+  ])("classifies changed $name as configuration-owned", ({ params, code }) => {
+    expect(resolveMemoryIndexIdentityState(createIdentityParams(params))).toMatchObject({
+      status: "mismatched",
+      code,
+      owner: "configuration",
     });
   });
 
@@ -93,16 +218,6 @@ describe("memory reindex state", () => {
         provider: { id: "empty-model-provider", model: "" },
       }),
     ).toMatchObject([{ provider: "empty-model-provider", model: "" }]);
-  });
-
-  it("marks identity dirty when the embedding model changes", () => {
-    expect(
-      isMemoryIndexIdentityDirty(
-        createIdentityParams({
-          provider: { id: "openai", model: "mock-embed-v2" },
-        }),
-      ),
-    ).toBe(true);
   });
 
   it("returns a mismatch reason when provider identity changes", () => {
@@ -116,23 +231,9 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: "index was built for provider openai, expected ollama",
+      code: "provider",
+      owner: "configuration",
     });
-  });
-
-  it("marks identity dirty when the provider cache key changes", () => {
-    expect(
-      isMemoryIndexIdentityDirty(
-        createIdentityParams({
-          provider: { id: "gemini", model: "gemini-embedding-2-preview" },
-          providerKey: "provider-key-dims-768",
-          meta: createMeta({
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            providerKey: "provider-key-dims-3072",
-          }),
-        }),
-      ),
-    ).toBe(true);
   });
 
   it("can defer provider key comparison until provider initialization", () => {
@@ -144,6 +245,29 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("defers only model and key checks when the configured model is unknown", () => {
+    const params = createIdentityParams({ provider: { id: "openai" }, providerKey: undefined });
+    expect(resolveMemoryIndexIdentityState(params)).toEqual({ status: "valid" });
+    expect(resolveMemoryIndexIdentityState({ ...params, provider: { id: "other" } })).toEqual({
+      status: "mismatched",
+      reason: "index was built for provider openai, expected other",
+      code: "provider",
+      owner: "configuration",
+    });
+    expect(resolveMemoryIndexIdentityState({ ...params, configuredScopeHash: "other" })).toEqual({
+      status: "mismatched",
+      reason: "index scope changed",
+      code: "scope",
+      owner: "configuration",
+    });
+    expect(resolveMemoryIndexIdentityState({ ...params, vectorReady: true })).toEqual({
+      status: "mismatched",
+      reason: "index vector dimensions are missing",
+      code: "vector_dims",
+      owner: "configuration",
+    });
   });
 
   it("keeps model identity strict when paths share a basename", () => {
@@ -167,6 +291,8 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: `index was built for model ${indexedModel}, expected ${currentModel}`,
+      code: "model",
+      owner: "configuration",
     });
   });
 
@@ -207,6 +333,8 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: "index provider settings changed",
+      code: "provider_settings",
+      owner: "configuration",
     });
   });
 
@@ -244,13 +372,13 @@ describe("memory reindex state", () => {
     });
 
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           meta: createMeta({ scopeHash: firstScopeHash }),
           configuredScopeHash: secondScopeHash,
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
   it("includes extra path patterns in stable scope identity", () => {
@@ -303,12 +431,12 @@ describe("memory reindex state", () => {
 
   it("marks identity dirty when configured sources add sessions", () => {
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           configuredSources: ["memory", "sessions"],
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "sources", owner: "configuration" });
   });
 
   it("marks identity dirty when multimodal settings change", () => {
@@ -333,13 +461,13 @@ describe("memory reindex state", () => {
     });
 
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           meta: createMeta({ scopeHash: firstScopeHash }),
           configuredScopeHash: secondScopeHash,
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
   it("keeps older indexes with missing sources compatible with memory-only config", () => {
@@ -353,14 +481,11 @@ describe("memory reindex state", () => {
     ).toBe(false);
   });
 
-  it.each([
-    { name: "empty model", model: "" },
-    { name: "whitespace-only model", model: "  " },
-  ])("falls back to fts-only for $name", ({ model }) => {
+  it("falls back to fts-only for a whitespace-only model", () => {
     expect(
       resolveMemoryIndexIdentityState(
         createIdentityParams({
-          provider: { id: "openai", model },
+          provider: { id: "openai", model: "  " },
           meta: createMeta({ model: "fts-only" }),
         }),
       ),
@@ -378,5 +503,26 @@ describe("memory reindex state", () => {
     if (state.status === "mismatched") {
       expect(state.reason).toContain("expected fts-only");
     }
+  });
+  it.each<Partial<MemoryIndexMeta>>([
+    { sources: ["sessions"] },
+    { scopeHash: "different-corpus" },
+    { chunkTokens: 999 },
+    { chunkOverlap: 999 },
+    { ftsTokenizer: "porter" },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION - 1 },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1 },
+    { chunkingVersion: MEMORY_CHUNKING_VERSION + 1 },
+  ])("never marks incompatible or newer indexes as lexical-compatible: %j", (change) => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        meta: createMeta({
+          chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+          ...change,
+        }),
+      }),
+    );
+    expect(state.status).toBe("mismatched");
+    expect(state).not.toHaveProperty("chunkingVersionOnly", true);
   });
 });

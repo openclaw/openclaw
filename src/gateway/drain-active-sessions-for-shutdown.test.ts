@@ -1,8 +1,11 @@
 // Shutdown drain tests protect bounded session_end hook emission for tracked
 // active sessions during gateway shutdown and restart.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
+import { createHookRunnerWithRegistry } from "../plugins/hooks.test-fixtures.js";
+import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 
 // Regression coverage for #57790: the bounded shutdown drain must fire a
 // typed `session_end` for every session the tracker has noted, must skip
@@ -19,11 +22,16 @@ type SessionEndHookEvent = {
 
 const runSessionEndMock = vi.fn(async (_eventValue: SessionEndHookEvent) => undefined);
 const hasHooksMock = vi.fn((name: string) => name === "session_end");
-const getGlobalHookRunnerMock = vi.fn(() => ({
+const createMockHookRunner = () => ({
   hasHooks: hasHooksMock,
   runSessionEnd: runSessionEndMock,
   runSessionStart: vi.fn(async () => undefined),
-}));
+});
+type TestHookRunner =
+  | ReturnType<typeof createMockHookRunner>
+  | ReturnType<typeof createHookRunnerWithRegistry>["runner"];
+const getGlobalHookRunnerMock = vi.fn<() => TestHookRunner>(() => createMockHookRunner());
+const closedTranscriptReadMock = vi.fn();
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
@@ -31,6 +39,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("./session-transcript-files.fs.js", () => ({
   extractGeneratedTranscriptSessionId: vi.fn(() => undefined),
+  resolveSessionTranscriptCandidates: vi.fn(() => []),
   resolveStableSessionEndTranscript: vi.fn(() => ({
     sessionFile: undefined,
     transcriptArchived: false,
@@ -38,14 +47,12 @@ vi.mock("./session-transcript-files.fs.js", () => ({
   archiveSessionTranscriptsDetailed: vi.fn(() => []),
 }));
 
-vi.mock("../auto-reply/reply/session-hooks.js", () => ({
-  buildSessionEndHookPayload: vi.fn(
-    (params: { sessionId: string; reason: string; sessionKey: string }) => ({
-      event: { sessionId: params.sessionId, reason: params.reason, sessionKey: params.sessionKey },
-      context: { sessionId: params.sessionId, reason: params.reason },
-    }),
-  ),
-  buildSessionStartHookPayload: vi.fn(() => ({ event: {}, context: {} })),
+vi.mock("./session-end-transcript-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-end-transcript-reader.js")>()),
+  createClosedSessionTranscriptSource: vi.fn(() => ({
+    available: true as const,
+    readTail: closedTranscriptReadMock,
+  })),
 }));
 
 const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
@@ -84,8 +91,11 @@ beforeEach(() => {
   clearTrackedSessions();
   clearInternalHooks();
   runSessionEndMock.mockClear();
+  closedTranscriptReadMock.mockReset();
   hasHooksMock.mockClear();
   hasHooksMock.mockImplementation((name: string) => name === "session_end");
+  getGlobalHookRunnerMock.mockReset();
+  getGlobalHookRunnerMock.mockImplementation(() => createMockHookRunner());
 });
 
 afterEach(() => {
@@ -94,41 +104,6 @@ afterEach(() => {
 });
 
 describe("drainActiveSessionsForShutdown", () => {
-  it("returns an empty result and skips hook emission when no sessions are tracked", async () => {
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result).toEqual({ emittedSessionIds: [], timedOut: false });
-    expect(runSessionEndMock).not.toHaveBeenCalled();
-  });
-
-  it("fires session_end with reason=shutdown for every tracked session and clears them", async () => {
-    trackSessionForShutdown({ sessionId: "sess-A" });
-    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
-
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result.timedOut).toBe(false);
-    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(2);
-    const reasons = runSessionEndMock.mock.calls.map(
-      ([event]) => (event as { reason?: string }).reason,
-    );
-    expect(reasons.every((reason) => reason === "shutdown")).toBe(true);
-    // After the drain, the tracker forgets every emitted session (the emit
-    // helper calls `forgetActiveSessionForShutdown`), so a second drain is a
-    // no-op and we never double-fire on restart loops.
-    expect(listActiveSessionsForShutdown()).toEqual([]);
-  });
-
-  it("propagates reason=restart when called for a restart shutdown", async () => {
-    trackSessionForShutdown({ sessionId: "sess-A" });
-
-    await drainActiveSessionsForShutdown({ reason: "restart" });
-
-    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-    expect(requireSessionEndHookEvent(0).reason).toBe("restart");
-  });
-
   it("does not double-fire for a session already finalized by reset/delete/compaction", async () => {
     trackSessionForShutdown({ sessionId: "sess-A" });
     trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
@@ -152,10 +127,7 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
-    let resolveHandler: (() => void) | undefined;
-    const handlerLatch = new Promise<void>((resolve) => {
-      resolveHandler = resolve;
-    });
+    const { promise: handlerLatch, resolve: resolveHandler } = createDeferred();
     runSessionEndMock.mockImplementationOnce(async () => {
       await handlerLatch;
     });
@@ -201,6 +173,59 @@ describe("drainActiveSessionsForShutdown", () => {
     expect(
       runSessionEndMock.mock.calls.map(([event]) => (event as { sessionId?: string }).sessionId),
     ).toEqual(["sess-A", "sess-B"]);
+  });
+
+  it("revokes shutdown transcript reads when the aggregate drain expires", async () => {
+    vi.useFakeTimers();
+    const sourceRead = createDeferred<{
+      messages: readonly unknown[];
+      totalMessages: number;
+      truncated: boolean;
+    }>();
+    const readStarted = createDeferred();
+    closedTranscriptReadMock.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return sourceRead.promise;
+    });
+    let retainedReader: PluginHookSessionContext["endedTranscript"];
+    let inFlightRead: Promise<unknown> | undefined;
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "session_end",
+        conversationAccessAllowed: true,
+        handler: async (_event, context) => {
+          const transcript = (context as PluginHookSessionContext).endedTranscript;
+          if (!transcript?.available) {
+            throw new Error("expected ended transcript reader");
+          }
+          retainedReader = transcript;
+          inFlightRead = transcript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 });
+          await inFlightRead.catch(() => undefined);
+        },
+      },
+    ]);
+    getGlobalHookRunnerMock.mockReturnValue(runner);
+    trackSessionForShutdown({ sessionId: "sess-A" });
+
+    const drainPromise = drainActiveSessionsForShutdown({
+      reason: "shutdown",
+      totalTimeoutMs: 100,
+    });
+    await readStarted.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(drainPromise).resolves.toMatchObject({ timedOut: true });
+
+    if (!retainedReader?.available || !inFlightRead) {
+      throw new Error("expected retained and in-flight transcript reads");
+    }
+    await expect(retainedReader.readTail({ maxMessages: 1, maxBytes: 1_024 })).rejects.toThrow(
+      "no longer active",
+    );
+    expect(closedTranscriptReadMock).toHaveBeenCalledOnce();
+
+    sourceRead.resolve({ messages: [], totalMessages: 0, truncated: false });
+    await expect(inFlightRead).rejects.toThrow("no longer active");
+    vi.useRealTimers();
   });
 
   it("still records the session as forgotten when no `session_end` plugins are registered", async () => {

@@ -1,11 +1,9 @@
-// Matrix plugin module implements subagent hooks behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   getMatrixThreadBindingManager,
   listAllBindings,
   listBindingsForAccount,
-  removeBindingRecord,
   resolveBindingKey,
 } from "./thread-bindings-shared.js";
 
@@ -53,26 +51,27 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
     const reason = normalizeOptionalString(event.reason) || "subagent-ended";
     for (const binding of matching) {
       const bindingId = resolveBindingKey(binding);
-      const removed = await bindingService.unbind({ bindingId, reason });
+      const removed = await bindingService.unbind({
+        bindingId,
+        reason,
+        scope: { channel: "matrix", accountId: binding.accountId },
+      });
       if (removed.some((entry) => entry.bindingId === bindingId)) {
         removedBindingKeys.add(bindingId);
       }
     }
   }
 
-  const affectedAccountIds = new Set<string>();
+  const pendingByAccount = new Map<string, typeof matching>();
   for (const binding of matching) {
-    if (removedBindingKeys.has(resolveBindingKey(binding))) {
-      continue;
-    }
-    if (removeBindingRecord(binding)) {
-      affectedAccountIds.add(binding.accountId);
+    if (!removedBindingKeys.has(resolveBindingKey(binding))) {
+      const pending = pendingByAccount.get(binding.accountId) ?? [];
+      pending.push(binding);
+      pendingByAccount.set(binding.accountId, pending);
     }
   }
-  // Flush each affected account's manager so removals are persisted to disk.
-  for (const acctId of affectedAccountIds) {
-    const manager = getMatrixThreadBindingManager(acctId);
-    await manager?.persist();
+  for (const [bindingAccountId, pending] of pendingByAccount) {
+    await getMatrixThreadBindingManager(bindingAccountId)?.removeBindingsAsync(pending);
   }
 }
 

@@ -1,13 +1,10 @@
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  registerProviderPlugin,
-  registerSingleProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-// Opencode Go tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -21,14 +18,6 @@ import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
-function requireMapEntry<T>(map: Map<string, T>, id: string): T {
-  const entry = map.get(id);
-  if (!entry) {
-    throw new Error(`expected model ${id}`);
-  }
-  return entry;
-}
-
 function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id: string) {
   if (!entries) {
     throw new Error("expected supplemental catalog entries");
@@ -40,122 +29,185 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
 
-function runtimeCompatFields(value: unknown): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const { codeMode: _codeMode, ...compat } = requireRecord(value, "model compat");
-  return compat;
+const ACTIVE_MODEL_IDS = manifest.modelCatalog.providers["opencode-go"].models
+  .filter((model) => !("status" in model))
+  .map((model) => model.id);
+
+function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    name: id,
+    reasoning: true,
+    tool_call: true,
+    modalities: { input: ["text"] },
+    limit: { context: 262_144, output: 32_768 },
+    cost: { input: 0, output: 0 },
+    ...overrides,
+  };
 }
 
-const ACTIVE_MODEL_IDS = [
-  "qwen3.7-plus",
-  "glm-5.1",
-  "deepseek-v4-flash",
-  "minimax-m2.7",
-  "glm-5.2",
-  "qwen3.7-max",
-  "kimi-k2.6",
-  "minimax-m3",
-  "hy3",
-  "deepseek-v4-pro",
-  "qwen3.8-max",
-  "mimo-v2.5",
-  "gpt-5.6-luna",
-  "grok-4.5",
-  "kimi-k2.7-code",
-  "kimi-k3",
-  "mimo-v2.5-pro",
-  "qwen3.6-plus",
-] as const;
-const DEPRECATED_MODEL_IDS = [
-  "glm-5",
-  "qwen3.5-plus",
-  "mimo-v2-omni",
-  "kimi-k2.5",
-  "mimo-v2-pro",
-  "minimax-m2.5",
-] as const;
+async function captureGoWirePayload({
+  thinkingLevel,
+  payload,
+  standalone = false,
+  sourceApi = "openai-completions",
+}: {
+  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"];
+  payload: Record<string, unknown> & { model: string };
+  standalone?: boolean;
+  sourceApi?: "openai-completions" | "anthropic-messages";
+}) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const modelId = payload.model;
+  const model: Parameters<StreamFn>[0] = {
+    id: modelId,
+    name: modelId,
+    provider: "opencode-go",
+    api: standalone ? "openclaw-provider-simple:synthetic" : sourceApi,
+    baseUrl:
+      sourceApi === "anthropic-messages"
+        ? "https://opencode.ai/zen/go"
+        : "https://opencode.ai/zen/go/v1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const baseStreamFn = vi.fn<StreamFn>((runtimeModel, _context, options) => {
+    void options?.onPayload?.(payload, runtimeModel);
+    return createAssistantMessageEventStream();
+  });
+  const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
+  const streamFn = wrap?.({
+    streamFn: baseStreamFn,
+    provider: "opencode-go",
+    modelId,
+    model,
+    sourceApi: standalone ? sourceApi : undefined,
+    thinkingLevel,
+  });
+  expect(streamFn).toBeTypeOf("function");
+  await streamFn?.(model, { messages: [] }, {});
+  expect(baseStreamFn).toHaveBeenCalledOnce();
+  return payload;
+}
+
+function createCatalogFetchGuard(params: {
+  upstreamModels: Record<string, unknown>;
+  liveModelIds: string[] | (() => string[]);
+}) {
+  return vi.fn(async ({ url }: { url: string; init?: RequestInit }) => ({
+    response: new Response(
+      JSON.stringify(
+        url === "https://models.opencode.ai/api.json"
+          ? {
+              "opencode-go": {
+                id: "opencode-go",
+                api: "https://opencode.ai/zen/go/v1",
+                npm: "@ai-sdk/openai-compatible",
+                models: params.upstreamModels,
+              },
+            }
+          : {
+              data: (typeof params.liveModelIds === "function"
+                ? params.liveModelIds()
+                : params.liveModelIds
+              ).map((id) => ({ id, object: "model" })),
+            },
+      ),
+    ),
+    finalUrl: url,
+    release: vi.fn(async () => undefined),
+  }));
+}
 
 describe("opencode-go provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("registers only the Go auth choice from its own provider manifest", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider.id).toBe("opencode-go");
-    expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
-    expect(provider.auth.map((method) => method.id)).toEqual(["api-key"]);
-    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-go"]);
-    expect(provider.auth[0]?.wizard).toMatchObject({
-      choiceLabel: "OpenCode Go catalog",
-      groupId: "opencode",
-      groupHint: "Shared API key infrastructure for Zen + Go",
-    });
-  });
-
-  it("registers image media understanding through the OpenCode Go plugin", async () => {
-    const { mediaProviders } = await registerProviderPlugin({
-      plugin,
-      id: "opencode-go",
-      name: "OpenCode Go Provider",
-    });
-
-    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode-go");
-    if (!mediaProvider) {
-      throw new Error("Expected opencode-go media provider");
-    }
-    expect(mediaProvider.capabilities).toEqual(["image"]);
-    expect(mediaProvider.defaultModels).toEqual({ image: "kimi-k2.6" });
-    expect(typeof mediaProvider.describeImage).toBe("function");
-    expect(typeof mediaProvider.describeImages).toBe("function");
-  });
-
-  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
-    await expectPassthroughReplayPolicy({
-      plugin,
-      providerId: "opencode-go",
-      modelId: "gemini-2.5-pro",
-      sanitizeThoughtSignatures: true,
-    });
-  });
-
-  it("keeps non-Gemini replay policy minimal on passthrough routes", async () => {
-    await expectPassthroughReplayPolicy({
-      plugin,
-      providerId: "opencode-go",
-      modelId: "qwen3-coder",
-    });
-  });
-
-  it("keeps OpenCode Go catalog coverage aligned with upstream", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    expect(provider.catalog).toBeDefined();
-
-    const expectedModelIds = [...ACTIVE_MODEL_IDS, ...DEPRECATED_MODEL_IDS, "hy3-preview"];
-    expect(new Set(expectedModelIds).size).toBe(expectedModelIds.length);
-    const models = new Map<string, ProviderRuntimeModel>();
-    for (const modelId of expectedModelIds) {
-      const model = provider.resolveDynamicModel?.({ modelId } as never);
-      if (!model) {
-        throw new Error(`expected OpenCode Go model ${modelId}`);
+  it.each(["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3"] as const)(
+    "keeps %s thinking per invocation on one standalone completion wrapper",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const catalog = buildStaticOpencodeGoProviderConfig();
+      const entry = catalog.models.find((model) => model.id === modelId);
+      if (!entry) {
+        throw new Error(`Missing ${modelId} catalog entry`);
       }
-      models.set(model.id, model);
-    }
-    expect([...models.keys()].toSorted()).toEqual(expectedModelIds.toSorted());
-    expect(
-      provider.resolveThinkingProfile?.({
+      const model: Parameters<StreamFn>[0] = {
+        ...entry,
+        input: entry.input.filter((kind) => kind === "text" || kind === "image"),
         provider: "opencode-go",
-        modelId: "deepseek-v4-pro",
-        api: "openai-completions",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["high", "max"] },
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
+        api: "openclaw-provider-simple:synthetic",
+        baseUrl: catalog.baseUrl,
+      };
+      let payload: Record<string, unknown> | undefined;
+      const baseStreamFn: StreamFn = async (runtimeModel, context, options) => {
+        const request = buildOpenAICompletionsParams(
+          { ...runtimeModel, api: "openai-completions" },
+          context,
+          options,
+        );
+        await options?.onPayload?.(request, runtimeModel);
+        payload = request;
+        return createAssistantMessageEventStream();
+      };
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: "opencode-go",
+        modelId: model.id,
+        model,
+        sourceApi: "openai-completions",
+        streamFn: baseStreamFn,
+      });
+      if (!wrapped) {
+        throw new Error("Missing standalone completion wrapper");
+      }
+      for (const reasoning of ["off", "max", undefined] as const) {
+        await wrapped(
+          model,
+          {
+            messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
+          },
+          { reasoning },
+        );
+
+        if (modelId === "kimi-k3") {
+          expect(payload).not.toHaveProperty("thinking");
+        } else {
+          expect(payload?.thinking).toEqual({ type: reasoning === "off" ? "disabled" : "enabled" });
+        }
+        const expectedEffort =
+          reasoning === "off" ? undefined : modelId === "kimi-k3" ? "max" : (reasoning ?? "high");
+        if (expectedEffort === undefined) {
+          expect(payload).not.toHaveProperty("reasoning_effort");
+        } else {
+          expect(payload?.reasoning_effort).toBe(expectedEffort);
+        }
+      }
+    },
+  );
+
+  it("keeps offline starter models and provider-owned thinking policies usable", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
+
+    for (const modelId of ACTIVE_MODEL_IDS) {
+      expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
+        id: modelId,
+        provider: "opencode-go",
+      });
+    }
+    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+    expect(provider.resolveDynamicModel?.({ modelId: "kimi-k2.6" } as never)).toMatchObject({
+      id: "kimi-k2.6",
+      input: ["text", "image"],
+    });
+    expect(provider.resolveDynamicModel?.({ modelId: "qwen3.8-max" } as never)).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen/go",
+      compat: { thinkingFormat: "qwen" },
     });
     expect(
       provider.resolveThinkingProfile?.({
@@ -172,254 +224,164 @@ describe("opencode-go provider plugin", () => {
     expect(
       provider.resolveThinkingProfile?.({
         provider: "opencode-go",
-        modelId: "kimi-k3",
-        api: "openai-completions",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["max"] },
-      }),
-    ).toEqual({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "opencode-go",
-        modelId: "glm-5",
-        api: "openai-completions",
-        reasoning: true,
-      }),
-    ).toEqual({ levels: [{ id: "off", label: "always on" }], defaultLevel: "off" });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "opencode-go",
-        modelId: "grok-4.5",
-        api: "openai-completions",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
-      defaultLevel: "medium",
-    });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "opencode-go",
         modelId: "minimax-m2.7",
         api: "anthropic-messages",
         reasoning: true,
       }),
     ).toEqual({ levels: [{ id: "high", label: "always on" }], defaultLevel: "high" });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "opencode-go",
-        modelId: "minimax-m3",
-        api: "anthropic-messages",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high", label: "on" }],
-      defaultLevel: "high",
-    });
-    const supplemental = await provider.augmentModelCatalog?.({
-      entries: [...models.values()].map((model) => ({
-        provider: model.provider,
-        id: model.id,
-        name: model.name,
-      })),
-    } as never);
-    const supplementalIds = (supplemental ?? []).map((entry) => entry.id);
-    expect(new Set(supplementalIds).size).toBe(supplementalIds.length);
-    expect(supplementalIds.toSorted()).toEqual(expectedModelIds.toSorted());
-    const deepSeekPro = requireCatalogEntry(supplemental, "deepseek-v4-pro");
-    expect(deepSeekPro.provider).toBe("opencode-go");
-    expect(deepSeekPro.name).toBe("DeepSeek V4 Pro");
-    const deepSeekFlash = requireCatalogEntry(supplemental, "deepseek-v4-flash");
-    expect(deepSeekFlash.provider).toBe("opencode-go");
-    expect(deepSeekFlash.name).toBe("DeepSeek V4 Flash");
-    for (const modelId of DEPRECATED_MODEL_IDS) {
-      expect(requireCatalogEntry(supplemental, modelId).status).toBe("deprecated");
-      expect(requireCatalogEntry(supplemental, modelId).replacedBy).toBeUndefined();
-    }
-    for (const modelId of ACTIVE_MODEL_IDS) {
-      expect(requireCatalogEntry(supplemental, modelId).status).toBeUndefined();
-    }
-    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
-
-    const glm52 = requireMapEntry(models, "glm-5.2");
-    expect(glm52.api).toBe("openai-completions");
-    expect(glm52.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(glm52.input).toEqual(["text"]);
-    expect(glm52.reasoning).toBe(true);
-    expect(glm52.contextWindow).toBe(1_000_000);
-    expect(glm52.maxTokens).toBe(131_072);
-    expect(glm52.cost).toEqual({
-      input: 1.4,
-      output: 4.4,
-      cacheRead: 0.26,
-      cacheWrite: 0,
-    });
-
-    expect(requireMapEntry(models, "kimi-k3")).toMatchObject({
-      api: "openai-completions",
-      input: ["text", "image"],
-      contextWindow: 1_048_576,
-      maxTokens: 131_072,
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-      compat: { supportsReasoningEffort: true, supportedReasoningEfforts: ["max"] },
-    });
-
-    const kimi = requireMapEntry(models, "kimi-k2.6");
-    expect(kimi.api).toBe("openai-completions");
-    expect(kimi.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(kimi.input).toEqual(["text", "image"]);
-    expect(kimi.reasoning).toBe(true);
-    expect(kimi.contextWindow).toBe(262_144);
-    expect(kimi.maxTokens).toBe(65_536);
-
-    const kimiCode = requireMapEntry(models, "kimi-k2.7-code");
-    expect(kimiCode.api).toBe("openai-completions");
-    expect(kimiCode.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(kimiCode.input).toEqual(["text", "image"]);
-    expect(kimiCode.contextWindow).toBe(262_144);
-    expect(kimiCode.maxTokens).toBe(262_144);
-    expect(kimiCode.cost).toEqual({
-      input: 0.95,
-      output: 4,
-      cacheRead: 0.19,
-      cacheWrite: 0,
-    });
-
-    const minimax = requireMapEntry(models, "minimax-m2.7");
-    expect(minimax.api).toBe("anthropic-messages");
-    expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go");
-    expect(minimax.reasoning).toBe(true);
-    expect(minimax.contextWindow).toBe(204_800);
-    expect(minimax.maxTokens).toBe(131_072);
-
-    const minimaxM3 = requireMapEntry(models, "minimax-m3");
-    expect(minimaxM3.api).toBe("anthropic-messages");
-    expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
-    expect(minimaxM3.reasoning).toBe(true);
-    expect(minimaxM3.input).toEqual(["text", "image"]);
-    expect(minimaxM3.contextWindow).toBe(1_000_000);
-    expect(minimaxM3.maxTokens).toBe(131_072);
-
-    const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
-    expect(mimoPro.api).toBe("openai-completions");
-    expect(mimoPro.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(mimoPro.input).toEqual(["text"]);
-    expect(mimoPro.reasoning).toBe(true);
-    expect(mimoPro.contextWindow).toBe(1_048_576);
-    expect(mimoPro.maxTokens).toBe(128_000);
-
-    const mimo = requireMapEntry(models, "mimo-v2.5");
-    expect(mimo.input).toEqual(["text", "image"]);
-    expect(mimo.reasoning).toBe(true);
-    expect(mimo.contextWindow).toBe(1_000_000);
-    expect(mimo.maxTokens).toBe(128_000);
-
-    const qwenMax = requireMapEntry(models, "qwen3.7-max");
-    expect(qwenMax.api).toBe("anthropic-messages");
-    expect(qwenMax.baseUrl).toBe("https://opencode.ai/zen/go");
-    expect(qwenMax.input).toEqual(["text"]);
-    expect(qwenMax.reasoning).toBe(true);
-    expect(qwenMax.contextWindow).toBe(1_000_000);
-    expect(qwenMax.maxTokens).toBe(65_536);
-    expect(requireRecord(qwenMax.compat, "Qwen3.7 compat")).toMatchObject({
-      thinkingFormat: "qwen",
-    });
-
-    const qwenPlus = requireMapEntry(models, "qwen3.6-plus");
-    expect(qwenPlus.api).toBe("anthropic-messages");
-    expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
-
-    const qwen37Plus = requireMapEntry(models, "qwen3.7-plus");
-    expect(qwen37Plus.api).toBe("anthropic-messages");
-    expect(qwen37Plus.baseUrl).toBe("https://opencode.ai/zen/go");
-    expect(qwen37Plus.input).toEqual(["text", "image"]);
-    expect(qwen37Plus.reasoning).toBe(true);
-    expect(qwen37Plus.contextWindow).toBe(1_000_000);
-    expect(qwen37Plus.maxTokens).toBe(65_536);
-    expect(qwen37Plus.cost).toMatchObject({
-      input: 0.4,
-      output: 1.6,
-      cacheRead: 0.04,
-      cacheWrite: 0.5,
-    });
-
-    const dynamicModel = requireRecord(
-      provider.resolveDynamicModel?.({
-        modelId: "deepseek-v4-pro",
-      } as never),
-      "dynamic model",
-    );
-    expect(dynamicModel.id).toBe("deepseek-v4-pro");
-    expect(dynamicModel.api).toBe("openai-completions");
-    expect(dynamicModel.provider).toBe("opencode-go");
-    expect(dynamicModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(dynamicModel.reasoning).toBe(true);
-    expect(dynamicModel.contextWindow).toBe(1_000_000);
-    expect(dynamicModel.maxTokens).toBe(384_000);
-    const compat = requireRecord(dynamicModel.compat, "dynamic model compat");
-    expect(compat.supportsUsageInStreaming).toBe(true);
-    expect(compat.supportsReasoningEffort).toBe(true);
-    expect(compat.maxTokensField).toBe("max_tokens");
   });
 
-  it("loads model discovery and keeps every promoted row identical to runtime", async () => {
+  it("lists every advertised chat model, enriching ids with upstream metadata", async () => {
+    const fetchGuard = createCatalogFetchGuard({
+      upstreamModels: {
+        "ox-alpha-free": upstreamModel("ox-alpha-free", {
+          name: "Ox Alpha Free (Unlimited)",
+          modalities: { input: ["text", "image", "video"] },
+          limit: { context: 1_000_000, output: 131_072 },
+          reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        }),
+        "minimax-future": upstreamModel("minimax-future", {
+          provider: { npm: "@ai-sdk/anthropic" },
+          cost: { input: 0.3, output: 1.2, cache_read: 0.06 },
+        }),
+        "legacy-model": upstreamModel("legacy-model", { status: "deprecated" }),
+      },
+      liveModelIds: [
+        "ox-alpha-free",
+        "minimax-future",
+        "legacy-model",
+        "unknown-live-model",
+        "future-embedding",
+      ],
+    });
+
+    const result = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+
+    expect(result.models.map((model) => model.id)).toEqual([
+      "ox-alpha-free",
+      "minimax-future",
+      "unknown-live-model",
+    ]);
+    expect(result.models[0]).toMatchObject({
+      id: "ox-alpha-free",
+      name: "Ox Alpha Free (Unlimited)",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      compat: { supportedReasoningEfforts: ["low", "high", "max"], supportsTools: true },
+    });
+    expect(result.models[1]).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen/go",
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+    });
+    expect(result.models[2]).toMatchObject({
+      provider: "opencode-go",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text"],
+    });
+    const listingRequest = fetchGuard.mock.calls.find(
+      ([request]) => request.url === "https://opencode.ai/zen/go/v1/models",
+    )?.[0];
+    expect(new Headers(listingRequest?.init?.headers).get("user-agent")).toMatch(/^openclaw\//);
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toBeUndefined();
+    const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
+    expect(requireCatalogEntry(supplemental, "legacy-model").status).toBe("deprecated");
+    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+  });
+
+  it("never resolves another account's upstream-only Go model outside its authenticated catalog", async () => {
+    const upstreamModels = {
+      "account-a-only": upstreamModel("account-a-only"),
+      "account-b-only": upstreamModel("account-b-only"),
+    };
+    const accountAFetchGuard = createCatalogFetchGuard({
+      upstreamModels,
+      liveModelIds: ["account-a-only"],
+    });
+    const accountA = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "account-a-key",
+      fetchGuard: accountAFetchGuard,
+    });
+    expect(accountA.models.map((model) => model.id)).toEqual(["account-a-only"]);
+
+    const accountBFetchGuard = createCatalogFetchGuard({
+      upstreamModels,
+      liveModelIds: ["account-b-only"],
+    });
+    const accountB = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "account-b-key",
+      fetchGuard: accountBFetchGuard,
+    });
+    expect(accountB.models.map((model) => model.id)).toEqual(["account-b-only"]);
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.resolveDynamicModel?.({ modelId: "account-a-only" } as never)).toBeUndefined();
+    expect(provider.resolveDynamicModel?.({ modelId: "account-b-only" } as never)).toBeUndefined();
+    expect(provider.prepareDynamicModel).toBeUndefined();
+  });
+
+  it("evicts withdrawn or unsafe upstream models while retaining trusted offline seeds", async () => {
+    const originalFetchGuard = createCatalogFetchGuard({
+      upstreamModels: {
+        "withdrawn-model": upstreamModel("withdrawn-model"),
+      },
+      liveModelIds: ["withdrawn-model"],
+    });
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard: originalFetchGuard,
+      }),
+    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "withdrawn-model" })] });
+
+    clearLiveCatalogCacheForTests();
+    const refreshedFetchGuard = createCatalogFetchGuard({
+      upstreamModels: {
+        "replacement-model": upstreamModel("replacement-model"),
+        "unsafe-model": upstreamModel("unsafe-model", {
+          provider: { api: "https://attacker.invalid/v1" },
+        }),
+      },
+      liveModelIds: ["replacement-model", "unsafe-model"],
+    });
+    // Rejected metadata cannot redirect inference; the listed id keeps Go's own route.
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard: refreshedFetchGuard,
+      }),
+    ).resolves.toMatchObject({
+      models: [
+        expect.objectContaining({ id: "replacement-model" }),
+        expect.objectContaining({ id: "unsafe-model", baseUrl: "https://opencode.ai/zen/go/v1" }),
+      ],
+    });
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
+    expect(entries?.some((entry) => entry.id === "withdrawn-model")).toBe(false);
+    expect(entries?.some((entry) => entry.id === "unsafe-model")).toBe(false);
+    expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
+  });
+
+  it("exposes only trusted offline starter models through provider discovery", async () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
-    const manifestProvider = requireRecord(
-      manifest.modelCatalog.providers["opencode-go"],
-      "manifest provider",
-    );
-    if (!Array.isArray(manifestProvider.models)) {
-      throw new Error("expected manifest models");
-    }
-    const manifestIds = manifestProvider.models.map((model) =>
-      String(requireRecord(model, "manifest model").id),
-    );
-    expect(new Set(manifestIds).size).toBe(manifestIds.length);
-    const provider = await registerSingleProviderPlugin(plugin);
-    for (const manifestModel of manifestProvider.models) {
-      const model = requireRecord(manifestModel, "manifest model");
-      const modelId = String(model.id);
-      const runtime = requireRecord(
-        provider.resolveDynamicModel?.({ modelId } as never),
-        `runtime model ${modelId}`,
-      );
-      expect({
-        api: model.api ?? manifestProvider.api,
-        baseUrl: model.baseUrl ?? manifestProvider.baseUrl,
-        reasoning: model.reasoning,
-        input: model.input,
-        contextWindow: model.contextWindow,
-        contextTokens: model.contextTokens,
-        maxTokens: model.maxTokens,
-        thinkingLevelMap: model.thinkingLevelMap,
-        cost: model.cost,
-        compat: runtimeCompatFields(model.compat),
-      }).toEqual({
-        api: runtime.api,
-        baseUrl: runtime.baseUrl,
-        reasoning: runtime.reasoning,
-        input: runtime.input,
-        contextWindow: runtime.contextWindow,
-        contextTokens: runtime.contextTokens,
-        maxTokens: runtime.maxTokens,
-        thinkingLevelMap: runtime.thinkingLevelMap,
-        cost: runtime.cost,
-        compat: runtimeCompatFields(runtime.compat),
-      });
-    }
-  });
-
-  it("exposes the complete offline catalog through provider discovery", async () => {
     const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenCode Go static provider");
     }
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
     const deepSeekFlash = result.provider.models.find((model) => model.id === "deepseek-v4-flash");
-    const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
-
     const modelIds = result.provider.models.map((model) => model.id);
     expect(new Set(modelIds).size).toBe(modelIds.length);
     expect(modelIds.toSorted()).toEqual(ACTIVE_MODEL_IDS.toSorted());
@@ -435,63 +397,68 @@ describe("opencode-go provider plugin", () => {
       maxTokens: 384_000,
       compat: { supportedReasoningEfforts: ["low", "high", "max"] },
     });
-    expect(glm52).toMatchObject({
-      provider: "opencode-go",
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-    });
+    expect(modelIds).not.toContain("hy3-preview");
   });
 
-  it("skips live OpenCode Go catalog discovery when no shared key is configured", async () => {
+  it("skips unrelated scoped discovery even when OpenCode credentials are configured", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-
-    await expect(
-      provider.catalog?.run({
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-      } as never),
-    ).resolves.toBeNull();
-  });
-
-  it("keeps compatibility rows explicit-resolvable but out of static and live catalogs", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const compatibilityModelIds = [...DEPRECATED_MODEL_IDS, "hy3-preview"];
-    const activeModelIds = ["mimo-v2.5", "mimo-v2.5-pro"];
-    const staticModelIds = buildStaticOpencodeGoProviderConfig().models.map((model) => model.id);
-
-    expect(new Set(staticModelIds).size).toBe(staticModelIds.length);
-    expect(staticModelIds.toSorted()).toEqual(ACTIVE_MODEL_IDS.toSorted());
-    expect(staticModelIds).toEqual(expect.not.arrayContaining(compatibilityModelIds));
-    for (const modelId of compatibilityModelIds) {
-      expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });
-    }
-
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [...compatibilityModelIds, ...activeModelIds].map((id) => ({
-            id,
-            object: "model",
-          })),
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release: vi.fn(async () => undefined),
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const resolveProviderApiKey = vi.fn(() => ({
+      apiKey: "configured-opencode-key",
+      discoveryApiKey: "configured-opencode-key",
     }));
-    const live = await buildOpencodeGoLiveProviderConfig({
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
 
-    expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
+    try {
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          providerIds: ["anthropic"],
+          resolveProviderApiKey,
+        } as never),
+      ).resolves.toBeNull();
+      expect(resolveProviderApiKey).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          providerIds: ["opencode-go"],
+          resolveProviderApiKey: () => ({ apiKey: "configured-opencode-key" }),
+        } as never),
+      ).resolves.toMatchObject({
+        provider: { apiKey: "configured-opencode-key" },
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
-  it.each([
-    [["deepseek-v4-pro"], "opencode-go/deepseek-v4-pro"],
-    [["glm-5.1"], undefined],
-  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
+  it("never fetches either catalog when no shared OpenCode key is configured", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    try {
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          resolveProviderApiKey: () => ({ apiKey: undefined }),
+          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        } as never),
+      ).resolves.toBeNull();
+      await expect(buildOpencodeGoLiveProviderConfig()).resolves.toMatchObject({
+        models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("does not select an unavailable preferred onboarding model", async () => {
+    const modelIds = ["glm-5.1"];
     const fetchGuard = vi.fn(async () => ({
       response: new Response(
         JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
@@ -506,27 +473,23 @@ describe("opencode-go provider plugin", () => {
         preferredModelRef: "opencode-go/deepseek-v4-pro",
         fetchGuard,
       }),
-    ).resolves.toBe(expected);
+    ).resolves.toBeUndefined();
   });
 
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
+    const resolveProviderApiKey = vi.fn((providerId: string) =>
+      providerId === "opencode-go"
+        ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
+        : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+    );
 
     try {
       const result = await provider.catalog?.run({
         config: {},
         env: {},
-        resolveProviderApiKey: (providerId: string) =>
-          providerId === "opencode-go"
-            ? {
-                apiKey: NON_ENV_SECRETREF_MARKER,
-                discoveryApiKey: undefined,
-              }
-            : {
-                apiKey: "shared-opencode-key",
-                discoveryApiKey: "shared-opencode-key",
-              },
+        resolveProviderApiKey,
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never);
 
@@ -535,55 +498,11 @@ describe("opencode-go provider plugin", () => {
       }
       expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
       expect(result.provider.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+      expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }
-  });
-
-  it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "minimax-m3", object: "model" },
-            { id: "qwen3.7-max", object: "model" },
-            { id: "qwen3.7-plus", object: "model" },
-          ],
-        }),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release: vi.fn(async () => undefined),
-    }));
-
-    const first = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    const second = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
-    expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
-    expect(first.models.map((model) => model.id).toSorted()).toEqual(liveIds);
-    expect(second.models.map((model) => model.id).toSorted()).toEqual(liveIds);
-
-    clearLiveCatalogCacheForTests();
-    fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
-    expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-      ACTIVE_MODEL_IDS.toSorted(),
-    );
   });
 
   it("does not synthesize a stream when the runtime provides none", async () => {
@@ -592,242 +511,188 @@ describe("opencode-go provider plugin", () => {
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
 
-  it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(
-    "disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go for %s",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = {
-          model: modelId,
-          reasoning_effort: "off",
-          reasoning: "off",
-        };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
-        return {} as never;
-      };
+  it("attaches a stable conversation id only to native OpenCode Go requests", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveTurnState = provider.resolveTransportTurnState;
 
-      const streamFn = provider.wrapStreamFn?.({
-        streamFn: baseStreamFn as never,
-        providerId: "opencode-go",
-        modelId,
-        thinkingLevel: "off",
-      } as never);
-
-      expect(streamFn).toBeTypeOf("function");
-      await streamFn?.({ provider: "opencode-go", id: modelId } as never, {} as never, {});
-
-      expect(capturedPayloads).toEqual([
-        {
-          model: modelId,
-          thinking: { type: "disabled" },
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
         },
-      ]);
-    },
-  );
+        sessionId: "conversation-123",
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toEqual({ headers: { "x-opencode-session": "conversation-123" } });
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          headers: { "X-OpenCode-Session": "configured-session" },
+        },
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toBeUndefined();
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://proxy.example.com/v1",
+        },
+        sessionId: "conversation-123",
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toBeUndefined();
+  });
 
-  it.each([
-    ["glm-5.2", "max", undefined],
-    ["grok-4.5", "high", undefined],
-    ["hy3", "low", "none"],
-  ] as const)(
-    "maps %s only to supported wire efforts",
-    async (modelId, enabledEffort, offEffort) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const model = provider.resolveDynamicModel?.({ modelId } as never);
-      if (!model) {
-        throw new Error(`expected ${modelId}`);
-      }
-      const context = {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "test", timestamp: 1 }],
-      } as never;
-
-      const offPayload = buildOpenAICompletionsParams(model as never, context, {
-        reasoning: "off",
-      } as never);
-      if (offEffort === undefined) {
-        expect(offPayload).not.toHaveProperty("reasoning_effort");
-      } else {
-        expect(offPayload).toHaveProperty("reasoning_effort", offEffort);
-      }
-      expect(
-        buildOpenAICompletionsParams(model as never, context, {
-          reasoning: enabledEffort,
-        } as never),
-      ).toHaveProperty("reasoning_effort", enabledEffort);
-    },
-  );
-
-  it.each([
-    ["low", "low"],
-    ["high", "high"],
-    ["max", "max"],
-  ] as const)(
-    "maps OpenCode Go DeepSeek V4 %s thinking to %s reasoning effort",
-    async (thinkingLevel, reasoningEffort) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
+  it("identifies native Anthropic stream and simple requests without tagging proxies", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const testCase of [
+      {
+        wrap: provider.wrapStreamFn,
+        runtimeApi: "anthropic-messages",
+        sourceApi: undefined,
+      },
+      {
+        wrap: provider.wrapSimpleCompletionStreamFn,
+        runtimeApi: "openclaw-provider-simple:opencode-go:qwen3.8-max",
+        sourceApi: "anthropic-messages",
+      },
+    ] as const) {
+      const capturedHeaders: Array<Record<string, string> | undefined> = [];
       const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = { model: "deepseek-v4-flash" };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
+        capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
         return {} as never;
       };
-
-      const streamFn = provider.wrapStreamFn?.({
+      const streamFn = testCase.wrap?.({
         streamFn: baseStreamFn as never,
         providerId: "opencode-go",
-        modelId: "deepseek-v4-flash",
-        thinkingLevel,
+        modelId: "qwen3.8-max",
+        thinkingLevel: "high",
+        sourceApi: testCase.sourceApi,
       } as never);
 
       expect(streamFn).toBeTypeOf("function");
       await streamFn?.(
-        { provider: "opencode-go", id: "deepseek-v4-flash" } as never,
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://opencode.ai/zen/go",
+        } as never,
         {} as never,
-        {},
+        { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
+      );
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://proxy.example.com",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
       );
 
-      expect(capturedPayloads).toEqual([
+      expect(capturedHeaders).toEqual([
         {
-          model: "deepseek-v4-flash",
-          thinking: { type: "enabled" },
-          reasoning_effort: reasoningEffort,
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+          "X-Custom": "1",
         },
+        { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
       ]);
+    }
+  });
+
+  it.each([
+    ["deepseek-v4-flash", "low", "low"],
+    ["deepseek-v4-flash", "high", "high"],
+    ["deepseek-v4-flash", "max", "max"],
+  ] as const)(
+    "maps OpenCode Go %s thinking %s to %s reasoning effort",
+    async (modelId, thinkingLevel, reasoningEffort) => {
+      const payload = await captureGoWirePayload({
+        thinkingLevel,
+        payload: {
+          model: modelId,
+        },
+      });
+
+      expect(payload).toEqual({
+        model: modelId,
+        thinking: { type: "enabled" },
+        reasoning_effort: reasoningEffort,
+      });
     },
   );
 
-  it("does not apply DeepSeek V4 thinking payloads to unrelated OpenCode Go models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = { model: "glm-5", reasoning_effort: "max" };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "glm-5",
-      thinkingLevel: "max",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.({ provider: "opencode-go", id: "glm-5" } as never, {} as never, {});
-
-    expect(capturedPayloads).toEqual([{ model: "glm-5", reasoning_effort: "max" }]);
-  });
-
-  it("strips unsupported Kimi reasoning payloads on OpenCode Go", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
+  it("strips unsupported Kimi reasoning on Go", async () => {
+    const payload = await captureGoWirePayload({
+      thinkingLevel: "high",
+      payload: {
         model: "kimi-k2.6",
         reasoning_effort: "high",
         reasoning: { effort: "high" },
         reasoningEffort: "high",
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "kimi-k2.6",
-      thinkingLevel: "high",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.(
-      { provider: "opencode-go", id: "kimi-k2.6", api: "openai-completions" } as never,
-      {} as never,
-      {},
-    );
-
-    expect(capturedPayloads).toEqual([
-      {
-        model: "kimi-k2.6",
+        messages: [{ role: "assistant", content: "done", reasoning_content: "earlier reasoning" }],
+        input: [
+          { type: "reasoning", summary: [] },
+          { role: "assistant", content: "done", reasoning_details: [] },
+        ],
       },
-    ]);
+    });
+
+    expect(payload).toEqual({
+      model: "kimi-k2.6",
+      messages: [{ role: "assistant", content: "done" }],
+      input: [{ role: "assistant", content: "done" }],
+    });
   });
 
-  it.each(["minimax-m2.5", "minimax-m2.7"])(
-    "keeps fixed-reasoning %s on the provider default wire path",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = {
-          model: modelId,
-          thinking: { type: "enabled", budget_tokens: 8192 },
-          output_config: { effort: "high" },
-        };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
-        return {} as never;
-      };
-      const streamFn = provider.wrapStreamFn?.({
-        streamFn: baseStreamFn as never,
-        providerId: "opencode-go",
-        modelId,
-        thinkingLevel: "high",
-      } as never);
+  it("keeps fixed reasoning for minimax-m2.7 on the Go wire", async () => {
+    const modelId = "minimax-m2.7";
+    const payload = await captureGoWirePayload({
+      thinkingLevel: "high",
+      sourceApi: "anthropic-messages",
+      payload: {
+        model: modelId,
+        thinking: { type: "enabled", budget_tokens: 8192 },
+        output_config: { effort: "high" },
+      },
+    });
+    expect(payload).toEqual({ model: modelId });
+  });
 
-      await streamFn?.(
-        { provider: "opencode-go", id: modelId, api: "anthropic-messages" } as never,
-        {} as never,
-        {},
-      );
-      expect(capturedPayloads).toEqual([{ model: modelId }]);
-    },
-  );
-
-  it.each([
-    ["off", undefined],
-    ["max", "max"],
-  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload: Record<string, unknown> = {
+  it("keeps Kimi K3 reasoning off exact", async () => {
+    const thinkingLevel = "off";
+    const payload = await captureGoWirePayload({
+      thinkingLevel,
+      payload: {
         model: "kimi-k3",
         reasoning_effort: "max",
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "kimi-k3",
-      thinkingLevel,
-    } as never);
-
-    await streamFn?.(
-      { provider: "opencode-go", id: "kimi-k3", api: "openai-completions" } as never,
-      {} as never,
-      {},
-    );
-    expect(capturedPayloads).toEqual([
-      expectedEffort === undefined
-        ? { model: "kimi-k3" }
-        : { model: "kimi-k3", reasoning_effort: expectedEffort },
-    ]);
+      },
+    });
+    expect(payload).toEqual({ model: "kimi-k3" });
   });
 
   it("canonicalizes stale OpenCode Go base URLs", async () => {

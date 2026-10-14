@@ -21,6 +21,8 @@ let swabbleTriggersKey = "openclaw.swabbleTriggers"
 let voiceWakeTriggerChimeKey = "openclaw.voiceWakeTriggerChime"
 let voiceWakeSendChimeKey = "openclaw.voiceWakeSendChime"
 let showDockIconKey = "openclaw.showDockIcon"
+let nativeExperienceEnabledKey = "openclaw.nativeExperienceEnabled"
+let appIconStyleKey = "openclaw.appIconStyle"
 let defaultVoiceWakeTriggers = ["openclaw"]
 let voiceWakeMaxWords = 32
 let voiceWakeMaxWordLength = 64
@@ -31,10 +33,12 @@ let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
 let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"
 let talkEnabledKey = "openclaw.talkEnabled"
+let talkRealtimeRelayEnabledKey = "openclaw.talkRealtimeRelayEnabled"
 let talkPhaseSoundsEnabledKey = "openclaw.talkPhaseSoundsEnabled"
 let talkShiftToStopEnabledKey = "openclaw.talkShiftToStopEnabled"
 let iconOverrideKey = "openclaw.iconOverride"
 let connectionModeKey = "openclaw.connectionMode"
+let hostsLocalGatewayWithRemotePrimaryKey = "openclaw.localGateway.hostWithRemotePrimary"
 let remoteTargetKey = "openclaw.remoteTarget"
 let remoteIdentityKey = "openclaw.remoteIdentity"
 let remoteProjectRootKey = "openclaw.remoteProjectRoot"
@@ -42,11 +46,16 @@ let remoteCliPathKey = "openclaw.remoteCliPath"
 let canvasEnabledKey = "openclaw.canvasEnabled"
 let quickChatEnabledKey = "openclaw.quickChatEnabled"
 let cameraEnabledKey = "openclaw.cameraEnabled"
+let desktopSharingEnabledKey = "openclaw.desktopSharingEnabled"
 let computerControlEnabledKey = "openclaw.computerControlEnabled"
 let computerControlProviderKey = "openclaw.computerControlProvider"
 let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
 let cookieSyncIntoProfileKey = "openclaw.cookieSyncIntoProfile"
 let cookieSyncDomainsKey = "openclaw.cookieSyncDomains"
+
+func isTalkRealtimeRelayEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+    defaults.object(forKey: talkRealtimeRelayEnabledKey) as? Bool ?? false
+}
 
 func isComputerControlEnabled(
     defaults: UserDefaults = AppDefaults.standard,
@@ -72,7 +81,8 @@ let cliValidatedVersionKey = "openclaw.cliValidatedVersion"
 let macNodeIdentityProfileKey = "openclaw.macNodeIdentityProfile"
 let heartbeatsEnabledKey = "openclaw.heartbeatsEnabled"
 let debugPaneEnabledKey = "openclaw.debugPaneEnabled"
-let nativeSettingsPanesEnabledKey = "openclaw.nativeSettingsPanesEnabled"
 let debugFileLogEnabledKey = "openclaw.debug.fileLogEnabled"
 let appLogLevelKey = "openclaw.debug.appLogLevel"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+
+let nativeConversationForcedKey = "openclaw.chat.useNativeConversation"

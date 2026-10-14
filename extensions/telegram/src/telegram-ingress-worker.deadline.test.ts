@@ -54,7 +54,6 @@ describe("telegram ingress worker request deadline", () => {
         token: "test-auth-token",
         accountId: "acct",
         initialUpdateId: null,
-        spoolDir: "/tmp/openclaw-telegram-ingress-worker-deadline-test",
         apiRoot: "https://api.telegram.test",
       },
       port,

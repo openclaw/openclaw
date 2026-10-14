@@ -1,26 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-export type RequestFn = (
-  method: string,
-  params?: unknown,
-  options?: { timeoutMs?: number | null },
-) => Promise<unknown>;
+export type RequestFn = (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>;
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
-
-export function deferred<T = unknown>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 export function approval(id: string, createdAtMs: number) {
   return {
@@ -54,7 +41,10 @@ export function createGatewayHarness(
       return snapshot;
     },
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect,
     setSessionKey() {},
     start() {},
@@ -159,8 +149,8 @@ export function registerOverlayPairingAccessTests() {
   describe("application pairing setup permissions", () => {
     it.each([
       {
-        name: "pairing-only to legacy administrator",
-        previousAuth: { role: "operator", scopes: ["operator.pairing"] },
+        name: "scoped administrator to legacy administrator",
+        previousAuth: { role: "operator", scopes: ["operator.admin"] },
         nextAuth: null,
       },
       {
@@ -207,7 +197,7 @@ export function registerOverlayPairingAccessTests() {
         await flushMicrotasks();
 
         expect(overlays.snapshot.devicePairPendingCount).toBe(2);
-        expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+        expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       } finally {
         stalePending.resolve({ pending: [] });
         overlays.dispose();
@@ -252,12 +242,12 @@ export function registerOverlayPairingAccessTests() {
       expect(request.mock.calls.filter(([method]) => method === "device.pair.list")).toHaveLength(
         2,
       );
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 
     it("discards an in-flight setup credential after admin access becomes pairing-only", async () => {
-      const setup = deferred();
+      const setup = deferred<unknown>();
       const request = vi.fn<RequestFn>((method) => {
         if (method === "device.pair.setupCode") {
           return setup.promise;
@@ -276,7 +266,10 @@ export function registerOverlayPairingAccessTests() {
       const overlays = createApplicationOverlays(harness.gateway);
       await overlays.openDevicePairSetup();
       const mintingSetup = overlays.refreshDevicePairSetup();
-      expect(request).toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "loading",
+        access: "full",
+      });
 
       harness.update({
         hello: {
@@ -311,39 +304,8 @@ export function registerOverlayPairingAccessTests() {
       overlays.dispose();
     });
 
-    it("closes a pairing-only setup when the same client loses pairing authority", async () => {
-      const request = vi.fn<RequestFn>((method) =>
-        Promise.resolve(method === "device.pair.list" ? { pending: [{ id: "pending" }] } : []),
-      );
-      const harness = createGatewayHarness(client(request));
-      harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.pairing"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const overlays = createApplicationOverlays(harness.gateway);
-      await overlays.openDevicePairSetup();
-      await flushMicrotasks();
-      expect(overlays.snapshot.devicePairSetupOpen).toBe(true);
-      expect(overlays.snapshot.devicePairPendingCount).toBe(1);
-
-      harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-
-      expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
-      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
-        phase: "selection",
-        access: "full",
-      });
-      expect(overlays.snapshot.devicePairPendingCount).toBe(0);
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
-      overlays.dispose();
-    });
-
     it.each([
+      { name: "pairing-only", scopes: ["operator.pairing"] },
       { name: "write-only", scopes: ["operator.write"] },
       { name: "approval-only", scopes: ["operator.approvals"] },
       { name: "explicitly ungranted", scopes: [] },
@@ -355,32 +317,12 @@ export function registerOverlayPairingAccessTests() {
       });
       const overlays = createApplicationOverlays(harness.gateway);
 
-      await overlays.openDevicePairSetup();
+      await expect(overlays.openDevicePairSetup()).resolves.toBe(false);
       await overlays.refreshDevicePairSetup();
 
       expect(request).not.toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
-      overlays.dispose();
-    });
-
-    it("allows pairing-only list access without minting an admin setup credential", async () => {
-      const request = vi.fn<RequestFn>((method) =>
-        Promise.resolve(method === "device.pair.list" ? { pending: [] } : []),
-      );
-      const harness = createGatewayHarness(client(request));
-      harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.pairing"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const overlays = createApplicationOverlays(harness.gateway);
-
-      await overlays.openDevicePairSetup();
-      await overlays.refreshDevicePairSetup();
-
-      expect(request).toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
       overlays.dispose();
     });
 

@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "./canvas.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -71,6 +72,10 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  contentOwner: Type.Optional(
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
+  ),
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
@@ -181,7 +186,7 @@ export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
-  html: Type.String({ maxLength: 262_144 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
 });
 export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),

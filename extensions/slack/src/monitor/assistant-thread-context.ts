@@ -1,4 +1,8 @@
-// Slack plugin module owns Assistant thread context metadata and caching.
+import type { WebClient } from "@slack/web-api";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackEventScope } from "./event-scope.js";
 
 export type SlackAssistantThreadContext = {
@@ -34,24 +38,46 @@ export function buildSlackAssistantThreadMetadata(
   };
 }
 
-export function parseSlackAssistantThreadMetadata(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseSlackAssistantThreadMetadata(value: unknown) {
+  const metadata = asOptionalRecord(value);
+  if (metadata?.event_type !== SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT) {
     return undefined;
   }
-  const metadata = value as Record<string, unknown>;
-  if (metadata.event_type !== SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT) {
+  const payload = asOptionalRecord(metadata.event_payload);
+  if (!payload) {
     return undefined;
   }
-  const payload = metadata.event_payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
   return {
-    channelId: readNonBlankStringField(record, "channel_id"),
-    teamId: readNonBlankStringField(record, "team_id"),
-    enterpriseId: readNonBlankStringField(record, "enterprise_id"),
+    channelId: normalizeOptionalString(payload.channel_id),
+    teamId: normalizeOptionalString(payload.team_id),
+    enterpriseId: normalizeOptionalString(payload.enterprise_id),
   };
+}
+
+export async function readSlackAssistantThreadContext(params: {
+  client: WebClient;
+  channelId: string;
+  threadTs: string;
+  userId?: string;
+}): Promise<Omit<SlackAssistantThreadContext, "updatedAt"> | undefined> {
+  const response = await params.client.conversations.replies({
+    channel: params.channelId,
+    ts: params.threadTs,
+    include_all_metadata: true,
+    limit: 4,
+  });
+  for (const message of response.messages ?? []) {
+    const context = parseSlackAssistantThreadMetadata(message.metadata);
+    if (context) {
+      return {
+        assistantChannelId: params.channelId,
+        threadTs: params.threadTs,
+        userId: params.userId,
+        ...context,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function createSlackAssistantThreadContextStore(params: { accountId: string }) {
@@ -99,11 +125,6 @@ export function createSlackAssistantThreadContextStore(params: { accountId: stri
   };
 
   return { get, save };
-}
-
-function readNonBlankStringField(record: Record<string, unknown>, key: string) {
-  const raw = record[key];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 function buildContextKey(

@@ -1,4 +1,7 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
 function createTransport(
@@ -102,6 +105,29 @@ describe("node meeting realtime audio transport", () => {
     await transport.stop();
   });
 
+  it("cannot verify stopped output from a pending input pull", async () => {
+    const pendingPull = createDeferredCore<{ base64: string }>();
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) =>
+      params.action === "pullAudio" ? pendingPull.promise : {},
+    );
+    const transport = createTransport(invoke);
+    const output = Buffer.alloc(80 * 240 * 2);
+    for (let sample = 0; sample < output.byteLength / 2; sample += 1) {
+      const amplitude = 400 + ((Math.floor(sample / 240) * 7919) % 12_000);
+      output.writeInt16LE(sample % 2 === 0 ? amplitude : -amplitude, sample * 2);
+    }
+    await transport.writeOutput(output);
+    const health = transport.getHealth?.();
+    const onAudio = vi.fn();
+    transport.startInput(onAudio);
+    await transport.stop();
+    pendingPull.resolve({ base64: output.toString("base64") });
+    await setImmediate();
+
+    expect(transport.getHealth?.()).toEqual(health);
+    expect(onAudio).not.toHaveBeenCalled();
+  });
+
   it("fences output writes across clear and stop", async () => {
     const invoke = vi.fn(async () => ({ ok: true }));
     const transport = createTransport(invoke, { outputGenerationSupported: true });
@@ -147,11 +173,13 @@ describe("node meeting realtime audio transport", () => {
   });
 
   it("serializes output commands for legacy node hosts", async () => {
+    const pushStarted = createDeferredCore();
     let releasePush: (() => void) | undefined;
     const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
       if (params.action === "pushAudio") {
         await new Promise<void>((resolve) => {
           releasePush = resolve;
+          pushStarted.resolve();
         });
       }
       return { ok: true };
@@ -160,9 +188,10 @@ describe("node meeting realtime audio transport", () => {
 
     const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
     const clearing = transport.clearOutput();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -223,11 +252,13 @@ describe("node meeting realtime audio transport", () => {
   });
 
   it("stops a legacy node host without waiting for blocked output", async () => {
+    const pushStarted = createDeferredCore();
     let releasePush: (() => void) | undefined;
     const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
       if (params.action === "pushAudio") {
         await new Promise<void>((resolve) => {
           releasePush = resolve;
+          pushStarted.resolve();
         });
       } else if (params.action === "stop") {
         releasePush?.();
@@ -238,9 +269,10 @@ describe("node meeting realtime audio transport", () => {
 
     const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
     const clearing = transport.clearOutput();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
     await transport.stop();
     await Promise.all([pushing, clearing]);
 

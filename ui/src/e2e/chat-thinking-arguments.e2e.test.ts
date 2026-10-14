@@ -1,7 +1,7 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,6 +16,117 @@ const VIEWPORTS = [
 ] as const;
 
 suite.define(() => {
+  it("keeps partial model thinking unknown and sends typed effort for server validation", async () => {
+    const key = "agent:main:main";
+    const session = { key, kind: "direct", updatedAt: 1, model: "model" };
+    const defaults = { model: "other", modelProvider: "openai", contextTokens: null };
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/other",
+        models: [
+          {
+            id: "model",
+            name: "Model",
+            provider: "openai",
+            thinkingLevels: [{ id: "high", label: "High" }],
+            thinkingDefault: "high",
+          },
+        ],
+        methodResponses: {
+          "sessions.list": { count: 1, ts: 1, path: "", defaults, sessions: [session] },
+        },
+      });
+      let displayedStatus: string | null = null;
+      let patch: unknown;
+      let highOptions: number | undefined;
+      let sliders: number | undefined;
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("/think");
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/think ");
+        await composer.press("Enter");
+        await expect
+          .poll(async () => {
+            displayedStatus = await page.getByRole("log").textContent();
+            return displayedStatus;
+          })
+          .toContain("Current thinking level: Unknown.");
+        expect(displayedStatus).toContain("Options: Unknown.");
+        highOptions = await page.locator('[data-chat-thinking-option="high"]').count();
+        sliders = await page.locator('[data-chat-thinking-slider="true"]').count();
+        expect(highOptions).toBe(0);
+        expect(sliders).toBe(0);
+        await composer.fill("/think low");
+        await composer.press("Enter");
+        patch = (await gateway.waitForRequest("sessions.patch")).params;
+        expect(patch).toMatchObject({ key, thinkingLevel: "low" });
+      } finally {
+        console.log(
+          "thinking-ui-public-observation",
+          JSON.stringify({
+            fixture: "maintained synthetic Gateway; actual Control UI browser",
+            session,
+            defaults,
+            displayedStatus,
+            highOptions,
+            sliders,
+            patch,
+            requests: await gateway.getRequests(),
+          }),
+        );
+        await page.screenshot({ path: path.join(suite.artifactDir, "partial-thinking.png") });
+      }
+    });
+  });
+
+  it("executes a typed inline /elevated argument separately from the draft", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.send"],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
+
+      await composer.fill("Keep this /elevated full");
+      await composer.press("Enter");
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect((request.params as { message?: unknown }).message).toBe("/elevated full");
+      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+    });
+  });
+
+  it("serializes a selected inline /exec host argument canonically", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.send"],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
+
+      await composer.fill("Keep this /exec");
+      await composer.press("Tab");
+      await composer.press("Enter");
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=auto");
+      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+    });
+  });
+
   it.each(VIEWPORTS)(
     "opens the active model's thinking levels above the composer ($name)",
     async (viewport) => {
@@ -57,7 +168,7 @@ suite.define(() => {
               path: "",
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "gpt-5.6-sol",
                   modelProvider: "openai",
@@ -108,13 +219,15 @@ suite.define(() => {
         await composer.press("Enter");
         const patchRequest = await gateway.waitForRequest("sessions.patch");
         expect(patchRequest.params).toMatchObject({
-          key: "main",
+          key: "agent:main:main",
           thinkingLevel: "ultra",
         });
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-thinking-arguments", artifactRoot)
+          : undefined;
         if (artifactDir) {
-          await fs.mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             path: path.join(artifactDir, `think-arguments-${viewport.name}.png`),
             fullPage: true,

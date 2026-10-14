@@ -32,8 +32,6 @@ export async function resolveOpenRouterGenerationRequestContext(params: {
     defaultHeaders: {
       Authorization: `Bearer ${auth.apiKey}`,
       ...(params.jsonContentType ? { "Content-Type": "application/json" } : {}),
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
     },
     request: sanitizeConfiguredModelProviderRequest(
       params.cfg.models?.providers?.openrouter?.request,

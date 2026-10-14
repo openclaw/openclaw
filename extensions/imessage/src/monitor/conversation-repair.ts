@@ -1,4 +1,3 @@
-// Imessage plugin module implements conversation repair behavior.
 import { hasNonEmptyString as isNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageRpcClient } from "../client.js";
 import type { IMessagePayload } from "./types.js";
@@ -24,9 +23,6 @@ type RepairIMessageConversationAnchorParams = {
   client: IMessageRpcClient;
   message: IMessagePayload;
   runtime?: RuntimeLogger;
-  chatsLimit?: number;
-  perChatHistoryLimit?: number;
-  rpcTimeoutMs?: number;
 };
 
 type AuthoritativeRecoveryProjection = {
@@ -49,11 +45,9 @@ function isExplicitEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim() === "";
 }
 
-function hasUsableConversationAnchor(projection: {
-  chat_id?: number;
-  chat_guid?: string;
-  chat_identifier?: string;
-}): boolean {
+function hasUsableConversationAnchor(
+  projection: Pick<IMessagePayload, "chat_id" | "chat_guid" | "chat_identifier">,
+): boolean {
   return (
     hasPositiveChatId(projection.chat_id) ||
     isNonEmptyString(projection.chat_guid) ||
@@ -62,22 +56,17 @@ function hasUsableConversationAnchor(projection: {
 }
 
 function isIMessageAnchorless(message: IMessagePayload): boolean {
-  const hasUsableAnchor =
-    hasPositiveChatId(message.chat_id) ||
-    isNonEmptyString(message.chat_guid) ||
-    isNonEmptyString(message.chat_identifier);
-  if (hasUsableAnchor) {
+  if (hasUsableConversationAnchor(message)) {
     return false;
   }
 
-  const hasExplicitBrokenAnchor =
+  return (
     message.chat_id === null ||
     (typeof message.chat_id === "number" &&
       (!Number.isFinite(message.chat_id) || message.chat_id <= 0)) ||
     isExplicitEmptyString(message.chat_guid) ||
-    isExplicitEmptyString(message.chat_identifier);
-
-  return hasExplicitBrokenAnchor;
+    isExplicitEmptyString(message.chat_identifier)
+  );
 }
 
 function extractAuthoritativeRecoveryProjection(
@@ -133,28 +122,6 @@ function projectionConflictKey(projection: AuthoritativeRecoveryProjection): str
   });
 }
 
-function applyAuthoritativeRecoveryProjection(
-  message: IMessagePayload,
-  projection: AuthoritativeRecoveryProjection,
-): IMessagePayload {
-  return {
-    ...message,
-    ...(projection.chat_id !== undefined ? { chat_id: projection.chat_id } : {}),
-    ...(projection.chat_guid !== undefined ? { chat_guid: projection.chat_guid } : {}),
-    ...(projection.chat_identifier !== undefined
-      ? { chat_identifier: projection.chat_identifier }
-      : {}),
-    ...(projection.chat_name !== undefined ? { chat_name: projection.chat_name } : {}),
-    ...(projection.participants !== undefined ? { participants: projection.participants } : {}),
-    is_group: projection.is_group,
-    sender: projection.sender,
-    // Exact-GUID history is authoritative for this outgoing-only field: when
-    // history omits it, clear any stale notification value instead of inheriting.
-    destination_caller_id: projection.destination_caller_id ?? null,
-    is_from_me: projection.is_from_me,
-  };
-}
-
 export async function repairIMessageConversationAnchor(
   params: RepairIMessageConversationAnchorParams,
 ): Promise<IMessagePayload | null> {
@@ -174,8 +141,8 @@ export async function repairIMessageConversationAnchor(
   try {
     chatsResult = await client.request<{ chats?: ChatsListEntry[] }>(
       "chats.list",
-      { limit: params.chatsLimit ?? DEFAULT_CHATS_LIMIT },
-      { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+      { limit: DEFAULT_CHATS_LIMIT },
+      { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
     );
   } catch (err) {
     runtime?.error?.(`imessage: anchorless message recovery failed listing chats: ${String(err)}`);
@@ -197,9 +164,9 @@ export async function repairIMessageConversationAnchor(
         {
           attachments: false,
           chat_id: chatId,
-          limit: params.perChatHistoryLimit ?? DEFAULT_PER_CHAT_HISTORY_LIMIT,
+          limit: DEFAULT_PER_CHAT_HISTORY_LIMIT,
         },
-        { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+        { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
       );
     } catch {
       continue;
@@ -247,15 +214,15 @@ export async function repairIMessageConversationAnchor(
     return null;
   }
 
-  const repaired = applyAuthoritativeRecoveryProjection(message, projection);
-  if (isIMessageAnchorless(repaired)) {
-    runtime?.error?.(
-      `imessage: dropping anchorless message GUID=${guid} after recovery found no usable conversation anchor`,
-    );
-    return null;
-  }
+  const repaired = {
+    ...message,
+    ...projection,
+    // Exact-GUID history is authoritative for this outgoing-only field: when
+    // history omits it, clear any stale notification value instead of inheriting.
+    destination_caller_id: projection.destination_caller_id ?? null,
+  };
   runtime?.log?.(
-    `imessage: recovered anchorless message GUID=${guid} chat_id=${repaired.chat_id ?? "unknown"} is_group=${repaired.is_group === true}`,
+    `imessage: recovered anchorless message GUID=${guid} chat_id=${repaired.chat_id ?? "unknown"} is_group=${repaired.is_group}`,
   );
   return repaired;
 }

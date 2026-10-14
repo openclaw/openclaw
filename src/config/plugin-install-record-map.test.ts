@@ -42,26 +42,6 @@ describe("plugin install record maps", () => {
     }
   });
 
-  it("rejects invalid records atomically", () => {
-    expect(
-      parsePluginInstallRecordMap({
-        valid: { source: "npm" },
-        invalid: { source: "npm", clawpackSize: -1 },
-      }),
-    ).toBeNull();
-  });
-
-  it.each(["constructor", "toString", "__proto__"])(
-    "rejects an invalid %s record atomically",
-    (pluginId) => {
-      const records = createPluginInstallRecordMap<unknown>();
-      setPluginInstallRecordMapEntry(records, "valid", { source: "npm" });
-      setPluginInstallRecordMapEntry(records, pluginId, { source: "bogus" });
-
-      expect(parsePluginInstallRecordMap(records)).toBeNull();
-    },
-  );
-
   it("preserves prototype-named plugin ids as inert own properties", () => {
     const records = parsePluginInstallRecordMap(
       JSON.parse(

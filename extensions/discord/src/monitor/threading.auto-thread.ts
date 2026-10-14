@@ -1,4 +1,4 @@
-// Discord plugin module implements threading.auto thread behavior.
+import { Routes } from "discord-api-types/v10";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -7,14 +7,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  ChannelType,
-  createThread,
-  editChannel,
-  getChannelMessage,
-  type Client,
-} from "../internal/discord.js";
-import { resolveDiscordMessageChannelId } from "./message-utils.js";
+import { ChannelType, createThread, getChannelMessage, type Client } from "../internal/discord.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import { generateThreadTitle } from "./thread-title.js";
 import { resolveDiscordReplyDeliveryPlan, sanitizeDiscordThreadName } from "./threading.starter.js";
 import type {
@@ -91,20 +85,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
-    client: params.client,
-    message: params.message,
+    ...params,
     messageChannelId: messageChannelId || undefined,
-    channel: params.channel,
-    isGuildMessage: params.isGuildMessage,
-    channelConfig: params.channelConfig,
-    threadChannel: params.threadChannel,
-    channelType: params.channelType,
-    channelName: params.channelName,
-    channelDescription: params.channelDescription,
-    baseText: params.baseText,
-    combinedBody: params.combinedBody,
-    cfg: params.cfg,
-    agentId: params.agentId,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,
@@ -115,11 +97,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
   });
   const autoThreadContext = params.isGuildMessage
     ? resolveDiscordAutoThreadContext({
-        agentId: params.agentId,
-        channel: params.channel,
-        parentSessionKey: params.parentSessionKey,
+        ...params,
         createdThreadId,
-        groupScope: params.groupScope,
         parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
@@ -129,13 +108,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
 export async function maybeCreateDiscordAutoThread(
   params: MaybeCreateDiscordAutoThreadParams,
 ): Promise<string | undefined> {
-  if (!params.isGuildMessage) {
-    return undefined;
-  }
-  if (!params.channelConfig?.autoThread) {
-    return undefined;
-  }
-  if (params.threadChannel) {
+  if (!params.isGuildMessage || !params.channelConfig?.autoThread || params.threadChannel) {
     return undefined;
   }
   if (
@@ -151,13 +124,14 @@ export async function maybeCreateDiscordAutoThread(
   if (!messageChannelId) {
     return undefined;
   }
-  try {
+  const findExistingThread = async () => {
     try {
-      const existingThreadId = (
-        (await getChannelMessage(params.client.rest, messageChannelId, params.message.id)) as {
-          thread?: { id?: string };
-        }
-      )?.thread?.id;
+      const message = await getChannelMessage(
+        params.client.rest,
+        messageChannelId,
+        params.message.id,
+      );
+      const existingThreadId = message?.thread?.id;
       if (existingThreadId) {
         logVerbose(
           `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
@@ -166,6 +140,13 @@ export async function maybeCreateDiscordAutoThread(
       }
     } catch {
       // Best effort only. A failed message refetch must not block creating the thread.
+    }
+    return undefined;
+  };
+  try {
+    const existingThreadId = await findExistingThread();
+    if (existingThreadId) {
+      return existingThreadId;
     }
     if (params.message.author?.bot) {
       logVerbose(
@@ -224,25 +205,7 @@ export async function maybeCreateDiscordAutoThread(
     logVerbose(
       `discord: autoThread creation failed for ${messageChannelId}/${params.message.id}: ${String(err)}`,
     );
-    try {
-      const msg = (await getChannelMessage(
-        params.client.rest,
-        messageChannelId,
-        params.message.id,
-      )) as {
-        thread?: { id?: string };
-      };
-      const existingThreadId = msg?.thread?.id || "";
-      if (existingThreadId) {
-        logVerbose(
-          `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
-        );
-        return existingThreadId;
-      }
-    } catch {
-      // If the refetch also fails, fall through to return undefined.
-    }
-    return undefined;
+    return findExistingThread();
   }
 }
 
@@ -292,12 +255,8 @@ async function maybeRenameDiscordAutoThread(params: {
   try {
     const fallbackName = sanitizeDiscordThreadName("", params.fallbackId);
     const generated = await generateThreadTitle({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...params,
       messageText: params.sourceText,
-      modelRef: params.modelRef,
-      channelName: params.channelName,
-      channelDescription: params.channelDescription,
     });
     if (!generated) {
       return;
@@ -306,7 +265,7 @@ async function maybeRenameDiscordAutoThread(params: {
     if (!nextName || nextName === params.currentName || nextName === fallbackName) {
       return;
     }
-    await editChannel(params.client.rest, params.threadId, {
+    await params.client.rest.patch(Routes.channel(params.threadId), {
       body: { name: nextName },
     });
   } catch (err) {

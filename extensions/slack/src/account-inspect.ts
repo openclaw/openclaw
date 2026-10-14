@@ -1,21 +1,24 @@
-// Slack plugin module implements account inspect behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import { hasSlackAccountCredentials } from "./account-configured.js";
+import {
+  buildSlackAccountSurfaceFields,
+  type SlackAccountSurfaceFields,
+} from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
   type SlackTokenSource,
 } from "./accounts.js";
-import type { SlackAccountConfig } from "./runtime-api.js";
 
 export type SlackCredentialStatus = "available" | "configured_unavailable" | "missing";
 
@@ -41,38 +44,26 @@ export type InspectedSlackAccount = {
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
-function inspectSlackToken(value: unknown): {
+function inspectSlackToken(
+  value: unknown,
+  envToken?: string,
+): {
   token?: string;
-  source: Exclude<SlackTokenSource, "env">;
+  source: SlackTokenSource;
   status: SlackCredentialStatus;
 } {
   const token = normalizeSecretInputString(value);
-  if (token) {
+  if (token || hasConfiguredSecretInput(value)) {
     return {
       token,
       source: "config",
-      status: "available",
+      status: token ? "available" : "configured_unavailable",
     };
   }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      source: "config",
-      status: "configured_unavailable",
-    };
-  }
-  return {
-    source: "none",
-    status: "missing",
-  };
-}
-
-function selectInspectedSlackToken(
-  configured: ReturnType<typeof inspectSlackToken>,
-  envToken: string | undefined,
-): string | undefined {
-  // A configured SecretRef remains authoritative while unavailable; read-only
-  // inspection must not make a lower-precedence environment token look active.
-  return configured.status === "missing" ? envToken : configured.token;
+  // A configured SecretRef stays authoritative while unavailable.
+  return envToken
+    ? { token: envToken, source: "env", status: "available" }
+    : { source: "none", status: "missing" };
 }
 
 export function inspectSlackAccount(params: {
@@ -91,59 +82,23 @@ export function inspectSlackAccount(params: {
   const mode = merged.mode ?? "socket";
   const identity = merged.postAs ?? "bot";
   const isHttpMode = mode === "http";
-  const isRelayMode = mode === "relay";
-
-  const configBot = inspectSlackToken(merged.botToken);
-  const configApp = inspectSlackToken(merged.appToken);
-  const configSigningSecret = inspectSlackToken(merged.signingSecret);
-  const configUser = inspectSlackToken(merged.userToken);
+  const isSocketMode = mode === "socket";
 
   const envBot = allowEnv
     ? normalizeSecretInputString(params.envBotToken ?? process.env.SLACK_BOT_TOKEN)
     : undefined;
   const envApp =
-    allowEnv && !isRelayMode
+    allowEnv && isSocketMode
       ? normalizeSecretInputString(params.envAppToken ?? process.env.SLACK_APP_TOKEN)
       : undefined;
   const envUser = allowEnv
     ? normalizeSecretInputString(params.envUserToken ?? process.env.SLACK_USER_TOKEN)
     : undefined;
 
-  const botToken = selectInspectedSlackToken(configBot, envBot);
-  const appToken = selectInspectedSlackToken(configApp, envApp);
-  const signingSecret = configSigningSecret.token;
-  const userToken = selectInspectedSlackToken(configUser, envUser);
-  const relayConfigured =
-    isRelayMode &&
-    Boolean(normalizeOptionalString(merged.relay?.url)) &&
-    hasConfiguredSecretInput(merged.relay?.authToken) &&
-    Boolean(normalizeOptionalString(merged.relay?.gatewayId));
-  const botTokenSource: SlackTokenSource = configBot.token
-    ? "config"
-    : configBot.status === "configured_unavailable"
-      ? "config"
-      : envBot
-        ? "env"
-        : "none";
-  const appTokenSource: SlackTokenSource = configApp.token
-    ? "config"
-    : configApp.status === "configured_unavailable"
-      ? "config"
-      : envApp
-        ? "env"
-        : "none";
-  const signingSecretSource: SlackTokenSource = configSigningSecret.token
-    ? "config"
-    : configSigningSecret.status === "configured_unavailable"
-      ? "config"
-      : "none";
-  const userTokenSource: SlackTokenSource = configUser.token
-    ? "config"
-    : configUser.status === "configured_unavailable"
-      ? "config"
-      : envUser
-        ? "env"
-        : "none";
+  const botCredential = inspectSlackToken(merged.botToken, envBot);
+  const appCredential = inspectSlackToken(isSocketMode ? merged.appToken : undefined, envApp);
+  const configSigningSecret = inspectSlackToken(merged.signingSecret);
+  const userCredential = inspectSlackToken(merged.userToken, envUser);
 
   return {
     accountId,
@@ -151,68 +106,25 @@ export function inspectSlackAccount(params: {
     ...(identity === "user" ? { identity } : {}),
     name: normalizeOptionalString(merged.name),
     mode,
-    botToken,
-    appToken,
-    ...(isHttpMode ? { signingSecret } : {}),
-    userToken,
-    botTokenSource,
-    appTokenSource,
-    ...(isHttpMode ? { signingSecretSource } : {}),
-    userTokenSource,
-    botTokenStatus: configBot.token
-      ? "available"
-      : configBot.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envBot
-          ? "available"
-          : "missing",
-    appTokenStatus: configApp.token
-      ? "available"
-      : configApp.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envApp
-          ? "available"
-          : "missing",
-    ...(isHttpMode
-      ? {
-          signingSecretStatus: configSigningSecret.token
-            ? "available"
-            : configSigningSecret.status === "configured_unavailable"
-              ? "configured_unavailable"
-              : "missing",
-        }
-      : {}),
-    userTokenStatus: configUser.token
-      ? "available"
-      : configUser.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envUser
-          ? "available"
-          : "missing",
-    configured: (() => {
-      const identityTokenConfigured =
-        identity === "user"
-          ? configUser.status !== "missing" || Boolean(envUser)
-          : configBot.status !== "missing" || Boolean(envBot);
-      if (isHttpMode) {
-        return identityTokenConfigured && configSigningSecret.status !== "missing";
-      }
-      if (isRelayMode) {
-        return identityTokenConfigured && relayConfigured;
-      }
-      return identityTokenConfigured && (configApp.status !== "missing" || Boolean(envApp));
-    })(),
+    botToken: botCredential.token,
+    appToken: appCredential.token,
+    ...(isHttpMode ? { signingSecret: configSigningSecret.token } : {}),
+    userToken: userCredential.token,
+    botTokenSource: botCredential.source,
+    appTokenSource: appCredential.source,
+    ...(isHttpMode ? { signingSecretSource: configSigningSecret.source } : {}),
+    userTokenSource: userCredential.source,
+    botTokenStatus: botCredential.status,
+    appTokenStatus: appCredential.status,
+    ...(isHttpMode ? { signingSecretStatus: configSigningSecret.status } : {}),
+    userTokenStatus: userCredential.status,
+    configured: hasSlackAccountCredentials({
+      config: merged,
+      identityTokenConfigured:
+        (identity === "user" ? userCredential : botCredential).status !== "missing",
+      appTokenConfigured: appCredential.status !== "missing",
+    }),
     config: merged,
-    groupPolicy: merged.groupPolicy,
-    textChunkLimit: merged.textChunkLimit,
-    mediaMaxMb: merged.mediaMaxMb,
-    reactionNotifications: merged.reactionNotifications,
-    reactionAllowlist: merged.reactionAllowlist,
-    replyToMode: merged.replyToMode,
-    replyToModeByChatType: merged.replyToModeByChatType,
-    actions: merged.actions,
-    slashCommand: merged.slashCommand,
-    dm: merged.dm,
-    channels: merged.channels,
+    ...buildSlackAccountSurfaceFields(merged),
   };
 }

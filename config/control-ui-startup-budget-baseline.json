@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345049,
-  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
-  "updatedAt": "2026-08-22"
+  "startupJsGzipBytes": 374285,
+  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
+  "updatedAt": "2026-10-12"
 }

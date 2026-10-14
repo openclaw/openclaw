@@ -3,48 +3,84 @@ import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
-  hasMediaPayload,
-  isImageWithMediaPayload,
+  formatToolResultText,
 } from "./tool-result-text.js";
 
-describe("hasMediaPayload", () => {
-  it("requires non-empty inline data instead of media metadata", () => {
-    expect(hasMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(true);
-    expect(hasMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" })).toBe(true);
-    expect(hasMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", data: "  ", mimeType: "image/png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", path: "/tmp/image.png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", url: "https://example.test/image.png" })).toBe(false);
-  });
-});
-
-describe("isImageWithMediaPayload", () => {
-  it("requires both the image type and inline payload bytes", () => {
-    expect(isImageWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
-      true,
-    );
-    expect(isImageWithMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+describe("formatToolResultText", () => {
+  it("falls back to placeholders only for blank tool output", () => {
+    expect(formatToolResultText({ text: "   \n\t", isError: false })).toBe("(no tool output)");
     expect(
-      isImageWithMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" }),
-    ).toBe(false);
+      formatToolResultText({ text: "", mediaPlaceholder: "(see attached image)", isError: false }),
+    ).toBe("(see attached image)");
+  });
+
+  it("keeps the error prefix on unmodified output", () => {
+    expect(formatToolResultText({ text: "  failed  ", isError: true })).toBe(
+      "[tool error]   failed  ",
+    );
+  });
+
+  it("appends the omitted-media suffix after unmodified output", () => {
+    const text = "line with trailing spaces   ";
+    expect(
+      formatToolResultText({
+        text,
+        omittedMediaPlaceholder: "[tool image omitted]",
+        isError: false,
+      }),
+    ).toBe(`${text}\n[tool image omitted]`);
   });
 });
 
 describe("extractToolResultText", () => {
-  it("keeps media-only blocks out of provider replay text", () => {
-    const text = extractToolResultText([
-      { type: "text", text: "summary" },
-      { type: "image", data: "image-binary", mimeType: "image/png" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
-      { type: "input_image", image_url: "data:image/png;base64,def456" },
-      { type: "audio", data: "audio-binary", mimeType: "audio/mpeg" },
-    ]);
+  it("keeps structured fallback and inclusion after block sanitation", () => {
+    const structured = { type: "json", value: "😀漢" };
+    const expected = '{"type":"json","value":"😀漢"}';
+    expect(extractToolResultText([{ type: "text", text: "\ud800" }, structured])).toBe(expected);
+    expect(
+      extractToolResultText([{ type: "text", text: "head\ud800" }, structured], {
+        includeStructured: true,
+      }),
+    ).toBe(`head\n${expected}`);
+  });
 
-    expect(text).toBe("summary");
-    expect(text).not.toContain("image-binary");
-    expect(text).not.toContain("abc123");
-    expect(text).not.toContain("def456");
-    expect(text).not.toContain("audio-binary");
+  it.each([8_000])("preserves explicit continuation text beyond %i UTF-16 units", (length) => {
+    const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
+    const blocks = [{ type: "text", text }];
+    expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
+    expect(extractToolResultText(blocks)).toBe(text);
+  });
+
+  it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
+    const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
+    const tail = "  final explicit block 😀  ";
+    const result = extractToolResultText(
+      [
+        {
+          type: "json",
+          bytes: [1, 2, 3],
+          encrypted_content: "opaque-ciphertext",
+          preview: "data:image/png;base64,AAECAwQFBgc=",
+          value: "x".repeat(5_000),
+        },
+        { type: "text", text: explicit },
+        { type: "json", value: "😀".repeat(5_000) },
+        { type: "text", text: tail },
+      ],
+      { includeStructured: true },
+    );
+
+    const prefix = `${explicit}\n${tail}\n`;
+    expect(result.startsWith(prefix)).toBe(true);
+    const structured = result.slice(prefix.length);
+    expect(structured.length).toBeLessThanOrEqual(8_000 + "\n…(truncated)…".length);
+    expect(structured).toContain("…(truncated)…");
+    expect(structured).toContain("[omitted bytes]");
+    expect(structured).toContain("[omitted encrypted_content]");
+    expect(structured).toContain("[inline data URI:");
+    expect(structured).not.toContain("opaque-ciphertext");
+    expect(structured).not.toContain("AAECAwQFBgc=");
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("omits MIME-tagged binary data while preserving textual resource data", () => {
@@ -56,52 +92,6 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"data":"[binary data omitted: 12 chars]"');
     expect(text).toContain('{\\"ok\\":true}');
     expect(text).not.toContain("AAECAwQFBgc=");
-  });
-
-  it("redacts inline data URIs without touching ordinary data-colon prose", () => {
-    const text = extractToolResultText([
-      {
-        type: "json",
-        value: {
-          note: "metadata:ready",
-          prose: "data: is ordinary prose",
-          preview: "thumbnail=data:image/png;base64,abcdef done",
-        },
-      },
-    ]);
-
-    expect(text).toContain("metadata:ready");
-    expect(text).toContain("data: is ordinary prose");
-    expect(text).toContain("[inline data URI:");
-    expect(text).not.toContain("abcdef");
-  });
-
-  it("omits opaque or binary structured fields", () => {
-    const text = extractToolResultText([
-      {
-        type: "json",
-        encrypted_content: "ciphertext",
-        bytes: [1, 2, 3],
-        visible: "safe-value",
-      },
-    ]);
-
-    expect(text).toContain('"encrypted_content":"[omitted encrypted_content]"');
-    expect(text).toContain('"bytes":"[omitted bytes]"');
-    expect(text).toContain('"visible":"safe-value"');
-    expect(text).not.toContain("ciphertext");
-  });
-
-  it("uses structured replay only as a no-text fallback without capping explicit text", () => {
-    const textTail = "explicit-tail-marker";
-    const text = extractToolResultText([
-      { type: "text", text: `${"x".repeat(8_200)}${textTail}` },
-      { type: "json", internal: "extra structured detail" },
-    ]);
-
-    expect(text).toContain(textTail);
-    expect(text).not.toContain("…(truncated)…");
-    expect(text).not.toContain("extra structured detail");
   });
 
   it("truncates structured fallback text before provider replay", () => {
@@ -155,14 +145,6 @@ describe("describeToolResultMediaPlaceholder", () => {
     expect(describeToolResultMediaPlaceholder(husks)).toBeUndefined();
     expect(
       describeUnsupportedToolResultMedia(husks, { images: true, audio: false }),
-    ).toBeUndefined();
-  });
-
-  it("does not treat text MIME metadata as attached media", () => {
-    expect(
-      describeToolResultMediaPlaceholder([
-        { type: "text", text: "actual tool output", mimeType: "image/svg+xml" },
-      ]),
     ).toBeUndefined();
   });
 });

@@ -1,7 +1,6 @@
-// Discord tests cover security audit plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 
 type DiscordAccountConfig = ResolvedDiscordAccount["config"];
@@ -141,56 +140,44 @@ describe("Discord security audit findings", () => {
   });
 
   it.each([
+    { name: "flags missing guild user allowlists", dm: undefined, expectFinding: true },
     {
-      name: "flags missing guild user allowlists",
-      cfg: {
-        commands: { native: true },
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { enabled: true },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      name: "does not flag when dm.allowFrom includes a Discord snowflake id",
+      dm: { allowFrom: ["387380367612706819"] },
+      expectFinding: false,
+    },
+    {
+      name: "respects an empty canonical allowlist over nested aliases",
+      allowFrom: [],
+      dm: { allowFrom: ["387380367612706819"] },
       expectFinding: true,
     },
     {
-      name: "does not flag when dm.allowFrom includes a Discord snowflake id",
-      cfg: {
-        commands: { native: true },
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            dm: { allowFrom: ["387380367612706819"] },
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { enabled: true },
-                },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      name: "does not flag a canonical account allowFrom list",
+      allowFrom: ["387380367612706819"],
+      dm: undefined,
       expectFinding: false,
     },
-  ])("$name", async (testCase) => {
-    const discordConfig = testCase.cfg.channels?.discord;
+  ])("$name", async ({ dm, allowFrom, expectFinding }) => {
+    const cfg = {
+      commands: { native: true },
+      channels: {
+        discord: {
+          enabled: true,
+          token: "t",
+          dm,
+          allowFrom,
+          groupPolicy: "allowlist",
+          guilds: { "123": { channels: { general: { enabled: true } } } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const discordConfig = cfg.channels?.discord;
     if (!discordConfig) {
       throw new Error("discord config required");
     }
     const findings = await collectFindings({
-      cfg: testCase.cfg,
+      cfg,
       config: discordConfig,
     });
 
@@ -198,7 +185,7 @@ describe("Discord security audit findings", () => {
       findings.some(
         (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
       ),
-    ).toBe(testCase.expectFinding);
+    ).toBe(expectFinding);
   });
 
   it.each([
@@ -207,7 +194,7 @@ describe("Discord security audit findings", () => {
       config: {
         enabled: true,
         token: "t",
-        allowFrom: ["Alice#1234", "<@123456789012345678>"],
+        allowFrom: ["Alice#1234", " Alice#1234 ", "second.operator", "<@123456789012345678>"],
         guilds: {
           "123": {
             users: ["trusted.operator"],
@@ -222,12 +209,21 @@ describe("Discord security audit findings", () => {
       storeAllowFrom: ["team.owner"],
       expectNameBasedSeverity: "warn",
       detailIncludes: [
-        "channels.discord.allowFrom:Alice#1234",
-        "channels.discord.guilds.123.users:trusted.operator",
-        "channels.discord.guilds.123.channels.general.users:security-team",
-        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+        "Found 5 name/tag entries",
+        "channels.discord.allowFrom (2)",
+        "channels.discord.guilds.123.users (1)",
+        "channels.discord.guilds.123.channels.general.users (1)",
+        "Discord pairing store (1)",
       ],
-      detailExcludes: ["<@123456789012345678>"],
+      detailExcludes: [
+        "Alice#1234",
+        "second.operator",
+        "trusted.operator",
+        "security-team",
+        "team.owner",
+        "<@123456789012345678>",
+        "987654321098765432",
+      ],
     },
     {
       name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
@@ -239,6 +235,7 @@ describe("Discord security audit findings", () => {
       } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "info",
       detailIncludes: ["out-of-scope"],
+      detailExcludes: ["Alice#1234"],
     },
     {
       name: "audits name-based allowlists on non-default Discord accounts",
@@ -251,7 +248,8 @@ describe("Discord security audit findings", () => {
         allowFrom: ["Alice#1234"],
       } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "warn",
-      detailIncludes: ["channels.discord.accounts.beta.allowFrom:Alice#1234"],
+      detailIncludes: ["channels.discord.accounts.beta.allowFrom (1)"],
+      detailExcludes: ["Alice#1234"],
     },
     {
       name: "does not warn when Discord allowlists use ID-style entries only",
@@ -302,7 +300,7 @@ describe("Discord security audit findings", () => {
         expect(nameBasedFinding.detail).toContain(snippet);
       }
       for (const snippet of testCase.detailExcludes ?? []) {
-        expect(nameBasedFinding.detail).not.toContain(snippet);
+        expect(JSON.stringify(findings)).not.toContain(snippet);
       }
     }
   });

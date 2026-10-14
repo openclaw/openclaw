@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const PENDING_DELIVERY_NOTICE =
@@ -26,17 +26,16 @@ vi.mock("../../infra/outbound/delivery-queue-storage.js", async (importOriginal)
 });
 
 describe("pending delivery notice", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-notice-");
   let storePath: string;
   const sessionKey = "agent:main:telegram:direct:chat-1";
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    sendRecoveryNotice.mockResolvedValue({ suppressed: false });
+    sendRecoveryNotice.mockReset().mockResolvedValue({ suppressed: false });
     findDeliveryIntentOwner.mockReturnValue(null);
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-notice-"));
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -59,11 +58,7 @@ describe("pending delivery notice", () => {
     );
   });
 
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it("clears debt only after the stable notice is acknowledged", async () => {
+  it("retains acknowledgment after the stable notice is recorded", async () => {
     await deliverPendingDeliveryNotice(sessionKey, storePath);
 
     expect(sendRecoveryNotice).toHaveBeenCalledWith({
@@ -80,7 +75,10 @@ describe("pending delivery notice", () => {
         text: PENDING_DELIVERY_NOTICE,
       }),
     );
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+      state: "acknowledged",
+      intentId: "intent-1",
+    });
   });
 
   it("does not cross an account or thread route", async () => {
@@ -133,7 +131,7 @@ describe("pending delivery notice", () => {
     });
   });
 
-  it("records and clears debt when the stable notice receipt completed before an error", async () => {
+  it("records acknowledgment when the stable notice receipt completed before an error", async () => {
     sendRecoveryNotice.mockRejectedValue(new Error("post-ack failure"));
     findDeliveryIntentOwner.mockReturnValue({ status: "completed" });
 
@@ -145,7 +143,10 @@ describe("pending delivery notice", () => {
         text: PENDING_DELIVERY_NOTICE,
       }),
     );
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+      state: "acknowledged",
+      intentId: "intent-1",
+    });
   });
 
   it("retains owed debt while the durable notice remains pending", async () => {
@@ -158,5 +159,56 @@ describe("pending delivery notice", () => {
       intentId: "intent-1",
       state: "owed",
     });
+  });
+  it.each([false, true])(
+    "keeps acknowledgment when suppression finishes first=%s",
+    async (suppressedFirst) => {
+      const first = createDeferred<{ suppressed: boolean }>();
+      const second = createDeferred<{ suppressed: boolean }>();
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      sendRecoveryNotice
+        .mockImplementationOnce(() => {
+          firstStarted.resolve();
+          return first.promise;
+        })
+        .mockImplementationOnce(() => {
+          secondStarted.resolve();
+          return second.promise;
+        });
+      const attempts = [
+        deliverPendingDeliveryNotice(sessionKey, storePath),
+        deliverPendingDeliveryNotice(sessionKey, storePath),
+      ];
+      await Promise.all([firstStarted.promise, secondStarted.promise]);
+      first.resolve({ suppressed: suppressedFirst });
+      await Promise.race(attempts);
+      second.resolve({ suppressed: !suppressedFirst });
+      await Promise.all(attempts);
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        "acknowledged",
+      );
+      expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("leaves a replacement notice owed when an earlier send finishes", async () => {
+    const sent = createDeferred<{ suppressed: boolean }>();
+    const sendStarted = createDeferred();
+    sendRecoveryNotice.mockImplementationOnce(() => {
+      sendStarted.resolve();
+      return sent.promise;
+    });
+    const attempt = deliverPendingDeliveryNotice(sessionKey, storePath);
+    await sendStarted.promise;
+    const entry = loadSessionEntry({ sessionKey, storePath })!;
+    const replacement = { ...entry.pendingDeliveryNotice!, intentId: "intent-2" };
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { ...entry, pendingDeliveryNotice: replacement },
+    );
+    sent.resolve({ suppressed: false });
+    await attempt;
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toEqual(replacement);
   });
 });

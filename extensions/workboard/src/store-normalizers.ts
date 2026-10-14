@@ -15,20 +15,14 @@ import {
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
   type WorkboardAttachment,
-  type WorkboardAttemptStatus,
   type WorkboardAutomation,
-  type WorkboardBoardMetadata,
   type WorkboardClaim,
   type WorkboardComment,
   type WorkboardDiagnostic,
   type WorkboardDiagnosticAction,
   type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
-  type WorkboardEventKind,
   type WorkboardExecution,
-  type WorkboardExecutionMode,
-  type WorkboardExecutionStatus,
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardLaunchState,
@@ -36,10 +30,8 @@ import {
   type WorkboardNotification,
   type WorkboardNotificationKind,
   type WorkboardNotificationSubscription,
-  type WorkboardOrchestrationSettings,
   type WorkboardPriority,
   type WorkboardProof,
-  type WorkboardProofStatus,
   type WorkboardRunAttempt,
   type WorkboardStatus,
   type WorkboardTemplateId,
@@ -47,8 +39,17 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveIntegerOption,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { definedFields } from "../record-fields.js";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
@@ -65,9 +66,9 @@ import {
 } from "./store-constants.js";
 import type {
   WorkboardAttachmentInput,
-  WorkboardBoardInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
+  WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
@@ -85,93 +86,6 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
 
 export function normalizeBoardIdRequired(value: unknown): string {
   return normalizeBoardId(value) ?? "default";
-}
-
-export function normalizeBoardMetadata(
-  input: WorkboardBoardInput,
-  fallback: WorkboardBoardMetadata | undefined,
-  now = Date.now(),
-): WorkboardBoardMetadata {
-  const id = normalizeBoardId(input.id, fallback?.id) ?? "default";
-  const name = normalizeBoundedString(input.name, fallback?.name, 120, "board name");
-  const description = normalizeBoundedString(
-    input.description,
-    fallback?.description,
-    1000,
-    "board description",
-  );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
-  let automationJobId = fallback?.automationJobId;
-  if (Object.hasOwn(input, "automationJobId")) {
-    automationJobId = normalizeOptionalString(input.automationJobId);
-    if (!automationJobId) {
-      throw new Error("automation job id must be a non-empty string.");
-    }
-    if (automationJobId.length > 128) {
-      throw new Error("automation job id must be 128 characters or fewer.");
-    }
-  }
-  const defaultWorkspace = Object.hasOwn(input, "defaultWorkspace")
-    ? normalizeWorkspace(input.defaultWorkspace, fallback?.defaultWorkspace)
-    : fallback?.defaultWorkspace;
-  const orchestration = Object.hasOwn(input, "orchestration")
-    ? normalizeOrchestration(input.orchestration, fallback?.orchestration)
-    : fallback?.orchestration;
-  const archivedAt = Object.hasOwn(input, "archived")
-    ? input.archived === false
-      ? undefined
-      : now
-    : fallback?.archivedAt;
-  return {
-    id,
-    ...(name ? { name } : {}),
-    ...(description ? { description } : {}),
-    ...(icon ? { icon } : {}),
-    ...(color ? { color } : {}),
-    ...(automationJobId ? { automationJobId } : {}),
-    ...(defaultWorkspace ? { defaultWorkspace } : {}),
-    ...(orchestration ? { orchestration } : {}),
-    createdAt: fallback?.createdAt ?? now,
-    updatedAt: now,
-    ...(archivedAt ? { archivedAt } : {}),
-  };
-}
-
-function normalizeOrchestration(
-  value: unknown,
-  fallback?: WorkboardOrchestrationSettings,
-): WorkboardOrchestrationSettings | undefined {
-  if (!isRecord(value)) {
-    return fallback;
-  }
-  const record = value;
-  const autoDecompose =
-    typeof record.autoDecompose === "boolean" ? record.autoDecompose : fallback?.autoDecompose;
-  const autoDecomposePerDispatch =
-    typeof record.autoDecomposePerDispatch === "number" &&
-    Number.isFinite(record.autoDecomposePerDispatch)
-      ? Math.max(1, Math.min(20, Math.trunc(record.autoDecomposePerDispatch)))
-      : fallback?.autoDecomposePerDispatch;
-  const defaultAssignee = normalizeBoundedString(
-    record.defaultAssignee,
-    fallback?.defaultAssignee,
-    120,
-    "default assignee",
-  );
-  const orchestratorProfile = normalizeBoundedString(
-    record.orchestratorProfile,
-    fallback?.orchestratorProfile,
-    120,
-    "orchestrator profile",
-  );
-  const next: WorkboardOrchestrationSettings = {
-    ...(autoDecompose !== undefined ? { autoDecompose } : {}),
-    ...(autoDecomposePerDispatch ? { autoDecomposePerDispatch } : {}),
-    ...(defaultAssignee ? { defaultAssignee } : {}),
-    ...(orchestratorProfile ? { orchestratorProfile } : {}),
-  };
-  return Object.keys(next).length ? next : undefined;
 }
 
 function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[] | undefined {
@@ -197,48 +111,26 @@ function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[]
 
 export function normalizeNotificationSubscription(
   input: WorkboardNotificationSubscribeInput,
-  fallback?: WorkboardNotificationSubscription,
-  now = Date.now(),
 ): WorkboardNotificationSubscription {
-  const boardId = normalizeBoardId(input.boardId, fallback?.boardId) ?? "default";
-  const cardId = normalizeBoundedString(input.cardId, fallback?.cardId, 120, "card id");
-  const sessionKey = normalizeBoundedString(
-    input.sessionKey,
-    fallback?.sessionKey,
-    240,
-    "session key",
-  );
-  const runId = normalizeBoundedString(input.runId, fallback?.runId, 160, "run id");
-  const target = normalizeBoundedString(input.target, fallback?.target, 240, "notification target");
+  const now = Date.now();
+  const boardId = normalizeBoardId(input.boardId) ?? "default";
+  const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
+  const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+  const target = normalizeBoundedString(input.target, undefined, 240, "notification target");
   if (!cardId && !sessionKey && !runId && !target) {
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
-  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
-  if (fallback) {
-    if (fallback.lastEventAt) {
-      preservedFields.lastEventAt = fallback.lastEventAt;
-    }
-    if (fallback.lastEventId) {
-      preservedFields.lastEventId = fallback.lastEventId;
-    }
-    if (fallback.lastEventSequence) {
-      preservedFields.lastEventSequence = fallback.lastEventSequence;
-    }
-    if (fallback.deliveredEventIds?.length) {
-      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
-    }
-  }
   return {
-    id: fallback?.id ?? randomUUID(),
+    id: randomUUID(),
     boardId,
     ...(cardId ? { cardId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...preservedFields,
-    createdAt: fallback?.createdAt ?? now,
+    createdAt: now,
     updatedAt: now,
   };
 }
@@ -283,50 +175,19 @@ export function normalizeBoundedString(
   return normalized;
 }
 
+export function capText(value: string | undefined, max: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
+}
+
 export function normalizeStatus(value: unknown, fallback: WorkboardStatus): WorkboardStatus {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_STATUSES as readonly string[]).includes(value)) {
-    return value as WorkboardStatus;
-  }
-  throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+  return normalizeEnumValue(value, WORKBOARD_STATUSES, fallback, "status");
 }
 
 export function normalizePriority(value: unknown, fallback: WorkboardPriority): WorkboardPriority {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_PRIORITIES as readonly string[]).includes(value)) {
-    return value as WorkboardPriority;
-  }
-  throw new Error(`priority must be one of: ${WORKBOARD_PRIORITIES.join(", ")}.`);
-}
-
-export function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
-  if (value == null) {
-    return fallback;
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("labels must be an array or comma-separated string.");
-  }
-  const labels: string[] = [];
-  for (const entry of entries) {
-    const label = normalizeOptionalString(entry);
-    if (!label || labels.includes(label)) {
-      continue;
-    }
-    if (label.length > 40) {
-      throw new Error("labels must be 40 characters or fewer.");
-    }
-    labels.push(label);
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
+  return normalizeEnumValue(value, WORKBOARD_PRIORITIES, fallback, "priority");
 }
 
 export function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
@@ -354,10 +215,6 @@ export function normalizeStringList(value: unknown, fieldName: string, maxLength
   return values;
 }
 
-export function normalizePosition(value: unknown, fallback: number): number {
-  return resolveNonNegativeIntegerOption(value, fallback);
-}
-
 function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
   if (value == null || value === "") {
     return undefined;
@@ -368,14 +225,13 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
   return Math.max(1, Math.trunc(value));
 }
 
-function normalizeWorkspace(
-  value: unknown,
+export function normalizeWorkspace(
+  record: unknown,
   fallback?: WorkboardWorkspace,
 ): WorkboardWorkspace | undefined {
-  if (!isRecord(value)) {
+  if (!isRecord(record)) {
     return fallback;
   }
-  const record = value;
   const kind =
     record.kind === "scratch" || record.kind === "dir" || record.kind === "worktree"
       ? record.kind
@@ -421,72 +277,55 @@ function normalizeWorkspace(
 export function normalizeAutomation(
   value: unknown,
   fallback: WorkboardAutomation = {},
-  options: { allowLaunchState?: boolean } = {},
+  options: { launch?: WorkboardLaunchState } = {},
 ): WorkboardAutomation | undefined {
   const record = isRecord(value) ? value : {};
-  const tenant = normalizeBoundedString(record.tenant, fallback.tenant, 80, "tenant");
-  const boardId = Object.hasOwn(record, "boardId")
-    ? normalizeBoardId(record.boardId, fallback.boardId)
-    : fallback.boardId;
-  const createdByCardId = normalizeBoundedString(
-    record.createdByCardId,
-    fallback.createdByCardId,
-    120,
-    "created by card id",
-  );
-  const idempotencyKey = normalizeBoundedString(
-    record.idempotencyKey,
-    fallback.idempotencyKey,
-    160,
-    "idempotency key",
-  );
-  const summary = normalizeBoundedString(record.summary, fallback.summary, 2000, "summary");
-  const skills = Object.hasOwn(record, "skills")
-    ? normalizeStringList(record.skills, "skills")
-    : fallback.skills;
-  const createdCardIds = Object.hasOwn(record, "createdCardIds")
-    ? normalizeStringList(record.createdCardIds, "created card ids", 120)
-    : fallback.createdCardIds;
-  const scheduledAt = Object.hasOwn(record, "scheduledAt")
-    ? normalizeTimestamp(record.scheduledAt, 0) || undefined
-    : fallback.scheduledAt;
-  const maxRuntimeSeconds = Object.hasOwn(record, "maxRuntimeSeconds")
-    ? normalizePositiveInteger(record.maxRuntimeSeconds, "max runtime seconds")
-    : fallback.maxRuntimeSeconds;
-  const maxRetries = Object.hasOwn(record, "maxRetries")
-    ? normalizePositiveInteger(record.maxRetries, "max retries")
-    : fallback.maxRetries;
-  const dispatchCount = Object.hasOwn(record, "dispatchCount")
-    ? normalizeTimestamp(record.dispatchCount, 0) || undefined
-    : fallback.dispatchCount;
-  const lastDispatchAt = Object.hasOwn(record, "lastDispatchAt")
-    ? normalizeTimestamp(record.lastDispatchAt, 0) || undefined
-    : fallback.lastDispatchAt;
-  const workspace = Object.hasOwn(record, "workspace")
-    ? normalizeWorkspace(record.workspace, fallback.workspace)
-    : fallback.workspace;
-  // Raw metadata preserves host-issued authority/state but cannot mint or widen either.
-  const workspaceAccess = fallback.workspaceAccess;
-  const launch = normalizeLaunchState(
-    options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
-  );
-  const next = removeUndefinedAutomationFields({
-    ...(tenant ? { tenant } : {}),
-    ...(boardId ? { boardId } : {}),
-    ...(createdByCardId ? { createdByCardId } : {}),
-    ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(skills?.length ? { skills } : {}),
-    ...(workspace ? { workspace } : {}),
-    ...(workspaceAccess ? { workspaceAccess } : {}),
-    ...(maxRuntimeSeconds ? { maxRuntimeSeconds } : {}),
-    ...(maxRetries ? { maxRetries } : {}),
-    ...(scheduledAt ? { scheduledAt } : {}),
-    ...(summary ? { summary } : {}),
-    ...(createdCardIds?.length ? { createdCardIds } : {}),
-    ...(dispatchCount ? { dispatchCount } : {}),
-    ...(lastDispatchAt ? { lastDispatchAt } : {}),
-    ...(launch ? { launch } : {}),
-  });
+  const timestamp = (key: "scheduledAt" | "dispatchCount" | "lastDispatchAt") =>
+    Object.hasOwn(record, key) ? normalizeTimestamp(record[key], 0) : fallback[key];
+  const strings = (key: "skills" | "createdCardIds", name: string, limit = 80) =>
+    Object.hasOwn(record, key) ? normalizeStringList(record[key], name, limit) : fallback[key];
+  const next = {
+    tenant: normalizeBoundedString(record.tenant, fallback.tenant, 80, "tenant"),
+    boardId: Object.hasOwn(record, "boardId")
+      ? normalizeBoardId(record.boardId, fallback.boardId)
+      : fallback.boardId,
+    createdByCardId: normalizeBoundedString(
+      record.createdByCardId,
+      fallback.createdByCardId,
+      120,
+      "created by card id",
+    ),
+    idempotencyKey: normalizeBoundedString(
+      record.idempotencyKey,
+      fallback.idempotencyKey,
+      160,
+      "idempotency key",
+    ),
+    skills: strings("skills", "skills"),
+    workspace: Object.hasOwn(record, "workspace")
+      ? normalizeWorkspace(record.workspace, fallback.workspace)
+      : fallback.workspace,
+    // Raw metadata preserves host-issued authority/state but cannot mint or widen either.
+    workspaceAccess: fallback.workspaceAccess,
+    maxRuntimeSeconds: Object.hasOwn(record, "maxRuntimeSeconds")
+      ? normalizePositiveInteger(record.maxRuntimeSeconds, "max runtime seconds")
+      : fallback.maxRuntimeSeconds,
+    maxRetries: Object.hasOwn(record, "maxRetries")
+      ? normalizePositiveInteger(record.maxRetries, "max retries")
+      : fallback.maxRetries,
+    scheduledAt: timestamp("scheduledAt") || undefined,
+    summary: normalizeBoundedString(record.summary, fallback.summary, 2000, "summary"),
+    createdCardIds: strings("createdCardIds", "created card ids", 120),
+    dispatchCount: timestamp("dispatchCount") || undefined,
+    lastDispatchAt: timestamp("lastDispatchAt") || undefined,
+    launch: options.launch ? normalizeLaunchState(options.launch) : fallback.launch,
+  };
+  // Legacy imports can retain empty workspace or authority objects.
+  for (const [key, entry] of Object.entries(next)) {
+    if (!entry || (typeof entry === "object" && Object.keys(entry).length === 0)) {
+      Reflect.deleteProperty(next, key);
+    }
+  }
   return Object.keys(next).length ? next : undefined;
 }
 
@@ -496,17 +335,12 @@ function normalizeLaunchTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized && normalized.length <= maxLength ? normalized : undefined;
-}
-
-function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
+export function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
+  const requestedSessionKey = normalizeBoundedOptionalString(value.requestedSessionKey, 240);
+  const provisionalRunId = normalizeBoundedOptionalString(value.provisionalRunId, 160);
   const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
   if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
     return undefined;
@@ -517,8 +351,8 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "accepted") {
     const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
-    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
+    const acceptedSessionKey = normalizeBoundedOptionalString(value.acceptedSessionKey, 240);
+    const acceptedRunId = normalizeBoundedOptionalString(value.acceptedRunId, 160);
     return acceptedAt === undefined || !acceptedSessionKey
       ? undefined
       : {
@@ -531,7 +365,7 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "failed") {
     const failedAt = normalizeLaunchTimestamp(value.failedAt);
-    const reason = normalizeLaunchString(value.reason, 800);
+    const reason = normalizeBoundedOptionalString(value.reason, 800);
     return failedAt === undefined || !reason
       ? undefined
       : { phase: "failed", ...identity, failedAt, reason };
@@ -550,100 +384,42 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-function normalizeExecutionMode(
+function normalizeEnumValue<T extends string, TFallback extends T | undefined>(
   value: unknown,
-  fallback: WorkboardExecutionMode,
-): WorkboardExecutionMode {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(value as WorkboardExecutionMode)
-  ) {
-    return value as WorkboardExecutionMode;
+  allowed: readonly T[],
+  fallback: TFallback,
+  fieldName?: string,
+): T | TFallback {
+  if (typeof value === "string" && allowed.includes(value as T)) {
+    return value as T;
   }
-  return fallback;
-}
-
-function normalizeExecutionStatus(
-  value: unknown,
-  fallback: WorkboardExecutionStatus,
-): WorkboardExecutionStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_STATUSES.includes(value as WorkboardExecutionStatus)
-  ) {
-    return value as WorkboardExecutionStatus;
-  }
-  return fallback;
-}
-
-function normalizeAttemptStatus(
-  value: unknown,
-  fallback: WorkboardAttemptStatus,
-): WorkboardAttemptStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_ATTEMPT_STATUSES.includes(value as WorkboardAttemptStatus)
-  ) {
-    return value as WorkboardAttemptStatus;
+  if (fieldName && typeof value === "string" && value.trim()) {
+    throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}.`);
   }
   return fallback;
 }
 
 export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): WorkboardLinkType {
-  if (typeof value === "string" && WORKBOARD_LINK_TYPES.includes(value as WorkboardLinkType)) {
-    return value as WorkboardLinkType;
-  }
-  return fallback;
-}
-
-function normalizeProofStatus(
-  value: unknown,
-  fallback: WorkboardProofStatus,
-): WorkboardProofStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_PROOF_STATUSES.includes(value as WorkboardProofStatus)
-  ) {
-    return value as WorkboardProofStatus;
-  }
-  return fallback;
+  return normalizeEnumValue(value, WORKBOARD_LINK_TYPES, fallback);
 }
 
 export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undefined {
-  return typeof value === "string" && WORKBOARD_TEMPLATE_IDS.includes(value as WorkboardTemplateId)
-    ? (value as WorkboardTemplateId)
-    : undefined;
+  return normalizeEnumValue(value, WORKBOARD_TEMPLATE_IDS, undefined);
 }
 
 export function normalizeTimestamp(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
+  return resolveOptionalIntegerOption(value, { min: 0 }) ?? fallback;
 }
 
-function normalizeEvent(value: unknown): WorkboardEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeEvent(record: Record<string, unknown>): WorkboardEvent | null {
   const id = normalizeOptionalString(record.id);
-  const kind = WORKBOARD_EVENT_KINDS.includes(record.kind as WorkboardEventKind)
-    ? (record.kind as WorkboardEventKind)
-    : null;
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_EVENT_KINDS, undefined);
   const at = normalizeTimestamp(record.at, 0);
   if (!id || !kind || !at) {
     return null;
   }
-  const fromStatus =
-    typeof record.fromStatus === "string" &&
-    WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
-      ? (record.fromStatus as WorkboardStatus)
-      : undefined;
-  const toStatus =
-    typeof record.toStatus === "string" &&
-    WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
-      ? (record.toStatus as WorkboardStatus)
-      : undefined;
+  const fromStatus = normalizeEnumValue(record.fromStatus, WORKBOARD_STATUSES, undefined);
+  const toStatus = normalizeEnumValue(record.toStatus, WORKBOARD_STATUSES, undefined);
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
   return {
@@ -658,68 +434,51 @@ function normalizeEvent(value: unknown): WorkboardEvent | null {
 }
 
 export function normalizeEvents(value: unknown): WorkboardEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(normalizeEvent)
-    .filter((event): event is WorkboardEvent => event !== null)
-    .slice(-MAX_CARD_EVENTS);
+  return normalizeList(value, normalizeEvent, MAX_CARD_EVENTS) ?? [];
 }
 
-function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt | null {
   const id = normalizeOptionalString(record.id);
   const startedAt = normalizeTimestamp(record.startedAt, 0);
   if (!id || !startedAt) {
     return null;
   }
-  const endedAt = normalizeTimestamp(record.endedAt, 0);
-  const sessionKey = normalizeOptionalString(record.sessionKey);
-  const runId = normalizeOptionalString(record.runId);
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
   const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
-  return {
+  return definedFields({
     id,
-    status: normalizeAttemptStatus(record.status, "running"),
+    status: normalizeEnumValue(record.status, WORKBOARD_ATTEMPT_STATUSES, "running"),
     startedAt,
-    ...(endedAt ? { endedAt } : {}),
-    ...(engine ? { engine } : {}),
-    ...(typeof record.mode === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
-      ? { mode: record.mode as WorkboardExecutionMode }
-      : {}),
-    ...(model ? { model } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(runId ? { runId } : {}),
-    ...(error ? { error } : {}),
-  };
+    endedAt: normalizeTimestamp(record.endedAt, 0) || undefined,
+    engine,
+    mode: normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, undefined),
+    model,
+    sessionKey: normalizeOptionalString(record.sessionKey),
+    runId: normalizeOptionalString(record.runId),
+    error,
+  });
 }
 
-function normalizeComment(value: unknown): WorkboardComment | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeComment(record: Record<string, unknown>): WorkboardComment | null {
   const id = normalizeOptionalString(record.id);
   const body = normalizeBoundedString(record.body, undefined, 2000, "comment body");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !body || !createdAt) {
     return null;
   }
-  const updatedAt = normalizeTimestamp(record.updatedAt, 0);
-  return { id, body, createdAt, ...(updatedAt ? { updatedAt } : {}) };
+  return definedFields({
+    id,
+    body,
+    createdAt,
+    updatedAt: normalizeTimestamp(record.updatedAt, 0) || undefined,
+  });
 }
 
-function normalizeLink(value: unknown): WorkboardLink | null {
-  if (!isRecord(value)) {
+function normalizeLink(record: unknown): WorkboardLink | null {
+  if (!isRecord(record)) {
     return null;
   }
-  const record = value;
   const id = normalizeOptionalString(record.id);
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !createdAt) {
@@ -731,50 +490,33 @@ function normalizeLink(value: unknown): WorkboardLink | null {
   if (!targetCardId && !url) {
     return null;
   }
-  return {
+  return definedFields({
     id,
     type: normalizeLinkType(record.type, "relates_to"),
     createdAt,
-    ...(targetCardId ? { targetCardId } : {}),
-    ...(title ? { title } : {}),
-    ...(url ? { url } : {}),
-  };
+    targetCardId,
+    title,
+    url,
+  });
 }
 
 function isDependencyLink(link: WorkboardLink): boolean {
   return link.type === "parent" || link.type === "child";
 }
 
-function normalizeProof(value: unknown): WorkboardProof | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeProof(record: Record<string, unknown>): WorkboardProof | null {
   const id = normalizeOptionalString(record.id);
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !createdAt) {
     return null;
   }
-  const label = normalizeBoundedString(record.label, undefined, 160, "proof label");
-  const command = normalizeBoundedString(record.command, undefined, 1000, "proof command");
-  const url = normalizeBoundedString(record.url, undefined, 2000, "proof URL");
-  const note = normalizeBoundedString(record.note, undefined, 2000, "proof note");
-  return {
-    id,
-    status: normalizeProofStatus(record.status, "unknown"),
-    createdAt,
-    ...(label ? { label } : {}),
-    ...(command ? { command } : {}),
-    ...(url ? { url } : {}),
-    ...(note ? { note } : {}),
-  };
+  return normalizeProofInput(record, createdAt, id);
 }
 
-export function normalizeArtifact(value: unknown): WorkboardArtifact | null {
-  if (!isRecord(value)) {
+export function normalizeArtifact(record: unknown): WorkboardArtifact | null {
+  if (!isRecord(record)) {
     return null;
   }
-  const record = value;
   const id = normalizeOptionalString(record.id) ?? randomUUID();
   const createdAt = normalizeTimestamp(record.createdAt, Date.now());
   const label = normalizeBoundedString(record.label, undefined, 160, "artifact label");
@@ -784,29 +526,22 @@ export function normalizeArtifact(value: unknown): WorkboardArtifact | null {
   if (!url && !artifactPath) {
     return null;
   }
-  return {
+  return definedFields({
     id,
     createdAt,
-    ...(label ? { label } : {}),
-    ...(url ? { url } : {}),
-    ...(artifactPath ? { path: artifactPath } : {}),
-    ...(mimeType ? { mimeType } : {}),
-  };
+    label,
+    url,
+    path: artifactPath,
+    mimeType,
+  });
 }
 
-function normalizeAttachment(value: unknown): WorkboardAttachment | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeAttachment(record: Record<string, unknown>): WorkboardAttachment | null {
   const id = normalizeOptionalString(record.id);
   const cardId = normalizeBoundedString(record.cardId, undefined, 120, "card id");
   const fileName = normalizeBoundedString(record.fileName, undefined, 240, "attachment file name");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
-  const byteSize =
-    typeof record.byteSize === "number" && Number.isFinite(record.byteSize)
-      ? Math.max(0, Math.trunc(record.byteSize))
-      : 0;
+  const byteSize = normalizeTimestamp(record.byteSize, 0);
   if (!id || !cardId || !fileName || !createdAt || byteSize <= 0) {
     return null;
   }
@@ -823,17 +558,22 @@ function normalizeAttachment(value: unknown): WorkboardAttachment | null {
   };
 }
 
-function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog | null {
   const id = normalizeOptionalString(record.id);
   const message = normalizeBoundedString(record.message, undefined, 800, "worker log message");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !message || !createdAt) {
     return null;
   }
+  return workerLogEntry(record, message, createdAt, id);
+}
+
+export function workerLogEntry(
+  record: WorkboardWorkerLogInput,
+  message: string,
+  createdAt: number,
+  id?: string,
+): WorkboardWorkerLog {
   const level =
     record.level === "warning" || record.level === "error" || record.level === "info"
       ? record.level
@@ -841,7 +581,7 @@ function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
   const runId = normalizeBoundedString(record.runId, undefined, 160, "run id");
   return {
-    id,
+    id: id ?? randomUUID(),
     level,
     message,
     createdAt,
@@ -851,21 +591,17 @@ function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
 }
 
 function normalizeWorkerProtocol(
-  value: unknown,
+  record: unknown,
   fallback?: WorkboardWorkerProtocol,
 ): WorkboardWorkerProtocol | undefined {
-  if (!isRecord(value)) {
+  if (!isRecord(record)) {
     return fallback;
   }
-  const record = value;
-  const state =
-    record.state === "idle" ||
-    record.state === "running" ||
-    record.state === "completed" ||
-    record.state === "blocked" ||
-    record.state === "violated"
-      ? record.state
-      : fallback?.state;
+  const state = normalizeEnumValue(
+    record.state,
+    ["idle", "running", "completed", "blocked", "violated"],
+    fallback?.state,
+  );
   if (!state) {
     return undefined;
   }
@@ -923,11 +659,10 @@ export function normalizeAttachmentInput(
   return { attachment, contentBase64 };
 }
 
-function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardClaim | undefined {
-  if (!isRecord(value)) {
+function normalizeClaim(record: unknown, fallback?: WorkboardClaim): WorkboardClaim | undefined {
+  if (!isRecord(record)) {
     return fallback;
   }
-  const record = value;
   const ownerId = normalizeBoundedString(record.ownerId, fallback?.ownerId, 120, "claim owner");
   const token = normalizeBoundedString(record.token, fallback?.token, 160, "claim token");
   const claimedAt = normalizeTimestamp(record.claimedAt, fallback?.claimedAt ?? Date.now());
@@ -948,11 +683,10 @@ function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardCla
   };
 }
 
-function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
-  if (!isRecord(value)) {
+function normalizeDiagnosticAction(record: unknown): WorkboardDiagnosticAction | null {
+  if (!isRecord(record)) {
     return null;
   }
-  const record = value;
   const kind =
     record.kind === "claim" ||
     record.kind === "unblock" ||
@@ -965,19 +699,9 @@ function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | 
   return kind && label ? { kind, label } : null;
 }
 
-function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
-  const kind = WORKBOARD_DIAGNOSTIC_KINDS.includes(record.kind as WorkboardDiagnosticKind)
-    ? (record.kind as WorkboardDiagnosticKind)
-    : undefined;
-  const severity = WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
-    record.severity as WorkboardDiagnosticSeverity,
-  )
-    ? (record.severity as WorkboardDiagnosticSeverity)
-    : "warning";
+function normalizeDiagnostic(record: Record<string, unknown>): WorkboardDiagnostic | null {
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_DIAGNOSTIC_KINDS, undefined);
+  const severity = normalizeEnumValue(record.severity, WORKBOARD_DIAGNOSTIC_SEVERITIES, "warning");
   const title = normalizeBoundedString(record.title, undefined, 160, "diagnostic title");
   const detail = normalizeBoundedString(record.detail, undefined, 800, "diagnostic detail");
   const firstSeenAt = normalizeTimestamp(record.firstSeenAt, Date.now());
@@ -992,10 +716,7 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
     detail,
     firstSeenAt,
     lastSeenAt,
-    count:
-      typeof record.count === "number" && Number.isFinite(record.count)
-        ? Math.max(1, Math.trunc(record.count))
-        : 1,
+    count: resolveIntegerOption(record.count, 1, { min: 1 }),
     actions: Array.isArray(record.actions)
       ? record.actions
           .map(normalizeDiagnosticAction)
@@ -1005,18 +726,12 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
   };
 }
 
-function normalizeNotification(value: unknown): WorkboardNotification | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
+function normalizeNotification(record: Record<string, unknown>): WorkboardNotification | null {
   const id = normalizeOptionalString(record.id) ?? randomUUID();
-  const kind = WORKBOARD_NOTIFICATION_KINDS.includes(record.kind as WorkboardNotificationKind)
-    ? (record.kind as WorkboardNotificationKind)
-    : undefined;
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_NOTIFICATION_KINDS, undefined);
   const createdAt = normalizeTimestamp(record.createdAt, Date.now());
   const sequence = normalizeTimestamp(record.sequence, 0) || undefined;
-  const message = normalizeBoundedString(record.message, undefined, 240, "notification message");
+  const message = capText(normalizeOptionalString(record.message), 240);
   if (!kind || !message) {
     return null;
   }
@@ -1033,14 +748,18 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
-export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+export function normalizeProofInput(
+  input: WorkboardProofInput,
+  now: number,
+  id?: string,
+): WorkboardProof {
   const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
   const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
   const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
   const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
   return {
-    id: randomUUID(),
-    status: normalizeProofStatus(input.status, "unknown"),
+    id: id ?? randomUUID(),
+    status: normalizeEnumValue(input.status, WORKBOARD_PROOF_STATUSES, "unknown"),
     createdAt: now,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),
@@ -1057,34 +776,51 @@ function completionProofConflicts(existing: WorkboardProof, completion: Workboar
 
 export function appendCompletionProof(
   existing: readonly WorkboardProof[] | undefined,
-  proof: WorkboardProof,
+  proof: WorkboardProof | undefined,
   proofId?: string,
 ): WorkboardProof[] {
   const entries = [...(existing ?? [])];
   if (!proofId) {
-    return [...entries, proof].slice(-MAX_CARD_PROOF);
+    return proof ? [...entries, proof].slice(-MAX_CARD_PROOF) : entries;
   }
   const index = entries.findIndex((entry) => entry.id === proofId);
   const pending = index >= 0 ? entries[index] : undefined;
   if (!pending) {
     throw new Error(`proof not found: ${proofId}`);
   }
-  if (proof.status === "unknown") {
-    throw new Error("completion proof status must be passed, failed, or skipped.");
+  const completionProof = proof ?? pending;
+  if (completionProof.status === "unknown") {
+    throw new Error(
+      proof
+        ? "completion proof status must be passed, failed, or skipped."
+        : "proof is required to resolve a pending proof.",
+    );
   }
-  if (completionProofConflicts(pending, proof)) {
+  if (completionProofConflicts(pending, completionProof)) {
     throw new Error(`completion proof does not match pending proof: ${proofId}`);
   }
-  if (pending.status !== "unknown") {
-    if (pending.status !== proof.status) {
-      throw new Error(`completion proof status does not match existing proof: ${proofId}`);
-    }
-    return entries.slice(-MAX_CARD_PROOF);
+  if (pending.status !== "unknown" && pending.status !== completionProof.status) {
+    throw new Error(`completion proof status does not match existing proof: ${proofId}`);
   }
-  // A proof id is the durable correlation boundary between a separately recorded check and its
-  // completion. Preserve the original evidence identity and timestamp while resolving its status.
-  entries[index] = { ...pending, status: proof.status };
+  if (pending.status === "unknown") {
+    // Preserve the stored evidence identity and timestamp when resolving its status.
+    entries[index] = { ...pending, status: completionProof.status };
+  }
   return entries.slice(-MAX_CARD_PROOF);
+}
+
+function normalizeList<T>(
+  value: unknown,
+  normalize: (entry: Record<string, unknown>) => T | null,
+  limit: number,
+  fallback?: T[],
+): T[] | undefined {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => (isRecord(entry) ? normalize(entry) : null))
+        .filter((entry): entry is T => entry !== null)
+        .slice(-limit)
+    : fallback;
 }
 
 export function normalizeMetadata(
@@ -1093,18 +829,15 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
-    allowAutomationLaunch?: boolean;
+    automationLaunch?: WorkboardLaunchState;
     preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
-  if (!isRecord(value)) {
+  if (!isRecord(value) && !options.automationLaunch) {
     return trimMetadataToBudget(fallback, options);
   }
-  const record = value;
-  const stale =
-    record.stale && typeof record.stale === "object" && !Array.isArray(record.stale)
-      ? (record.stale as Record<string, unknown>)
-      : null;
+  const record = isRecord(value) ? value : {};
+  const stale = isRecord(record.stale) ? record.stale : null;
   // Archival is a transition owned by archive(), which appends the matching
   // `archived` event. Callers that cannot produce that event (create) must not
   // be able to declare it, or the card is excluded from dispatch from the
@@ -1131,70 +864,63 @@ export function normalizeMetadata(
           })()
         : links.slice(-MAX_CARD_LINKS);
   const normalized = {
-    attempts: Array.isArray(record.attempts)
-      ? record.attempts
-          .map(normalizeAttempt)
-          .filter((attempt): attempt is WorkboardRunAttempt => attempt !== null)
-          .slice(-MAX_CARD_ATTEMPTS)
-      : fallback.attempts,
-    comments: Array.isArray(record.comments)
-      ? record.comments
-          .map(normalizeComment)
-          .filter((comment): comment is WorkboardComment => comment !== null)
-          .slice(-MAX_CARD_COMMENTS)
-      : fallback.comments,
+    attempts: normalizeList(
+      record.attempts,
+      normalizeAttempt,
+      MAX_CARD_ATTEMPTS,
+      fallback.attempts,
+    ),
+    comments: normalizeList(
+      record.comments,
+      normalizeComment,
+      MAX_CARD_COMMENTS,
+      fallback.comments,
+    ),
     links: normalizedLinks,
-    proof: Array.isArray(record.proof)
-      ? record.proof
-          .map(normalizeProof)
-          .filter((proof): proof is WorkboardProof => proof !== null)
-          .slice(-MAX_CARD_PROOF)
-      : fallback.proof,
-    artifacts: Array.isArray(record.artifacts)
-      ? record.artifacts
-          .map(normalizeArtifact)
-          .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
-          .slice(-MAX_CARD_ARTIFACTS)
-      : fallback.artifacts,
-    attachments: Array.isArray(record.attachments)
-      ? record.attachments
-          .map(normalizeAttachment)
-          .filter((attachment): attachment is WorkboardAttachment => attachment !== null)
-          .slice(-MAX_CARD_ATTACHMENTS)
-      : fallback.attachments,
-    workerLogs: Array.isArray(record.workerLogs)
-      ? record.workerLogs
-          .map(normalizeWorkerLog)
-          .filter((log): log is WorkboardWorkerLog => log !== null)
-          .slice(-MAX_CARD_WORKER_LOGS)
-      : fallback.workerLogs,
+    proof: normalizeList(record.proof, normalizeProof, MAX_CARD_PROOF, fallback.proof),
+    artifacts: normalizeList(
+      record.artifacts,
+      normalizeArtifact,
+      MAX_CARD_ARTIFACTS,
+      fallback.artifacts,
+    ),
+    attachments: normalizeList(
+      record.attachments,
+      normalizeAttachment,
+      MAX_CARD_ATTACHMENTS,
+      fallback.attachments,
+    ),
+    workerLogs: normalizeList(
+      record.workerLogs,
+      normalizeWorkerLog,
+      MAX_CARD_WORKER_LOGS,
+      fallback.workerLogs,
+    ),
     workerProtocol: Object.hasOwn(record, "workerProtocol")
       ? normalizeWorkerProtocol(record.workerProtocol, fallback.workerProtocol)
       : fallback.workerProtocol,
     automation: normalizeAutomation(
       Object.hasOwn(record, "automation") ? record.automation : {},
       fallback.automation,
-      { allowLaunchState: options.allowAutomationLaunch },
+      { launch: options.automationLaunch },
     ),
     claim: Object.hasOwn(record, "claim")
       ? record.claim
         ? normalizeClaim(record.claim, fallback.claim)
         : undefined
       : fallback.claim,
-    diagnostics: Array.isArray(record.diagnostics)
-      ? record.diagnostics
-          .map(normalizeDiagnostic)
-          .filter(
-            (diagnosticLocal): diagnosticLocal is WorkboardDiagnostic => diagnosticLocal !== null,
-          )
-          .slice(-MAX_CARD_DIAGNOSTICS)
-      : fallback.diagnostics,
-    notifications: Array.isArray(record.notifications)
-      ? record.notifications
-          .map(normalizeNotification)
-          .filter((notification): notification is WorkboardNotification => notification !== null)
-          .slice(-MAX_CARD_NOTIFICATIONS)
-      : fallback.notifications,
+    diagnostics: normalizeList(
+      record.diagnostics,
+      normalizeDiagnostic,
+      MAX_CARD_DIAGNOSTICS,
+      fallback.diagnostics,
+    ),
+    notifications: normalizeList(
+      record.notifications,
+      normalizeNotification,
+      MAX_CARD_NOTIFICATIONS,
+      fallback.notifications,
+    ),
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -1214,18 +940,15 @@ export function normalizeMetadata(
       ? normalizeTimestamp(record.lifecycleStatusSourceUpdatedAt, 0)
       : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
-      typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
-        ? Math.max(0, Math.trunc(record.failureCount))
-        : fallback.failureCount,
+      resolveOptionalIntegerOption(record.failureCount, { min: 0 }) ?? fallback.failureCount,
   };
   return trimMetadataToBudget(normalized, options);
 }
 
-export function normalizeExecution(value: unknown): WorkboardExecution | undefined {
-  if (!isRecord(value)) {
+export function normalizeExecution(record: unknown): WorkboardExecution | undefined {
+  if (!isRecord(record)) {
     return undefined;
   }
-  const record = value;
   const now = Date.now();
   // Preserve historical labels as written; old hardcoded "codex" rows cannot be inferred safely.
   const engine = normalizeBoundedString(record.engine, undefined, 160, "execution engine");
@@ -1242,8 +965,8 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   return {
     id,
     kind: "agent-session",
-    mode: normalizeExecutionMode(record.mode, "autonomous"),
-    status: normalizeExecutionStatus(record.status, "idle"),
+    mode: normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, "autonomous"),
+    status: normalizeEnumValue(record.status, WORKBOARD_EXECUTION_STATUSES, "idle"),
     startedAt,
     updatedAt,
     ...(engine ? { engine } : {}),
@@ -1260,55 +983,13 @@ export function syncExecutionSessionKey(
   if (!execution) {
     return undefined;
   }
-  return removeUndefinedExecutionFields({
+  const next = {
     ...execution,
     sessionKey,
     updatedAt: Date.now(),
-  });
-}
-
-function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
-  const next = { ...execution };
-  if (next.engine === undefined) {
-    delete next.engine;
-  }
-  if (next.model === undefined) {
-    delete next.model;
-  }
-  if (next.sessionKey === undefined) {
-    delete next.sessionKey;
-  }
-  if (next.runId === undefined) {
-    delete next.runId;
-  }
-  return next;
-}
-
-function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
-  const next = { ...automation };
-  for (const key of [
-    "tenant",
-    "boardId",
-    "createdByCardId",
-    "idempotencyKey",
-    "skills",
-    "workspace",
-    "workspaceAccess",
-    "maxRuntimeSeconds",
-    "maxRetries",
-    "scheduledAt",
-    "summary",
-    "createdCardIds",
-    "dispatchCount",
-    "lastDispatchAt",
-    "launch",
-  ] as const) {
-    const value = next[key];
-    if (
-      value === undefined ||
-      (Array.isArray(value) && value.length === 0) ||
-      (typeof value === "object" && value !== null && Object.keys(value).length === 0)
-    ) {
+  };
+  for (const key of ["engine", "model", "sessionKey", "runId"] as const) {
+    if (next[key] === undefined) {
       delete next[key];
     }
   }
@@ -1369,43 +1050,6 @@ function metadataByteSize(metadata: WorkboardMetadata): number {
   return Buffer.byteLength(JSON.stringify(metadata), "utf8");
 }
 
-function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
-  if (!items?.length) {
-    return undefined;
-  }
-  const next = items.slice(1);
-  return next.length ? next : undefined;
-}
-
-function dropFirstProofExcept(
-  items: readonly WorkboardProof[] | undefined,
-  preserveProofId: string | undefined,
-): WorkboardProof[] | undefined {
-  if (!items?.length) {
-    return undefined;
-  }
-  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
-  if (index < 0) {
-    return items.slice();
-  }
-  const next = items.filter((_, itemIndex) => itemIndex !== index);
-  return next.length ? next : undefined;
-}
-
-function dropFirstNonDependencyLink(
-  items: readonly WorkboardLink[] | undefined,
-): WorkboardLink[] | undefined {
-  if (!items?.length) {
-    return undefined;
-  }
-  const index = items.findIndex((link) => !isDependencyLink(link));
-  if (index < 0) {
-    return items.slice();
-  }
-  const next = items.filter((_, itemIndex) => itemIndex !== index);
-  return next.length ? next : undefined;
-}
-
 export function appendLinkPreservingDependencies(
   links: readonly WorkboardLink[],
   link: WorkboardLink,
@@ -1428,42 +1072,40 @@ export function trimMetadataToBudget(
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
-    if (next.attempts?.length) {
-      next = removeUndefinedMetadataFields({ ...next, attempts: dropFirst(next.attempts) });
-    } else if (next.diagnostics?.length) {
-      next = removeUndefinedMetadataFields({ ...next, diagnostics: dropFirst(next.diagnostics) });
-    } else if (next.notifications?.length) {
-      next = removeUndefinedMetadataFields({
-        ...next,
-        notifications: dropFirst(next.notifications),
-      });
-    } else if (
-      next.proof?.some((proof) => !options.preserveProofId || proof.id !== options.preserveProofId)
-    ) {
-      next = removeUndefinedMetadataFields({
-        ...next,
-        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
-      });
-    } else if (next.artifacts?.length) {
-      next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
-    } else if (next.attachments?.length) {
-      next = removeUndefinedMetadataFields({
-        ...next,
-        attachments: dropFirst(next.attachments),
-      });
-    } else if (next.workerLogs?.length) {
-      next = removeUndefinedMetadataFields({ ...next, workerLogs: dropFirst(next.workerLogs) });
-    } else if (next.links?.length) {
-      const links = dropFirstNonDependencyLink(next.links);
-      if (links?.length === next.links.length) {
-        next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
-      } else {
-        next = removeUndefinedMetadataFields({ ...next, links });
+    for (const key of [
+      "attempts",
+      "diagnostics",
+      "notifications",
+      "proof",
+      "artifacts",
+      "attachments",
+      "workerLogs",
+      "links",
+      "comments",
+    ] as const) {
+      const entries = next[key];
+      if (!entries?.length) {
+        continue;
       }
-    } else if (next.comments?.length) {
-      next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
-    } else if (options.preserveProofId) {
-      throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
+      const index =
+        key === "proof"
+          ? (next.proof?.findIndex(
+              (proof) => !options.preserveProofId || proof.id !== options.preserveProofId,
+            ) ?? -1)
+          : key === "links"
+            ? (next.links?.findIndex((link) => !isDependencyLink(link)) ?? -1)
+            : 0;
+      if (index < 0) {
+        continue;
+      }
+      next = removeUndefinedMetadataFields({
+        ...next,
+        [key]:
+          key === "proof" || key === "links"
+            ? entries.filter((_, entryIndex) => entryIndex !== index)
+            : entries.slice(1),
+      });
+      break;
     }
     if (metadataByteSize(next) >= currentSize) {
       if (options.preserveProofId) {

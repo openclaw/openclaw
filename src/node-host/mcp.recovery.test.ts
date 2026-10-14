@@ -4,7 +4,11 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { OpenClawStreamableHTTPClientTransport } from "../agents/mcp-http-transport.js";
+import {
+  McpSseSessionExpiredError,
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "../agents/mcp-http-transport.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
 function tool(name: string, inputSchema: Tool["inputSchema"] = { type: "object" }): Tool {
@@ -38,16 +42,24 @@ const stdioTransport = {
   requestTimeoutMs: 100,
 };
 
-function httpTransport(sessionId?: string) {
-  const transport = new OpenClawStreamableHTTPClientTransport(
-    new URL("http://127.0.0.1:1/mcp"),
-    sessionId ? { sessionId } : undefined,
-  );
+function httpTransport(
+  sessionId?: string,
+  transportType: "sse" | "streamable-http" = "streamable-http",
+) {
+  const transport =
+    transportType === "sse"
+      ? new OpenClawSSEClientTransport(new URL("http://127.0.0.1:1/sse"))
+      : new OpenClawStreamableHTTPClientTransport(
+          new URL("http://127.0.0.1:1/mcp"),
+          sessionId ? { sessionId } : undefined,
+        );
   transport.close = vi.fn(async () => {});
-  transport.terminateSession = vi.fn(async () => {});
+  if (transport instanceof OpenClawStreamableHTTPClientTransport) {
+    transport.terminateSession = vi.fn(async () => {});
+  }
   return {
     transport,
-    transportType: "streamable-http" as const,
+    transportType,
     connectionTimeoutMs: 100,
     requestTimeoutMs: 100,
   };
@@ -83,7 +95,8 @@ describe("node host MCP live lifecycle", () => {
           notifyToolsChanged = options.onToolsChanged;
           return client;
         },
-        resolveTransport: () => stdioTransport,
+        // This test deliberately holds both list calls; request timeout is not its contract.
+        resolveTransport: () => ({ ...stdioTransport, requestTimeoutMs: 5_000 }),
         warn: vi.fn(),
       },
     );
@@ -206,7 +219,7 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("redacts Streamable HTTP response bodies from node diagnostics", async () => {
+  it("preserves Streamable HTTP response bodies in tool errors", async () => {
     const client = createClient({
       tools: () => [tool("fail")],
       call: async () => {
@@ -221,8 +234,10 @@ describe("node host MCP live lifecycle", () => {
     const error = await manager
       .callMcpTool({ server: "docs", tool: "fail" })
       .catch((caught: unknown) => caught);
-    expect(String(error)).not.toContain("body-secret");
-    expect(String(error)).toContain("[redacted response body]");
+    expect(error).toMatchObject({
+      code: "MCP_TOOL_ERROR",
+      message: "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
+    });
     await manager.close();
   });
 
@@ -273,6 +288,7 @@ describe("node host MCP live lifecycle", () => {
     let maxActiveLists = 0;
     let listCount = 0;
     const pending: Array<(value: { tools: Tool[] }) => void> = [];
+    const refreshStarted = [createDeferred(), createDeferred()] as const;
     const client = createClient({
       list: async () => {
         listCount += 1;
@@ -284,6 +300,7 @@ describe("node host MCP live lifecycle", () => {
         try {
           return await new Promise<{ tools: Tool[] }>((resolve) => {
             pending.push(resolve);
+            refreshStarted[listCount - 2]?.resolve();
           });
         } finally {
           activeLists -= 1;
@@ -303,13 +320,15 @@ describe("node host MCP live lifecycle", () => {
     );
 
     notifyToolsChanged?.();
-    await vi.waitFor(() => expect(activeLists).toBe(1));
+    await refreshStarted[0].promise;
+    expect(activeLists).toBe(1);
     for (let index = 0; index < 20; index += 1) {
       notifyToolsChanged?.();
     }
     expect(client.request).toHaveBeenCalledTimes(2);
     pending.shift()?.({ tools: [tool("middle")] });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(3));
+    await refreshStarted[1].promise;
+    expect(client.request).toHaveBeenCalledTimes(3);
     expect(maxActiveLists).toBe(1);
     pending.shift()?.({ tools: [tool("final")] });
     await vi.waitFor(() =>
@@ -466,90 +485,101 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("recovers only an exact stateful Streamable HTTP 404 and never replays the call", async () => {
-    const replacementReady = createDeferred();
-    const expiredStateful = createClient({
-      tools: () => [tool("run")],
-      call: async () => {
-        throw new StreamableHTTPError(404, "Session not found");
-      },
-    });
-    const clients = {
-      stateful: [
-        expiredStateful,
-        createClient({
-          tools: () => [tool("run")],
-          connect: async () => await replacementReady.promise,
-        }),
-      ],
-      stateless: [
-        createClient({
-          tools: () => [tool("run")],
-          call: async () => {
-            throw new StreamableHTTPError(404, "Not found");
-          },
-        }),
-      ],
-      application: [
-        createClient({
-          tools: () => [tool("run")],
-          call: async () => ({ isError: true, content: [{ type: "text", text: "rejected" }] }),
-        }),
-      ],
-    } as const;
-    const generations = new Map<string, number>();
-    const manager = await startNodeHostMcpManager(
-      {
-        stateful: { url: "http://stateful.invalid/mcp" },
-        stateless: { url: "http://stateless.invalid/mcp" },
-        application: { url: "http://application.invalid/mcp" },
-      },
-      {
-        createClient: (serverName) => {
-          const generation = generations.get(serverName) ?? 0;
-          generations.set(serverName, generation + 1);
-          const client = clients[serverName as keyof typeof clients][generation];
-          if (!client) {
-            throw new Error(`unexpected ${serverName} MCP client generation ${generation}`);
-          }
-          return client;
+  it.each(["sse", "streamable-http"] as const)(
+    "recovers an expired %s session and never replays the call",
+    async (transportType) => {
+      const replacementReady = createDeferred();
+      const expiredStateful = createClient({
+        tools: () => [tool("run")],
+        call: async () => {
+          throw transportType === "sse"
+            ? new McpSseSessionExpiredError("Session not found")
+            : new StreamableHTTPError(404, "Session not found");
         },
-        resolveTransport: (serverName) =>
-          httpTransport(serverName === "stateful" ? "session-1" : undefined),
-        warn: vi.fn(),
-      },
-    );
+      });
+      const clients = {
+        stateful: [
+          expiredStateful,
+          createClient({
+            tools: () => [tool("run")],
+            connect: async () => await replacementReady.promise,
+          }),
+        ],
+        stateless: [
+          createClient({
+            tools: () => [tool("run")],
+            call: async () => {
+              throw new StreamableHTTPError(404, "Not found");
+            },
+          }),
+        ],
+        application: [
+          createClient({
+            tools: () => [tool("run")],
+            call: async () => ({ isError: true, content: [{ type: "text", text: "rejected" }] }),
+          }),
+        ],
+      } as const;
+      const generations = new Map<string, number>();
+      const manager = await startNodeHostMcpManager(
+        {
+          stateful: { url: "http://stateful.invalid/mcp" },
+          stateless: { url: "http://stateless.invalid/mcp" },
+          application: { url: "http://application.invalid/mcp" },
+        },
+        {
+          createClient: (serverName) => {
+            const generation = generations.get(serverName) ?? 0;
+            generations.set(serverName, generation + 1);
+            const client = clients[serverName as keyof typeof clients][generation];
+            if (!client) {
+              throw new Error(`unexpected ${serverName} MCP client generation ${generation}`);
+            }
+            return client;
+          },
+          resolveTransport: (serverName) =>
+            serverName === "stateful" ? httpTransport("session-1", transportType) : httpTransport(),
+          warn: vi.fn(),
+        },
+      );
 
-    await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).rejects.toMatchObject({
-      code: "MCP_TOOL_ERROR",
-    });
-    expect(expiredStateful.callTool).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(generations.get("stateful")).toBe(2));
-    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).not.toContain(
-      "stateful",
-    );
+      await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).rejects.toMatchObject({
+        code: "MCP_TOOL_ERROR",
+      });
+      expect(expiredStateful.callTool).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(generations.get("stateful")).toBe(2));
+      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).not.toContain(
+        "stateful",
+      );
 
-    replacementReady.resolve();
-    await vi.waitFor(() =>
-      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain("stateful"),
-    );
-    await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).resolves.toEqual({
-      content: [{ type: "text", text: "ok" }],
-    });
-    expect(expiredStateful.callTool).toHaveBeenCalledOnce();
+      replacementReady.resolve();
+      await vi.waitFor(() =>
+        expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain(
+          "stateful",
+        ),
+      );
+      await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      expect(expiredStateful.callTool).toHaveBeenCalledOnce();
 
-    await expect(manager.callMcpTool({ server: "stateless", tool: "run" })).rejects.toMatchObject({
-      code: "MCP_TOOL_ERROR",
-    });
-    expect(generations.get("stateless")).toBe(1);
-    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain("stateless");
+      await expect(manager.callMcpTool({ server: "stateless", tool: "run" })).rejects.toMatchObject(
+        {
+          code: "MCP_TOOL_ERROR",
+        },
+      );
+      expect(generations.get("stateless")).toBe(1);
+      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain(
+        "stateless",
+      );
 
-    await expect(
-      manager.callMcpTool({ server: "application", tool: "run" }),
-    ).resolves.toMatchObject({ isError: true });
-    expect(generations.get("application")).toBe(1);
-    await manager.close();
-  });
+      await expect(
+        manager.callMcpTool({ server: "application", tool: "run" }),
+      ).resolves.toMatchObject({ isError: true });
+      expect(generations.get("application")).toBe(1);
+      await manager.close();
+    },
+  );
 
   it("does not retry unsupported restart-scoped transport config", async () => {
     vi.useFakeTimers();
@@ -600,6 +630,55 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let maxActive = 0;
+    const attemptsByServer = new Map<string, number>();
+    const retryReleases: Array<() => void> = [];
+    const servers = Object.fromEntries(
+      Array.from({ length: 7 }, (_, index) => [`server-${index}`, { command: "server" }]),
+    );
+    const createClientMock = vi.fn((serverName: string) =>
+      createClient({
+        connect: async () => {
+          const attempts = (attemptsByServer.get(serverName) ?? 0) + 1;
+          attemptsByServer.set(serverName, attempts);
+          if (attempts === 1) {
+            throw new Error("offline");
+          }
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise<void>((resolve) => {
+            retryReleases.push(() => {
+              active -= 1;
+              resolve();
+            });
+          });
+        },
+      }),
+    );
+    const manager = await startNodeHostMcpManager(servers, {
+      createClient: createClientMock,
+      resolveTransport: () => stdioTransport,
+      warn: vi.fn(),
+    });
+    expect(createClientMock).toHaveBeenCalledTimes(7);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(active).toBe(6);
+    expect(maxActive).toBe(6);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+
+    await manager.close();
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+    for (const release of retryReleases.splice(0)) {
+      release();
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+  });
+
   it("keeps global ordering and descriptor caps after refresh", async () => {
     let listed = [tool("initial")];
     let notifyToolsChanged: (() => void) | undefined;
@@ -633,9 +712,13 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("bounds initial server connection fan-out at six", async () => {
+  it("bounds initial server connection fan-out at six", async ({ onTestFinished }) => {
     let active = 0;
     let maxActive = 0;
+    let started = 0;
+    const initialConnectionsStarted = createDeferred();
+    const lastConnectionStarted = createDeferred();
+    const controller = new AbortController();
     const releases: Array<() => void> = [];
     const servers = Object.fromEntries(
       Array.from({ length: 7 }, (_, index) => [`server-${index}`, { command: "server" }]),
@@ -648,23 +731,41 @@ describe("node host MCP live lifecycle", () => {
             maxActive = Math.max(maxActive, active);
             await new Promise<void>((resolve) => {
               releases.push(resolve);
+              started += 1;
+              if (started === 6) {
+                initialConnectionsStarted.resolve();
+              } else if (started === 7) {
+                lastConnectionStarted.resolve();
+              }
             });
             active -= 1;
           },
         }),
       resolveTransport: () => stdioTransport,
+      signal: controller.signal,
       warn: vi.fn(),
     });
+    onTestFinished(async () => {
+      // Retire held and queued connections even when an admission assertion fails.
+      controller.abort();
+      for (const release of releases.splice(0)) {
+        release();
+      }
+      const manager = await starting;
+      await manager.close();
+    });
 
-    await vi.waitFor(() => expect(releases).toHaveLength(6));
+    // Polling can miss the initial window and count retries after the fixture's deadline.
+    await initialConnectionsStarted.promise;
+    expect(releases).toHaveLength(6);
     expect(maxActive).toBe(6);
     releases.shift()?.();
-    await vi.waitFor(() => expect(releases).toHaveLength(6));
+    await lastConnectionStarted.promise;
+    expect(releases).toHaveLength(6);
     for (const release of releases.splice(0)) {
       release();
     }
-    const manager = await starting;
+    await starting;
     expect(maxActive).toBe(6);
-    await manager.close();
   });
 });

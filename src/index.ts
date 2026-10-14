@@ -1,24 +1,50 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 // Re-exports the OpenClaw CLI entry point for package execution.
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
-  formatCliFailureLines,
-  formatCliJsonFailure,
-  isExpectedCliError,
-} from "./cli/failure-output.js";
-import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
-import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
-import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
-import { formatUncaughtError } from "./infra/errors.js";
-import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
-import { isMainModule } from "./infra/is-main.js";
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "../node-compile-cache.mjs";
+import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
-  installUnhandledRejectionHandler,
-  isBenignUncaughtExceptionError,
-  isUncaughtExceptionHandled,
-} from "./infra/unhandled-rejections.js";
+  isForegroundGmailRunArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
+import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./cli/startup-trace.js";
+import { isMainModule } from "./infra/is-main.js";
+import "./shared/detached-async-context.js";
+
+const isMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+});
+const handledAdmission =
+  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
+const packageRootUrl = new URL("../", import.meta.url);
+if (
+  !handledAdmission &&
+  !existsSync(new URL("entry.ts", import.meta.url)) &&
+  (existsSync(new URL(".openclaw-lifecycle-pending", packageRootUrl)) ||
+    existsSync(new URL("dist/openclaw-install-guard", packageRootUrl)))
+) {
+  const { completePendingPackageLifecycle } = await import("./infra/package-lifecycle.js");
+  try {
+    await completePendingPackageLifecycle({ packageRoot: fileURLToPath(packageRootUrl) });
+  } catch (error) {
+    throw new Error(
+      `OpenClaw package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
 
 type LegacyCliDeps = {
   runCli: (
@@ -42,8 +68,6 @@ export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
 export let handlePortError: LibraryExports["handlePortError"];
 export let loadConfig: LibraryExports["loadConfig"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
 export let PortInUseError: LibraryExports["PortInUseError"];
@@ -52,16 +76,19 @@ export let resolveSessionKey: LibraryExports["resolveSessionKey"];
 export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
-async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const { runCli } = await import("./cli/run-main.js");
+async function loadLegacyCliDeps(argv: string[]): Promise<LegacyCliDeps> {
+  const startupTrace = createGatewayDispatchStartupTrace(argv, "entry");
+  await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+  const { runCli } = await startupTrace.measure(
+    "run-main-import",
+    () => import("./cli/run-main.js"),
+  );
   return { runCli };
 }
 
-// Legacy direct file entrypoint only. Package root exports now live in library.ts.
+// Legacy executable bridge, also exported for callers that retain their own process lifecycle.
 export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
@@ -69,15 +96,14 @@ export async function runLegacyCliEntry(
     retainConsoleRoutingUntilProcessExit?: boolean;
   },
 ): Promise<void> {
-  const { runCli } = deps ?? (await loadLegacyCliDeps());
+  const { runCli } = deps ?? (await loadLegacyCliDeps(argv));
   await runCli(argv, options);
 }
 
-const isMain = isMainModule({
-  currentFile: fileURLToPath(import.meta.url),
-});
-const handledRootVersion = isMain && tryHandleRootVersionFastPath(process.argv);
-
+const handledRootVersion =
+  isMain &&
+  !handledAdmission &&
+  (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
 if (!isMain) {
   ({
     applyTemplate,
@@ -89,7 +115,6 @@ if (!isMain) {
     getReplyFromConfig,
     handlePortError,
     loadConfig,
-    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
     PortInUseError,
@@ -98,13 +123,64 @@ if (!isMain) {
     resolveStorePath,
     runCommandWithTimeout,
     runExec,
-    saveSessionStore,
     waitForever,
   } = await import("./library.js"));
 }
 
-if (isMain && !handledRootVersion) {
+const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const compileCacheDirectory = shouldRunCli
+  ? resolveOpenClawCompileCacheDirectory({
+      installRoot: fileURLToPath(packageRootUrl),
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+    })
+  : undefined;
+const compileCacheRespawnEnv =
+  shouldRunCli &&
+  !isForegroundGmailRunArgv(process.argv) &&
+  !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
+    ? resolveOpenClawCompileCacheRespawnEnv({
+        directory: compileCacheDirectory,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      })
+    : undefined;
+if (compileCacheRespawnEnv) {
+  const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
+  // External supervisors require the serving Gateway to retain its listener PID.
+  if (process.platform !== "win32" && process.execve && isForegroundGatewayRunArgv(process.argv)) {
+    process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
+  }
+  const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+  await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
+}
+if (shouldRunCli && !compileCacheRespawnEnv) {
+  enableOpenClawCompileCache({
+    directory: compileCacheDirectory,
+    foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+  });
+  const [
+    { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+    { isJsonOutputModeActive },
+    { runCliWithExitFinalization },
+    { withCliProcessScope },
+    { formatUncaughtError },
+    { runFatalErrorHooks },
+    {
+      installUnhandledRejectionHandler,
+      isBenignUncaughtExceptionError,
+      isUncaughtExceptionHandled,
+    },
+  ] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    import("./cli/one-shot-exit.js"),
+    import("./cli/runtime-cleanup-scope.js"),
+    import("./infra/errors.js"),
+    import("./infra/fatal-error-hooks.js"),
+    import("./infra/unhandled-rejections.js"),
+  ]);
+
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
+  const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -135,15 +211,17 @@ if (isMain && !handledRootVersion) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
+    exitAfterSignalExitBarriers(1, "uncaught exception");
   });
 
   void runCliWithExitFinalization({
-    run: async () =>
-      await runLegacyCliEntry(process.argv, undefined, {
-        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
-        retainConsoleRoutingUntilProcessExit: true,
-      }),
+    run: () =>
+      withCliProcessScope(() =>
+        runLegacyCliEntry(process.argv, undefined, {
+          // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+          retainConsoleRoutingUntilProcessExit: true,
+        }),
+      ),
     onError: (err) => {
       if (isJsonOutputModeActive(process.argv)) {
         defaultRuntime.writeJson(formatCliJsonFailure(err));

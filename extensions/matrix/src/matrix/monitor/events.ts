@@ -1,11 +1,19 @@
-// Matrix plugin module implements events behavior.
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
-import type { CoreConfig } from "../../types.js";
+import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { readMatrixMessages } from "../actions/messages.js";
+import { getMatrixRoomInfo } from "../actions/room.js";
 import type { MatrixAuth } from "../client.js";
+import { readJoinedMatrixMembers } from "../direct-room.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
+import type { createDirectRoomTracker } from "./direct.js";
+import type { createMatrixRoomInfoResolver } from "./room-info.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -34,10 +42,9 @@ function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
 function isFreshPostHealthySyncDecryptFailure(params: {
   event: MatrixRawEvent;
   healthySyncSinceMs?: number;
-  graceMs?: number;
   nowMs: number;
 }): boolean {
-  const { event, healthySyncSinceMs, graceMs = 0, nowMs } = params;
+  const { event, healthySyncSinceMs, nowMs } = params;
   if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
     return false;
   }
@@ -45,7 +52,7 @@ function isFreshPostHealthySyncDecryptFailure(params: {
   if (!Number.isFinite(eventTs) || eventTs <= 0) {
     return false;
   }
-  if (eventTs < healthySyncSinceMs + graceMs) {
+  if (eventTs < healthySyncSinceMs) {
     return false;
   }
   if (eventTs > nowMs + 60_000) {
@@ -56,7 +63,6 @@ function isFreshPostHealthySyncDecryptFailure(params: {
 
 function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   getHealthySyncSinceMs?: () => number | undefined;
-  startupGraceMs?: number;
 }) {
   let observations: MatrixPostHealthySyncDecryptFailureObservation[] = [];
   let warningEmitted = false;
@@ -88,7 +94,6 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         !isFreshPostHealthySyncDecryptFailure({
           event,
           healthySyncSinceMs,
-          graceMs: params.startupGraceMs,
           nowMs,
         })
       ) {
@@ -115,15 +120,12 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
       }
 
       warningEmitted = true;
-      const rooms = uniqueStrings(observations.map((entry) => entry.roomId)).slice(
-        0,
-        MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
-      );
+      const rooms = uniqueStrings(observations.map((entry) => entry.roomId));
       const senders = uniqueStrings(
         observations
           .map((entry) => entry.sender)
           .filter((sender): sender is string => Boolean(sender)),
-      ).slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT);
+      );
       const eventIds = observations
         .slice(-MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT)
         .map((entry) => entry.eventId);
@@ -132,10 +134,10 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         freshAfterHealthySync: true,
         failureCount,
         warning: {
-          rooms,
-          roomCount: new Set(observations.map((entry) => entry.roomId)).size,
-          senders,
-          senderCount: new Set(observations.map((entry) => entry.sender).filter(Boolean)).size,
+          rooms: rooms.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          roomCount: rooms.length,
+          senders: senders.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          senderCount: senders.length,
           eventIds,
           latestError,
           windowMs: MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS,
@@ -176,16 +178,16 @@ export function registerMatrixMonitorEvents(params: {
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
-  directTracker?: {
-    invalidateRoom: (roomId: string) => void;
-    rememberInvite?: (roomId: string, remoteUserId: string) => void;
-  };
+  directTracker: ReturnType<typeof createDirectRoomTracker>;
+  groupPolicy: "open" | "allowlist" | "disabled";
+  roomsConfig?: Record<string, MatrixRoomConfig>;
+  needsRoomAliasesForConfig: boolean;
+  getRoomInfo: ReturnType<typeof createMatrixRoomInfoResolver>["getRoomInfo"];
   invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
   logger: RuntimeLogger;
-  startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
@@ -206,7 +208,6 @@ export function registerMatrixMonitorEvents(params: {
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
     logger,
-    startupGraceMs,
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
     onRoomMessage,
@@ -215,7 +216,6 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
     getHealthySyncSinceMs,
-    startupGraceMs,
   });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
@@ -239,16 +239,17 @@ export function registerMatrixMonitorEvents(params: {
       });
   };
 
+  const dispatchRoomMessage = (label: string, roomId: string, event: MatrixRawEvent) => {
+    void runMonitorTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
+      await onRoomMessage(roomId, event);
+    });
+  };
+
   const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void runMonitorTask(
-      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("room message handler", roomId, event);
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -267,12 +268,7 @@ export function registerMatrixMonitorEvents(params: {
     if (eventType !== EventType.RoomMessage) {
       return;
     }
-    void runMonitorTask(
-      `decrypted room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("decrypted room message handler", roomId, event);
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
@@ -360,6 +356,76 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     logVerboseMessage(`matrix: join room=${roomId} id=${eventId}`);
+    if (event.membershipProvenance !== "transition" || event.state_key !== auth.userId) {
+      return;
+    }
+    void runMonitorTask(`join introduction room=${roomId}`, async () => {
+      const members = await readJoinedMatrixMembers(client, roomId);
+      // Classification needs a real remote member, not the self-join's sender.
+      // Unknown membership cannot establish either room admission or DM exclusion.
+      const remoteUserId = members?.find((member) => member !== auth.userId);
+      if (
+        !members?.includes(auth.userId) ||
+        !remoteUserId ||
+        (await directTracker.isDirectMessage({
+          roomId,
+          senderId: remoteUserId,
+          selfUserId: auth.userId,
+          joinedMembers: members,
+        }))
+      ) {
+        return;
+      }
+      const roomInfo = await params.getRoomInfo(roomId, {
+        includeAliases: params.needsRoomAliasesForConfig,
+      });
+      const roomConfig = resolveMatrixRoomConfig({
+        rooms: params.roomsConfig,
+        roomId,
+        aliases: [roomInfo.canonicalAlias ?? "", ...roomInfo.altAliases].filter(Boolean),
+      });
+      const roomAllowed =
+        (!params.needsRoomAliasesForConfig || roomInfo.aliasesResolved) &&
+        params.groupPolicy !== "disabled" &&
+        (roomConfig.config ? roomConfig.allowed : params.groupPolicy === "open");
+      const options = { cfg, accountId: auth.accountId, client };
+      await reportChannelRoomJoin({
+        cfg,
+        channel: "matrix",
+        accountId: auth.accountId,
+        conversationId: roomId,
+        deliverTo: `room:${roomId}`,
+        route: (
+          await resolveMatrixInboundRouteAsync({
+            cfg,
+            accountId: auth.accountId,
+            roomId,
+            senderId: auth.userId,
+            isDirectMessage: false,
+            resolveAgentRoute,
+          })
+        ).route,
+        roomAllowed,
+        resolveRoomContext: async ({ messageLimit }) => {
+          const info = await getMatrixRoomInfo(roomId, options);
+          const context = { title: info.name ?? undefined, purpose: info.topic ?? undefined };
+          try {
+            const { messages } = await readMatrixMessages(roomId, {
+              ...options,
+              limit: messageLimit,
+            });
+            return {
+              ...context,
+              recentMessages: messages
+                .toReversed()
+                .flatMap(({ sender, body }) => (body?.trim() ? [{ sender, text: body }] : [])),
+            };
+          } catch {
+            return context;
+          }
+        },
+      });
+    });
   };
 
   const onRoomEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -397,12 +463,7 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void runMonitorTask(
-        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-        async () => {
-          await onRoomMessage(roomId, event);
-        },
-      );
+      dispatchRoomMessage("reaction handler", roomId, event);
       return;
     }
 

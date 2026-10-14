@@ -1,8 +1,4 @@
-/**
- * Presentation limit adapters for channel outbound payloads.
- *
- * Truncates and reshapes portable presentation blocks to match per-channel limits.
- */
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -19,6 +15,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -38,6 +35,7 @@ type SelectCandidate = {
   adapted?: MessagePresentationOption;
 };
 type ButtonSelection = ReadonlySet<MessagePresentationButton> | undefined;
+type RenderableButtonCandidate = ButtonCandidate & { adapted: MessagePresentationButton };
 
 const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
@@ -49,18 +47,14 @@ function positiveInteger(value: number | undefined): number | undefined {
 
 function truncateText(value: string, maxLength: number | undefined): string {
   const limit = positiveInteger(maxLength);
-  if (!limit) {
-    return value;
-  }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  return limit ? truncateCodePoints(value, limit) : value;
 }
 
 function truncateUtf8Bytes(value: string, limit: number): string {
   let bytes = 0;
   let result = "";
   for (const char of value) {
-    const nextBytes = utf8ByteLength(char);
+    const nextBytes = Buffer.byteLength(char, "utf8");
     if (bytes + nextBytes > limit) {
       break;
     }
@@ -81,8 +75,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
   if (limits?.encoding === "utf16-units") {
     return truncateUtf16Safe(value, limit);
   }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  return truncateText(value, limit);
 }
 
 function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
@@ -108,14 +101,15 @@ function splitPresentationText(value: string, limits: TextLimits | undefined): s
   return chunks;
 }
 
-function fallbackTextBlocks(params: {
+function presentationTextBlocks(params: {
   blockType: "context" | "text";
   text: string;
   limits?: TextLimits;
-}): MessagePresentationBlock[] {
+  continuation?: boolean;
+}): Array<{ type: "context" | "text"; text: string }> {
   return splitPresentationText(params.text, params.limits).map((text, index) => {
     const block = { type: params.blockType, text };
-    if (index > 0) {
+    if (index > 0 || params.continuation) {
       // Native fallback renderers must reassemble split fragments without inserting paragraph breaks.
       Object.defineProperty(block, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
     }
@@ -123,13 +117,9 @@ function fallbackTextBlocks(params: {
   });
 }
 
-function utf8ByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 function fitsByteLimit(value: string | undefined, maxBytes: number | undefined): boolean {
   const limit = positiveInteger(maxBytes);
-  return !value || !limit || utf8ByteLength(value) <= limit;
+  return !value || !limit || Buffer.byteLength(value, "utf8") <= limit;
 }
 
 function fallbackListBlocks(params: {
@@ -143,42 +133,11 @@ function fallbackListBlocks(params: {
     return [];
   }
   // Action labels are operator-visible content; split like chart/table fallbacks instead of dropping them.
-  return fallbackTextBlocks({
+  return presentationTextBlocks({
     blockType: params.blockType,
     text: `${params.heading}:\n${labels.map((label) => `- ${label}`).join("\n")}`,
     limits: params.limits,
   });
-}
-
-function actionCapacity(limits: ActionLimits | undefined): number | undefined {
-  const maxActions = positiveInteger(limits?.maxActions);
-  const maxRows = positiveInteger(limits?.maxRows);
-  const maxActionsPerRow = positiveInteger(limits?.maxActionsPerRow);
-  const rowCapacity = maxRows && maxActionsPerRow ? maxRows * maxActionsPerRow : undefined;
-  if (maxActions && rowCapacity) {
-    return Math.min(maxActions, rowCapacity);
-  }
-  return maxActions ?? rowCapacity;
-}
-
-function buttonCapacityAfterReservedSelects(
-  limits: ActionLimits | undefined,
-  reservedSelects: number,
-): number | undefined {
-  const maxActions = positiveInteger(limits?.maxActions);
-  const maxRows = positiveInteger(limits?.maxRows);
-  const maxActionsPerRow = positiveInteger(limits?.maxActionsPerRow);
-  const remainingActions =
-    maxActions === undefined ? undefined : Math.max(0, maxActions - reservedSelects);
-  const remainingRows = maxRows === undefined ? undefined : Math.max(0, maxRows - reservedSelects);
-  const rowCapacity =
-    remainingRows !== undefined && maxActionsPerRow !== undefined
-      ? remainingRows * maxActionsPerRow
-      : undefined;
-  if (remainingActions !== undefined && rowCapacity !== undefined) {
-    return Math.min(remainingActions, rowCapacity);
-  }
-  return remainingActions ?? rowCapacity;
 }
 
 function createActionBudget(limits: ActionLimits | undefined): ActionBudget {
@@ -203,7 +162,7 @@ function buttonCapacity(budget: ActionBudget): number | undefined {
   return budget.remainingActions ?? rowCapacity;
 }
 
-function consumeButtonBudget(budget: ActionBudget, count: number): void {
+function consumeActionBudget(budget: ActionBudget, count = 1, actionsPerRow = 1): void {
   if (count <= 0) {
     return;
   }
@@ -211,63 +170,44 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
     budget.remainingActions = Math.max(0, budget.remainingActions - count);
   }
   if (budget.remainingRows !== undefined) {
-    const perRow = budget.maxActionsPerRow ?? count;
-    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / perRow));
+    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / actionsPerRow));
   }
-}
-
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
 }
 
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
 
-function consumeSelectBudget(budget: ActionBudget): void {
-  if (budget.remainingActions !== undefined) {
-    budget.remainingActions = Math.max(0, budget.remainingActions - 1);
+function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
+  control: Control,
+  action: ReturnType<typeof resolveMessagePresentationButtonAction>,
+  limits: SelectLimits | undefined,
+): Control | undefined {
+  if (!action) {
+    return undefined;
   }
-  if (budget.remainingRows !== undefined) {
-    budget.remainingRows = Math.max(0, budget.remainingRows - 1);
+  const legacyValueFits = fitsByteLimit(control.value, limits?.maxValueBytes);
+  if (
+    control.action !== undefined
+      ? !fitsByteLimit(resolveMessagePresentationActionValue(action), limits?.maxValueBytes)
+      : action.type === "callback" && !legacyValueFits
+  ) {
+    return undefined;
   }
+  const adapted = { ...control, label: truncateText(control.label, limits?.maxLabelLength) };
+  if (!legacyValueFits) {
+    delete adapted.value;
+  }
+  return adapted;
 }
 
 function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
-  const hasExplicitAction = button.action !== undefined;
-  const action = resolveMessagePresentationButtonAction(button);
-  if (!action) {
+  const adapted = adaptControl(button, resolveMessagePresentationButtonAction(button), limits);
+  if (!adapted || (button.disabled === true && limits?.supportsDisabled !== true)) {
     return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
-  if (
-    (hasExplicitAction ? !actionFits : action.type === "callback" && !legacyValueFits) ||
-    (button.disabled === true && limits?.supportsDisabled !== true)
-  ) {
-    return undefined;
-  }
-  const adapted: MessagePresentationButton = {
-    ...button,
-    label: truncateText(button.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
   }
   if (limits?.supportsStyles === false) {
     delete adapted.style;
@@ -289,30 +229,21 @@ function adaptButtonsBlock(
     adapted: adaptButton(button, limits),
   }));
   const renderableCandidates = candidates.filter(
-    (candidate): candidate is ButtonCandidate & { adapted: MessagePresentationButton } =>
-      Boolean(candidate.adapted),
+    (candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted),
   );
   const eligibleCandidates = buttonSelection
     ? renderableCandidates.filter((candidate) => buttonSelection.has(candidate.original))
     : renderableCandidates;
   const selectedCandidates =
     capacity !== undefined && eligibleCandidates.length > capacity
-      ? eligibleCandidates
-          .map((candidate, index) => ({ candidate, index }))
-          .toSorted((left, right) => {
-            const priorityDelta =
-              (right.candidate.adapted.priority ?? 0) - (left.candidate.adapted.priority ?? 0);
-            return priorityDelta || left.index - right.index;
-          })
-          .slice(0, capacity)
-          .map((entry) => entry.candidate)
+      ? selectButtonsByPriority(eligibleCandidates, capacity)
       : eligibleCandidates;
   const selected = new Set<ButtonCandidate>(selectedCandidates);
   const buttons = selectedCandidates.map((candidate) => candidate.adapted);
   const droppedLabels = candidates
     .filter((candidate) => !candidate.adapted || !selected.has(candidate))
     .map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original));
-  consumeButtonBudget(budget, buttons.length);
+  consumeActionBudget(budget, buttons.length, budget.maxActionsPerRow ?? buttons.length);
   const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
     heading: "Actions",
@@ -322,53 +253,19 @@ function adaptButtonsBlock(
   if (buttons.length === 0) {
     return fallback;
   }
-  const blocks: MessagePresentationBlock[] = chunkButtons(buttons, limits?.maxActionsPerRow).map(
-    (row) => ({
-      type: "buttons",
-      buttons: row,
-    }),
-  );
-  blocks.push(...fallback);
-  return blocks;
-}
-
-function appendAdaptedButtonsBlock(
-  blocks: MessagePresentationBlock[],
-  block: Extract<MessagePresentationBlock, { type: "buttons" }>,
-  limits: ActionLimits | undefined,
-  budget: ActionBudget,
-  fallbackBlockType: "context" | "text",
-  buttonSelection: ButtonSelection,
-  textLimits?: TextLimits,
-): void {
-  blocks.push(
-    ...adaptButtonsBlock(block, limits, budget, fallbackBlockType, buttonSelection, textLimits),
-  );
+  return [
+    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
+    ...fallback,
+  ];
 }
 
 function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  const hasExplicitAction = option.action !== undefined;
-  const action = resolveMessagePresentationOptionAction(option);
-  if (!action) {
-    return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(option.value, limits?.maxValueBytes);
-  if (hasExplicitAction ? !actionFits : !legacyValueFits) {
-    return undefined;
-  }
-  const adapted: MessagePresentationOption = {
-    ...option,
-    label: truncateText(option.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
-  }
-  return adapted;
+  return adaptControl(option, resolveMessagePresentationOptionAction(option), limits);
 }
 
 function adaptSelectBlock(
@@ -405,8 +302,8 @@ function adaptSelectBlock(
   if (!canRenderSelect) {
     return fallback;
   }
-  consumeSelectBudget(budget);
-  const blocks: MessagePresentationBlock[] = [
+  consumeActionBudget(budget);
+  return [
     {
       type: "select",
       ...(block.placeholder
@@ -414,9 +311,8 @@ function adaptSelectBlock(
         : {}),
       options,
     },
+    ...fallback,
   ];
-  blocks.push(...fallback);
-  return blocks;
 }
 
 function countRenderableSelectBlocks(
@@ -427,17 +323,14 @@ function countRenderableSelectBlocks(
   if (capabilities?.selects === false) {
     return 0;
   }
-  return blocks.filter((block) => {
-    if (block.type !== "select") {
-      return false;
+  let count = 0;
+  for (const block of blocks) {
+    // A valid maxOptions is at least one, so one accepted option reserves the slot.
+    if (block.type === "select" && block.options.some((option) => adaptOption(option, limits))) {
+      count += 1;
     }
-    const maxOptions = positiveInteger(limits?.maxOptions);
-    const renderableOptions = block.options
-      .map((option) => adaptOption(option, limits))
-      .filter(Boolean)
-      .slice(0, maxOptions ?? undefined);
-    return renderableOptions.length > 0;
-  }).length;
+  }
+  return count;
 }
 
 function createGlobalButtonSelection(params: {
@@ -449,13 +342,34 @@ function createGlobalButtonSelection(params: {
   if (params.capabilities?.buttons === false) {
     return undefined;
   }
-  const reservedSelectSlots = countRenderableSelectBlocks(
-    params.presentation.blocks,
-    params.capabilities,
-    params.selectLimits,
+  const reservationBudget = createActionBudget(params.limits);
+  consumeActionBudget(
+    reservationBudget,
+    countRenderableSelectBlocks(
+      params.presentation.blocks,
+      params.capabilities,
+      params.selectLimits,
+    ),
   );
-  const capacity = buttonCapacityAfterReservedSelects(params.limits, reservedSelectSlots);
+  // Without a per-row size, row-only limits follow authored block order rather than preselecting buttons.
+  const capacity =
+    reservationBudget.remainingRows === 0 && reservationBudget.maxActionsPerRow === undefined
+      ? reservationBudget.remainingActions
+      : buttonCapacity(reservationBudget);
   if (capacity === undefined) {
+    return undefined;
+  }
+  // Adaptation can only remove buttons, so authored occurrences bound the selection size.
+  let rawButtonCount = 0;
+  for (const block of params.presentation.blocks) {
+    if (block.type === "buttons") {
+      rawButtonCount += block.buttons.length;
+      if (rawButtonCount > capacity) {
+        break;
+      }
+    }
+  }
+  if (rawButtonCount <= capacity) {
     return undefined;
   }
   const candidates = params.presentation.blocks.flatMap((block) => {
@@ -467,57 +381,27 @@ function createGlobalButtonSelection(params: {
         original: button,
         adapted: adaptButton(button, params.limits),
       }))
-      .filter(
-        (
-          candidate,
-        ): candidate is {
-          original: MessagePresentationButton;
-          adapted: MessagePresentationButton;
-        } => Boolean(candidate.adapted),
-      );
+      .filter((candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted));
   });
   if (candidates.length <= capacity) {
     return undefined;
   }
   return new Set(
-    candidates
-      .map((candidate, index) => ({ candidate, index }))
-      .toSorted((left, right) => {
-        const priorityDelta =
-          (right.candidate.adapted.priority ?? 0) - (left.candidate.adapted.priority ?? 0);
-        return priorityDelta || left.index - right.index;
-      })
-      .slice(0, capacity)
-      .map((entry) => entry.candidate.original),
+    selectButtonsByPriority(candidates, capacity).map((candidate) => candidate.original),
   );
 }
 
-function adaptTextBlock(
-  block: MessagePresentationBlock,
-  limits: TextLimits | undefined,
-): MessagePresentationBlock {
-  if (block.type === "text" || block.type === "context") {
-    const adapted = {
-      ...block,
-      text: truncatePresentationText(block.text, limits),
-    };
-    if (
-      Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value === true
-    ) {
-      // Text normalization clones blocks; keep continuation ownership across that boundary.
-      Object.defineProperty(adapted, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
-    }
-    return adapted;
-  }
-  return block;
+function selectButtonsByPriority(
+  candidates: RenderableButtonCandidate[],
+  capacity: number,
+): RenderableButtonCandidate[] {
+  // Stable sorting retains authored order for equal priorities.
+  return candidates
+    .toSorted((left, right) => (right.adapted.priority ?? 0) - (left.adapted.priority ?? 0))
+    .slice(0, capacity);
 }
 
-/**
- * Adapt a portable presentation to the target channel's advertised capabilities.
- *
- * Unsupported controls are downgraded to text/context fallback blocks where possible, and
- * labels, values, rows, options, styles, disabled state, and text are clipped to channel limits.
- */
+/** Limit native controls while preserving authored and fallback text in full. */
 export function adaptMessagePresentationForChannel(params: {
   presentation: MessagePresentation;
   capabilities?: ChannelPresentationCapabilities;
@@ -532,42 +416,52 @@ export function adaptMessagePresentationForChannel(params: {
     limits: limits?.actions,
     selectLimits: limits?.selects,
   });
-  const blocks: MessagePresentationBlock[] = [];
-  for (const block of params.presentation.blocks) {
-    if (block.type === "chart" && capabilities?.charts !== true) {
-      blocks.push(
-        ...fallbackTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationChartFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+  const titleBlocks = params.presentation.title
+    ? presentationTextBlocks({
+        blockType: "text",
+        text: params.presentation.title,
+        limits: limits?.text,
+      })
+    : [];
+  const blocks = params.presentation.blocks.flatMap((block): MessagePresentationBlock[] => {
+    if (block.type === "text" || block.type === "context") {
+      return presentationTextBlocks({
+        blockType: block.type === "context" ? fallbackBlockType : "text",
+        text: block.text,
+        limits: limits?.text,
+        continuation:
+          Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
+          true,
+      });
     }
-    if (block.type === "table" && capabilities?.tables !== true) {
-      blocks.push(
-        ...fallbackTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationTableFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+    if (
+      (block.type === "chart" && capabilities?.charts !== true) ||
+      (block.type === "table" && capabilities?.tables !== true)
+    ) {
+      return presentationTextBlocks({
+        blockType: fallbackBlockType,
+        text:
+          block.type === "chart"
+            ? renderMessagePresentationChartFallbackText(block)
+            : renderMessagePresentationTableFallbackText(block),
+        limits: limits?.text,
+      });
+    }
+    if (
+      (block.type === "buttons" && capabilities?.buttons === false) ||
+      (block.type === "select" && capabilities?.selects === false)
+    ) {
+      return fallbackListBlocks({
+        blockType: fallbackBlockType,
+        heading: block.type === "buttons" ? "Actions" : (block.placeholder ?? "Options"),
+        labels: (block.type === "buttons" ? block.buttons : block.options).map(
+          renderMessagePresentationControlFallbackLabel,
+        ),
+        limits: limits?.text,
+      });
     }
     if (block.type === "buttons") {
-      if (capabilities?.buttons === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: "Actions",
-            labels: block.buttons.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      appendAdaptedButtonsBlock(
-        blocks,
+      return adaptButtonsBlock(
         block,
         limits?.actions,
         actionBudget,
@@ -575,40 +469,22 @@ export function adaptMessagePresentationForChannel(params: {
         buttonSelection,
         limits?.text,
       );
-      continue;
     }
     if (block.type === "select") {
-      if (capabilities?.selects === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: block.placeholder ?? "Options",
-            labels: block.options.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      blocks.push(
-        ...adaptSelectBlock(block, limits?.selects, actionBudget, fallbackBlockType, limits?.text),
+      return adaptSelectBlock(
+        block,
+        limits?.selects,
+        actionBudget,
+        fallbackBlockType,
+        limits?.text,
       );
-      continue;
     }
-    if (block.type === "context" && capabilities?.context === false) {
-      blocks.push({ type: "text", text: block.text });
-      continue;
-    }
-    if (block.type === "divider" && capabilities?.divider === false) {
-      continue;
-    }
-    blocks.push(block);
-  }
+    return block.type === "divider" && capabilities?.divider === false ? [] : [block];
+  });
   return {
     ...params.presentation,
-    ...(params.presentation.title
-      ? { title: truncatePresentationText(params.presentation.title, limits?.text) }
-      : {}),
-    blocks: blocks.map((block) => adaptTextBlock(block, limits?.text)),
+    ...(params.presentation.title ? { title: titleBlocks[0]?.text } : {}),
+    blocks: [...titleBlocks.slice(1), ...blocks],
   };
 }
 
@@ -634,7 +510,7 @@ export function presentationPageSize(
   reservedActions = 0,
   maxPageSize = Number.POSITIVE_INFINITY,
 ): number {
-  const capacity = actionCapacity(capabilities?.limits?.actions);
+  const capacity = buttonCapacity(createActionBudget(capabilities?.limits?.actions));
   const remaining = Math.max(0, (capacity ?? maxPageSize) - Math.max(0, reservedActions));
   return Math.max(1, Math.min(remaining || 1, maxPageSize));
 }

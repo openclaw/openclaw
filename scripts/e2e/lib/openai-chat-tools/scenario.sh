@@ -35,10 +35,12 @@ TOKEN="${OPENCLAW_GATEWAY_TOKEN:?missing OPENCLAW_GATEWAY_TOKEN}"
 MODEL_REF="${OPENCLAW_OPENAI_CHAT_TOOLS_MODEL:?missing OPENCLAW_OPENAI_CHAT_TOOLS_MODEL}"
 GATEWAY_LOG="/tmp/openclaw-openai-chat-tools-gateway.log"
 CLIENT_LOG="/tmp/openclaw-openai-chat-tools-client.log"
+COLD_FIXTURE="$(mktemp /tmp/openclaw-openai-cold-fixture.XXXXXX)"
 gateway_pid=""
 
 cleanup() {
   openclaw_e2e_stop_process "$gateway_pid"
+  rm -f "$COLD_FIXTURE"
 }
 trap cleanup EXIT
 
@@ -51,12 +53,15 @@ dump_debug_logs() {
     node -e "const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); console.error(JSON.stringify({model:cfg.agents?.defaults?.model, tools:cfg.tools, provider:cfg.models?.providers?.openai && {api:cfg.models.providers.openai.api, baseUrl:cfg.models.providers.openai.baseUrl, agentRuntime:cfg.models.providers.openai.agentRuntime}}, null, 2));" "$OPENCLAW_CONFIG_PATH" || true
   fi
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
 
 node scripts/e2e/lib/openai-chat-tools/write-config.mjs
+if [ "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" = required ]; then
+  node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs seed "$entry" "$COLD_FIXTURE"
+fi
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 for _ in $(seq 1 360); do
@@ -82,6 +87,12 @@ node "$entry" gateway health \
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
   node scripts/e2e/lib/openai-chat-tools/client.mjs >"$CLIENT_LOG" 2>&1
+if [ "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" = required ]; then
+  PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
+    node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs recall "$entry" "$COLD_FIXTURE" >>"$CLIENT_LOG" 2>&1
+else
+  echo "NOT RUN: cold transcript recall is unavailable in the selected frozen target" >>"$CLIENT_LOG"
+fi
 
 openclaw_e2e_print_log "$CLIENT_LOG"
 echo "OpenAI Chat Completions tools Docker E2E passed"

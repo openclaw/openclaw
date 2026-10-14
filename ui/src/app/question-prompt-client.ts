@@ -4,6 +4,24 @@ import {
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
 import type { QuestionResolvedEvent } from "@openclaw/gateway-protocol";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+
+/** Only the Gateway-admitted person gets the verified-user question alternative. */
+export function canUseQuestionPrompts(
+  snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase" | "selfUser">,
+): boolean {
+  return (
+    !isRemoteControlUiIngress() ||
+    (snapshot.selfUser?.identity?.type === "profile" &&
+      snapshot.selfUser.id !== GATEWAY_OWNER_PROFILE_ID) ||
+    canCallGatewayMethod(snapshot, "question.list", "operator.questions", {
+      requireAdvertisement: false,
+    })
+  );
+}
 
 export type QuestionClient = {
   request: (
@@ -18,6 +36,12 @@ export type QuestionClientResolutionOwner = {
   clientGeneration: number;
   onQuestionResolution: (resolution: QuestionResolvedEvent) => void;
 };
+
+const questionLists = new WeakMap<QuestionClient, Promise<unknown>>();
+
+export function invalidateQuestionList(client: QuestionClient): void {
+  questionLists.delete(client);
+}
 
 const resolutionOwnersByClient = new WeakMap<QuestionClient, Set<QuestionClientResolutionOwner>>();
 
@@ -38,12 +62,10 @@ export function unregisterQuestionClientOwner(
   owner: QuestionClientResolutionOwner,
 ): void {
   const owners = resolutionOwnersByClient.get(client);
-  if (!owners) {
-    return;
-  }
-  owners.delete(owner);
-  if (owners.size === 0) {
+  owners?.delete(owner);
+  if (owners?.size === 0) {
     resolutionOwnersByClient.delete(client);
+    invalidateQuestionList(client);
   }
 }
 
@@ -51,6 +73,7 @@ export function publishQuestionClientResolution(
   client: QuestionClient,
   resolution: QuestionResolvedEvent,
 ): void {
+  invalidateQuestionList(client);
   const owners = resolutionOwnersByClient.get(client);
   if (!owners) {
     return;
@@ -80,5 +103,18 @@ export function requestQuestionGateway(
     expiresAtMs === undefined
       ? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
       : Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, Math.max(0, expiresAtMs - Date.now()));
-  return client.request(method, params, { timeoutMs });
+  if (method !== "question.list") {
+    return client.request(method, params, { timeoutMs });
+  }
+  let pending = questionLists.get(client);
+  if (!pending) {
+    pending = client.request(method, params, { timeoutMs });
+    questionLists.set(client, pending);
+    void pending.catch(() => {
+      if (questionLists.get(client) === pending) {
+        questionLists.delete(client);
+      }
+    });
+  }
+  return pending;
 }

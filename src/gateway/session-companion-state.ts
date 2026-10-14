@@ -24,6 +24,23 @@ export type SessionCompanionThread = {
 const SESSION_COMPANION_MAX_EXCHANGES = 24;
 const SESSION_COMPANION_MAX_EXCHANGE_BYTES = 48 * 1024;
 
+export function selectSessionCompanionReferenceItems<T>(
+  newestFirst: readonly T[],
+  maxBytes: number,
+): T[] {
+  const selected: T[] = [];
+  let bytes = 2;
+  for (const item of newestFirst) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8") + 1;
+    if (bytes + itemBytes > maxBytes) {
+      break;
+    }
+    selected.push(item);
+    bytes += itemBytes;
+  }
+  return selected.toReversed();
+}
+
 function exchangeBytes(exchange: SessionCompanionExchange): number {
   return Buffer.byteLength(exchange.question, "utf8") + Buffer.byteLength(exchange.answer, "utf8");
 }

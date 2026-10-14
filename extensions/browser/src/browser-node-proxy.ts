@@ -1,9 +1,5 @@
 import crypto from "node:crypto";
-import {
-  addTimerTimeoutGraceMs,
-  MAX_TIMER_TIMEOUT_MS,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -21,24 +17,19 @@ import {
   type BrowserProxyEnvelope,
   type BrowserProxyRoute,
 } from "./browser-proxy-envelope.js";
+import { resolveBrowserProxyTimeouts } from "./browser-proxy-timeouts.js";
 import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
-import {
-  callGatewayTool,
-  fetchBrowserJson,
-  persistBrowserProxyResultFiles,
-} from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
+import { BrowserServiceError, fetchBrowserJson } from "./browser/client-fetch.js";
+import { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
 } from "./browser/session-tab-route.js";
 
 const logger = createSubsystemLogger("browser");
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
-const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
 class BrowserNodeSafeFallbackError extends Error {
   constructor(message: string, cause?: unknown) {
@@ -76,32 +67,18 @@ function unwrapBrowserProxyPayload(
   }
 }
 
-async function callBrowserProxy(params: {
-  nodeId: string;
-  nodeLabel?: string;
-  declaredCommands: readonly string[];
-  pendingDeclaredCommands: readonly string[];
-  allowAutomaticHostFallback: boolean;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}): Promise<BrowserProxyEnvelope> {
-  // Reserve both watchdog windows before clamping so timer saturation cannot
-  // make an outer watchdog expire alongside the browser action.
-  const proxyTimeoutMs = Math.min(
-    resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS),
-    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+async function callBrowserProxy(
+  params: Parameters<BrowserProxyRequest>[0] & {
+    nodeId: string;
+    nodeLabel?: string;
+    declaredCommands: readonly string[];
+    pendingDeclaredCommands: readonly string[];
+    allowAutomaticHostFallback: boolean;
+  },
+): Promise<BrowserProxyEnvelope> {
+  const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
+    params.timeoutMs,
   );
-  const nodeInvokeTimeoutMs =
-    addTimerTimeoutGraceMs(proxyTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    proxyTimeoutMs;
-  const gatewayTimeoutMs =
-    addTimerTimeoutGraceMs(nodeInvokeTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    nodeInvokeTimeoutMs;
   if (
     isBrowserProxyUploadRequest(params) &&
     !params.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)
@@ -188,7 +165,7 @@ export function createBrowserNodeProxyRequest(params: {
   allowAutomaticHostFallback: boolean;
   signal?: AbortSignal;
 }): BrowserProxyRequest {
-  let hostFallbackActive = false;
+  let target: "auto" | "node" | "host" = params.allowAutomaticHostFallback ? "auto" : "node";
   let route: BrowserProxyRoute | undefined;
   const dispatch = async (request: Parameters<BrowserProxyRequest>[0]) => {
     // Bind cancellation once so every node action and its safe host fallback
@@ -197,7 +174,7 @@ export function createBrowserNodeProxyRequest(params: {
       request.signal || params.signal
         ? { ...request, signal: request.signal ?? params.signal }
         : request;
-    if (hostFallbackActive) {
+    if (target === "host") {
       return await callLocalBrowserControl(requestWithSignal);
     }
     try {
@@ -206,26 +183,29 @@ export function createBrowserNodeProxyRequest(params: {
         nodeLabel: params.nodeTarget.label,
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
-        allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        allowAutomaticHostFallback: target === "auto",
         ...requestWithSignal,
       });
+      // A follow-up snapshot or setting belongs to the browser that already
+      // handled this action, even if that node subsequently becomes unavailable.
+      target = "node";
       route = parseBrowserProxyRoute(proxy);
       const failure = parseBrowserProxyFailure(proxy);
       if (failure) {
         const { status, body } = failure.error;
-        throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+        throw new BrowserServiceError(body.error, body, status);
       }
       if (!("result" in proxy)) {
         throw new Error("Browser proxy returned a failure without an error payload.");
       }
       return await persistBrowserProxyResultFiles(proxy.result, proxy.files);
     } catch (error) {
-      if (!params.allowAutomaticHostFallback || !(error instanceof BrowserNodeSafeFallbackError)) {
+      if (target !== "auto" || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;
       }
       // These failures are detected before route dispatch. Retrying any later
       // failure could duplicate a mutating browser action.
-      hostFallbackActive = true;
+      target = "host";
       route = undefined;
       logger.warn(
         `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} unavailable before dispatch (${error.message}); falling back to Gateway host`,
@@ -234,7 +214,7 @@ export function createBrowserNodeProxyRequest(params: {
     }
   };
   return Object.assign(dispatch, {
-    isHostFallbackActive: () => hostFallbackActive,
+    isHostFallbackActive: () => target === "host",
     route: () => route,
   });
 }

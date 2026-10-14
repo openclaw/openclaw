@@ -4,9 +4,11 @@ import { getActiveReef } from "./runtime.js";
 export async function handleReefCommand({
   args,
   senderIsOwner,
+  assertOwnerCurrent,
 }: {
   args?: string;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
 }): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
   const changesFriendship =
@@ -14,18 +16,22 @@ export async function handleReefCommand({
   const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
   if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
     return {
-      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+      text: "Only an authorized owner can change Reef friends or decide reviews. Ask an owner; friendship changes can also use openclaw reef locally.",
     };
   }
   const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
-    const minted = await active.friends.mintCode();
+    const minted = await active.friends.mintCode(assertOwnerCurrent);
     return {
       text: `Reef friend code: ${minted.code} (expires ${new Date(minted.expires * 1000).toISOString()})`,
     };
   }
   if (words[0] === "friend" && words[1] === "request" && words[2]) {
-    await active.friends.request(words[2].replace(/^@/, "").toLowerCase(), words[3]);
+    await active.friends.request(
+      words[2].replace(/^@/, "").toLowerCase(),
+      words[3],
+      assertOwnerCurrent,
+    );
     return { text: "Reef friend request submitted." };
   }
   if (words[0] === "friend" && words[1] === "list") {
@@ -43,13 +49,13 @@ export async function handleReefCommand({
   }
   if (words[0] === "friend" && /^(remove|block)$/.test(words[1] ?? "") && words[2]) {
     const peer = words[2].replace(/^@/, "").toLowerCase();
-    await active.friends.remove(peer);
+    await active.friends.remove(peer, assertOwnerCurrent);
     return { text: `Reef friend @${peer} blocked and removed locally.` };
   }
   if (words[0] === "friend" && words[1] === "autonomy" && words[2] && words[3]) {
     const peer = words[2].replace(/^@/, "").toLowerCase();
     const autonomy = ReefAutonomySchema.parse(words[3]);
-    await active.friends.setAutonomy(peer, autonomy);
+    await active.friends.setAutonomy(peer, autonomy, assertOwnerCurrent);
     return { text: `Reef friend @${peer} autonomy set to ${autonomy}.` };
   }
   if (words[0] === "review" && words[1] === "list") {
@@ -66,11 +72,19 @@ export async function handleReefCommand({
     };
   }
   if (words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "") && words[2]) {
-    const found = await active.reviews.decide(words[2], words[1] === "approve");
+    const decided = await active.reviews.decide(
+      words[2],
+      words[1] === "approve",
+      assertOwnerCurrent,
+    );
+    if (!decided) {
+      return { text: "Unknown Reef approval digest." };
+    }
     return {
-      text: found
-        ? `Reef review ${words[1]}d. Retry the identical message to re-run the guard.`
-        : "Unknown Reef approval digest.",
+      text:
+        decided.direction === "inbound"
+          ? `Reef review ${words[1]}d. The parked message from ${decided.from} is re-processed from the relay within about 30 seconds.`
+          : `Reef review ${words[1]}d. Retry the identical message to re-run the guard.`,
     };
   }
   return {

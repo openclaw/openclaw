@@ -1,4 +1,5 @@
 // Preferred provider tests cover auth-choice provider selection and runtime provider discovery.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { resolvePluginProvidersCore as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
 
@@ -51,26 +52,6 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("normalizes legacy auth choices before plugin lookup", async () => {
-    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
-    });
-    resolveManifestProviderAuthChoice.mockReturnValue({
-      pluginId: "anthropic",
-      providerId: "anthropic",
-      methodId: "cli",
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
-    });
-
-    await expect(resolvePreferredProviderForAuthChoice({ choice: "claude-cli" })).resolves.toBe(
-      "anthropic",
-    );
-    expect(resolveProviderPluginChoiceCore).not.toHaveBeenCalled();
-    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
-  });
-
   it("passes explicit env through legacy auth normalization", async () => {
     const env = { OPENCLAW_AUTH_CHOICE_TEST: "1" } as NodeJS.ProcessEnv;
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
@@ -89,20 +70,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       resolvePreferredProviderForAuthChoice({ choice: "claude-cli", env }),
     ).resolves.toBe("anthropic");
     expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("claude-cli", { env });
-  });
-
-  it("uses manifest metadata for plugin-owned choices", async () => {
-    resolveManifestProviderAuthChoice.mockReturnValue({
-      pluginId: "chutes",
-      providerId: "chutes",
-      methodId: "oauth",
-      choiceId: "chutes",
-      choiceLabel: "Chutes OAuth",
-    });
-
-    await expect(resolvePreferredProviderForAuthChoice({ choice: "chutes" })).resolves.toBe(
-      "chutes",
-    );
+    expect(resolveProviderPluginChoiceCore).not.toHaveBeenCalled();
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 

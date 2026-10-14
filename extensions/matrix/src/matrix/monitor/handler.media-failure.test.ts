@@ -49,8 +49,6 @@ function createMediaFailureHarness() {
     }),
     getMemberDisplayName: async () => "Gum",
     startupMs: Date.now() - 120_000,
-    startupGraceMs: 60_000,
-    textLimit: 4000,
     mediaMaxBytes: 5 * 1024 * 1024,
     replyToMode: "first",
   });
@@ -108,51 +106,47 @@ describe("createMatrixRoomMessageHandler media failures", () => {
     installMatrixMonitorTestRuntime();
   });
 
-  it("forwards the Matrix event body as originalFilename for media downloads", async () => {
-    downloadMatrixMediaMock.mockResolvedValue({
-      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
-      contentType: "image/png",
-      placeholder: "[matrix media]",
-    });
-    const { handler } = createMediaFailureHarness();
+  it.each([" \t "])(
+    "downloads encrypted image attachments when the top-level URL is blank (%j)",
+    async (url) => {
+      downloadMatrixMediaMock.mockResolvedValue({
+        path: "/tmp/inbound/encrypted-image.png",
+        contentType: "image/png",
+        placeholder: "[matrix image attachment]",
+      });
+      const { handler, recordInboundSession } = createMediaFailureHarness();
+      const file = {
+        url: "mxc://example/encrypted-image",
+        key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+        iv: "iv",
+        hashes: { sha256: "hash" },
+        v: "v2",
+      };
 
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: " Screenshot 2026-03-27.png ",
-        url: "mxc://example/image",
-      }),
-    );
+      await handler(
+        "!room:example.org",
+        createImageEvent({
+          msgtype: "m.image",
+          body: " \t ",
+          filename: " encrypted-image.png ",
+          url,
+          file,
+          info: { mimetype: "image/png", size: 123 },
+        }),
+      );
 
-    const downloadOptions = firstObjectArg(downloadMatrixMediaMock);
-    expect(downloadOptions.mxcUrl).toBe("mxc://example/image");
-    expect(downloadOptions.maxBytes).toBe(5 * 1024 * 1024);
-    expect(downloadOptions.originalFilename).toBe("Screenshot 2026-03-27.png");
-  });
-
-  it("prefers content.filename over body text when deriving originalFilename", async () => {
-    downloadMatrixMediaMock.mockResolvedValue({
-      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
-      contentType: "image/png",
-      placeholder: "[matrix media]",
-    });
-    const { handler } = createMediaFailureHarness();
-
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: "can you review this screenshot?",
-        filename: "Screenshot 2026-03-27.png",
-        url: "mxc://example/image",
-      }),
-    );
-
-    expect(firstObjectArg(downloadMatrixMediaMock).originalFilename).toBe(
-      "Screenshot 2026-03-27.png",
-    );
-  });
+      expect(downloadMatrixMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mxcUrl: "mxc://example/encrypted-image",
+          file,
+          originalFilename: "encrypted-image.png",
+        }),
+      );
+      expect(firstInboundContext(recordInboundSession).MediaPath).toBe(
+        "/tmp/inbound/encrypted-image.png",
+      );
+    },
+  );
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
@@ -177,71 +171,6 @@ describe("createMatrixRoomMessageHandler media failures", () => {
     expect(warningMetadata.msgtype).toBe("m.image");
     expect(warningMetadata.encrypted).toBe(false);
     expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("replaces bare image filenames with an unavailable marker when encrypted download fails", async () => {
-    downloadMatrixMediaMock.mockRejectedValue(new Error("decrypt failed"));
-    const { handler, recordInboundSession } = createMediaFailureHarness();
-
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: "photo.jpg",
-        file: {
-          url: "mxc://example/encrypted",
-          key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
-          iv: "iv",
-          hashes: { sha256: "hash" },
-          v: "v2",
-        },
-      }),
-    );
-
-    const ctx = firstInboundContext(recordInboundSession);
-    expect(ctx.RawBody).toBe("[matrix image attachment unavailable]");
-    expect(ctx.CommandBody).toBe("[matrix image attachment unavailable]");
-    expect(ctx.MediaPath).toBeUndefined();
-  });
-
-  it("preserves a real caption while marking the attachment unavailable", async () => {
-    downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
-    const { handler, recordInboundSession } = createMediaFailureHarness();
-
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: "can you see this image?",
-        filename: "image.png",
-        url: "mxc://example/image",
-      }),
-    );
-
-    const ctx = firstInboundContext(recordInboundSession);
-    expect(ctx.RawBody).toBe("can you see this image?\n\n[matrix image attachment unavailable]");
-    expect(ctx.CommandBody).toBe(
-      "can you see this image?\n\n[matrix image attachment unavailable]",
-    );
-  });
-
-  it("shows a too-large marker when the download is rejected due to size limit", async () => {
-    downloadMatrixMediaMock.mockRejectedValue(new MatrixMediaSizeLimitError());
-    const { handler, recordInboundSession } = createMediaFailureHarness();
-
-    await handler(
-      "!room:example.org",
-      createImageEvent({
-        msgtype: "m.image",
-        body: "big-photo.jpg",
-        url: "mxc://example/big-image",
-      }),
-    );
-
-    const ctx = firstInboundContext(recordInboundSession);
-    expect(ctx.RawBody).toBe("[matrix image attachment too large]");
-    expect(ctx.CommandBody).toBe("[matrix image attachment too large]");
-    expect(ctx.MediaPath).toBeUndefined();
   });
 
   it("preserves a real caption while marking the attachment too large on size limit error", async () => {

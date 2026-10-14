@@ -4,6 +4,14 @@ const { assertNativeGeneratedArtifactsIsolated, shouldRunNativeI18n, shouldStric
   await import("../../scripts/ci-changed-scope.mjs");
 
 describe("native i18n changed scope", () => {
+  it.each(["scripts/native-app-i18n.ts", "scripts/native-i18n-inventory.ts"])(
+    "routes %s without requiring generated parity",
+    (sourcePath) => {
+      expect(shouldRunNativeI18n([sourcePath])).toBe(true);
+      expect(shouldStrictNativeI18n([sourcePath])).toBe(false);
+    },
+  );
+
   it("routes Android flavor sources through native i18n", () => {
     expect(
       shouldRunNativeI18n([
@@ -111,5 +119,33 @@ describe("native i18n changed scope", () => {
     expect(
       shouldStrictNativeI18n(["apps/ios/Sources/RootTabs.swift", "apps/.i18n/native-source.json"]),
     ).toBe(false);
+  });
+
+  it("admits the Android projection retirement only with its complete input migration", () => {
+    const migration = [
+      "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
+      ".github/workflows/native-app-locale-refresh.yml",
+      "apps/.i18n/native-source.json",
+      "apps/android/app/build.gradle.kts",
+      "scripts/android-app-i18n.ts",
+      "scripts/native-app-i18n.ts",
+      "scripts/ci-changed-scope.mjs",
+      "test/scripts/android-app-i18n.test.ts",
+      "test/scripts/native-app-i18n.test.ts",
+      "src/scripts/ci-changed-scope.native-i18n.test.ts",
+      "apps/.i18n/native/de.json",
+      "apps/android/app/src/main/res/values-de/strings.xml",
+    ];
+    expect(() => assertNativeGeneratedArtifactsIsolated(migration)).not.toThrow();
+    for (const incomplete of [
+      migration.slice(1),
+      migration.filter((filePath) => filePath !== "apps/android/app/build.gradle.kts"),
+      [...migration, "apps/ios/Resources/Localizable.xcstrings"],
+      [...migration, "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt"],
+    ]) {
+      expect(() => assertNativeGeneratedArtifactsIsolated(incomplete)).toThrow(
+        "Native generated locale artifacts must be isolated from source changes",
+      );
+    }
   });
 });

@@ -49,17 +49,6 @@ export type AcpEventLedger = {
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
 };
 
-export type AcpLedgerSession = {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-  complete: boolean;
-  createdAt: number;
-  updatedAt: number;
-  nextSeq: number;
-  events: AcpEventLedgerEntry[];
-};
-
 export type AcpLedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
@@ -67,12 +56,7 @@ export type AcpLedgerOptions = {
   now?: () => number;
 };
 
-export type AcpMutableLedgerState = {
-  maxSessions: number;
-  maxEventsPerSession: number;
-  maxSerializedBytes: number;
-  now: () => number;
-};
+export type AcpMutableLedgerState = ReturnType<typeof normalizeAcpLedgerOptions>;
 
 export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   return {
@@ -91,14 +75,10 @@ export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   };
 }
 
-export function cloneAcpLedgerValue<T>(value: T): T {
-  return structuredClone(value);
-}
-
 export function createAcpPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate[] {
   return prompt.map((content) => ({
     sessionUpdate: "user_message_chunk",
-    content: cloneAcpLedgerValue(content),
+    content: structuredClone(content),
   }));
 }
 
@@ -130,6 +110,6 @@ export function normalizeAcpLedgerEvent(raw: unknown): AcpEventLedgerEntry | und
     sessionId,
     sessionKey,
     ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: cloneAcpLedgerValue(raw.update) as SessionUpdate,
+    update: structuredClone(raw.update) as SessionUpdate,
   };
 }

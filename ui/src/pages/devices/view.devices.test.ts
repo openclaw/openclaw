@@ -1,91 +1,36 @@
 /* @vitest-environment jsdom */
+
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
-import { renderDevices } from "./view.ts";
-import type { DevicesProps } from "./view.types.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
+import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
+import { showToast } from "../../lib/toast.ts";
+import {
+  createDevicesViewProps,
+  createOfflineDeviceNode,
+  deviceSystemInfo,
+} from "../../test-helpers/devices-fixtures.ts";
+import {
+  renderDevicesContainer,
+  renderDevicesInto,
+  getDevicesSection as getSection,
+  getDeviceSettingsRow as getSettingsRow,
+} from "../../test-helpers/devices-view.tsx";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 
-function baseProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
-  return {
-    loading: false,
-    nodes: [],
-    presence: [],
-    gatewayVersion: null,
-    lastError: null,
-    devicesLoading: false,
-    devicesError: null,
-    devicesList: {
-      pending: [],
-      paired: [],
-    },
-    canPairDevice: true,
-    canManagePairing: true,
-    canAdmin: true,
-    configForm: null,
-    configLoading: false,
-    configSaving: false,
-    configDirty: false,
-    configFormMode: "form",
-    execApprovalsLoading: false,
-    execApprovalsSaving: false,
-    execApprovalsDirty: false,
-    execApprovalsSnapshot: null,
-    execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
-    execApprovalsTarget: "gateway",
-    execApprovalsTargetNodeId: null,
-    onDevicePairSetupOpen: () => undefined,
-    onDeviceApprove: () => undefined,
-    onDeviceReject: () => undefined,
-    onDeviceRotate: () => undefined,
-    onDeviceRevoke: () => undefined,
-    onNodeApprove: () => undefined,
-    onNodeReject: () => undefined,
-    onInventoryRemove: () => undefined,
-    onInventoryCleanup: () => undefined,
-    onLoadConfig: () => undefined,
-    onLoadExecApprovals: () => undefined,
-    onBindDefault: () => undefined,
-    onBindAgent: () => undefined,
-    onSaveBindings: () => undefined,
-    onExecApprovalsTargetChange: () => undefined,
-    onExecApprovalsSelectAgent: () => undefined,
-    onExecApprovalsPatch: () => undefined,
-    onExecApprovalsRemove: () => undefined,
-    onSaveExecApprovals: () => undefined,
-    ...overrides,
-  };
-}
+vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
+  openDesktopFocus: vi.fn(),
+}));
 
-function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderDevices(baseProps(overrides)), container);
-  return container;
-}
+vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
-function getSection(container: Element, heading: string): Element {
-  const section = Array.from(container.querySelectorAll(".settings-section")).find((candidate) =>
-    candidate.querySelector(".settings-section__heading")?.textContent?.trim().startsWith(heading),
-  );
-  expect(section).toBeInstanceOf(Element);
-  if (!(section instanceof Element)) {
-    throw new Error(`Expected ${heading} section`);
-  }
-  return section;
-}
-
-function getSettingsRow(container: Element, title: string): Element {
-  const row = Array.from(container.querySelectorAll(".settings-row")).find(
-    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
-  );
-  expect(row).toBeInstanceOf(Element);
-  if (!(row instanceof Element)) {
-    throw new Error(`Expected ${title} row`);
-  }
-  return row;
-}
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 function getInventorySection(container: Element): Element {
   return getSection(container, "Paired devices");
@@ -97,11 +42,18 @@ function getPendingDeviceDetails(container: Element): string[] {
   if (!(item instanceof Element)) {
     throw new Error("Expected pending device item");
   }
-  const lines = Array.from(item.querySelectorAll(".settings-row__desc")).map(
-    (line) => line.textContent?.replace(/\s+/gu, " ").trim() ?? "",
-  );
-  // Drop the identifier line; the remaining lines carry approval context.
-  return lines.slice(1);
+  const meta =
+    item
+      .querySelector(".device-entry__body > .settings-row__desc")
+      ?.textContent?.replace(/\s+/gu, " ")
+      .trim() ?? "";
+  const access = Array.from(item.querySelectorAll("dt"))
+    .filter((label) => /Requested access|Approved access/u.test(label.textContent ?? ""))
+    .map((label) => {
+      const prefix = label.textContent === "Requested access" ? "requested" : "approved now";
+      return `${prefix}: ${label.nextElementSibling?.textContent?.trim()}`;
+    });
+  return [meta, ...access];
 }
 
 function findButton(scope: Element, label: string): HTMLButtonElement {
@@ -115,6 +67,25 @@ function findButton(scope: Element, label: string): HTMLButtonElement {
   return button;
 }
 
+async function selectMenuItem(scope: Element, value: string): Promise<HTMLButtonElement> {
+  const trigger = expectDefined(
+    scope.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
+    "device actions trigger",
+  );
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  }
+  const item = expectDefined(
+    scope.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
+    `menu item ${value}`,
+  );
+  item.click();
+  await Promise.resolve();
+  flush();
+  return item;
+}
+
 function statusesByText(scope: Element, text: string): HTMLElement[] {
   return Array.from(scope.querySelectorAll<HTMLElement>(".settings-status")).filter(
     (status) => status.textContent?.trim() === text,
@@ -122,38 +93,6 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
 }
 
 describe("devices pending rendering", () => {
-  it("shows requested and approved access for a scope upgrade", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
-    });
-    const details = getPendingDeviceDetails(container);
-
-    expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.slice(1)).toEqual([
-      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
-      "approved now: roles: operator · scopes: operator.read",
-    ]);
-  });
-
   it("normalizes pending device ids before matching paired access", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -180,7 +119,10 @@ describe("devices pending rendering", () => {
     const details = getPendingDeviceDetails(container);
 
     expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.at(-1)).toBe("approved now: roles: operator · scopes: operator.read");
+    expect(details.slice(1)).toEqual([
+      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
+      "approved now: roles: operator · scopes: operator.read",
+    ]);
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {
@@ -239,33 +181,134 @@ describe("devices pending rendering", () => {
 });
 
 describe("devices inventory rendering", () => {
-  it("pins the Gateway self beacon before paired devices", () => {
+  it.each([
+    { load: 18, free: 24, diskFree: 240, tone: "warn" },
+    { load: 28, free: 8, diskFree: 80, tone: "danger" },
+  ])("renders node resource pressure as $tone", ({ load, free, diskFree, tone }) => {
     const container = renderDevicesContainer({
-      presence: [
+      nodes: [
         {
-          instanceId: "gateway-1",
-          host: "gateway-host",
-          mode: "gateway",
-          platform: "linux",
-          version: "2026.7.11",
-          lastInputSeconds: 5,
-          ts: 1_000,
+          nodeId: "studio",
+          displayName: "Studio",
+          connected: true,
+          paired: true,
+          platform: "macos 27.0",
+          modelIdentifier: "Mac15,14",
+          version: "2026.8.1",
+          hostStats: {
+            cpuCount: 24,
+            loadAverage: [load, 2.8, 2.4],
+            memoryTotalBytes: 192 * 1024 ** 3,
+            memoryFreeBytes: free * 1024 ** 3,
+            diskTotalBytes: 2048 * 1024 ** 3,
+            diskAvailableBytes: diskFree * 1024 ** 3,
+            updatedAtMs: 1000,
+          },
+        },
+        { nodeId: "without-stats", displayName: "Without stats", paired: true, connected: true },
+      ],
+    });
+    const row = getSettingsRow(container, "Studio");
+    expect(row.querySelectorAll(`.device-resources .session-context-meter--${tone}`)).toHaveLength(
+      3,
+    );
+    expect(row.querySelector(".device-resource")?.getAttribute("title")).toContain(
+      `${load.toFixed(2)} / 2.80 / 2.40 on 24 cores`,
+    );
+    expect(row.querySelector(".settings-row__desc")?.textContent).toContain(
+      "macOS 27.0 · Mac Studio · Mac15,14 · 2026.8.1",
+    );
+    expect(
+      getSettingsRow(container, "Without stats").querySelector(".device-resources"),
+    ).toBeNull();
+  });
+
+  it("hides only meters whose optional inputs are absent", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "memory",
+          displayName: "Memory only",
+          paired: true,
+          hostStats: {
+            cpuCount: 8,
+            memoryTotalBytes: 32 * 1024 ** 3,
+            memoryFreeBytes: 16 * 1024 ** 3,
+            updatedAtMs: 1000,
+          },
         },
       ],
-      devicesList: {
-        pending: [],
-        paired: [{ deviceId: "device-1", displayName: "Device One", roles: ["operator"] }],
+    });
+    const meters = getSettingsRow(container, "Memory only").querySelectorAll(".device-resource");
+    expect(meters).toHaveLength(1);
+    expect(meters[0]?.textContent).toContain("16 / 32 GB");
+  });
+
+  it.each(["gateway", "node:studio"])(
+    "opens the recorded %s desktop environment in a focus window",
+    async (environmentId) => {
+      // Settings routes hide the docked panel, so the row must open the standalone window.
+      vi.mocked(openDesktopFocus).mockClear();
+      const container = renderDevicesContainer({
+        basePath: "/ui",
+        presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+        nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
+        desktopEnvironments: [
+          { id: environmentId, type: "host", status: "available", desktop: true },
+        ],
+      });
+      expect(container.querySelectorAll(".device-entry__desktop")).toHaveLength(1);
+      findButton(
+        getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
+        "Desktop",
+      ).click();
+      expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
+      vi.mocked(openDesktopFocus).mockClear();
+      await selectMenuItem(
+        getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
+        "desktop",
+      );
+      expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
+    },
+  );
+
+  it("does not infer Desktop availability from commands", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        { nodeId: "studio", displayName: "Studio", paired: true, commands: ["desktop.stream"] },
+      ],
+      desktopEnvironments: [
+        { id: "node:studio", type: "node", status: "available", desktop: undefined },
+        { id: "node:other", type: "node", status: "available", desktop: true },
+      ],
+    });
+    const row = getSettingsRow(container, "Studio");
+    expect(row.querySelector(".device-entry__desktop")).toBeNull();
+    const chip = row.querySelector('[aria-disabled="true"]');
+    expect(chip?.getAttribute("title")).toContain("Desktop sharing");
+    expect(chip?.getAttribute("title")).toContain("pending desktop capability request");
+    expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
+  });
+
+  it("renders Gateway resources and uptime from system info", () => {
+    const container = renderDevicesContainer({
+      presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+      gatewaySystemInfo: {
+        ...deviceSystemInfo,
+        uptimeMs: (11 * 24 + 4) * 3600000,
+        cpuCount: 16,
+        loadAverage: [3.2, 2.8, 2.4],
+        memoryTotalBytes: 64 * 1024 ** 3,
+        memoryFreeBytes: 32 * 1024 ** 3,
+        diskTotalBytes: 2 * 1024 ** 4,
+        diskAvailableBytes: 1.2 * 1024 ** 4,
       },
     });
-    const entries = getInventorySection(container).querySelectorAll(".device-entry");
-    const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
-
-    expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
-    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(0);
-    expect(gatewayEntry.textContent).toContain("gateway-host");
-    expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
-    expect(gatewayEntry.querySelector("button")).toBeNull();
-    expect(gatewayEntry.querySelector("details")).toBeNull();
+    const row = getSettingsRow(container, "Gateway");
+    expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
+    expect(row.textContent).toContain("load 3.2");
+    expect(row.textContent).toContain("1.2 TB free");
+    expect(row.querySelector(".settings-row__desc")?.textContent).toContain("up 11d 4h");
   });
 
   it("keeps the paired-devices empty state when only other sections have rows", () => {
@@ -324,7 +367,7 @@ describe("devices inventory rendering", () => {
     expect(findButton(section, "Clean up 1 stale")).toBeInstanceOf(HTMLButtonElement);
   });
 
-  it("wires the remove icon button to the removal routing for the entry roles", () => {
+  it("routes the danger menu item through the existing inventory removal request", async () => {
     const removed: InventoryRemovalRequest[] = [];
     const container = renderDevicesContainer({
       devicesList: {
@@ -340,19 +383,109 @@ describe("devices inventory rendering", () => {
       onInventoryRemove: (entry) => removed.push(entry),
     });
 
-    const button = getInventorySection(container).querySelector<HTMLButtonElement>(
-      'button[aria-label="Remove Browser"]',
-    );
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button?.click();
+    const row = getSettingsRow(container, "Browser");
+    expect(row.querySelector(".device-entry__remove")).toBeNull();
+    expect((await selectMenuItem(row, "remove")).dataset.variant).toBe("danger");
 
     expect(removed).toEqual([
       { id: "op-only", name: "Browser", removeNode: false, removeDevice: true },
     ]);
   });
 
-  it("renders approve and reject actions for pending node approvals", () => {
+  it("routes the Edit alias menu item to the device with its current alias", async () => {
+    const renamed: Array<{ id: string; name: string; operatorLabel?: string }> = [];
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "alias-device",
+            displayName: "LIN-5F196050F5D",
+            operatorLabel: "Office node",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "unaliased-device",
+            displayName: "Fresh laptop",
+            roles: ["operator"],
+          },
+        ],
+      },
+      onDeviceRename: (device) => renamed.push(device),
+    });
+
+    await selectMenuItem(getSettingsRow(container, "Office node"), "editAlias");
+    await selectMenuItem(getSettingsRow(container, "Fresh laptop"), "editAlias");
+
+    expect(renamed).toEqual([
+      { id: "alias-device", name: "Office node", operatorLabel: "Office node" },
+      { id: "unaliased-device", name: "Fresh laptop", operatorLabel: undefined },
+    ]);
+  });
+
+  it("keeps focus on Copy when an inventory refresh adds preceding approval actions", async () => {
+    const node = { nodeId: "node-one", displayName: "Node One", paired: true, connected: true };
+    const props = createDevicesViewProps({ nodes: [node] });
+    const container = renderDevicesContainer(props);
+    const copy = expectDefined(
+      container.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="copy"]'),
+      "Copy device ID menu item",
+    );
+    const trigger = expectDefined(
+      getSettingsRow(container, "Node One").querySelector<HTMLButtonElement>(
+        ".device-entry__menu-trigger",
+      ),
+      "device actions trigger",
+    );
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+    copy.focus();
+    expect(document.activeElement).toBe(copy);
+
+    renderDevicesInto(container, {
+      ...props,
+      nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
+    });
+
+    expect(container.querySelector('[role="menuitem"][data-value="approve"]')).not.toBeNull();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        (item) => item.dataset.value,
+      ),
+    ).toEqual(["approve", "reject", "copy", "remove"]);
+    expect(container.querySelector('[role="menuitem"][data-value="copy"]')).toBe(copy);
+    expect(document.activeElement).toBe(copy);
+  });
+
+  it.each([true, false])(
+    "reports the device ID copy outcome when clipboard succeeds: %s",
+    async (succeeds) => {
+      const writeText = succeeds
+        ? vi.fn().mockResolvedValue(undefined)
+        : vi.fn().mockRejectedValue(new Error("Denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const container = renderDevicesContainer({
+        canManagePairing: false,
+        devicesList: {
+          pending: [],
+          paired: [{ deviceId: "copy-device-id", displayName: "Copy device", roles: ["operator"] }],
+        },
+      });
+      const row = getSettingsRow(container, "Copy device");
+      expect((await selectMenuItem(row, "copy")).disabled).toBe(false);
+      await vi.waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith({
+          message: succeeds ? "Device ID copied" : "Copy failed",
+        }),
+      );
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("copy-device-id");
+    },
+  );
+
+  it("renders approve and reject actions for pending node approvals", async () => {
     const approvals: string[] = [];
+    const rejections: string[] = [];
     const container = renderDevicesContainer({
       nodes: [
         {
@@ -365,11 +498,19 @@ describe("devices inventory rendering", () => {
         },
       ],
       onNodeApprove: (requestId) => approvals.push(requestId),
+      onNodeReject: (requestId) => rejections.push(requestId),
     });
     const section = getInventorySection(container);
 
     expect(section.textContent).toContain("approval needed");
-    findButton(section, "Approve").click();
+    expect(
+      Array.from(section.querySelectorAll('button:not([role="menuitem"])'), (button) =>
+        button.textContent?.trim(),
+      ),
+    ).not.toContain("Approve");
+    await selectMenuItem(section, "approve");
+    await selectMenuItem(section, "reject");
+    expect(rejections).toEqual(["node-req-1"]);
     expect(approvals).toEqual(["node-req-1"]);
   });
 
@@ -401,10 +542,14 @@ describe("devices inventory rendering", () => {
     expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
       "Worker 2026.8.9",
     );
-    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
-      "Worker slots 1/2",
+    expect(installed?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
     );
-    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
+    expect(installed?.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).not.toContain(
+      "Worker slots",
+    );
+    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(1);
     expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
     expect(missing ? statusesByText(missing, "worker missing") : []).toHaveLength(1);
     expect(
@@ -419,6 +564,7 @@ describe("devices inventory rendering", () => {
   it("shows device and Gateway version drift", () => {
     const container = renderDevicesContainer({
       gatewayVersion: "2026.7.2",
+      basePath: "",
       nodes: [
         {
           nodeId: "node-old",
@@ -473,65 +619,6 @@ describe("devices inventory rendering", () => {
     ]);
   });
 
-  it("shows when an offline Windows device requires manual wake", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "windows-browser",
-            displayName: "Windows browser",
-            platform: "Win32",
-            roles: ["operator"],
-          },
-        ],
-      },
-      nodes: [
-        {
-          nodeId: "windows-node",
-          displayName: "Windows node",
-          platform: "win32",
-          connected: false,
-          paired: true,
-        },
-        {
-          nodeId: "windows-node-online",
-          displayName: "Online Windows node",
-          platform: "Windows 11",
-          connected: true,
-          paired: true,
-        },
-        {
-          nodeId: "windows-node-pending",
-          displayName: "Pending Windows node",
-          platform: "win32",
-          connected: false,
-          paired: true,
-          approvalState: "pending-approval",
-          pendingRequestId: "pending-windows",
-        },
-        {
-          nodeId: "windows-node-unapproved",
-          displayName: "Unapproved Windows node",
-          platform: "windows",
-          connected: false,
-          paired: true,
-          approvalState: "unapproved",
-        },
-      ],
-    });
-    const section = getInventorySection(container);
-    const wakeStatuses = Array.from(section.querySelectorAll<HTMLElement>("[title]")).filter(
-      (element) => element.textContent?.trim() === "manual wake required",
-    );
-
-    expect(statusesByText(section, "offline").length).toBeGreaterThan(0);
-    expect(wakeStatuses).toHaveLength(1);
-    expect(wakeStatuses[0]?.getAttribute("title")).toBe(
-      "The Gateway cannot wake an offline Windows device. Start the machine or restore its network connection.",
-    );
-  });
-
   it("shows node-only offline affordances while preserving mixed-role device liveness", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -553,6 +640,8 @@ describe("devices inventory rendering", () => {
           platform: "Windows 11",
           connected: false,
           paired: true,
+          workerSlots: { total: 8, available: 0 },
+          hostStats: createOfflineDeviceNode().hostStats,
         },
       ],
     });
@@ -561,8 +650,32 @@ describe("devices inventory rendering", () => {
 
     expect(section.textContent).toContain("1 of 1 connected");
     expect(
+      row.querySelector('.settings-row__control [role="img"]')?.getAttribute("aria-label"),
+    ).toBe("Slot utilization unavailable");
+    expect(row.querySelectorAll(".device-resources .session-context-meter--stale")).toHaveLength(3);
+    expect(row.querySelector(".device-resource__label")?.textContent).toContain("27d ago");
+    expect(row.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(0);
+    expect(
       Array.from(row.querySelectorAll(".settings-status"), (status) => status.textContent?.trim()),
     ).toEqual(["offline", "manual wake required"]);
+  });
+
+  it("preserves the slot-less exec affordance through node inventory", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "exec",
+          displayName: "Exec host",
+          connected: true,
+          paired: true,
+          caps: ["codex.exec-server"],
+          commands: [],
+        },
+      ],
+    });
+    const row = getSettingsRow(getInventorySection(container), "Exec host");
+    expect(row.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Codex exec");
+    expect(row.querySelector(".capacity-meter-pips, .session-context-meter")).toBeNull();
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {
@@ -576,6 +689,7 @@ describe("devices inventory rendering", () => {
             deviceId: "device-1",
             displayName: "Device One",
             roles: ["operator"],
+            scopes: ["operator.read"],
             tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
           },
         ],
@@ -586,72 +700,20 @@ describe("devices inventory rendering", () => {
     });
     const section = getInventorySection(container);
 
-    expect(section.textContent).toContain("operator · active · scopes: operator.read");
+    const facts = expectDefined(section.querySelector(".device-entry__facts"), "device facts");
+    expect(facts.querySelector("dt")?.textContent).toBe("Device ID");
+    expect(facts.querySelector("dd[title='device-1']")?.textContent).toBe("device-1");
+    expect(facts.querySelector(".device-capability--scope")?.textContent).toBe("operator.read");
+    const tokenRow = expectDefined(facts.querySelector("table tbody tr"), "token table row");
+    expect(
+      Array.from(tokenRow.querySelectorAll("td"), (cell) => cell.textContent?.trim()).slice(0, 3),
+    ).toEqual(["operator", "active", "operator.read"]);
+    expect(facts.querySelector(".muted")).toBeNull();
     findButton(section, "Rotate").click();
     // The rotate callback carries the row label, so the outcome dialog can name it.
     expect(rotations).toEqual([{ deviceId: "device-1", name: "Device One", role: "operator" }]);
     findButton(section, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
-  });
-
-  it("always renders private identifiers in Details and status as a dot with text", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "device-private-id",
-            displayName: "Device One",
-            platform: "macos 26.5.2",
-            remoteIp: "192.0.2.10",
-            roles: ["operator"],
-          },
-        ],
-      },
-    });
-    const entry = getInventorySection(container).querySelector(".device-entry");
-
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).toContain("macOS 26.5.2");
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).not.toContain(
-      "device-private-id",
-    );
-    expect(entry?.querySelector(".settings-row__desc")?.textContent).not.toContain("192.0.2.10");
-    expect(entry ? statusesByText(entry, "offline") : []).toHaveLength(1);
-    expect(entry?.querySelector("details")?.textContent).toContain("Device ID: device-private-id");
-    expect(entry?.querySelector("details")?.textContent).toContain("Remote IP: 192.0.2.10");
-  });
-
-  it("lists live unpaired presence beacons as display-only rows", () => {
-    const container = renderDevicesContainer({
-      presence: [
-        {
-          instanceId: "webchat-1",
-          host: "browser-session",
-          mode: "webchat",
-          roles: ["operator"],
-          platform: "macos 26.5.2",
-          lastInputSeconds: 90,
-          ts: 1_000,
-        },
-        {
-          instanceId: "left-1",
-          host: "gone",
-          mode: "webchat",
-          reason: "disconnect",
-          ts: 2_000,
-        },
-      ],
-    });
-    const section = getSection(container, "Connected without pairing");
-
-    expect(section.textContent).not.toContain("gone");
-    const entry = Array.from(section.querySelectorAll(".device-entry")).find((candidate) =>
-      candidate.textContent?.includes("browser-session"),
-    );
-    expect(entry?.textContent).toContain("unpaired");
-    expect(entry?.textContent).toContain("macOS 26.5.2");
-    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(0);
-    expect(entry?.querySelector("button")).toBeNull();
   });
 
   it("brands platform names instead of naive capitalization", () => {
@@ -661,8 +723,38 @@ describe("devices inventory rendering", () => {
         paired: [
           { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
           { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
+          {
+            deviceId: "mac-browser",
+            displayName: "Mac browser",
+            platform: "MacIntel",
+            deviceFamily: "Mac",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "ipad-browser",
+            displayName: "iPad browser",
+            platform: "MacIntel",
+            deviceFamily: "iPad",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "legacy-browser",
+            displayName: "Legacy browser",
+            platform: "MacIntel",
+            roles: ["operator"],
+          },
         ],
       },
+      presence: [
+        {
+          instanceId: "unpaired-ipad",
+          host: "Unpaired iPad",
+          platform: "MacIntel",
+          deviceFamily: "iPad",
+          mode: "webchat",
+          ts: 1_000,
+        },
+      ],
     });
     const subs = Array.from(
       getInventorySection(container).querySelectorAll(".device-entry .settings-row__desc"),
@@ -672,12 +764,44 @@ describe("devices inventory rendering", () => {
     expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
     expect(subs.some((text) => text.includes("IOS"))).toBe(false);
     expect(subs.some((text) => text.includes("macOS"))).toBe(true);
+    for (const [name, label] of [
+      ["Mac browser", "macOS"],
+      ["iPad browser", "iPadOS"],
+      ["Legacy browser", "MacIntel"],
+      ["Unpaired iPad", "iPadOS"],
+    ]) {
+      const row = Array.from(container.querySelectorAll(".device-entry")).find(
+        (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+      );
+      expect(
+        row
+          ?.querySelector(".device-entry__body > .settings-row__desc")
+          ?.textContent?.split(" · ")[0],
+      ).toBe(label);
+    }
   });
 });
 
 describe("devices access gating", () => {
   it("disables pairing and admin mutations with one browsing-only notice", () => {
+    const onInventoryRemove = vi.fn();
+    const onNodeApprove = vi.fn();
+    const onNodeReject = vi.fn();
+    const onDeviceRename = vi.fn();
     const container = renderDevicesContainer({
+      onInventoryRemove,
+      onNodeApprove,
+      onNodeReject,
+      onDeviceRename,
+      nodes: [
+        {
+          nodeId: "node-pending",
+          displayName: "Pending node",
+          paired: true,
+          approvalState: "pending-reapproval",
+          pendingRequestId: "node-request",
+        },
+      ],
       canPairDevice: false,
       canManagePairing: false,
       canAdmin: false,
@@ -700,7 +824,7 @@ describe("devices access gating", () => {
           },
         ],
       },
-      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configForm: { agents: { entries: { main: {} } } },
       configDirty: true,
     });
 
@@ -709,214 +833,35 @@ describe("devices access gating", () => {
     for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
-    expect(
-      container.querySelector<HTMLButtonElement>('button[aria-label="Remove Device One"]')
-        ?.disabled,
-    ).toBe(true);
+    const remove = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
+      '[role="menuitem"][data-value="remove"]',
+    );
+    expect(remove?.disabled).toBe(true);
+    expect(remove?.getAttribute("title")).toContain("operator.pairing");
+    const editAlias = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
+      '[role="menuitem"][data-value="editAlias"]',
+    );
+    expect(editAlias?.disabled).toBe(true);
+    expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
+    remove?.click();
+    editAlias?.click();
+    for (const action of ["approve", "reject"]) {
+      const item = expectDefined(
+        getSettingsRow(container, "Pending node").querySelector<HTMLButtonElement>(
+          `[role="menuitem"][data-value="${action}"]`,
+        ),
+        `device action ${action}`,
+      );
+      expect(item.disabled).toBe(true);
+      expect(item.title).toContain("operator.pairing");
+      item.click();
+    }
+    expect(onInventoryRemove).not.toHaveBeenCalled();
+    expect(onDeviceRename).not.toHaveBeenCalled();
+    expect(onNodeApprove).not.toHaveBeenCalled();
+    expect(onNodeReject).not.toHaveBeenCalled();
     expect(container.textContent).toContain(
       "Browsing only. Exec approvals and node bindings require operator.admin access.",
     );
-  });
-});
-
-describe("devices exec approvals rendering", () => {
-  it("renders owner-reported defaults for fresh approval state", () => {
-    const container = renderDevicesContainer({
-      execApprovalsSnapshot: {
-        path: "/tmp/exec-approvals.json",
-        exists: false,
-        hash: "missing:empty",
-        file: { version: 1, agents: {} },
-        resolvedDefaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-    });
-    const section = getSection(container, "Exec approvals");
-
-    expect(
-      getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
-    ).toBe("full");
-    expect(getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select")?.value).toBe(
-      "off",
-    );
-  });
-
-  it("preserves authored wildcard and agent overrides above owner defaults", () => {
-    const container = renderDevicesContainer({
-      execApprovalsSnapshot: {
-        path: "/tmp/exec-approvals.json",
-        exists: false,
-        hash: "missing:empty",
-        file: {
-          version: 1,
-          agents: {
-            "*": { security: "allowlist", ask: "always" },
-            main: { ask: "on-miss" },
-          },
-        },
-        resolvedDefaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-      execApprovalsSelectedAgent: "main",
-    });
-    const section = getSection(container, "Exec approvals");
-    const security = getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select");
-    const ask = getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select");
-    const fallback = getSettingsRow(section, "Ask fallback").querySelector<HTMLSelectElement>(
-      "select",
-    );
-
-    expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
-    expect(ask?.value).toBe("on-miss");
-    expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
-  });
-
-  it("offers only nodes that support both reading and writing approval policy", () => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "get-only",
-          displayName: "Get only",
-          commands: ["system.execApprovals.get"],
-        },
-        {
-          nodeId: "set-only",
-          displayName: "Set only",
-          commands: ["system.execApprovals.set"],
-        },
-        {
-          nodeId: "editable",
-          displayName: "Editable",
-          commands: ["system.execApprovals.get", "system.execApprovals.set"],
-        },
-      ],
-      execApprovalsTarget: "node",
-    });
-    const section = getSection(container, "Exec approvals");
-    const nodeSelect = section.querySelector<HTMLSelectElement>('select[aria-label="Node"]');
-
-    expect(Array.from(nodeSelect?.options ?? [], (option) => option.value)).toEqual([
-      "",
-      "editable",
-    ]);
-  });
-
-  it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
-    const onExecApprovalsSelectAgent = vi.fn();
-    const container = renderDevicesContainer({
-      configForm: {
-        agents: {
-          entries: {
-            main: { name: "Main", default: true },
-            research: { name: "Research" },
-          },
-        },
-      },
-      execApprovalsForm: {
-        version: 1,
-        defaults: { security: "deny" },
-        agents: { retired: { security: "full" } },
-      },
-      execApprovalsSelectedAgent: "research",
-      onExecApprovalsSelectAgent,
-    });
-    const section = getSection(container, "Exec approvals");
-    const picker = section.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; badge?: string }>;
-        onSelect: (value: string) => void;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-agent-select");
-    await picker?.updateComplete;
-
-    expect(picker?.options.map((option) => option.value)).toEqual([
-      "__defaults__",
-      "main",
-      "research",
-      "retired",
-    ]);
-    expect(picker?.options.find((option) => option.value === "main")?.badge).toBe("Default");
-    picker?.onSelect("retired");
-    expect(onExecApprovalsSelectAgent).toHaveBeenCalledWith("retired");
-  });
-
-  it("renders host-native Windows policies as read-only", () => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          id: "windows-node",
-          label: "Windows node",
-          commands: ["system.execApprovals.get", "system.execApprovals.set"],
-        },
-      ],
-      execApprovalsTarget: "node",
-      execApprovalsTargetNodeId: "windows-node",
-      execApprovalsSnapshot: {
-        enabled: true,
-        hash: "sha256:current",
-        defaultAction: "deny",
-        rules: [{ pattern: "hostname", action: "allow" }],
-      },
-    });
-    const section = getSection(container, "Exec approvals");
-
-    expect(section.textContent).toContain("Host-native policy");
-    expect(section.textContent).toContain("Read-only here");
-    expect(section.textContent).toContain("hostname");
-    expect(section.textContent).toContain("deny");
-    expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
-  });
-});
-
-describe("devices agent bindings", () => {
-  it("reports node bindings and translates each unbound sentinel", () => {
-    const onBindDefault = vi.fn();
-    const onBindAgent = vi.fn();
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "worker-node",
-          displayName: "Worker node",
-          commands: ["system.run"],
-        },
-      ],
-      configForm: {
-        agents: {
-          entries: {
-            MAIN: { default: true },
-            research: {},
-          },
-        },
-      },
-      onBindDefault,
-      onBindAgent,
-    });
-    const bindingSection = getSection(container, "Exec node binding");
-    const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
-
-    const [defaultBinding, mainBinding] = selects;
-    defaultBinding!.value = "worker-node";
-    defaultBinding!.dispatchEvent(new Event("change"));
-    defaultBinding!.value = "";
-    defaultBinding!.dispatchEvent(new Event("change"));
-    mainBinding!.value = "worker-node";
-    mainBinding!.dispatchEvent(new Event("change"));
-    mainBinding!.value = "__default__";
-    mainBinding!.dispatchEvent(new Event("change"));
-
-    expect(onBindDefault.mock.calls).toEqual([["worker-node"], [null]]);
-    expect(onBindAgent.mock.calls).toEqual([
-      ["MAIN", "worker-node"],
-      ["MAIN", null],
-    ]);
   });
 });

@@ -1,11 +1,11 @@
-// Probe script for bundled plugin install/uninstall E2E scenarios.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
 const bundledRuntimeFragments = (pluginDir) => [
   `/dist/extensions/${pluginDir}`,
@@ -33,10 +33,6 @@ function readIntegerEnv(name, fallback, minimum) {
 
 function readPositiveIntEnv(name, fallback) {
   return readIntegerEnv(name, fallback, 1);
-}
-
-function readNonNegativeIntEnv(name, fallback) {
-  return readIntegerEnv(name, fallback, 0);
 }
 
 function resolveStateDir() {
@@ -150,7 +146,7 @@ function pluginRequiresConfig(pluginDir) {
   return Array.isArray(required) && required.some((value) => typeof value === "string");
 }
 
-async function loadPackagedBundledEntries() {
+function loadPackagedBundledEntries() {
   return readPluginsList()
     .filter((plugin) => plugin?.origin === "bundled")
     .map((plugin) => {
@@ -172,12 +168,11 @@ async function loadPackagedBundledEntries() {
     .toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
-async function loadManifestEntries() {
+function loadManifestEntries() {
   const explicit = (process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS || "")
     .split(/[,\s]+/u)
-    .map((entry) => entry.trim())
     .filter(Boolean);
-  const manifestEntries = await loadPackagedBundledEntries();
+  const manifestEntries = loadPackagedBundledEntries();
 
   if (explicit.length === 0) {
     return manifestEntries;
@@ -194,10 +189,10 @@ async function loadManifestEntries() {
   });
 }
 
-async function selectedManifestEntries() {
-  const allEntries = await loadManifestEntries();
+function selectedManifestEntries() {
+  const allEntries = loadManifestEntries();
   const total = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL", 1);
-  const index = readNonNegativeIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX", 0);
+  const index = readIntegerEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX", 0, 0);
   if (index >= total) {
     throw new Error(
       `OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX must be in [0, ${total - 1}], got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX}`,
@@ -276,8 +271,8 @@ function assertUninstalled(pluginId, pluginDir) {
   if (paths.some((entry) => pathReferencesBundledRuntime(entry, pluginDir))) {
     throw new Error(`load path still present after uninstall for ${pluginId}`);
   }
-  if (config.plugins?.entries?.[pluginId]) {
-    throw new Error(`config entry still present after uninstall for ${pluginId}`);
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
+    throw new Error(`exact disabled uninstall marker missing for ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`allowlist still contains ${pluginId} after uninstall`);
@@ -295,7 +290,7 @@ function assertUninstalled(pluginId, pluginDir) {
 
 const [command, pluginId, pluginDir, requiresConfig, selectedPluginRoot] = process.argv.slice(2);
 if (command === "select") {
-  for (const entry of await selectedManifestEntries()) {
+  for (const entry of selectedManifestEntries()) {
     console.log(`${entry.id}\t${entry.dir}\t${entry.requiresConfig ? "1" : "0"}\t${entry.rootDir}`);
   }
 } else if (command === "assert-installed") {

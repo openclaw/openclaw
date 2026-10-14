@@ -1,5 +1,6 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import type { ClawRemovePlan, ClawRemoveResult } from "../claws/lifecycle-remove-contract.js";
 
 export const minimalManifest = {
   schemaVersion: 1,
@@ -68,4 +69,41 @@ export async function writePackageFixture(tempDirs: {
     "utf8",
   );
   return { root, workspace: join(root, "target-workspace") };
+}
+
+export function createClawRemoveFixtures(): { plan: ClawRemovePlan; result: ClawRemoveResult } {
+  return {
+    plan: {
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      stability: "experimental",
+      dryRun: true,
+      mutationAllowed: false,
+      planIntegrity: "sha256:remove-plan",
+      target: "demo-agent",
+      agentId: "demo-agent",
+      actions: [
+        {
+          kind: "agent",
+          id: "demo-agent",
+          action: "remove",
+          target: 'agents.entries["demo-agent"]',
+          blocked: false,
+        },
+      ],
+      blockers: [],
+    },
+    result: {
+      schemaVersion: "openclaw.clawRemoveResult.v1",
+      stability: "experimental",
+      dryRun: false,
+      status: "complete",
+      agentId: "demo-agent",
+      agentRemoved: true,
+      workspaceFiles: [],
+      packages: [],
+      mcpServers: [],
+      cronJobs: [],
+      packageRefsReleased: 1,
+    },
+  };
 }

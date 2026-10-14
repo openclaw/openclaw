@@ -1,26 +1,18 @@
-import { finalizeEvent, type Event, type Relay } from "nostr-tools";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
 const AGENT_PROFILE_KIND = 10_100;
 const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
 const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
-const PROFILE_QUERY_TIMEOUT_MS = 10_000;
-
-type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
 
 function parseProfileContent(event: Event | undefined): Record<string, unknown> {
-  if (!event) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? { ...parsed }
-      : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(event ? safeParseJson<unknown>(event.content) : undefined);
 }
 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
@@ -40,85 +32,6 @@ function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | unde
   }
   const authTags = event?.tags.filter((tag) => tag[0] === "auth") ?? [];
   return authTags.length === 1 && JSON.stringify(authTags[0]) === JSON.stringify(authTag);
-}
-
-function readNonEmptyString(content: Record<string, unknown>, key: string): string | undefined {
-  const value = content[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-async function queryCurrentProfiles(params: {
-  relay: Relay;
-  publicKey: string;
-  onTimeout?: (error: Error) => void;
-  signal?: AbortSignal;
-}): Promise<Map<number, Event>> {
-  params.signal?.throwIfAborted();
-  return await new Promise<Map<number, Event>>((resolve, reject) => {
-    const latestByKind = new Map<number, Event>();
-    const state: {
-      settled: boolean;
-      receivedEose: boolean;
-      subscription?: ReturnType<Relay["prepareSubscription"]>;
-    } = { settled: false, receivedEose: false };
-    const timeout = setTimeout(() => {
-      const error = new Error("Timed out loading current Buzz profile");
-      finish(error);
-      params.onTimeout?.(error);
-      params.relay.close();
-    }, PROFILE_QUERY_TIMEOUT_MS);
-    const finish = (error?: unknown) => {
-      if (state.settled) {
-        return;
-      }
-      state.settled = true;
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", onAbort);
-      if (state.receivedEose) {
-        state.subscription?.close("profile query complete");
-      }
-      if (error !== undefined) {
-        reject(
-          error instanceof Error ? error : new Error("Buzz profile query failed", { cause: error }),
-        );
-        return;
-      }
-      resolve(latestByKind);
-    };
-    const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz profile query aborted"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    state.subscription = openBuzzRelaySubscription(
-      params.relay,
-      [
-        { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-        { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-      ],
-      {
-        onevent: (event) => {
-          const current = latestByKind.get(event.kind);
-          if (!current || event.created_at > current.created_at) {
-            latestByKind.set(event.kind, event);
-          }
-        },
-        oneose: () => {
-          state.receivedEose = true;
-          if (state.settled) {
-            state.subscription?.close("profile query complete");
-          } else {
-            finish();
-          }
-        },
-        onclose: (reason) => {
-          if (reason !== "profile query complete") {
-            finish(new Error(`Buzz profile query closed: ${reason}`));
-          }
-        },
-      },
-    );
-    if (state.settled && state.receivedEose) {
-      state.subscription.close("profile query complete");
-    }
-  });
 }
 
 function buildProfileEvent(params: {
@@ -148,24 +61,44 @@ export async function syncBuzzProfile(params: {
   authTag?: string[];
   onFatalError?: (error: Error) => void;
   signal?: AbortSignal;
-}): Promise<BuzzProfileSyncResult> {
+}): Promise<string | undefined> {
   const displayName = params.displayName.trim();
   if (!displayName) {
-    return { status: "unchanged" };
+    return undefined;
   }
 
-  const currentProfiles = await queryCurrentProfiles({
-    ...params,
+  params.signal?.throwIfAborted();
+  const currentProfiles = new Map<number, Event>();
+  await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [
+      { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+      { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+    ],
+    signal: params.signal,
+    timeoutMessage: "Timed out loading current Buzz profile",
+    abortMessage: "Buzz profile query aborted",
+    failureMessage: "Buzz profile query failed",
+    closeReason: "profile query complete",
+    closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
+    onEvent: (event) => {
+      const current = currentProfiles.get(event.kind);
+      if (!current || compareEvents(event, current) < 0) {
+        currentProfiles.set(event.kind, event);
+      }
+    },
+    result: () => currentProfiles,
     onTimeout: params.onFatalError,
   });
+  params.signal?.throwIfAborted();
   const currentMetadata = currentProfiles.get(PROFILE_KIND);
   const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
   const metadataContent = parseProfileContent(currentMetadata);
   const agentContent = parseProfileContent(currentAgentProfile);
   const resolvedDisplayName =
-    readNonEmptyString(metadataContent, "display_name") ??
-    readNonEmptyString(agentContent, "display_name") ??
-    readNonEmptyString(agentContent, "name") ??
+    normalizeOptionalString(metadataContent.display_name) ??
+    normalizeOptionalString(agentContent.display_name) ??
+    normalizeOptionalString(agentContent.name) ??
     displayName;
   const events: Event[] = [];
 
@@ -186,11 +119,11 @@ export async function syncBuzzProfile(params: {
   }
 
   let agentProfileChanged = false;
-  if (!readNonEmptyString(agentContent, "name")) {
+  if (!normalizeOptionalString(agentContent.name)) {
     agentContent.name = resolvedDisplayName;
     agentProfileChanged = true;
   }
-  if (!readNonEmptyString(agentContent, "display_name")) {
+  if (!normalizeOptionalString(agentContent.display_name)) {
     agentContent.display_name = resolvedDisplayName;
     agentProfileChanged = true;
   }
@@ -215,12 +148,15 @@ export async function syncBuzzProfile(params: {
     );
   }
 
-  if (events.length === 0) {
-    return { status: "unchanged" };
+  const lastEvent = events.at(-1);
+  if (!lastEvent) {
+    return undefined;
   }
   for (const event of events) {
+    // A previous publish acknowledgement can arrive after this account stopped.
+    params.signal?.throwIfAborted();
     await params.relay.publish(event);
   }
-  const lastEvent = events.at(-1);
-  return lastEvent ? { status: "published", eventId: lastEvent.id } : { status: "unchanged" };
+  params.signal?.throwIfAborted();
+  return lastEvent.id;
 }

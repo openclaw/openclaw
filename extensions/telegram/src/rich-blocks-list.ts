@@ -2,7 +2,6 @@ import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
 import type { InputRichBlock, InputRichBlockListItem } from "./rich-block-model.js";
 
 type MarkdownRichListItemSource = {
-  kind: "bullet" | "ordered";
   start: number;
   end: number;
   contentStart: number;
@@ -35,7 +34,6 @@ export function collectMarkdownRichListSources(ir: MarkdownIR): MarkdownRichList
       : "";
     const value = item.kind === "ordered" ? Number.parseInt(markerText, 10) : undefined;
     const source = {
-      kind: item.kind,
       start: item.start,
       end: item.end,
       contentStart: item.taskMarker?.end ?? item.listMarker.end,
@@ -63,19 +61,15 @@ type RenderRange = (start: number, end: number) => InputRichBlock[];
 export function renderMarkdownRichListSource(
   source: MarkdownRichListSource,
   renderRange: RenderRange,
-): InputRichBlock[] | undefined {
-  const kind = source.items[0]?.kind;
-  if (!kind || source.items.some((item) => item.kind !== kind)) {
-    return undefined;
-  }
+): InputRichBlock {
   const items: InputRichBlockListItem[] = source.items.map((item) => {
     const blocks = renderRange(item.contentStart, item.end);
     return {
       blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
       ...(item.task ? { has_checkbox: true as const } : {}),
       ...(item.checked ? { is_checked: true as const } : {}),
-      ...(kind === "ordered" && item.value !== undefined ? { value: item.value } : {}),
+      ...(item.value !== undefined ? { value: item.value } : {}),
     };
   });
-  return [{ type: "list", items }];
+  return { type: "list", items };
 }

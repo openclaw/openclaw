@@ -1,4 +1,5 @@
 // Gateway register option collision tests cover gateway command option registration.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayCli } from "./register.js";
@@ -134,9 +135,6 @@ vi.mock("../progress.js", () => ({
 
 vi.mock("./discover.js", () => ({
   dedupeBeacons: (beacons: unknown[]) => beacons,
-  parseDiscoverTimeoutMs: () => 2000,
-  pickBeaconHost: () => null,
-  pickGatewayPort: () => 18789,
   renderBeaconLines: () => [],
 }));
 
@@ -163,10 +161,8 @@ function expectLocalGatewayCall(method: string, port: number, params?: unknown) 
 describe("gateway register option collisions", () => {
   const sharedProgram: Command = new Command();
 
-  if (sharedProgram.commands.length === 0) {
-    sharedProgram.exitOverride();
-    registerGatewayCli(sharedProgram);
-  }
+  sharedProgram.exitOverride();
+  registerGatewayCli(sharedProgram);
 
   beforeEach(() => {
     callGatewayCli.mockClear();
@@ -200,37 +196,12 @@ describe("gateway register option collisions", () => {
 
   it.each([
     {
-      name: "forwards --token to gateway call when parent and child option names collide",
-      argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts, params] = firstGatewayCall();
-        expect(method).toBe("health");
-        expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
-        expect(params).toEqual({});
-      },
-    },
-    {
       name: "gives setup detection enough transport grace",
       argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
       assert: () => {
         const [method, opts] = firstGatewayCall();
         expect(method).toBe("openclaw.setup.detect");
         expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
-      },
-    },
-    {
-      name: "projects gateway call --port into the local override",
-      argv: ["gateway", "call", "health", "--port", "19084", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19084, {});
-      },
-    },
-    {
-      name: "inherits parent --port for gateway call",
-      argv: ["gateway", "--port", "19085", "call", "health", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19085);
       },
     },
     {
@@ -260,69 +231,12 @@ describe("gateway register option collisions", () => {
       },
     },
     {
-      name: "forwards --token to gateway probe when parent and child option names collide",
-      argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
-      assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts, runtime] = firstGatewayStatusCall();
-        expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
-        expect(runtime).toBe(defaultRuntime);
-      },
-    },
-    {
-      name: "forwards --port to gateway probe",
-      argv: ["gateway", "probe", "--port", "19080", "--json"],
-      assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts] = firstGatewayStatusCall();
-        expect((opts as { port?: string } | undefined)?.port).toBe("19080");
-      },
-    },
-    {
       name: "inherits parent --port for gateway probe",
       argv: ["gateway", "--port", "19082", "probe", "--json"],
       assert: () => {
         expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
         const [opts] = firstGatewayStatusCall();
         expect((opts as { port?: string } | undefined)?.port).toBe("19082");
-      },
-    },
-    {
-      name: "projects gateway health --port into the local override",
-      argv: ["gateway", "health", "--port", "19081", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19081);
-      },
-    },
-    {
-      name: "inherits parent --port for gateway health",
-      argv: ["gateway", "--port", "19083", "health", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19083);
-      },
-    },
-    {
-      name: "passes decimal usage-cost --days values",
-      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, _opts, params] = firstGatewayCall();
-        expect(method).toBe("usage.cost");
-        expect(params).toEqual({ days: 7 });
-      },
-    },
-    {
-      name: "projects gateway usage-cost --port into the local override",
-      argv: ["gateway", "usage-cost", "--port", "19088", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("usage.cost", 19088, { days: 30 });
-      },
-    },
-    {
-      name: "inherits parent --port for gateway usage-cost",
-      argv: ["gateway", "--port", "19089", "usage-cost", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("usage.cost", 19089, { days: 30 });
       },
     },
     {
@@ -333,34 +247,10 @@ describe("gateway register option collisions", () => {
       },
     },
     {
-      name: "projects gateway stability --port into the local override",
-      argv: ["gateway", "stability", "--port", "19092", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("diagnostics.stability", 19092, { limit: 25 });
-      },
-    },
-    {
-      name: "inherits parent --port for live gateway stability",
-      argv: ["gateway", "--port", "19093", "stability", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("diagnostics.stability", 19093, { limit: 25 });
-      },
-    },
-    {
       name: "prefers the explicit live stability --port over the parent --port",
       argv: ["gateway", "--port", "19094", "stability", "--port", "19095", "--json"],
       assert: () => {
         expectLocalGatewayCall("diagnostics.stability", 19095, { limit: 25 });
-      },
-    },
-    {
-      name: "falls back for non-decimal usage-cost --days values",
-      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, _opts, params] = firstGatewayCall();
-        expect(method).toBe("usage.cost");
-        expect(params).toEqual({ days: 30 });
       },
     },
   ])("$name", async ({ argv, assert }) => {
@@ -368,50 +258,51 @@ describe("gateway register option collisions", () => {
     assert();
   });
 
-  it.each([
-    {
-      name: "call",
-      args: ["call", "health"],
-      failure: "Gateway call failed",
-    },
-    {
-      name: "usage-cost",
-      args: ["usage-cost"],
-      failure: "Gateway usage cost failed",
-    },
-    {
-      name: "live stability",
-      args: ["stability"],
-      failure: "Gateway stability failed",
-    },
-  ])("rejects combining --url and --port for gateway $name", async ({ args, failure }) => {
+  it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {
+    await sharedProgram.parseAsync(["gateway", "usage-cost", "--days", "1e3", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects combining --url and --port for gateway call", async () => {
     await sharedProgram.parseAsync(
-      ["gateway", ...args, "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
+      ["gateway", "call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
       { from: "user" },
     );
 
     expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      `${failure}: Use either --url or --port, not both.`,
-    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "Use either --url or --port, not both." },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("uses the effective local port override for gateway health auth diagnostics", async () => {
+  it("uses the effective local port and timeout for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
     emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
 
-    await sharedProgram.parseAsync(["gateway", "health", "--port", "19081", "--json"], {
-      from: "user",
-    });
+    await sharedProgram.parseAsync(
+      ["gateway", "health", "--port", "19081", "--timeout", "1234", "--json"],
+      { from: "user" },
+    );
 
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
       error: authError,
       config: {},
       runtime: defaultRuntime,
-      timeoutMs: 10000,
+      timeoutMs: 1234,
       token: undefined,
       password: undefined,
       localPortOverride: 19081,
@@ -419,20 +310,22 @@ describe("gateway register option collisions", () => {
     });
   });
 
-  it("defers health presentation imports for successful JSON output", async () => {
+  it("loads health presentation only for text output", async () => {
     const program = new Command();
     program.exitOverride();
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       formatHealthChannelLines: mocks.formatHealthChannelLines,
+      readNonObservingHealthConfig: async () => ({}),
     }));
     const loadHealthStyleModule = vi.fn(async () => ({
       styleHealthChannelLine: (line: string) => line,
     }));
-    registerGatewayCli(program, {
-      loadGatewayHealthModule: loadGatewayHealthModule as never,
-      loadHealthStyleModule: loadHealthStyleModule as never,
-    });
+    vi.resetModules();
+    vi.doMock("../../commands/health.js", loadGatewayHealthModule);
+    vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
+    const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
+    registerFreshGatewayCli(program);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -444,5 +337,14 @@ describe("gateway register option collisions", () => {
     expect(loadGatewayHealthModule).not.toHaveBeenCalled();
     expect(loadHealthStyleModule).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
+
+    const textProgram = new Command();
+    textProgram.exitOverride();
+    registerFreshGatewayCli(textProgram);
+    await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
+
+    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
+    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

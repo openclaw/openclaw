@@ -1,17 +1,13 @@
-// Tlon plugin module implements auth behavior.
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
 const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
 
-type UrbitAuthenticateOptions = {
-  ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  timeoutMs?: number;
-};
+type UrbitAuthenticateOptions = Pick<
+  Parameters<typeof urbitFetch>[0],
+  "ssrfPolicy" | "lookupFn" | "fetchImpl" | "beforeRequest"
+>;
 
 export async function authenticate(
   url: string,
@@ -29,7 +25,8 @@ export async function authenticate(
     ssrfPolicy: options.ssrfPolicy,
     lookupFn: options.lookupFn,
     fetchImpl: options.fetchImpl,
-    timeoutMs: options.timeoutMs ?? 15_000,
+    beforeRequest: options.beforeRequest,
+    timeoutMs: 15_000,
     maxRedirects: 3,
     auditContext: "tlon-urbit-login",
   });

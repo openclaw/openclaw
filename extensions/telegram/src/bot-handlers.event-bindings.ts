@@ -1,17 +1,25 @@
 import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
-import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
 import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
+import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import {
+  createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import { evaluateTelegramGroupPolicyAccess } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { findTelegramPollRegistryEntry, retireTelegramPollRegistryEntry } from "./poll-registry.js";
@@ -21,10 +29,7 @@ const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 type TelegramEventMessageDependencies = Pick<
   TelegramMessagePipeline,
-  | "resolveCachedMessageThreadSpec"
-  | "buildSyntheticTextMessage"
-  | "buildSyntheticContext"
-  | "processMessageWithReplyChain"
+  "resolveCachedMessageThreadSpec" | "processMessageWithReplyChain"
 >;
 
 type CreateTelegramEventBindingsOptions = {
@@ -34,7 +39,6 @@ type CreateTelegramEventBindingsOptions = {
     TelegramHandlerAuthorization,
     "resolveTelegramEventAuthorizationContext" | "authorizeTelegramEventSender"
   >;
-  registerMessages: () => void;
 };
 
 function isCurrentTelegramChatMember(member: ChatMember): boolean {
@@ -50,16 +54,104 @@ export function createTelegramEventBindings({
   params,
   message,
   authorization,
-  registerMessages,
-}: CreateTelegramEventBindingsOptions): TelegramEventBindings {
-  const { accountId, ownerAgentId, bot, cfg, runtime, shouldSkipUpdate, telegramDeps } = params;
+}: CreateTelegramEventBindingsOptions) {
+  const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
+    params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
-  const {
-    buildSyntheticContext,
-    buildSyntheticTextMessage,
-    processMessageWithReplyChain,
-    resolveCachedMessageThreadSpec,
-  } = message;
+  const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
+  const resolveAuthorizedEventContext = async (
+    eventParams: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
+      senderId: string;
+      chatTitle?: string;
+    },
+  ) => {
+    const context = await resolveTelegramEventAuthorizationContext(eventParams);
+    return (await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))
+      ? context
+      : undefined;
+  };
+
+  const registerChatMembership = () => {
+    bot.on("my_chat_member", async (ctx) => {
+      const membership = ctx.myChatMember;
+      if (!membership || shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const botUserId = ctx.me?.id ?? opts.botInfo?.id;
+      const isGroup = membership.chat.type === "group" || membership.chat.type === "supergroup";
+      if (
+        !isGroup ||
+        botUserId === undefined ||
+        membership.new_chat_member.user.id !== botUserId ||
+        isCurrentTelegramChatMember(membership.old_chat_member) ||
+        !isCurrentTelegramChatMember(membership.new_chat_member)
+      ) {
+        return;
+      }
+
+      const chatId = membership.chat.id;
+      const currentCfg = telegramDeps.getRuntimeConfig();
+      const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
+      const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
+      const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
+        isGroup: true,
+        chatId,
+        cfg: currentCfg,
+        telegramCfg,
+        groupConfig,
+        effectiveGroupAllow: normalizeAllowFrom(),
+        resolveGroupPolicy: params.resolveGroupPolicy,
+        enforceAllowlistAuthorization: false,
+        allowEmptyAllowlistEntries: false,
+      });
+      const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
+      const inviter = membership.from;
+      const inviterLabel =
+        [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
+
+      const participant = createTelegramSpooledReplayDeferredParticipant(`room-join:${chatId}`);
+      const hold = participant?.beginSettlementHold();
+      if (participant && !hold) {
+        return;
+      }
+      try {
+        await reportChannelRoomJoin({
+          cfg: currentCfg,
+          channel: "telegram",
+          accountId,
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          route: (
+            await resolveTelegramConversationRoute({
+              cfg: currentCfg,
+              accountId,
+              chatId,
+              isGroup: true,
+              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+            })
+          ).route,
+          inviterLabel,
+          roomAllowed,
+          resolveRoomContext: async () => {
+            const chat = await bot.api.getChat(chatId);
+            // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
+            return {
+              title: chat.title,
+              purpose: chat.description,
+              pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
+              historyUnavailable: true,
+            };
+          },
+        });
+        hold?.release("discard-pending");
+        participant?.settle({ kind: "completed" });
+      } catch (error) {
+        hold?.release("replay-pending");
+        participant?.settle({ kind: "failed-retryable", error });
+        throw error;
+      }
+    });
+  };
 
   const registerReaction = () => {
     bot.on("message_reaction", async (ctx) => {
@@ -73,7 +165,6 @@ export function createTelegramEventBindings({
         const messageId = reaction.message_id;
         const user = reaction.user;
         const senderId = user?.id != null ? String(user.id) : "";
-        const senderUsername = user?.username ?? "";
         const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
         const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
         const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
@@ -89,10 +180,10 @@ export function createTelegramEventBindings({
         }
         if (
           reactionMode === "own" &&
-          !telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
+          !(await telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
             accountId,
             agentId: ownerAgentId,
-          })
+          }))
         ) {
           logVerbose(
             `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
@@ -135,9 +226,10 @@ export function createTelegramEventBindings({
           }
         }
 
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
           chatId,
+          chatTitle: reaction.chat.title,
           isGroup,
           senderId,
           threadSpec:
@@ -147,16 +239,7 @@ export function createTelegramEventBindings({
               isForum,
             }),
         });
-        const senderAuthorization = await authorizeTelegramEventSender({
-          chatId,
-          chatTitle: reaction.chat.title,
-          isGroup,
-          senderId,
-          senderUsername,
-          mode: "reaction",
-          context: eventAuthContext,
-        });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -174,7 +257,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const sessionKey = resolveTelegramConversationRoute({
+        const { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -182,28 +265,21 @@ export function createTelegramEventBindings({
           threadSpec: recoveredThreadSpec ?? eventAuthContext.threadSpec,
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
-        }).route.sessionKey;
+        });
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
           : undefined;
         const senderUsernameLabel = user?.username ? `@${user.username}` : undefined;
-        let senderLabel = senderName;
-        if (senderName && senderUsernameLabel) {
-          senderLabel = `${senderName} (${senderUsernameLabel})`;
-        } else if (!senderName && senderUsernameLabel) {
-          senderLabel = senderUsernameLabel;
-        }
-        if (!senderLabel && user?.id) {
-          senderLabel = `id:${user.id}`;
-        }
-        senderLabel = senderLabel || "unknown";
+        const senderLabel =
+          (senderName && senderUsernameLabel
+            ? `${senderName} (${senderUsernameLabel})`
+            : senderName || senderUsernameLabel) || (user?.id ? `id:${user.id}` : "unknown");
 
         for (const addedReaction of addedReactions) {
           const emoji = addedReaction.emoji;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-          telegramDeps.enqueueSystemEvent(text, {
-            sessionKey,
+          telegramDeps.enqueueRoutedSystemEvent(text, route, {
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
           logVerbose(`telegram: reaction event enqueued: ${text}`);
@@ -215,6 +291,19 @@ export function createTelegramEventBindings({
     });
   };
 
+  const handlePollError = (
+    err: unknown,
+    ctx: { update: unknown },
+    kind: "poll" | "poll_answer",
+  ) => {
+    runtime.error?.(danger(`telegram ${kind} handler failed: ${String(err)}`));
+    if (isTelegramSpooledReplayUpdate(ctx.update)) {
+      recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+    } else {
+      throw err;
+    }
+  };
+
   const registerPolls = () => {
     bot.on("poll", async (ctx) => {
       try {
@@ -224,12 +313,7 @@ export function createTelegramEventBindings({
         }
         await retireTelegramPollRegistryEntry({ accountId, pollId: poll.id });
       } catch (err) {
-        runtime.error?.(danger(`telegram poll handler failed: ${String(err)}`));
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
-          return;
-        }
-        throw err;
+        handlePollError(err, ctx, "poll");
       }
     });
 
@@ -261,7 +345,6 @@ export function createTelegramEventBindings({
         const chatId = entry.chat.id;
         const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
         const senderId = String(user.id);
-        const senderUsername = user.username ?? "";
         if (!isGroup && user.id !== chatId) {
           logVerbose(`Blocked forwarded telegram poll_answer for DM ${chatId} from ${senderId}`);
           return;
@@ -273,23 +356,15 @@ export function createTelegramEventBindings({
           return;
         }
         const authorizationCfg = telegramDeps.getRuntimeConfig();
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
-          chatId,
-          isGroup,
-          senderId,
-          threadSpec: entry.threadSpec,
-        });
-        const senderAuthorization = await authorizeTelegramEventSender({
           chatId,
           chatTitle: "title" in entry.chat ? entry.chat.title : undefined,
           isGroup,
           senderId,
-          senderUsername,
-          mode: "reaction",
-          context: eventAuthContext,
+          threadSpec: entry.threadSpec,
         });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -298,13 +373,11 @@ export function createTelegramEventBindings({
           eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
             ? eventAuthContext.groupConfig.requireTopic
             : undefined;
-        if (!isGroup && requireTopic === true) {
-          if (eventAuthContext.dmThreadId == null) {
-            logVerbose(
-              `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
-            );
-            return;
-          }
+        if (!isGroup && requireTopic === true && eventAuthContext.dmThreadId == null) {
+          logVerbose(
+            `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
+          );
+          return;
         }
 
         const optionLabels = optionIds.map((index) => entry.options[index] ?? `option ${index}`);
@@ -341,12 +414,7 @@ export function createTelegramEventBindings({
         recordTelegramMessageProcessingResult(result);
         logVerbose(`telegram: poll_answer dispatched for poll ${pollId} by ${senderId}`);
       } catch (err) {
-        runtime.error?.(danger(`telegram poll_answer handler failed: ${String(err)}`));
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
-          return;
-        }
-        throw err;
+        handlePollError(err, ctx, "poll_answer");
       }
     });
   };
@@ -411,5 +479,10 @@ export function createTelegramEventBindings({
     });
   };
 
-  return { registerReaction, registerPolls, registerMigration, registerMessages };
+  return {
+    registerChatMembership,
+    registerReaction,
+    registerPolls,
+    registerMigration,
+  };
 }

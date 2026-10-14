@@ -1,5 +1,17 @@
+import fs from "node:fs";
 import path from "node:path";
+import { root as fsRoot } from "../infra/fs-safe.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import {
+  resolveSkillReadPath,
+  resolveWorkspaceSkillSourcePath,
+} from "../skills/workspace-skill-read-path.js";
+import {
+  bindAgentToolActionDescriptor,
+  type AgentToolActionDescriptor,
+} from "./agent-tool-metadata.js";
+import { getToolParamsRecord, normalizeFileToolPathParam } from "./agent-tools.params.js";
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -8,11 +20,13 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   resolveAdaptiveReadMaxBytes,
+  type SkillInstructionDeliveryCache,
   wrapReadToolWithSkillContent,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
+  wrapSandboxFileToolPath,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
@@ -20,44 +34,30 @@ import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
+import { relativePathInsideSandboxRoot, resolvePathFromInput } from "./path-policy.js";
 import type { SandboxContext } from "./sandbox.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
-import {
-  resolveReadOnlyWorkspaceSkillMounts,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./sandbox/workspace-mounts.js";
-import type {
-  createEditTool,
-  createReadTool as CreateReadTool,
-  createWriteTool,
-} from "./sessions/tools/index.js";
+import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { resolveToolResultBudget } from "./tool-result-limits.js";
+import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
 
-function readOnlySandboxReadMounts(
-  sandbox: SandboxContext,
-  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[],
-): Array<{ containerRoot: string; hostRoot: string }> | undefined {
-  const mounts: Array<{ containerRoot: string; hostRoot: string }> = [];
-  if (sandbox.workspaceAccess === "ro" && sandbox.agentWorkspaceDir !== sandbox.workspaceDir) {
-    mounts.push({
-      containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
-      hostRoot: sandbox.agentWorkspaceDir,
-    });
-  }
-  if (sandbox.workspaceAccess === "rw") {
-    mounts.push(
-      ...readOnlyWorkspaceSkillMounts.map((mount) => ({
-        containerRoot: mount.containerPath,
-        hostRoot: mount.hostPath,
-      })),
-    );
-  }
-  return mounts.length > 0 ? mounts : undefined;
-}
+const filesystemAction: AgentToolActionDescriptor = Object.freeze({
+  family: "data",
+  operation: "filesystem",
+});
+const processAction: AgentToolActionDescriptor = Object.freeze({
+  family: "tool",
+  operation: "process",
+});
 
-function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
+function resolveSkillReadRoots(skills?: SkillSnapshot["resolvedSkills"]): string[] | undefined {
   const roots = new Set<string>();
-  for (const skill of skillsSnapshot?.resolvedSkills ?? []) {
+  for (const skill of skills ?? []) {
+    if (resolveSkillFileHost(skill) === "workspace") {
+      continue;
+    }
     const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
     const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
     const root = baseDir || (filePath ? path.dirname(filePath) : "");
@@ -69,38 +69,130 @@ function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undef
   return roots.size > 0 ? Array.from(roots) : undefined;
 }
 
-function guardHostWorkspaceTool(
-  tool: AnyAgentTool,
-  options: Pick<CoreCodingToolsOptions, "codingRoot" | "containmentRoot">,
+/** Route only selected workspace Skills; their paths never name Gateway files. */
+function wrapWorkspaceSkillRead(
+  localRead: AnyAgentTool,
+  skills: SkillSnapshot["resolvedSkills"],
+  options: CoreCodingToolsOptions,
 ): AnyAgentTool {
-  return path.resolve(options.containmentRoot) === path.resolve(options.codingRoot)
-    ? wrapToolWorkspaceRootGuard(tool, options.codingRoot)
-    : wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
-        resolutionCwd: options.codingRoot,
+  const remoteSkills = skills?.filter((skill) => resolveSkillFileHost(skill) === "workspace") ?? [];
+  const localSkills = skills?.filter((skill) => resolveSkillFileHost(skill) !== "workspace") ?? [];
+  if (remoteSkills.length === 0) {
+    return localRead;
+  }
+  const access = getAgentWorkspaceAccess(
+    options.skillsSnapshot?.skillRoots?.agentWorkspaceDir ?? options.codingRoot,
+    "loadSkills",
+  );
+  const reader = access?.loadSkills ? access.skillResources : undefined;
+  return {
+    ...localRead,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const record = getToolParamsRecord(params);
+      const input = record?.path ?? record?.file_path;
+      const requestedPath =
+        typeof input === "string" ? normalizeFileToolPathParam(input) : undefined;
+      const virtualMatch = requestedPath
+        ? remoteSkills
+            .map((skill) => ({
+              skill,
+              sourcePath: resolveWorkspaceSkillSourcePath(skill, requestedPath),
+            }))
+            .find((candidate) => candidate.sourcePath !== undefined)
+        : undefined;
+      const physicalPath =
+        requestedPath && !virtualMatch
+          ? resolvePathFromInput(requestedPath, options.codingRoot)
+          : undefined;
+      const physicalMatches = physicalPath
+        ? remoteSkills.filter(
+            (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
+          )
+        : [];
+      const physicalMatch =
+        physicalMatches.length === 1 &&
+        physicalPath &&
+        !fs.existsSync(physicalPath) &&
+        !localSkills.some(
+          (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
+        )
+          ? physicalMatches[0]
+          : undefined;
+      const skill = virtualMatch?.skill ?? physicalMatch;
+      const sourcePath = virtualMatch?.sourcePath ?? (physicalMatch ? physicalPath : undefined);
+      if (!skill || !sourcePath) {
+        return localRead.execute(toolCallId, params, signal, onUpdate);
+      }
+      if (!reader) {
+        throw new WorkspaceAccessUnavailableError(
+          "Remote workspace Skill resources are unavailable.",
+        );
+      }
+      const active = AbortSignal.any(
+        [signal, options.abortSignal].filter((value): value is AbortSignal => Boolean(value)),
+      );
+      const remoteRead = createReadTool(options.codingRoot, {
+        maxBytes: resolveAdaptiveReadMaxBytes(options),
+        modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
+        modelHasVision: options.modelHasVision,
+        operations: {
+          resolvePath: () => sourcePath,
+          resolveQueueKey: (filePath) => `workspace-skill:${filePath}`,
+          access: async () => active.throwIfAborted(),
+          readFile: async () => {
+            active.throwIfAborted();
+            if (sourcePath === skill.filePath) {
+              return Buffer.from(await reader.readInstructions(skill.filePath, { signal: active }));
+            }
+            const { prepareSkillBundle } = await import("../skills/library/bundle.js");
+            const files = await reader.readSkillFiles(skill, { allowMissingRoot: false });
+            active.throwIfAborted();
+            const relative = relativePathInsideSandboxRoot(skill.baseDir, sourcePath)!;
+            const bundlePath =
+              !skill.baseDir.startsWith("/") && path.win32.isAbsolute(skill.baseDir)
+                ? relative.split("\\").join("/")
+                : relative;
+            const file =
+              files && prepareSkillBundle(files).files.find((entry) => entry.path === bundlePath);
+            if (!file) {
+              throw Object.assign(new Error(`Skill file not found: ${sourcePath}`), {
+                code: "ENOENT",
+              });
+            }
+            return file.bytes;
+          },
+        },
       });
+      return createOpenClawReadTool(remoteRead, {
+        modelContextWindowTokens: options.modelContextWindowTokens,
+        imageSanitization: options.imageSanitization,
+        cwd: options.codingRoot,
+      }).execute(toolCallId, { ...record, path: sourcePath }, active, onUpdate);
+    },
+  };
 }
 
 type CoreCodingToolsOptions = {
+  abortSignal?: AbortSignal;
+  attachmentReadRoot?: string;
   codingRoot: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
+  shellTools: "disabled" | "patch-only" | "full";
   workspaceOnly: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
+  skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
+  skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  baseToolNames?: readonly string[];
-  baseToolFactories?: {
-    createEditTool: typeof createEditTool;
-    createReadTool: typeof CreateReadTool;
-    createWriteTool: typeof createWriteTool;
-  };
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
+  applyPatchContainmentSource?: ApplyPatchContainmentSource;
   execDefaults: ExecToolDefaults;
   processDefaults: ProcessToolDefaults;
   recordToolPrepStage?: (name: string) => void;
@@ -115,14 +207,20 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   if (
     sandboxRoot &&
     !sandboxFsBridge &&
-    (options.includeBaseCodingTools || options.includeShellTools)
+    (options.includeBaseCodingTools || options.shellTools !== "disabled")
   ) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
-  const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options.skillsSnapshot);
+  const skillReadResources = options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills;
+  const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(skillReadResources);
+  const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
+  const hostReadRoots = [
+    ...(skillReadRoots ?? []),
+    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+  ];
   const needsReadOnlyWorkspaceSkillMounts =
-    options.includeShellTools || (options.includeBaseCodingTools && options.workspaceOnly);
+    options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
       ? resolveReadOnlyWorkspaceSkillMounts({
@@ -134,69 +232,142 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         })
       : [];
 
+  // Older external SDK bridges predate pathMappings. Only absence selects
+  // their reconstructed admission; a supplied empty table is authoritative.
+  const sandboxFileMounts =
+    sandbox &&
+    ((options.includeBaseCodingTools && options.workspaceOnly) ||
+      (options.shellTools !== "disabled" &&
+        options.applyPatchEnabled &&
+        options.applyPatchWorkspaceOnly))
+      ? (sandboxFsBridge?.pathMappings ?? buildSandboxFsMounts(sandbox))
+      : [];
+  const sandboxWorkspaceMounts = sandbox
+    ? sandboxFileMounts.filter(
+        (mount) =>
+          relativePathInsideSandboxRoot(sandbox.containerWorkdir, mount.containerRoot) !== null,
+      )
+    : [];
+  // Declared mount read exceptions do not grant writes or enumeration outside
+  // the container workspace. Both sets reuse the same effective selection.
+  const sandboxReadMounts = sandboxFileMounts;
+
+  const guardWorkspaceTool = (tool: AnyAgentTool) =>
+    options.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(
+          tool,
+          sandboxRoot ?? options.containmentRoot,
+          sandboxRoot
+            ? {
+                containerMounts: sandboxWorkspaceMounts,
+                containerWorkdir: sandbox.containerWorkdir,
+                bridge: sandboxFsBridge,
+                normalizeGuardedPathParams: true,
+              }
+            : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+        )
+      : tool;
+
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
-    const baseToolNames = new Set(options.baseToolNames ?? ["read", "edit", "write"]);
-    if (baseToolNames.has("read")) {
-      const wrapped = sandboxRoot
-        ? createSandboxedReadTool({
-            root: sandboxRoot,
-            bridge: sandboxFsBridge!,
-            modelContextWindowTokens: options.modelContextWindowTokens,
-            imageSanitization: options.imageSanitization,
-            createTool: options.baseToolFactories?.createReadTool,
-          })
-        : createOpenClawReadTool(
-            (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
-              maxBytes: resolveAdaptiveReadMaxBytes(options),
-            }),
-            {
-              modelContextWindowTokens: options.modelContextWindowTokens,
-              imageSanitization: options.imageSanitization,
+    const readDirectory = sandboxFsBridge?.readDirectory?.bind(sandboxFsBridge);
+    const listingOperations: LsOperations | undefined = readDirectory
+      ? {
+          readDirectory: (filePath, signal) =>
+            readDirectory({ filePath, cwd: sandbox?.containerWorkdir, signal }),
+        }
+      : options.workspaceOnly && !sandbox
+        ? {
+            readDirectory: async (filePath) => {
+              const root = await fsRoot(options.containmentRoot);
+              return (
+                await root.list(path.relative(options.containmentRoot, filePath), {
+                  withFileTypes: true,
+                })
+              ).map(({ name, isDirectory }) => ({ name, isDirectory }));
             },
-          );
-      const guarded = options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(
-            wrapped,
-            sandboxRoot ?? options.containmentRoot,
-            sandboxRoot
-              ? {
-                  additionalContainerMounts: readOnlySandboxReadMounts(
-                    sandbox,
-                    readOnlyWorkspaceSkillMounts,
-                  ),
-                  containerWorkdir: sandbox.containerWorkdir,
-                }
-              : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
-          )
-        : wrapped;
+          }
+        : undefined;
+    if (!sandbox || readDirectory) {
+      const ls = createLsTool(options.codingRoot, {
+        operations: listingOperations,
+        modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
+      });
+      // Skill-content read exceptions do not grant directory enumeration outside the workspace.
+      const guardedLs = guardWorkspaceTool(ls);
+      // Resolve the default directory before the guard as well as execution.
       base.push(
-        wrapReadToolWithSkillContent(guarded, options.skillsSnapshot?.resolvedSkills, {
+        sandboxRoot
+          ? wrapSandboxFileToolPath(guardedLs, {
+              root: sandboxRoot,
+              bridge: sandboxFsBridge!,
+              defaultPath: ".",
+            })
+          : guardedLs,
+      );
+    }
+    const read = sandboxRoot
+      ? createSandboxedReadTool({
+          root: sandboxRoot,
+          bridge: sandboxFsBridge!,
+          modelContextWindowTokens: options.modelContextWindowTokens,
+          imageSanitization: options.imageSanitization,
+          modelHasVision: options.modelHasVision,
+        })
+      : createReadTool(options.codingRoot, {
+          maxBytes: resolveAdaptiveReadMaxBytes(options),
+          modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
+          modelHasVision: options.modelHasVision,
+        });
+    const guarded = options.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(
+          read,
+          sandboxRoot ?? options.containmentRoot,
+          sandboxRoot
+            ? {
+                containerMounts: sandboxReadMounts,
+                containerWorkdir: sandbox.containerWorkdir,
+                bridge: sandboxFsBridge,
+                readPathValidation: "bridge",
+              }
+            : {
+                additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
+              },
+        )
+      : read;
+    // Relative read semantics (including optional daily journals) run before
+    // the guard forwards its checked absolute path to the filesystem reader.
+    const wrapped = sandboxRoot
+      ? guarded
+      : createOpenClawReadTool(guarded, {
+          modelContextWindowTokens: options.modelContextWindowTokens,
+          imageSanitization: options.imageSanitization,
+          cwd: options.codingRoot,
+        });
+    base.push(
+      wrapReadToolWithSkillContent(
+        sandboxRoot ? wrapped : wrapWorkspaceSkillRead(wrapped, skillReadResources, options),
+        skillReadResources?.map((skill) => ({
+          filePath: resolveSkillReadPath(skill),
+          readContent: skill.readContent,
+        })),
+        {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
           cwd: options.codingRoot,
           containerWorkdir: sandbox?.containerWorkdir,
           instructionPaths: options.skillInstructionPaths,
-        }),
-      );
-    }
-    if (!options.readOnly && !sandboxRoot && baseToolNames.has("edit")) {
-      const edit = createHostWorkspaceEditTool(options.codingRoot, {
-        containmentRoot: options.containmentRoot,
-        workspaceOnly: options.workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        createTool: options.baseToolFactories?.createEditTool,
-      });
-      base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
-    }
-    if (!options.readOnly && !sandboxRoot && baseToolNames.has("write")) {
-      const write = createHostWorkspaceWriteTool(options.codingRoot, {
-        containmentRoot: options.containmentRoot,
-        workspaceOnly: options.workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        createTool: options.baseToolFactories?.createWriteTool,
-      });
-      base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
+          instructionDeliveryCache: options.skillInstructionDeliveryCache,
+        },
+      ),
+    );
+    if (!options.readOnly && !sandboxRoot) {
+      for (const createTool of [createHostWorkspaceEditTool, createHostWorkspaceWriteTool]) {
+        const tool = createTool(options.codingRoot, options);
+        base.push(guardWorkspaceTool(tool));
+      }
     }
   }
 
@@ -205,49 +376,45 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
       memoryWriteProvenance: options.memoryWriteProvenance,
+      abortSignal: options.abortSignal,
     };
-    const edit = createSandboxedEditTool({
-      ...toolOptions,
-      createTool: options.baseToolFactories?.createEditTool,
-    });
-    const write = createSandboxedWriteTool({
-      ...toolOptions,
-      createTool: options.baseToolFactories?.createWriteTool,
-    });
-    base.push(
-      options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
-            containerWorkdir: sandbox.containerWorkdir,
-          })
-        : edit,
-      options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
-            containerWorkdir: sandbox.containerWorkdir,
-          })
-        : write,
-    );
+    for (const createTool of [createSandboxedEditTool, createSandboxedWriteTool]) {
+      const tool = createTool(toolOptions);
+      base.push(guardWorkspaceTool(tool));
+    }
   }
   options.recordToolPrepStage?.("base-coding-tools");
 
   const shell: AnyAgentTool[] = [];
-  if (options.includeShellTools) {
-    if (options.applyPatchEnabled && (!sandboxRoot || allowWorkspaceWrites)) {
-      shell.push(
-        createApplyPatchTool({
-          cwd: options.codingRoot,
-          root: options.containmentRoot,
-          sandbox:
-            sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
-              : undefined,
-          workspaceOnly: options.applyPatchWorkspaceOnly,
-          memoryWriteProvenance: options.memoryWriteProvenance,
-        }),
-      );
-    }
+  if (
+    options.shellTools !== "disabled" &&
+    options.applyPatchEnabled &&
+    (!sandboxRoot || allowWorkspaceWrites)
+  ) {
+    shell.push(
+      createApplyPatchTool({
+        cwd: options.codingRoot,
+        root: options.containmentRoot,
+        sandbox:
+          sandboxRoot && allowWorkspaceWrites
+            ? {
+                root: sandboxRoot,
+                bridge: sandboxFsBridge!,
+                workspaceMounts: sandboxWorkspaceMounts,
+              }
+            : undefined,
+        workspaceOnly: options.applyPatchWorkspaceOnly,
+        containmentSource: options.applyPatchContainmentSource,
+        memoryWriteProvenance: options.memoryWriteProvenance,
+        abortSignal: options.abortSignal,
+      }),
+    );
+  }
+  if (options.shellTools === "full") {
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {
@@ -262,6 +429,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               workdirRoots: sandbox.backend?.workdirRoots,
               readOnlyWorkspaceSkillMounts,
               env: sandbox.backend?.env ?? sandbox.docker.env,
+              prepareProcessCleanup: sandbox.backend?.prepareProcessCleanup?.bind(sandbox.backend),
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
             }
@@ -272,5 +440,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   }
   options.recordToolPrepStage?.("shell-tools");
 
+  base.forEach((tool) => bindAgentToolActionDescriptor(tool, filesystemAction));
+  shell.forEach((tool) => bindAgentToolActionDescriptor(tool, processAction));
   return [...base, ...shell];
 }

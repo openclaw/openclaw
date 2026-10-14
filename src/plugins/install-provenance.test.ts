@@ -17,7 +17,9 @@ describe("plugin install provenance", () => {
   it.each([
     "discord",
     "@openclaw/discord",
+    "@openclaw/discord@1.2.3",
     "npm:@openclaw/discord",
+    "npm:@openclaw/discord@1.2.3",
     "/opt/openclaw/extensions/discord",
     "brave",
     "npm:@openclaw/brave-plugin",

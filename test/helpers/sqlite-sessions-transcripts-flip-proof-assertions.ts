@@ -1,37 +1,54 @@
-import { expect } from "vitest";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect } from "vitest";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import type { runSqliteSessionsTranscriptsFlipProof } from "./sqlite-sessions-transcripts-flip-proof.ts";
 
 type SqliteFlipProofReport = Awaited<ReturnType<typeof runSqliteSessionsTranscriptsFlipProof>>;
 
+export function assertSqliteFlipStartupRefusal(
+  refusal: SqliteFlipProofReport["startupRefusal"],
+): void {
+  expect(refusal?.message).toContain(`Run "${formatCliCommand("openclaw doctor --fix")}"`);
+  expect(refusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/"))).toEqual(
+    expect.arrayContaining([
+      "agents/main/sessions/sessions.json",
+      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
+      "agents/main/sessions/sqlite-legacy-main.jsonl",
+    ]),
+  );
+}
+
 export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   expect(report.failures).toEqual([]);
   expect(report.ok).toBe(true);
-  expect(
-    report.checkpoints
-      .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
-      .every((checkpoint) => checkpoint.activeJsonl.length === 0),
-  ).toBe(true);
-  expect(
-    report.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.label === "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0,
-    ),
-  ).toBe(true);
-  expect(
-    report.checkpoints
-      .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
-      .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
-  ).toBe(true);
-  expect(report.checkpoints.some((checkpoint) => checkpoint.label === "after-doctor-fix")).toBe(
-    false,
+  const seededCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "seeded-legacy-store",
+  );
+  const refusalCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "after-startup-refusal",
+  );
+  assertSqliteFlipStartupRefusal(report.startupRefusal);
+  expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
+  expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
+  expect(refusalCheckpoint?.sqlite.transcriptEvents).toBe(
+    seededCheckpoint?.sqlite.transcriptEvents,
   );
   expect(
+    report.checkpoints
+      .filter(
+        (checkpoint) =>
+          checkpoint.label !== "seeded-legacy-store" &&
+          checkpoint.label !== "after-startup-refusal",
+      )
+      .every((checkpoint) => checkpoint.activeJsonl.length === 0),
+  ).toBe(true);
+  expect(seededCheckpoint?.activeJsonl.length).toBeGreaterThan(0);
+  expect(
     report.checkpoints.some(
       (checkpoint) =>
-        checkpoint.label === "after-startup-import" &&
-        checkpoint.gatewayLogTail?.includes(
-          "session: imported legacy session metadata/transcripts into SQLite",
-        ) &&
+        checkpoint.label === "after-doctor-fix" &&
+        checkpoint.doctor?.mode === "fix" &&
+        checkpoint.doctor.code === 0 &&
         report.oldStateSessionKeys.every((key) =>
           checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
         ) &&
@@ -39,11 +56,11 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         checkpoint.sqlite.transcriptEvents >= 13,
     ),
   ).toBe(true);
-  const startupImportCheckpoint = report.checkpoints.find(
-    (checkpoint) => checkpoint.label === "after-startup-import",
+  const doctorImportCheckpoint = report.checkpoints.find(
+    (checkpoint) => checkpoint.label === "after-doctor-fix",
   );
   expect(
-    startupImportCheckpoint?.archiveArtifacts.some(
+    doctorImportCheckpoint?.archiveArtifacts.some(
       (artifact) =>
         artifact.path.includes(`${report.legacySessionId}.trajectory.jsonl`) &&
         artifact.textTail?.includes("trajectory") === true,
@@ -67,6 +84,71 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         ),
     ),
   ).toBe(true);
+  const recovery = report.abruptRestart;
+  expect(recovery).toBeDefined();
+  if (!recovery) {
+    throw new Error("missing abrupt Gateway restart proof");
+  }
+  const { before, afterRestart, afterAppend, forcedExit } = recovery;
+  expect(forcedExit.processTreeState).toBe("dead");
+  expect(forcedExit.closeCode).toBe(forcedExit.code);
+  expect(forcedExit.closeSignal).toBe(forcedExit.signal);
+  if (forcedExit.platform === "win32") {
+    expect(forcedExit.code).not.toBeNull();
+    expect(forcedExit.code).not.toBe(0);
+  } else {
+    expect(forcedExit.code).toBeNull();
+    expect(forcedExit.signal).toBe("SIGKILL");
+  }
+  expect(before.selected.sessionKey).toBe(report.fullTurnSessionKey);
+  expect(before.selected.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  expect(before.selected.history.sessionId).toBe(before.selected.sessionId);
+  expect(afterRestart).toEqual(before);
+  expect(afterAppend.sibling).toEqual(before.sibling);
+  expect(afterAppend.selected.sessionId).toBe(before.selected.sessionId);
+  expect(afterAppend.selected.history.sessionId).toBe(before.selected.sessionId);
+  expect(afterAppend.selected.events.slice(0, before.selected.events.length)).toEqual(
+    before.selected.events,
+  );
+  expect(afterAppend.selected.messages.slice(0, before.selected.messages.length)).toEqual(
+    before.selected.messages,
+  );
+  const appendedMessages = afterAppend.selected.messages.slice(before.selected.messages.length);
+  expect(appendedMessages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  expect(JSON.stringify(appendedMessages[0]?.content)).toContain(recovery.appendText);
+  expect(JSON.stringify(appendedMessages[1]?.content)).toContain(report.fullTurnAssistantText);
+  const messageIds = afterAppend.selected.messages.map((message) => message.id);
+  expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+  expect(new Set(messageIds).size).toBe(messageIds.length);
+  const historyPrefix = afterAppend.selected.history.messages.slice(
+    0,
+    before.selected.history.messages.length,
+  );
+  const displaySource = asRecord(
+    asRecord(asRecord(historyPrefix[0])?.["__openclaw"])?.transcriptPosition,
+  )?.source;
+  assert(typeof displaySource === "string" && displaySource.length > 0);
+  const expectedHistory = structuredClone(before.selected.history.messages);
+  // Capturing the new user's prompt advances the display generation, not past message content.
+  for (const message of expectedHistory) {
+    const position = asRecord(asRecord(asRecord(message)?.["__openclaw"])?.transcriptPosition);
+    assert(position && typeof position.source === "string");
+    position.source = displaySource;
+  }
+  expect(historyPrefix).toEqual(expectedHistory);
+  const appendedHistory = afterAppend.selected.history.messages.slice(
+    before.selected.history.messages.length,
+  );
+  expect(appendedHistory.map((message) => asRecord(message)?.role)).toEqual(["user", "assistant"]);
+  expect(JSON.stringify(asRecord(appendedHistory[0])?.content)).toContain(recovery.appendText);
+  expect(JSON.stringify(asRecord(appendedHistory[1])?.content)).toContain(
+    report.fullTurnAssistantText,
+  );
+  expect(
+    afterAppend.selected.history.messages.map(
+      (message) => asRecord(asRecord(message)?.["__openclaw"])?.id,
+    ),
+  ).toEqual(messageIds);
   const idempotenceCheckpoint = report.checkpoints.find(
     (checkpoint) => checkpoint.label === "after-doctor-import-idempotence",
   );
@@ -117,13 +199,18 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   ).toBe(false);
   expect(report.checkpoints.map((checkpoint) => checkpoint.label)).toEqual([
     "seeded-legacy-store",
-    "after-startup-import",
+    "after-startup-refusal",
+    "after-doctor-fix",
+    "after-gateway-start",
     "after-doctor-inspect",
     "after-doctor-validate",
     "after-rollback-restore",
     "after-gateway-restart",
     "after-chat-send",
     "after-full-agent-turn",
+    "after-abrupt-gateway-exit",
+    "after-abrupt-gateway-restart",
+    "after-abrupt-restart-chat-send",
     "after-doctor-import-idempotence",
     "after-downgrade-reupgrade-import",
     "after-sqlite-busy-contention",
@@ -137,7 +224,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     "after-final-doctor-inspect",
   ]);
   expect(
-    startupImportCheckpoint?.archiveArtifacts.some(
+    doctorImportCheckpoint?.archiveArtifacts.some(
       (artifact) =>
         artifact.path.includes("old-orphan.deleted.jsonl") &&
         artifact.textTail?.includes("old-orphan") === true,
@@ -166,7 +253,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     seededSessions: 24,
   });
   expect(report.scaleMigration?.importedSessionKeys).toHaveLength(24);
-  expect(report.scaleMigration?.startupImportElapsedMs).toBeGreaterThanOrEqual(0);
+  expect(report.scaleMigration?.doctorImportElapsedMs).toBeGreaterThanOrEqual(0);
   expect(
     report.checkpoints.some(
       (checkpoint) =>

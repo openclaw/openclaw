@@ -1,24 +1,42 @@
-import { html, nothing } from "lit";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
+registerSessionPlacementEnglish();
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
-  const result = await client.request<EnvironmentsListResult>("environments.list", {});
+  runtimeId?: string,
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+  suggestedProfile?: EnvironmentsListResult["suggestedProfile"];
+}> {
+  const result = await client.request<EnvironmentsListResult>(
+    "environments.list",
+    runtimeId ? { runtimeId } : {},
+  );
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
+    suggestedProfile: result?.suggestedProfile,
     environments: readDraftEnvironments(result?.environments),
   };
 }
 
-type SessionMenuItemOptions = {
+export type SessionMenuItemOptions = {
   value: string;
   label: string;
+  accessibleProvider?: string;
+  description?: string;
   icon?: unknown;
   sub?: string;
   facts?: readonly string[];
@@ -26,94 +44,48 @@ type SessionMenuItemOptions = {
   disabled?: boolean;
   title?: string;
   keepOpen?: boolean;
+  compact?: boolean;
+  capacityLabel?: string;
+  platform?: string;
+  summary?: string;
+  selectedSummary?: string;
+  hasSubmenu?: boolean;
+  suggested?: boolean;
+  capabilityLabels?: readonly string[];
+  hardware?: string;
+  hideDetails?: boolean;
+  remediation?: "enable-session-hosting" | "update-device";
+  provider?: string;
+  trust?: "persistent" | "disposable";
   onSelect: () => void;
 };
 
-export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
-  return html`
-    <button
-      type="button"
-      class="session-menu__item"
-      data-value=${params.value}
-      data-popover=${params.keepOpen ? nothing : "close"}
-      aria-pressed=${String(params.checked)}
-      title=${params.title ?? nothing}
-      ?disabled=${submitting || (params.disabled ?? false)}
-      @click=${params.onSelect}
-    >
-      ${params.icon
-        ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
-        : nothing}
-      <span class="session-menu__text">${params.label}</span>
-      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
-      ${params.facts?.length
-        ? html`<span class="new-session-page__menu-facts">
-            ${params.facts.map(
-              (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-            )}
-          </span>`
-        : nothing}
-      <span class="session-menu__check" aria-hidden="true"
-        >${params.checked ? icons.check : nothing}</span
-      >
-    </button>
-  `;
-}
-
-export function renderConnectMachineMenuItem(params: { disabled: boolean; onSelect: () => void }) {
-  return html`
-    <div class="session-menu__separator" role="separator"></div>
-    <button
-      type="button"
-      class="session-menu__item new-session-page__connect-machine"
-      data-value="connect-machine"
-      aria-pressed="false"
-      ?disabled=${params.disabled}
-      @click=${params.onSelect}
-    >
-      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
-      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
-    </button>
-  `;
-}
-
-export function renderCloudProfileMenuItems(params: {
+export type CloudProfileMenuItemsOptions = {
   profiles: readonly DraftCloudProfile[];
   selectedId: string;
+  selectedOs?: string;
+  selectedMachine?: string;
+  onSelectOs?: (osId: string) => void;
+  onSelectMachine?: (machineId: string) => void;
   submitting: boolean;
-  icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  onSelect: (profileId: string) => void;
-}) {
-  return params.profiles.map((profile) => {
-    const profileDisabledReason = params.profileDisabledReason?.(profile);
-    return renderSessionMenuItem(
-      {
-        value: `cloud:${profile.id}`,
-        label: t("newSession.cloudWorker", { profile: profile.id }),
-        icon: params.icon,
-        facts:
-          profile.trust === "disposable"
-            ? [t("newSession.environmentDisposable")]
-            : profile.trust === "persistent"
-              ? [t("newSession.environmentPersistent")]
-              : undefined,
-        checked: params.selectedId === profile.id,
-        disabled: params.disabled || Boolean(profileDisabledReason),
-        title:
-          (params.disabled ? params.disabledReason : profileDisabledReason) ??
-          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
-        onSelect: () => params.onSelect(profile.id),
-      },
-      params.submitting,
-    );
-  });
-}
+  compact?: boolean;
+  onSelect: (profileId: string, useDefaults?: boolean) => void;
+};
+
+export type CloudChoiceMenuItemsOptions = {
+  kind: "machine" | "os";
+  choices: readonly (WorkerMachineOption & WorkerOperatingSystem)[];
+  selectedId: string;
+  suggestedId?: string;
+  submitting: boolean;
+  onSelect: (id: string) => void;
+};
 
 /** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
-function machineShapeText(machine: DraftMachineOption): string | undefined {
+export function machineShapeText(machine: WorkerMachineOption): string | undefined {
   const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
   const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
   if (cpu && memory) {
@@ -123,26 +95,4 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
     return t("newSession.machineCpu", { cpu });
   }
   return memory ? t("newSession.machineMemory", { memory }) : undefined;
-}
-
-export function renderCloudMachineMenuItems(params: {
-  machines: readonly DraftMachineOption[];
-  selectedId: string;
-  submitting: boolean;
-  onSelect: (machineId: string) => void;
-}) {
-  return params.machines.map((machine) =>
-    renderSessionMenuItem(
-      {
-        value: `machine:${machine.id}`,
-        label: machine.label,
-        sub: machineShapeText(machine),
-        facts: machine.default ? [t("newSession.machineDefault")] : undefined,
-        checked: params.selectedId === machine.id,
-        keepOpen: true,
-        onSelect: () => params.onSelect(machine.id),
-      },
-      params.submitting,
-    ),
-  );
 }

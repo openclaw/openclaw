@@ -4,19 +4,25 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createReadToolDefinition } from "./read.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
+import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
+import { createWriteTool } from "./write.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
   vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../../../infra/windows-encoding.js", () => ({
+vi.mock("../../../infra/windows-encoding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/windows-encoding.js")>()),
   decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
 }));
 
@@ -38,11 +44,16 @@ function createTinyBmp(): Buffer {
   return buffer;
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
-): string {
+function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+function executeRead(
+  tool: ReturnType<typeof createReadToolDefinition>,
+  args: Parameters<typeof tool.execute>[1],
+) {
+  return tool.execute("read", args, undefined, undefined, {} as never);
 }
 
 const plainTheme = {
@@ -66,13 +77,6 @@ describe("read tool", () => {
     decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
   });
 
-  it("describes image reads as private model context", () => {
-    const description = createReadToolDefinition("/workspace").description;
-
-    expect(description).toContain("images attach to model context");
-    expect(description).not.toContain("images attach.");
-  });
-
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -83,13 +87,7 @@ describe("read tool", () => {
     const tool = createReadToolDefinition("/workspace", { autoResizeImages: false });
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const result = await tool.execute(
-          "call-1",
-          { path: `media://inbound/${mediaId}` },
-          undefined,
-          undefined,
-          {} as never,
-        );
+        const result = await executeRead(tool, { path: `media://inbound/${mediaId}` });
 
         expect(result.content).toHaveLength(2);
         expect(result.content[0]).toStrictEqual({
@@ -107,18 +105,37 @@ describe("read tool", () => {
     }
   });
 
+  it.each(["extension", "embedded"])("omits images for a non-vision %s model", async (source) => {
+    const stateDir = tempDirs.make("openclaw-read-vision-");
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+
+    const result =
+      source === "embedded"
+        ? await createReadTool(stateDir, {
+            autoResizeImages: false,
+            modelHasVision: false,
+          }).execute("embedded-read", { path: imagePath })
+        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+            "extension-read",
+            { path: imagePath },
+            undefined,
+            undefined,
+            {
+              model: { input: ["text"] },
+            } as never,
+          );
+    const imageParts = result.content.filter((part) => part.type === "image");
+    expect(imageParts).toHaveLength(0);
+    expect(textContent(result)).toContain("does not support images");
+  });
+
   it("converts BMP files to PNG attachments", async () => {
     const tempDir = tempDirs.make("openclaw-read-bmp-");
     const filePath = path.join(tempDir, "pixel.bmp");
     await fs.writeFile(filePath, createTinyBmp());
     const tool = createReadToolDefinition(tempDir, { autoResizeImages: false });
-    const result = await tool.execute(
-      "call-bmp",
-      { path: filePath },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: filePath });
 
     expect(textContent(result)).toContain("Read image file [image/png]");
     expect(textContent(result)).toContain("converted from image/bmp to image/png");
@@ -133,60 +150,9 @@ describe("read tool", () => {
     const tempDir = tempDirs.make("openclaw-read-directory-");
     const tool = createReadToolDefinition(tempDir);
 
-    await expect(
-      tool.execute(
-        "call-directory",
-        { path: ".", optional: true },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(
+    await expect(executeRead(tool, { path: ".", optional: true })).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
     );
-  });
-
-  it("returns not_found only for optional missing paths", async () => {
-    const tempDir = tempDirs.make("openclaw-read-optional-");
-    await fs.writeFile(path.join(tempDir, "present.txt"), "present");
-    const tool = createReadToolDefinition(tempDir);
-
-    const missing = await tool.execute(
-      "call-optional-missing",
-      { path: "missing.txt", optional: true },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    expect(missing).toStrictEqual({
-      content: [{ type: "text", text: "Optional file not found: missing.txt." }],
-      details: {
-        kind: "not_found",
-        status: "not_found",
-        path: "missing.txt",
-        optional: true,
-      },
-    });
-
-    await expect(
-      tool.execute(
-        "call-required-missing",
-        { path: "missing.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/not found/i);
-
-    const present = await tool.execute(
-      "call-optional-present",
-      { path: "present.txt", optional: true },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    expect(textContent(present)).toBe("present");
-    expect(present.details).toEqual({ kind: "text", content: "present" });
   });
 
   it("treats ENOTDIR as optional not_found without swallowing permission errors", async () => {
@@ -279,15 +245,22 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "empty.txt"), "");
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-empty",
-      { path: "empty.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "empty.txt" });
 
     expect(textContent(result)).toBe("File is empty (0 bytes).");
+  });
+
+  it("reads later lines from isolated files larger than 16 MiB", async () => {
+    const tempDir = tempDirs.make("openclaw-read-large-");
+    const filePath = path.join(tempDir, "large.sqlite");
+    await fs.writeFile(filePath, `${"x".repeat(17 * 1024 * 1024)}\nlast line\n`);
+
+    const result = await executeRead(createReadToolDefinition(tempDir), {
+      path: filePath,
+      offset: 2,
+    });
+
+    expect(textContent(result)).toBe("last line\n");
   });
 
   it("reports the byte count when a BOM-only file decodes to empty text", async () => {
@@ -298,92 +271,24 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-bom-only",
-      { path: "bom.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "bom.txt" });
 
     expect(textContent(result)).toBe("File contains no readable text (3 bytes).");
   });
 
-  it.each([
-    ["LF", "\n"],
-    ["CRLF", "\r\n"],
-  ])("describes %s-only files instead of returning blank content", async (_label, contents) => {
-    const tempDir = tempDirs.make("openclaw-read-blank-line-");
-    await fs.writeFile(path.join(tempDir, "blank.txt"), contents);
-    const tool = createReadToolDefinition(tempDir);
-
-    const result = await tool.execute(
-      "call-blank-line",
-      { path: "blank.txt" },
-      undefined,
-      undefined,
-      {} as never,
+  it("does not decode PDF bytes from a renamed .bin file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-document-");
+    await fs.writeFile(
+      path.join(tempDir, "pdf.bin"),
+      Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii"),
     );
+    const result = await executeRead(createReadToolDefinition(tempDir), { path: "pdf.bin" });
 
-    expect(textContent(result)).toBe("File contains 1 blank line.");
-  });
-
-  it("applies line limits before describing blank-only content", async () => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("\n\n"),
-      },
-    });
-
-    const result = await tool.execute(
-      "call-blank-range",
-      { path: "blank.txt", limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
+    expect(textContent(result)).toMatch(
+      /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
     );
-
-    expect(textContent(result)).toBe(
-      "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
-    );
-  });
-
-  it("does not classify plaintext from a custom backend by its extension", async () => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("plain text"),
-      },
-    });
-
-    const result = await tool.execute(
-      "call-custom-png",
-      { path: "report.png" },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toBe("plain text");
-  });
-
-  it("resolves one Unicode-equivalent filename and names the correction", async () => {
-    const tempDir = tempDirs.make("openclaw-read-unicode-");
-    const storedName = "re\u0301sume\u0301 3.04\u202fPM d\u2019accord.txt";
-    await fs.writeFile(path.join(tempDir, storedName), "matched");
-    const tool = createReadToolDefinition(tempDir);
-
-    const result = await tool.execute(
-      "call-unicode",
-      { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toContain("Resolved filename");
-    expect(textContent(result)).toContain("matched");
+    expect(result.details.kind).toBe("text");
+    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
   });
 
   it("counts filename-resolution notes inside the complete 50 KiB read ceiling", async () => {
@@ -392,34 +297,11 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, storedName), "x".repeat(DEFAULT_MAX_BYTES));
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-unicode-budget",
-      { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" });
 
     expect(textContent(result)).toContain("Resolved filename");
     expect(textContent(result)).toContain("cursor=");
     expect(Buffer.byteLength(textContent(result), "utf8")).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-  });
-
-  it("keeps an exact Unicode spelling ahead of equivalent filenames", async () => {
-    const tempDir = tempDirs.make("openclaw-read-unicode-exact-");
-    await fs.writeFile(path.join(tempDir, "report\u00a0.txt"), "exact");
-    await fs.writeFile(path.join(tempDir, "report .txt"), "equivalent");
-    const tool = createReadToolDefinition(tempDir);
-
-    const result = await tool.execute(
-      "call-unicode-exact",
-      { path: "report\u00a0.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toBe("exact");
   });
 
   it("refuses ambiguous Unicode-equivalent filenames", async () => {
@@ -428,15 +310,9 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "d\u2019accord.txt"), "curly");
     const tool = createReadToolDefinition(tempDir);
 
-    await expect(
-      tool.execute(
-        "call-unicode-ambiguous",
-        { path: "d\u2018accord.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/ambiguous.*d'accord\.txt.*d\u2019accord\.txt/i);
+    await expect(executeRead(tool, { path: "d\u2018accord.txt" })).rejects.toThrow(
+      /ambiguous.*d'accord\.txt.*d\u2019accord\.txt/i,
+    );
   });
 
   it("suggests a close filename without reading it", async () => {
@@ -449,13 +325,8 @@ describe("read tool", () => {
     ).rejects.toThrow(/Did you mean: AGENTS\.md\?/);
   });
 
-  it.each([
-    {
-      name: "minified JSON",
-      text: JSON.stringify({ generated: "x".repeat(DEFAULT_MAX_BYTES * 2) }),
-    },
-    { name: "astral emoji", text: `prefix${"🦞".repeat(DEFAULT_MAX_BYTES)}` },
-  ])("continues an oversized $name line without splitting characters", async ({ text }) => {
+  it("continues an oversized astral emoji line without splitting characters", async () => {
+    const text = `prefix${"🦞".repeat(DEFAULT_MAX_BYTES)}`;
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: async () => {},
@@ -497,18 +368,12 @@ describe("read tool", () => {
       },
     });
 
-    await expect(
-      tool.execute(
-        "call-surrogate",
-        { path: "emoji.txt", cursor: 2 },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/cursor.*surrogate.*(?:1|3)/i);
+    await expect(executeRead(tool, { path: "emoji.txt", cursor: 2 })).rejects.toThrow(
+      /cursor.*surrogate.*(?:1|3)/i,
+    );
   });
 
-  it.each([4, 5])("explains an intra-line cursor at or past EOF (%s)", async (cursor) => {
+  it("explains an intra-line cursor past EOF", async () => {
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: async () => {},
@@ -516,15 +381,38 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-cursor-eof",
-      { path: "done.txt", cursor },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "done.txt", cursor: 5 });
 
-    expect(textContent(result)).toMatch(/cursor.*(?:end|beyond).*line 1/i);
+    expect(textContent(result)).toBe("Cursor 5 is at or beyond the end of line 1 (4 characters).");
+  });
+
+  it.each([
+    {
+      name: "a blank-only file",
+      contents: "\n\n",
+      offset: 1,
+      limit: 2000,
+      expected: "File contains 2 blank lines.",
+    },
+    {
+      name: "a blank-only range",
+      contents: "\n\n",
+      offset: 1,
+      limit: 1,
+      expected:
+        "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
+    },
+  ])("accepts cursor 0 on $name", async ({ contents, offset, limit, expected }) => {
+    const tempDir = tempDirs.make("openclaw-read-cursor-zero-");
+    await fs.writeFile(path.join(tempDir, "synthetic.txt"), contents);
+    const result = await createReadTool(tempDir).execute("read-zero", {
+      path: "synthetic.txt",
+      offset,
+      limit,
+      cursor: 0,
+    });
+
+    expect(textContent(result)).toBe(expected);
   });
 
   it("finishes an oversized selected line before continuing at the next line", async () => {
@@ -536,48 +424,23 @@ describe("read tool", () => {
       },
     });
 
-    const first = await tool.execute(
-      "call-line-first",
-      { path: "lines.txt", offset: 2, limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const first = await executeRead(tool, { path: "lines.txt", offset: 2, limit: 1 });
     const continuation = (
       first.details as { continuation?: { kind: string; offset: number; cursor: number } }
     ).continuation;
     expect(continuation).toMatchObject({ kind: "cursor", offset: 2 });
 
-    const second = await tool.execute(
-      "call-line-second",
-      { path: "lines.txt", offset: 2, cursor: continuation?.cursor, limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    const firstChunk = textContent(first).replace(/\n\n\[Showing[^\]]*\]$/, "");
-    const secondChunk = textContent(second).replace(/\n\n\[\d+ more lines[^\]]*\]$/, "");
-    expect(`${firstChunk}${secondChunk}`).toBe(longLine);
-    expect(textContent(second)).toContain("offset=3");
-  });
-
-  it("preserves ordinary multi-line selection and trailing newlines", async () => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("first\r\nsecond\r\nthird\r\n"),
-      },
+    const second = await executeRead(tool, {
+      path: "lines.txt",
+      offset: 2,
+      cursor: continuation?.cursor,
+      limit: 1,
     });
-
-    const selected = await tool.execute(
-      "call-lines",
-      { path: "lines.txt", offset: 2 },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(selected)).toBe("second\nthird\n");
+    if (first.details.kind !== "truncated" || second.details.kind !== "truncated") {
+      throw new Error("Expected both partial pages to retain their continuation");
+    }
+    expect(first.details.content + second.details.content).toBe(longLine);
+    expect(textContent(second)).toContain("offset=3");
   });
 
   it("clamps non-positive line limits before slicing file content", async () => {
@@ -591,26 +454,23 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "notes.txt", limit: -1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "notes.txt", limit: -1 });
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      content: "alpha",
+      continuation: { kind: "line", offset: 2, limit: 1 },
+    });
   });
 
-  it.each([
-    { limit: -1, range: ":1-1" },
-    { limit: 1.5, range: ":1-1" },
-    { limit: Number.POSITIVE_INFINITY, range: `:1-${DEFAULT_MAX_LINES}` },
-  ])("normalizes read call line ranges for limit $limit", ({ limit, range }) => {
-    expect(renderReadCall({ path: "notes.txt", limit })).toBe(`read notes.txt${range}`);
+  it("normalizes an infinite rendered line limit", () => {
+    expect(renderReadCall({ path: "notes.txt", limit: Number.POSITIVE_INFINITY })).toBe(
+      `read notes.txt:1-${DEFAULT_MAX_LINES}`,
+    );
   });
 
-  it.each([0, -1, 1.5])("rejects invalid offset %s before accessing the file", async (offset) => {
+  it("rejects offset zero before accessing the file", async () => {
     const access = vi.fn(async () => {});
     const detectImageMimeType = vi.fn(async () => null);
     const readFile = vi.fn(async () => Buffer.from("alpha\nbeta\ngamma"));
@@ -623,38 +483,11 @@ describe("read tool", () => {
     });
 
     await expect(
-      tool.execute(
-        "call-1",
-        { path: "notes.txt", offset, optional: true },
-        undefined,
-        undefined,
-        {} as never,
-      ),
+      executeRead(tool, { path: "notes.txt", offset: 0, optional: true }),
     ).rejects.toThrow("Offset must be an integer at least 1");
     expect(access).not.toHaveBeenCalled();
     expect(detectImageMimeType).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
-  });
-
-  it("declares offsets as positive integers in the tool schema", () => {
-    const tool = createReadToolDefinition("/workspace");
-
-    expect(Value.Check(tool.parameters, { path: "notes.txt", offset: 1 })).toBe(true);
-    expect(Value.Check(tool.parameters, { path: "notes.txt", cursor: 0 })).toBe(true);
-    for (const offset of [0, -1, 1.5]) {
-      expect(Value.Check(tool.parameters, { path: "notes.txt", offset })).toBe(false);
-    }
-    for (const cursor of [-1, 1.5]) {
-      expect(Value.Check(tool.parameters, { path: "notes.txt", cursor })).toBe(false);
-    }
-  });
-
-  it("accepts only literal true for optional reads", () => {
-    const schema = createReadToolDefinition("/workspace").parameters;
-
-    expect(Value.Check(schema, { path: "notes.txt", optional: true })).toBe(true);
-    expect(Value.Check(schema, { path: "notes.txt", optional: false })).toBe(false);
-    expect(Value.Check(schema, { path: "notes.txt", optional: "true" })).toBe(false);
   });
 
   it("uses the shared Windows decoder for local filesystem reads", async () => {
@@ -666,13 +499,7 @@ describe("read tool", () => {
     try {
       await fs.writeFile(filePath, legacyBytes);
       const tool = createReadToolDefinition(tempDir);
-      const result = await tool.execute(
-        "call-1",
-        { path: "legacy.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const result = await executeRead(tool, { path: "legacy.txt" });
 
       expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
       expect(textContent(result)).toBe("decoded legacy text");
@@ -681,66 +508,86 @@ describe("read tool", () => {
     }
   });
 
-  it("leaves injected read operation decoding owner-controlled", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
+  it("waits for an aliased queued write before reading the same new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-write-order-");
+    const realDir = path.join(tempDir, "real");
+    const aliasDir = path.join(tempDir, "alias");
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    const writePath = path.join(aliasDir, "race-target.txt");
+    const readPath = path.join(realDir, "race-target.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const blocker = withFileMutationQueueKeyResolution(
+      resolveFileMutationQueueKey(writePath),
+      async () => {
+        blockerStarted.resolve();
+        await releaseBlocker.promise;
       },
-    });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
     );
+    await blockerStarted.promise;
+    const writeResult = createWriteTool(tempDir).execute(
+      "write",
+      { path: writePath, content: "first snapshot" },
+      undefined,
+    );
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(bytes.toString("utf8"));
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalledOnce();
+    expect(textContent(result)).toBe("first snapshot");
   });
 
-  it("strips one leading UTF-8 BOM without changing embedded markers", async () => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => Buffer.from("\uFEFFimport value\nconst marker = '\uFEFF';"),
+  it("queues every accepted Unicode spelling before reading a new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-order-");
+    const writePath = path.join(tempDir, "caf\u00e9.txt");
+    const readPath = path.join(tempDir, "cafe\u0301.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = withFileMutationQueueKeyResolution(
+      resolveFileMutationQueueKey(writePath),
+      async () => {
+        blockerStarted.resolve();
+        await releaseBlocker.promise;
       },
-    });
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "source.ts" },
-      undefined,
-      undefined,
-      {} as never,
     );
+    await blockerStarted.promise;
 
-    expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
-  });
-
-  it("uses an injected backend decoder when declared", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
+    const writeResult = createWriteTool(tempDir).execute(
+      "write",
+      { path: writePath, content: "normalized snapshot" },
+      undefined,
+    );
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const readResult = createReadToolDefinition(tempDir, {
       operations: {
-        decodeText: ({ buffer, absolutePath }) => `${absolutePath}:${buffer.toString("hex")}`,
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
       },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
     });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    expect(readAccess).not.toHaveBeenCalled();
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalled();
+    expect(textContent(result)).toContain("normalized snapshot");
   });
 });

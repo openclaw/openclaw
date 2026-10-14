@@ -10,17 +10,63 @@ import {
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 
 describe("gateway wizard e2e", () => {
   beforeEach(resetGatewayTestState);
   afterEach(resetGatewayTestState);
+
+  it(
+    "requires boolean consent through wizard.next",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-consent-home-",
+        minimalGateway: true,
+      });
+      const token = nextGatewayId("wizard-consent");
+      const claim = await acquireGatewayE2ePortBlock();
+      const confirmations: boolean[] = [];
+      const server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+          wizardRunner: async (_opts, _runtime, prompter) => {
+            confirmations.push(
+              await prompter.confirm({ message: "Continue?", initialValue: false }),
+            );
+          },
+        }),
+      );
+      const client = await connectGatewayClient({ url: `ws://127.0.0.1:${claim.port}`, token });
+
+      try {
+        for (const { value, expected } of [
+          { value: "false", expected: false },
+          { value: false, expected: false },
+          { value: true, expected: true },
+        ]) {
+          const start = await client.request<WizardStartResult>("wizard.start", { mode: "local" });
+          expect(start.step).toMatchObject({ type: "confirm", initialValue: false });
+          const result = await client.request<WizardNextResult>("wizard.next", {
+            sessionId: start.sessionId,
+            answer: { stepId: start.step?.id, value },
+          });
+          expect(result).toMatchObject({ done: true, status: "done" });
+          expect(confirmations.at(-1)).toBe(expected);
+        }
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard consent E2E complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
 
   it("contains hosted wizard exits", { timeout: GATEWAY_E2E_TIMEOUT_MS }, async () => {
     const { envSnapshot, tempHome } = await setupGatewayTempHome({
@@ -29,22 +75,24 @@ describe("gateway wizard e2e", () => {
     });
     const wizardToken = nextGatewayId("wiz-contained-exit");
     let exitCode = 0;
-    const port = await getGatewayE2ePortBlock();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token: wizardToken },
-      controlUiEnabled: false,
-      wizardRunner: async (_opts, runtime, prompter) => {
-        await prompter.outro("wizard complete");
-        runtime.exit(exitCode);
-      },
-      channelWizardRunner: async (_opts, runtime, prompter) => {
-        await prompter.outro("channel wizard complete");
-        runtime.exit(exitCode);
-      },
-    });
+    const claim = await acquireGatewayE2ePortBlock();
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("wizard complete");
+          runtime.exit(exitCode);
+        },
+        channelWizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("channel wizard complete");
+          runtime.exit(exitCode);
+        },
+      }),
+    );
     const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token: wizardToken,
     });
     // Intercept an actual host exit so the fail-first Gateway test cannot
@@ -95,29 +143,31 @@ describe("gateway wizard e2e", () => {
         minimalGateway: true,
       });
       const wizAuth = nextGatewayId("wiz-chan");
-      const port = await getGatewayE2ePortBlock();
+      const claim = await acquireGatewayE2ePortBlock();
       const channelRuns: Array<string | undefined> = [];
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token: wizAuth },
-        controlUiEnabled: false,
-        wizardRunner: async () => {
-          throw new Error("setup wizard runner must not run for flow channels");
-        },
-        channelWizardRunner: async (opts, _runtime, prompter) => {
-          channelRuns.push(opts.channel);
-          await prompter.intro("Channel setup");
-          const choice = await prompter.select({
-            message: "channel",
-            options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
-          });
-          opts.onConfigured?.([{ channel: choice, accountId: "default" }]);
-          await prompter.outro(`configured ${choice}`);
-        },
-      });
+      const server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token: wizAuth },
+          controlUiEnabled: false,
+          wizardRunner: async () => {
+            throw new Error("setup wizard runner must not run for flow channels");
+          },
+          channelWizardRunner: async (opts, _runtime, prompter) => {
+            channelRuns.push(opts.channel);
+            await prompter.intro("Channel setup");
+            const choice = await prompter.select({
+              message: "channel",
+              options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
+            });
+            opts.onConfigured?.([{ channel: choice, accountId: "default" }]);
+            await prompter.outro(`configured ${choice}`);
+          },
+        }),
+      );
 
       const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token: wizAuth,
         clientDisplayName: "vitest-wizard-channels",
       });

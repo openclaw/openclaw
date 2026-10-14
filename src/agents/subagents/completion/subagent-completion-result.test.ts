@@ -5,7 +5,11 @@ describe("resolveSubagentCompletionResultText", () => {
   it.each([
     {
       name: "visible",
-      terminalReply: { disposition: "visible", text: "authoritative reply" } as const,
+      terminalReply: {
+        disposition: "visible",
+        text: "authoritative reply",
+        modelRouteChange: "Model route changed: requested/model → actual/model.",
+      } as const,
       expected: "authoritative reply",
     },
     {
@@ -24,12 +28,11 @@ describe("resolveSubagentCompletionResultText", () => {
       expect(
         resolveSubagentCompletionResultText({
           completion: {
-            required: true,
             resultText: "NO_REPLY",
             fallbackResultText: "older visible fallback",
             terminalReply,
           },
-          execution: { status: "terminal", outcome: { status: "ok" } },
+          execution: { outcome: { status: "ok" } },
         }),
       ).toBe(expected);
     },
@@ -39,12 +42,44 @@ describe("resolveSubagentCompletionResultText", () => {
     expect(
       resolveSubagentCompletionResultText({
         completion: {
-          required: true,
           resultText: "NO_REPLY",
           fallbackResultText: "legacy fallback",
         },
-        execution: { status: "terminal", outcome: { status: "ok" } },
+        execution: { outcome: { status: "ok" } },
       }),
     ).toBe("legacy fallback");
   });
+
+  it.each(["error", "timeout", "unknown"] as const)(
+    "preserves a %s outcome even when its captured reply is NO_REPLY",
+    (status) => {
+      expect(
+        resolveSubagentCompletionResultText({
+          completion: {
+            terminalReply: { disposition: "visible", text: "NO_REPLY" },
+          },
+          execution: { outcome: { status } },
+        }),
+      ).toBe("NO_REPLY");
+    },
+  );
+
+  it.each([
+    { status: "error", resultText: " \n\t " },
+    { status: "timeout", resultText: "" },
+    { status: "unknown", resultText: " \n\t " },
+  ] as const)(
+    "preserves captured findings when a $status completion has blank primary text ($#)",
+    ({ status, resultText }) => {
+      expect(
+        resolveSubagentCompletionResultText({
+          completion: {
+            resultText,
+            fallbackResultText: "  actionable captured findings  ",
+          },
+          execution: { outcome: { status } },
+        }),
+      ).toBe("actionable captured findings");
+    },
+  );
 });

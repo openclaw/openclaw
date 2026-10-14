@@ -6,7 +6,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-surface.ts";
+import "./custodian-surface.tsx";
 
 function alert(id: string): CustodianAlert {
   return {
@@ -63,6 +63,20 @@ describe("CustodianAlertStore", () => {
     expect(custodianAlertStore.alert).toBeNull();
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
+  });
+
+  it("retires scoped facts and a queued question when its owner loses authority", () => {
+    let current = true;
+    const admit = vi.fn(() => true);
+    const send = vi.fn();
+    custodianAlertStore.present(alert("scoped"), { isCurrent: () => current, admit });
+    current = false;
+
+    custodianAlertStore.askIfReady(send);
+
+    expect(custodianAlertStore.alert).toBeNull();
+    expect(admit).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("renders without sending when custodian chat is unavailable", async () => {

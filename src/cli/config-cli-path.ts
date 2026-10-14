@@ -1,12 +1,29 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { normalizeConfigModelSelectionParent } from "../config/model-input-normalization.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { toDotPath } from "../shared/dot-path.js";
+import {
+  formatConcreteConfigPath,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
+
+export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
 
 export type PathSegment = string;
+
+export function formatConfigSetPath(
+  path: readonly PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+  source?: unknown,
+): string {
+  return formatConcreteConfigPath(pathTokens ?? path, source);
+}
 
 export type JsonSchemaRecord = {
   type?: unknown;
@@ -18,172 +35,58 @@ export type JsonSchemaRecord = {
   allOf?: unknown;
 };
 
+/** Subcommand that hit a replacement guard; it may only recommend flags that subcommand registers. */
+export type ConfigMutationCommand = "set" | "patch";
+
+/** Patch prints this path as its `--replace-path` argument, so a literal dot in a key needs brackets to re-parse. */
+function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): string {
+  return command === "patch" ? formatConfigSetPath(path) : toDotPath(path);
+}
+
+/**
+ * A copied retry crosses a shell, and once a key holds a quote no single spelling survives both
+ * the POSIX and the PowerShell convention. The host platform is no proxy for the interactive
+ * shell - Git Bash on Windows needs the POSIX form - so the advice names both when they differ.
+ */
+function replacePathArgument(pathLabel: string): string {
+  const posix = quoteCliArg(pathLabel);
+  const powershell = quotePowerShellArg(pathLabel);
+  // Bare and plainly quoted arguments read identically in both shells; only escaping makes them diverge.
+  if (posix === pathLabel || posix === powershell) {
+    return `--replace-path ${posix}`;
+  }
+  return `--replace-path ${posix} in bash and zsh, or --replace-path ${powershell} in PowerShell`;
+}
+
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   schema?: JsonSchemaRecord;
+  command?: ConfigMutationCommand;
 };
-
-function parseIndexSegment(raw: string): number | undefined {
-  return parseConfigPathArrayIndex(raw);
-}
-
-function isIndexSegment(raw: string): boolean {
-  return parseIndexSegment(raw) !== undefined;
-}
-
-function parseBracketPathSegment(raw: string, fullPath: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error(`Invalid path (empty "[]"): ${fullPath}`);
-  }
-  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
-    try {
-      const parsed = JSON5.parse(trimmed) as unknown;
-      if (typeof parsed === "string" && parsed.trim()) {
-        return parsed;
-      }
-    } catch (err) {
-      throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`, { cause: err });
-    }
-    throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`);
-  }
-  return trimmed;
-}
-
-function assertNotWhitespaceSegment(current: string, raw: string): void {
-  if (current.length > 0 && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-}
-
-function findBracketPathClose(path: string, open: number): number {
-  let quote: '"' | "'" | undefined;
-  for (let index = open + 1; index < path.length; index += 1) {
-    const character = path[index];
-    if (quote) {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (character === "]") {
-      return index;
-    }
-    if ((character === '"' || character === "'") && !path.slice(open + 1, index).trim()) {
-      quote = character;
-    }
-  }
-  return -1;
-}
-
-function parsePath(raw: string): PathSegment[] {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const parts: string[] = [];
-  let current = "";
-  let segmentEmitted = false;
-  let i = 0;
-  while (i < trimmed.length) {
-    const ch = trimmed[i];
-    if (ch === "\\") {
-      const next = trimmed[i + 1];
-      if (next === undefined) {
-        throw new Error(`Invalid path (trailing escape): ${raw}`);
-      }
-      current += next;
-      i += 2;
-      continue;
-    }
-    if (ch === ".") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!segmentEmitted && !current.trim()) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      segmentEmitted = false;
-      i += 1;
-      continue;
-    }
-    if (ch === "[") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!current.trim() && !segmentEmitted && parts.length > 0) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      const close = findBracketPathClose(trimmed, i);
-      if (close === -1) {
-        throw new Error(`Invalid path (missing "]"): ${raw}`);
-      }
-      const inside = trimmed.slice(i + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
-      parts.push(parseBracketPathSegment(inside, raw));
-      const next = trimmed[close + 1];
-      if (next !== undefined && next !== "." && next !== "[") {
-        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
-      }
-      segmentEmitted = true;
-      i = close + 1;
-      continue;
-    }
-    current += ch;
-    i += 1;
-  }
-  if (!segmentEmitted && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-  if (current) {
-    parts.push(current.trim());
-  }
-  return parts;
-}
-
-export function parseConfigSetPath(path: string): string[] {
-  const parsedPath = parsePath(path);
-  if (parsedPath.length === 0) {
-    throw new Error("Path is empty.");
-  }
-  validatePathSegments(parsedPath);
-  return parsedPath;
-}
 
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
-  if (strictJson) {
-    try {
-      return JSON.parse(trimmed);
-    } catch (err) {
+  let parsed: unknown;
+  try {
+    parsed = strictJson ? JSON.parse(trimmed) : JSON5.parse(trimmed);
+  } catch (err) {
+    if (strictJson) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
-  }
-  try {
-    return JSON5.parse(trimmed);
-  } catch {
     return raw;
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 export function validatePathSegments(path: PathSegment[]): void {
   for (const segment of path) {
-    if (!isIndexSegment(segment) && isBlockedObjectKey(segment)) {
+    if (isBlockedObjectKey(segment)) {
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
-}
-
-function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(value, key);
 }
 
 export function getAtPath(
@@ -196,7 +99,7 @@ export function getAtPath(
       return { found: false };
     }
     if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index === undefined || index >= current.length) {
         return { found: false };
       }
@@ -204,7 +107,7 @@ export function getAtPath(
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!hasOwnPathKey(record, segment)) {
+    if (!Object.hasOwn(record, segment)) {
       return { found: false };
     }
     current = record[segment];
@@ -222,18 +125,8 @@ export function formatConfigUnsetMissingPathMessage(params: {
   return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
 }
 
-function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return isPlainRecord(value);
-}
-
-function schemaTypes(schema: JsonSchemaRecord): Set<string> {
-  if (typeof schema.type === "string") {
-    return new Set([schema.type]);
-  }
-  if (Array.isArray(schema.type)) {
-    return new Set(schema.type.filter((entry): entry is string => typeof entry === "string"));
-  }
-  return new Set();
+function schemaHasType(schema: JsonSchemaRecord, type: string): boolean {
+  return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
 }
 
 function schemaAlternatives(
@@ -251,7 +144,7 @@ function schemaAlternatives(
       continue;
     }
     for (const entry of entries) {
-      if (isSchemaRecord(entry)) {
+      if (isPlainRecord(entry)) {
         alternatives.push(...schemaAlternatives(entry, seen));
       }
     }
@@ -261,42 +154,45 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
+    schemaHasType(schema, "array") || isPlainRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 
 function schemaLooksObject(schema: JsonSchemaRecord): boolean {
-  const types = schemaTypes(schema);
   return (
-    types.has("object") ||
-    isSchemaRecord(schema.properties) ||
+    schemaHasType(schema, "object") ||
+    isPlainRecord(schema.properties) ||
     schema.additionalProperties === true ||
-    isSchemaRecord(schema.additionalProperties)
+    isPlainRecord(schema.additionalProperties)
   );
 }
 
 function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
+    if (Object.keys(alternative).length === 0) {
+      schemas.push(alternative);
+      continue;
+    }
     if (schemaLooksArray(alternative)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index !== undefined) {
         const indexedItem = Array.isArray(alternative.items)
           ? alternative.items[index]
           : alternative.items;
-        if (isSchemaRecord(indexedItem)) {
+        if (isPlainRecord(indexedItem)) {
           schemas.push(indexedItem);
         }
       }
       continue;
     }
-    const properties = isSchemaRecord(alternative.properties)
-      ? (alternative.properties as Record<string, unknown>)
-      : undefined;
+    const properties = isPlainRecord(alternative.properties) ? alternative.properties : undefined;
     const explicit = properties?.[segment];
-    if (isSchemaRecord(explicit)) {
+    if (isPlainRecord(explicit)) {
       schemas.push(explicit);
-    } else if (isSchemaRecord(alternative.additionalProperties)) {
+    } else if (alternative.additionalProperties === true) {
+      schemas.push({});
+    } else if (isPlainRecord(alternative.additionalProperties)) {
       schemas.push(alternative.additionalProperties);
     }
   }
@@ -324,6 +220,10 @@ export function isConfigSchemaPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
 ): boolean {
+  // Editor metadata is valid at the root but deliberately hidden from the UI schema.
+  if (path.length === 1 && path[0] === "$schema") {
+    return true;
+  }
   return schemasAtPath(schema, path).length > 0;
 }
 
@@ -339,13 +239,7 @@ function schemaPrefersArrayAtPath(
   }
   const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
   const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
-  if (hasArray && !hasObject) {
-    return true;
-  }
-  if (hasObject && !hasArray) {
-    return false;
-  }
-  return undefined;
+  return hasArray === hasObject ? undefined : hasArray;
 }
 
 function shouldCreateArrayForMissingPathSegment(params: {
@@ -354,7 +248,18 @@ function shouldCreateArrayForMissingPathSegment(params: {
   next?: PathSegment;
   options?: SetAtPathOptions;
 }): boolean {
-  if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+  if (
+    !params.next ||
+    params.options?.numericObjectKeys ||
+    parseConfigPathArrayIndex(params.next) === undefined
+  ) {
+    return false;
+  }
+  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
+  if (typeof nextToken === "number") {
+    return true;
+  }
+  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
     return false;
   }
   const parentPath = params.path.slice(0, params.segmentIndex + 1);
@@ -380,7 +285,7 @@ export function setAtPath(
       options,
     });
     if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index === undefined) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
@@ -395,15 +300,16 @@ export function setAtPath(
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
+    const existing = Object.hasOwn(record, segment) ? record[segment] : undefined;
     if (!existing || typeof existing !== "object") {
-      record[segment] = nextIsIndex ? [] : {};
+      record[segment] =
+        normalizeConfigModelSelectionParent(existing, path, i) ?? (nextIsIndex ? [] : {});
     }
     current = record[segment];
   }
 
   if (Array.isArray(current)) {
-    const index = parseIndexSegment(last);
+    const index = parseConfigPathArrayIndex(last);
     if (index === undefined) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
@@ -430,8 +336,15 @@ function modelArrayIds(value: unknown): Set<string> | null {
   return ids;
 }
 
-function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+type ConfigMergeResult = { value: unknown; suppliedPaths: PathSegment[][] };
+
+function mergeModelArrays(
+  existing: unknown[],
+  patch: unknown[],
+  path: PathSegment[],
+): ConfigMergeResult {
   const merged = [...existing];
+  const suppliedPaths: PathSegment[][] = [];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
     if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
@@ -439,21 +352,25 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
     }
   }
   for (const entry of patch) {
-    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
-      merged.push(entry);
-      continue;
-    }
-    const id = entry.id.trim();
-    const existingIndex = indexById.get(id);
-    if (existingIndex === undefined) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      const id = entry.id.trim();
+      const existingIndex = indexById.get(id);
+      if (existingIndex !== undefined) {
+        const existingEntry = merged[existingIndex];
+        merged[existingIndex] = isPlainRecord(existingEntry)
+          ? { ...existingEntry, ...entry }
+          : entry;
+        for (const key of Object.keys(entry)) {
+          suppliedPaths.push([...path, String(existingIndex), key]);
+        }
+        continue;
+      }
       indexById.set(id, merged.length);
-      merged.push(entry);
-      continue;
     }
-    const existingEntry = merged[existingIndex];
-    merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+    suppliedPaths.push([...path, String(merged.length)]);
+    merged.push(entry);
   }
-  return merged;
+  return { value: merged, suppliedPaths };
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -462,21 +379,89 @@ function isProviderModelListPath(path: PathSegment[]): boolean {
   );
 }
 
-function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
+type MergePath = {
+  parent?: MergePath;
+  segment: PathSegment;
+};
+
+function toMergePath(path: PathSegment[]): MergePath | undefined {
+  let current: MergePath | undefined;
+  for (const segment of path) {
+    current = { parent: current, segment };
+  }
+  return current;
+}
+
+function mergePathSegments(path: MergePath): PathSegment[] {
+  const segments: PathSegment[] = [];
+  for (let current: MergePath | undefined = path; current; current = current.parent) {
+    segments.push(current.segment);
+  }
+  return segments.toReversed();
+}
+
+function isProviderModelListMergePath(path: MergePath): boolean {
+  const provider = path.parent;
+  const providers = provider?.parent;
+  const models = providers?.parent;
+  return (
+    path.segment === "models" &&
+    providers?.segment === "providers" &&
+    models?.segment === "models" &&
+    models.parent === undefined
+  );
+}
+
+function mergeConfigValue(
+  existing: unknown,
+  patch: unknown,
+  path: PathSegment[],
+  command: ConfigMutationCommand,
+): ConfigMergeResult {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
-    return mergeModelArrays(existing, patch);
+    return mergeModelArrays(existing, patch, path);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
-    for (const [key, value] of Object.entries(patch)) {
-      next[key] =
-        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
-          ? mergeConfigValue(next[key], value, [...path, key])
-          : value;
+    const suppliedPaths: PathSegment[][] = [];
+    // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
+    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    while (pending.length > 0) {
+      const frame = pending.pop()!;
+      for (const [key, value] of Object.entries(frame.patch)) {
+        const current = frame.target[key];
+        const childPath: MergePath = { parent: frame.path, segment: key };
+        if (
+          Object.hasOwn(frame.target, key) &&
+          isProviderModelListMergePath(childPath) &&
+          Array.isArray(current) &&
+          Array.isArray(value)
+        ) {
+          const merged = mergeModelArrays(current, value, mergePathSegments(childPath));
+          frame.target[key] = merged.value;
+          suppliedPaths.push(...merged.suppliedPaths);
+        } else if (
+          Object.hasOwn(frame.target, key) &&
+          isPlainRecord(current) &&
+          isPlainRecord(value)
+        ) {
+          const child = { ...current };
+          frame.target[key] = child;
+          pending.push({ target: child, patch: value, path: childPath });
+        } else {
+          frame.target[key] = value;
+          suppliedPaths.push(mergePathSegments(childPath));
+        }
+      }
     }
-    return next;
+    return { value: next, suppliedPaths };
   }
-  throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
+  const label = refusalPathLabel(command, path);
+  throw new Error(
+    `Cannot merge ${label}; use ${
+      command === "patch" ? replacePathArgument(label) : "--replace"
+    } to replace intentionally.`,
+  );
 }
 
 export function mergeAtPath(
@@ -484,14 +469,13 @@ export function mergeAtPath(
   path: PathSegment[],
   value: unknown,
   options?: SetAtPathOptions,
-): void {
+): PathSegment[][] {
   const existing = getAtPath(root, path);
-  setAtPath(
-    root,
-    path,
-    existing.found ? mergeConfigValue(existing.value, value, path) : value,
-    options,
-  );
+  const merged = existing.found
+    ? mergeConfigValue(existing.value, value, path, options?.command ?? "set")
+    : { value, suppliedPaths: [path] };
+  setAtPath(root, path, merged.value, options);
+  return merged.suppliedPaths;
 }
 
 function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
@@ -506,10 +490,6 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
   );
 }
 
-function isProtectedArrayReplacementPath(path: PathSegment[]): boolean {
-  return isProviderModelListPath(path);
-}
-
 function formatRemovedEntries(entries: string[]): string {
   const visible = entries.slice(0, 6);
   const suffix =
@@ -517,11 +497,24 @@ function formatRemovedEntries(entries: string[]): string {
   return `${visible.join(", ")}${suffix}`;
 }
 
+function replacementAdvice(
+  command: ConfigMutationCommand,
+  pathLabel: string,
+  mergeSubject: string,
+): string {
+  // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
+  if (command === "patch") {
+    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
+  }
+  return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
+}
+
 export function assertNonDestructiveReplacement(params: {
   root: Record<string, unknown>;
   path: PathSegment[];
   value: unknown;
   allowReplace?: boolean;
+  command: ConfigMutationCommand;
 }): void {
   if (params.allowReplace) {
     return;
@@ -530,31 +523,31 @@ export function assertNonDestructiveReplacement(params: {
   if (!existing.found) {
     return;
   }
-  const pathLabel = toDotPath(params.path);
+  const pathLabel = refusalPathLabel(params.command, params.path);
+  let removed: string[];
+  let mergeHint: string;
   if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
     if (!isPlainRecord(params.value)) {
       return;
     }
     const nextKeys = new Set(Object.keys(params.value));
-    const removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
-    if (removed.length > 0) {
-      throw new Error(
-        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge object values or --replace to replace intentionally.`,
-      );
-    }
-  }
-  if (isProtectedArrayReplacementPath(params.path)) {
+    removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
+    mergeHint = "object values";
+  } else if (isProviderModelListPath(params.path)) {
     const existingIds = modelArrayIds(existing.value);
     const nextIds = modelArrayIds(params.value);
     if (!existingIds || !nextIds) {
       return;
     }
-    const removed = [...existingIds].filter((id) => !nextIds.has(id));
-    if (removed.length > 0) {
-      throw new Error(
-        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge by id or --replace to replace intentionally.`,
-      );
-    }
+    removed = [...existingIds].filter((id) => !nextIds.has(id));
+    mergeHint = "by id";
+  } else {
+    return;
+  }
+  if (removed.length > 0) {
+    throw new Error(
+      `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. ${replacementAdvice(params.command, pathLabel, mergeHint)}`,
+    );
   }
 }
 
@@ -565,28 +558,10 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   if (last === undefined) {
     return { removed: false };
   }
-  let current: unknown = root;
-  for (const segment of path.slice(0, -1)) {
-    if (!current || typeof current !== "object") {
-      return { removed: false };
-    }
-    if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
-      if (index === undefined || index >= current.length) {
-        return { removed: false };
-      }
-      current = current[index];
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    if (!hasOwnPathKey(record, segment)) {
-      return { removed: false };
-    }
-    current = record[segment];
-  }
+  const current = getAtPath(root, path.slice(0, -1)).value;
 
   if (Array.isArray(current)) {
-    const index = parseIndexSegment(last);
+    const index = parseConfigPathArrayIndex(last);
     if (index === undefined || index >= current.length) {
       return { removed: false };
     }
@@ -597,7 +572,7 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
     return { removed: false };
   }
   const record = current as Record<string, unknown>;
-  if (!hasOwnPathKey(record, last)) {
+  if (!Object.hasOwn(record, last)) {
     return { removed: false };
   }
   delete record[last];

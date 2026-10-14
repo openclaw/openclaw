@@ -136,29 +136,6 @@ describe("qa credential admin runtime", () => {
     );
   });
 
-  it("allows loopback http admin site URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        count: 0,
-        credentials: [],
-      }),
-    );
-
-    await listQaCredentialSets({
-      siteUrl: "http://127.0.0.1:3210",
-      env: {
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-      },
-      fetchImpl,
-    });
-
-    expect(requireFirstFetchInput(fetchImpl)).toBe(
-      "http://127.0.0.1:3210/qa-credentials/v1/admin/list",
-    );
-  });
-
   it("caps oversized admin HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);

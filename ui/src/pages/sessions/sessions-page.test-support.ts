@@ -1,45 +1,55 @@
-import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { ContextProvider } from "@lit/context";
+import { createComponent, flush } from "solid-js";
+import { onTestFinished, vi } from "vitest";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type {
   SessionCapability,
   SessionListOptions,
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
-import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
+import type {
+  SessionRefreshOptions,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import type { SessionsPageArchive } from "./archive-actions.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
-import type { TranscriptSearchState } from "./view.ts";
-import "./sessions-page.ts";
+import { SessionsPageController } from "./sessions-page.ts";
+import { SessionsPageContent } from "./sessions-page.tsx";
 
 export type TestSessionsPage = HTMLElement & {
   context: ApplicationContext;
-  render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
   routeData?: SessionsRouteData;
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
-  selectedKeys: Set<string>;
+  selectedSessions: Map<
+    string,
+    Pick<GatewaySessionRow, "key" | "archived" | "sessionId" | "label" | "displayName">
+  >;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointErrorByKey: Record<string, string>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
-  loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
@@ -53,24 +63,105 @@ export type TestSessionsPage = HTMLElement & {
   ) => void;
   patchSession: (
     key: string,
-    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
-  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
+  archiveActions: Pick<SessionsPageArchive, "archive" | "archiveTree">;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
-  branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
+  runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
+
+const remountPage = new WeakMap<TestSessionsPage, () => void>();
+
+export async function createPage(
+  context: ApplicationContext,
+  routeData?: SessionsRouteData,
+): Promise<TestSessionsPage> {
+  const host = document.createElement("div");
+  const controller = new SessionsPageController();
+  controller.routeData = routeData;
+  let currentContext = context;
+  let dispose: (() => void) | undefined;
+  const provider = new ContextProvider(host, {
+    context: applicationContext,
+    initialValue: context,
+  });
+  const unmount = () => {
+    dispose?.();
+    dispose = undefined;
+  };
+  const mount = () => {
+    document.body.append(host);
+    const view = mountSolid(
+      () =>
+        createComponent(ApplicationProvider, {
+          value: currentContext,
+          get children() {
+            return createComponent(SessionsPageContent, { controller });
+          },
+        }),
+      { container: host },
+    );
+    dispose = view.unmount;
+    flush();
+  };
+  const page = new Proxy<HTMLElement>(host, {
+    get(target, property) {
+      if (property === "updateComplete") {
+        return controller.updateComplete.then(() => {
+          flush();
+          return true;
+        });
+      }
+      if (property === "remove") {
+        return () => {
+          unmount();
+          host.remove();
+        };
+      }
+      if (property in controller.state) {
+        return Reflect.get(controller.state, property);
+      }
+      const owner = property in controller ? controller : target;
+      const value = Reflect.get(owner, property, owner);
+      return typeof value === "function" ? value.bind(owner) : value;
+    },
+    set(target, property, value) {
+      if (property === "context") {
+        currentContext = value;
+        provider.setValue(value);
+        controller.setContext(value);
+        return true;
+      }
+      if (property === "routeData") {
+        controller.setRouteData(value);
+        return true;
+      }
+      return Reflect.set(property in controller.state ? controller.state : target, property, value);
+    },
+  }) as TestSessionsPage;
+  remountPage.set(page, mount);
+  onTestFinished(unmount);
+  mount();
+  await page.updateComplete;
+  return page;
+}
+
+export function reconnectPage(page: TestSessionsPage) {
+  remountPage.get(page)!();
+}
 
 type MutableGateway = {
   gateway: ApplicationContext["gateway"];
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  emitEvent: (event: GatewayEventFrame) => void;
   setSessionKey: ReturnType<typeof vi.fn>;
 };
 
-export function createGateway(client: GatewayBrowserClient): MutableGateway {
+export function createGateway(
+  client: GatewayBrowserClient = createTestGatewayClient(async () => ({ profiles: [] })),
+): MutableGateway {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -83,6 +174,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const setSessionKey = vi.fn();
   const gateway = {
     get snapshot() {
@@ -94,12 +186,16 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     subscribeEventLog: () => () => undefined,
   } as unknown as ApplicationContext["gateway"];
   return {
     gateway,
     setSessionKey,
+    emitEvent: (event) => eventListeners.forEach((listener) => listener(event)),
     emit(patch) {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
@@ -124,8 +220,18 @@ function sessionListKey(options: SessionListOptions | SessionRefreshOptions): st
   return JSON.stringify(scope);
 }
 
+const managedListPublishers = new WeakMap<
+  SessionCapability,
+  (options: SessionListOptions, snapshot: SessionListSnapshot) => void
+>();
+
 export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
+  const archiveState = createSessionArchiveState(
+    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
+    () => {},
+    createSessionRowProvenance(),
+  );
   const snapshots = new Map<string, SessionListSnapshot>();
   const listeners = new Map<string, Set<(snapshot: SessionListSnapshot) => void>>();
   const emptySnapshot = (): SessionListSnapshot => ({
@@ -170,19 +276,30 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
       groupSettings: [],
       sectionOrder: [],
     },
+    captureConnectionScope: () => null,
+    isConnectionScopeCurrent: () => false,
     list: vi.fn(async () => null),
     listSnapshot,
     subscribeList,
     refreshList,
-    listCheckpoints: vi.fn(async () => []),
+    observeRow: vi.fn((): SessionRowObservation => ({
+      row: null,
+      sessionId: null,
+      hasObserved: false,
+      isCurrent: () => true,
+      captureReconcile: () => () => ({ status: "current", row: null }),
+      dispose: () => {},
+    })),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    deletionState: () => undefined,
     patch: vi.fn(async () => null),
+    archiveVisibility: archiveState.visibility,
+    beginArchive: archiveState.beginPending,
     create: vi.fn(async () => null),
-    branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
-    restoreCheckpoint: vi.fn(async () => ({ ok: true })),
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
+  managedListPublishers.set(sessions, publish);
   return { sessions, publish, listSnapshot, subscribeList, refreshList };
 }
 
@@ -194,7 +311,9 @@ export function createContext(
   return {
     basePath: "",
     gateway,
+    navigation: createNavigationPreferencesFixture(),
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {
@@ -205,9 +324,9 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
+    plugins: {
+      registrations: vi.fn(() => []),
+      reportError: vi.fn(),
       subscribe,
     },
     navigate: vi.fn(),
@@ -221,19 +340,21 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = context;
-  page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: context.gateway.snapshot,
-    sessions: context.sessions,
-    result,
-    loading: false,
-    error: null,
+  const query = buildSessionsListQuery(context, {
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter,
+    deepLinkSessionKey: expandedSessionKey,
+  });
+  const publish = managedListPublishers.get(context.sessions);
+  if (publish) {
+    publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });
+  } else {
+    await context.sessions.refreshList(query);
+  }
+  return createPage(context, {
     expandedSessionKey,
     statusFilter,
-  };
-  document.body.append(page);
-  await page.updateComplete;
-  return page;
+  });
 }

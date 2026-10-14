@@ -57,7 +57,10 @@ describe("Discord modal presentation failures", () => {
         accountId: "default",
         fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
       };
-      registerDiscordComponentEntries({ entries: [modalTrigger, siblingButton], modals: [modal] });
+      await registerDiscordComponentEntries({
+        entries: [modalTrigger, siblingButton],
+        modals: [modal],
+      });
 
       const createButton = createDiscordComponentControls[0];
       if (!createButton) {

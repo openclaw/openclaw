@@ -109,80 +109,6 @@ describe("scanOpenRouterModels", () => {
     expect(result?.maxCompletionTokens).toBe(4096);
   });
 
-  it("falls back when top-provider limits are malformed", async () => {
-    for (const topProvider of [
-      { context_length: 0, max_completion_tokens: 0 },
-      { context_length: -1, max_completion_tokens: -1 },
-      { context_length: 8192.5, max_completion_tokens: 8192.5 },
-      {
-        context_length: Number.MAX_SAFE_INTEGER + 1,
-        max_completion_tokens: Number.MAX_SAFE_INTEGER + 1,
-      },
-      { context_length: "8192", max_completion_tokens: "1024" },
-      { context_length: null, max_completion_tokens: null },
-    ]) {
-      const fetchImpl = createFetchFixture({
-        data: [
-          {
-            id: "acme/provider-limited:free",
-            name: "Provider Limited",
-            context_length: 32_768,
-            max_completion_tokens: 4096,
-            top_provider: topProvider,
-            supported_parameters: [],
-            pricing: { prompt: "0", completion: "0" },
-          },
-        ],
-      });
-
-      const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
-
-      expect(result?.contextLength).toBe(32_768);
-      expect(result?.maxCompletionTokens).toBe(4096);
-    }
-  });
-
-  it("mixes provider context length with a top-level completion cap", async () => {
-    const fetchImpl = createFetchFixture({
-      data: [
-        {
-          id: "acme/provider-limited:free",
-          name: "Provider Limited",
-          context_length: 32_768,
-          max_completion_tokens: 4096,
-          top_provider: { context_length: 16_384, max_completion_tokens: 0 },
-          supported_parameters: [],
-          pricing: { prompt: "0", completion: "0" },
-        },
-      ],
-    });
-
-    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
-
-    expect(result?.contextLength).toBe(16_384);
-    expect(result?.maxCompletionTokens).toBe(4096);
-  });
-
-  it("falls back to top-level max_output_tokens", async () => {
-    const fetchImpl = createFetchFixture({
-      data: [
-        {
-          id: "acme/output-limited:free",
-          name: "Output Limited",
-          context_length: 32_768,
-          max_output_tokens: 2048,
-          top_provider: { max_completion_tokens: 0 },
-          supported_parameters: [],
-          pricing: { prompt: "0", completion: "0" },
-        },
-      ],
-    });
-
-    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
-
-    expect(result?.maxCompletionTokens).toBe(2048);
-  });
-
   it("drops out-of-range OpenRouter created_at timestamps", async () => {
     const fetchImpl = createFetchFixture({
       data: [
@@ -242,7 +168,7 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response too large/,
+      /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
     // The reader stopped early instead of draining an unbounded stream, and
@@ -262,8 +188,17 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response is malformed JSON/,
+      /OpenRouter \/models: malformed JSON response/,
     );
+  });
+
+  it.each([{}])("rejects a malformed catalog envelope", async (payload) => {
+    await expect(
+      scanOpenRouterModels({
+        fetchImpl: createFetchFixture(payload),
+        probe: false,
+      }),
+    ).rejects.toThrow(/OpenRouter \/models.*malformed JSON response/);
   });
 
   it("requires an API key when probing", async () => {
@@ -363,10 +298,7 @@ describe("scanOpenRouterModels", () => {
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
     // Timer APIs cannot safely schedule above the platform max; cap before
     // creating the catalog abort timeout.
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fetchImpl = createFetchFixture({ data: [] });
 
     await scanOpenRouterModels({

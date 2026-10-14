@@ -9,7 +9,7 @@ function createProvider(maxInputTokens: number): EmbeddingProvider {
     id: "mock",
     model: "mock-embed",
     maxInputTokens,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }
@@ -21,7 +21,7 @@ function createProviderWithoutMaxInputTokens(params: {
   return {
     id: params.id,
     model: params.model,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }
@@ -103,6 +103,20 @@ describe("embedding chunk limits", () => {
 
     // If we split inside surrogate pairs we'd likely end up with replacement chars.
     expect(joinedChunkText(out)).not.toContain("\uFFFD");
+  });
+
+  it.each([
+    { cap: 1, expected: ["😀", "t", "a", "i", "l", "😀"] },
+    { cap: 2, expected: ["😀", "ta", "il", "😀"] },
+    { cap: 3, expected: ["😀", "tai", "l", "😀"] },
+  ])("retains indivisible code points when the byte cap is $cap", ({ cap, expected }) => {
+    const out = enforceEmbeddingMaxInputTokens(
+      createProvider(8192),
+      [{ startLine: 1, endLine: 1, text: "😀tail😀", hash: "ignored" }],
+      cap,
+    );
+
+    expect(out.map((chunk) => chunk.text)).toEqual(expected);
   });
 
   it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {

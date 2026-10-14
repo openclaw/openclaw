@@ -1,8 +1,11 @@
 /** Builds /status replies using the command's authorized channel context. */
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { logError } from "../../logger.js";
 import { formatDetailedPluginHealth } from "../../status/status-plugin-health.js";
 import { buildStatusReplyParts } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
@@ -11,6 +14,10 @@ export { buildStatusText } from "../../status/status-text.js";
 type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
+
+function markStatusReply(payload: ReplyPayload): ReplyPayload {
+  return setReplyPayloadMetadata(payload, { contextFreeCommand: true });
+}
 
 /** Builds a status reply or suppresses unauthorized status requests. */
 export async function buildStatusReply(
@@ -22,14 +29,21 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  const { text, presentation } = await buildStatusReplyParts({
-    ...params,
-    statusChannel: command.channel,
-    statusAccountId: command.accountId,
-  });
-  // The text body is the authored plain rendering of the same facts; channels
-  // with native table support render the presentation instead.
-  return { text, presentation, presentationTextMode: "fallback" };
+  try {
+    const { text, presentation } = await buildStatusReplyParts({
+      ...params,
+      statusChannel: command.channel,
+      statusAccountId: command.accountId,
+    });
+    // The text body is the authored plain rendering of the same facts; channels
+    // with native table support render the presentation instead.
+    return markStatusReply({ text, presentation, presentationTextMode: "fallback" });
+  } catch (error) {
+    // Diagnostics stay in logs only; the channel reply is a fixed generic
+    // message so internal module paths or runtime details never reach users.
+    logError(`/status render failed: ${formatErrorMessage(error)}`);
+    return markStatusReply({ text: "⚠️ Status: error rendering response" });
+  }
 }
 
 export async function buildStatusPluginsReply(
@@ -47,7 +61,7 @@ export async function buildStatusPluginsReply(
     configKey: "plugins",
   });
   if (disabled) {
-    return disabled.reply;
+    return disabled.reply ? markStatusReply(disabled.reply) : undefined;
   }
 
   try {
@@ -57,10 +71,10 @@ export async function buildStatusPluginsReply(
       config: params.cfg,
       workspaceDir: params.workspaceDir,
     });
-    return { text: formatDetailedPluginHealth(snapshot) };
+    return markStatusReply({ text: formatDetailedPluginHealth(snapshot) });
   } catch (error) {
-    return {
-      text: `⚠️ Plugins: health unavailable (${error instanceof Error ? error.message : String(error)})`,
-    };
+    // Match the /status fallback: fixed generic reply, diagnostics in logs only.
+    logError(`/status plugins render failed: ${formatErrorMessage(error)}`);
+    return markStatusReply({ text: "⚠️ Plugins: health unavailable" });
   }
 }

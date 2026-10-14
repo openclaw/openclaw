@@ -1,9 +1,15 @@
-// Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-core.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
   security?: string | null;
@@ -12,10 +18,7 @@ export type ExecApprovalRequestPayload = {
   resolvedPath?: string | null;
   sessionKey?: string | null;
   runId?: string | null;
-  commandSpans?: readonly {
-    startIndex: number;
-    endIndex: number;
-  }[];
+  commandSpans?: readonly ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -27,18 +30,15 @@ export type ExecApprovalRequest = {
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
+  pluginDetail?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  pluginActions?: unknown;
   proposalHash?: string | null;
+  /** Canonical raising session when this request is projected into an ancestor session. */
+  sourceSessionKey?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
-};
-
-type ExecApprovalResolved = {
-  id: string;
-  decision?: string | null;
-  resolvedBy?: string | null;
-  ts?: number | null;
 };
 
 export type ExecApprovalPromptState = {
@@ -56,25 +56,25 @@ export type ExecApprovalPromptState = {
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
 
+const APPROVAL_EVENT_KINDS = [
+  ["exec", "exec"],
+  ["plugin", "plugin"],
+  ["openclaw", "system-agent"],
+] as const;
+
+function approvalKindForEvent(event: string, phase: "requested" | "resolved") {
+  return APPROVAL_EVENT_KINDS.find(([prefix]) => event === `${prefix}.approval.${phase}`)?.[1];
+}
+
 function parseCommandSpans(
   value: unknown,
   commandLength: number,
-):
-  | {
-      startIndex: number;
-      endIndex: number;
-    }[]
-  | undefined {
+): ExecApprovalRequestPayload["commandSpans"] {
   if (!Array.isArray(value)) {
     return undefined;
   }
   const spans = value.filter(
-    (
-      item,
-    ): item is {
-      startIndex: number;
-      endIndex: number;
-    } => {
+    (item): item is NonNullable<ExecApprovalRequestPayload["commandSpans"]>[number] => {
       if (!isRecord(item)) {
         return false;
       }
@@ -104,155 +104,142 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
-function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
-  if (!isRecord(payload)) {
+function parseApprovalScope(value: unknown): ApprovalScope | null {
+  if (!isRecord(value)) {
     return null;
   }
-  const id = normalizeOptionalString(payload.id) ?? "";
-  const request = payload.request;
-  if (!id || !isRecord(request)) {
-    return null;
+  switch (value.kind) {
+    case "standing-grant":
+      return typeof value.automation === "string" && typeof value.command === "string"
+        ? {
+            kind: "standing-grant",
+            automation: value.automation,
+            command: value.command,
+            ...(typeof value.expiresInDays === "number"
+              ? { expiresInDays: value.expiresInDays }
+              : {}),
+          }
+        : null;
+    case "message-send":
+      return typeof value.target === "string" && typeof value.recipientCount === "number"
+        ? {
+            kind: "message-send",
+            target: value.target,
+            recipientCount: value.recipientCount,
+            ...(Array.isArray(value.recipients) &&
+            value.recipients.every((recipient) => typeof recipient === "string")
+              ? { recipients: value.recipients }
+              : {}),
+            ...(value.audience === "internal" || value.audience === "external"
+              ? { audience: value.audience }
+              : {}),
+          }
+        : null;
+    case "payment":
+      return typeof value.amount === "string" &&
+        typeof value.currency === "string" &&
+        typeof value.target === "string"
+        ? { kind: "payment", amount: value.amount, currency: value.currency, target: value.target }
+        : null;
+    case "external-post":
+      return typeof value.target === "string" &&
+        (value.visibility === "public" || value.visibility === "restricted")
+        ? { kind: "external-post", target: value.target, visibility: value.visibility }
+        : null;
+    default:
+      return null;
   }
-  const command = typeof request.command === "string" ? request.command : "";
-  if (command.trim().length === 0) {
-    return null;
-  }
-  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
-  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
-  if (!createdAtMs || !expiresAtMs) {
-    return null;
-  }
-  return {
-    id,
-    kind: "exec",
-    request: {
-      command,
-      cwd: typeof request.cwd === "string" ? request.cwd : null,
-      host: typeof request.host === "string" ? request.host : null,
-      security: typeof request.security === "string" ? request.security : null,
-      ask: typeof request.ask === "string" ? request.ask : null,
-      agentId: typeof request.agentId === "string" ? request.agentId : null,
-      resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
-      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
-      runId: typeof request.runId === "string" ? request.runId : null,
-      commandSpans: parseCommandSpans(request.commandSpans, command.length),
-      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
-    },
-    createdAtMs,
-    expiresAtMs,
-  };
 }
 
-export function parseApprovalResolvedEvent(
-  event: string,
+function parseApprovalRequested(
+  kind: ExecApprovalRequest["kind"],
   payload: unknown,
-): ExecApprovalResolved | null {
-  if (
-    (event !== "exec.approval.resolved" &&
-      event !== "plugin.approval.resolved" &&
-      event !== "openclaw.approval.resolved") ||
-    !isRecord(payload)
-  ) {
+): ExecApprovalRequest | null {
+  if (!isRecord(payload) || !isRecord(payload.request)) {
     return null;
   }
-  const id = normalizeOptionalString(payload.id) ?? "";
-  if (!id) {
-    return null;
-  }
-  return {
-    id,
-    decision: typeof payload.decision === "string" ? payload.decision : null,
-    resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
-    ts: typeof payload.ts === "number" ? payload.ts : null,
-  };
-}
-
-function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const id = normalizeOptionalString(payload.id) ?? "";
-  if (!id) {
-    return null;
-  }
+  const id = normalizeOptionalString(payload.id);
+  const request = payload.request;
   const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
   const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
-  if (!createdAtMs || !expiresAtMs) {
+  if (!id || !createdAtMs || !expiresAtMs) {
     return null;
   }
-  // title, description, severity, pluginId, agentId, sessionKey live inside payload.request
-  const request = isRecord(payload.request) ? payload.request : {};
-  const title = normalizeOptionalString(request.title) ?? "";
+  const base = { id, kind, createdAtMs, expiresAtMs };
+  const source = {
+    agentId: readStringValue(request.agentId) ?? null,
+    sessionKey: readStringValue(request.sessionKey) ?? null,
+  };
+  if (kind === "exec") {
+    const command = readNonBlankString(request.command);
+    return command
+      ? {
+          ...base,
+          request: {
+            ...source,
+            command,
+            cwd: readStringValue(request.cwd) ?? null,
+            host: readStringValue(request.host) ?? null,
+            security: readStringValue(request.security) ?? null,
+            ask: readStringValue(request.ask) ?? null,
+            resolvedPath: readStringValue(request.resolvedPath) ?? null,
+            runId: readStringValue(request.runId) ?? null,
+            commandSpans: parseCommandSpans(request.commandSpans, command.length),
+            allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+            scope: parseApprovalScope(request.scope),
+          },
+        }
+      : null;
+  }
+  const title = normalizeOptionalString(request.title);
   if (!title) {
     return null;
   }
-  const description = typeof request.description === "string" ? request.description : null;
-  const severity = typeof request.severity === "string" ? request.severity : null;
-  const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
-
-  return {
-    id,
-    kind: "plugin",
-    request: {
-      command: title,
-      agentId: typeof request.agentId === "string" ? request.agentId : null,
-      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
-      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
-    },
-    pluginTitle: title,
-    pluginDescription: description,
-    pluginSeverity: severity,
-    pluginId,
-    createdAtMs,
-    expiresAtMs,
-  };
-}
-
-function parseSystemAgentApprovalRequested(payload: unknown): ExecApprovalRequest | null {
-  if (!isRecord(payload)) {
-    return null;
+  if (kind === "plugin") {
+    return {
+      ...base,
+      request: {
+        ...source,
+        command: title,
+        allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      },
+      pluginTitle: title,
+      pluginDescription: readStringValue(request.description) ?? null,
+      pluginDetail: readStringValue(request.detail) ?? null,
+      pluginSeverity: readStringValue(request.severity) ?? null,
+      pluginId: readStringValue(request.pluginId) ?? null,
+      pluginActions: request.actions,
+    };
   }
-  const id = normalizeOptionalString(payload.id) ?? "";
-  const request = isRecord(payload.request) ? payload.request : {};
-  const title = normalizeOptionalString(request.title) ?? "";
   const description = normalizeOptionalString(request.description);
   const command = normalizeOptionalString(request.command);
   const proposalHash = normalizeOptionalString(request.proposalHash);
-  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
-  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
-  if (!id || !title || !description || !command || !proposalHash || !createdAtMs || !expiresAtMs) {
+  if (!description || !command || !proposalHash) {
     return null;
   }
   return {
-    id,
-    kind: "system-agent",
-    request: {
-      command,
-      agentId: typeof request.agentId === "string" ? request.agentId : null,
-      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
-      allowedDecisions: ["allow-once", "deny"],
-    },
+    ...base,
+    request: { ...source, command, allowedDecisions: ["allow-once", "deny"] },
     pluginTitle: title,
     pluginDescription: description,
     proposalHash,
-    createdAtMs,
-    expiresAtMs,
   };
+}
+
+export function parseApprovalResolvedEvent(event: string, payload: unknown): { id: string } | null {
+  if (!approvalKindForEvent(event, "resolved") || !isRecord(payload)) {
+    return null;
+  }
+  const id = normalizeOptionalString(payload.id);
+  return id ? { id } : null;
 }
 
 export function parseApprovalRequestedEvent(
   event: string,
   payload: unknown,
 ): ExecApprovalRequest | null {
-  if (event === "exec.approval.requested") {
-    return parseExecApprovalRequested(payload);
-  }
-  if (event === "plugin.approval.requested") {
-    return parsePluginApprovalRequested(payload);
-  }
-  return event === "openclaw.approval.requested"
-    ? parseSystemAgentApprovalRequested(payload)
-    : null;
+  const kind = approvalKindForEvent(event, "requested");
+  return kind ? parseApprovalRequested(kind, payload) : null;
 }
 
 export async function resolveApprovalRequest(
@@ -277,74 +264,40 @@ function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalReque
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
 
-function addExecApproval(
-  queue: ExecApprovalRequest[],
-  entry: ExecApprovalRequest,
-): ExecApprovalRequest[] {
-  const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
-  next.push(entry);
-  return sortApprovalsOldestFirst(next);
-}
-
-function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
-  return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
-}
-
-function readGatewayErrorCode(err: unknown): string | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-  return normalizeOptionalString(err.gatewayCode) ?? null;
-}
-
-function readGatewayErrorReason(err: unknown): string | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-  const { details } = err;
-  if (!isRecord(details)) {
-    return null;
-  }
-  return normalizeOptionalString(details.reason) ?? null;
-}
-
 export function isStaleApprovalResolutionError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  const gatewayCode = readGatewayErrorCode(err);
-  const reason = readGatewayErrorReason(err);
-  if (reason === APPROVAL_ALREADY_RESOLVED || reason === APPROVAL_NOT_FOUND) {
-    return true;
-  }
-  if (gatewayCode === APPROVAL_NOT_FOUND) {
-    return true;
-  }
-  return /unknown or expired approval id/i.test(err.message);
+  const record = isRecord(err) ? err : null;
+  const reason = isRecord(record?.details)
+    ? normalizeOptionalString(record.details.reason)
+    : undefined;
+  return (
+    reason === APPROVAL_ALREADY_RESOLVED ||
+    reason === APPROVAL_NOT_FOUND ||
+    normalizeOptionalString(record?.gatewayCode) === APPROVAL_NOT_FOUND ||
+    /unknown or expired approval id/i.test(err.message)
+  );
 }
 
-function parseApprovalList(
-  payload: unknown,
-  parseEntry: (entry: unknown) => ExecApprovalRequest | null,
-): ExecApprovalRequest[] | null {
-  if (!Array.isArray(payload)) {
-    return null;
+function readRefreshedApprovals(
+  result: PromiseSettledResult<unknown>,
+  kind: ExecApprovalRequest["kind"],
+  queue: ExecApprovalRequest[],
+): ExecApprovalRequest[] {
+  if (result.status === "rejected") {
+    return pruneExecApprovalQueue(queue).filter((entry) => entry.kind === kind);
   }
-  return payload.flatMap((entry) => {
-    const parsed = parseEntry(entry);
-    return parsed ? [parsed] : [];
-  });
+  return Array.isArray(result.value)
+    ? result.value.flatMap((entry) => {
+        const parsed = parseApprovalRequested(kind, entry);
+        return parsed ? [parsed] : [];
+      })
+    : [];
 }
 
 function sortApprovalsOldestFirst(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
   return queue.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
-}
-
-function currentApprovalsForKind(
-  queue: ExecApprovalRequest[],
-  kind: ExecApprovalRequest["kind"],
-): ExecApprovalRequest[] {
-  return pruneExecApprovalQueue(queue).filter((entry) => entry.kind === kind);
 }
 
 function mergeRefreshedApprovalQueue(
@@ -402,23 +355,14 @@ function scheduleApprovalExpiryPrune(
 
 function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): void {
   clearApprovalExpiryTimer(state, id);
-  state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
+  state.execApprovalQueue = pruneExecApprovalQueue(state.execApprovalQueue).filter(
+    (entry) => entry.id !== id,
+  );
   state.execApprovalErrors.delete(id);
 }
 
-function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
-  const pendingIds = new Set(state.execApprovalQueue.map((entry) => entry.id));
-  for (const id of state.execApprovalErrors.keys()) {
-    if (!pendingIds.has(id)) {
-      state.execApprovalErrors.delete(id);
-    }
-  }
-}
-
 export function clearExecApprovalTimers(state: ExecApprovalPromptState): void {
-  for (const timer of state.execApprovalExpiryTimers?.values() ?? []) {
-    globalThis.clearTimeout(timer);
-  }
+  state.execApprovalExpiryTimers?.forEach((timer) => globalThis.clearTimeout(timer));
   state.execApprovalExpiryTimers?.clear();
 }
 
@@ -426,7 +370,11 @@ export function enqueueExecApprovalPrompt(
   state: ExecApprovalPromptState,
   entry: ExecApprovalRequest,
 ): void {
-  state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
+  const next = pruneExecApprovalQueue(state.execApprovalQueue).filter(
+    (item) => item.id !== entry.id,
+  );
+  next.push(entry);
+  state.execApprovalQueue = sortApprovalsOldestFirst(next);
   scheduleApprovalExpiryPrune(state, entry);
 }
 
@@ -453,20 +401,12 @@ export async function refreshPendingApprovalQueue(
       client.request("plugin.approval.list", {}),
       client.request("openclaw.approval.list", {}),
     ]);
-    const execApprovals =
-      execResult.status === "fulfilled"
-        ? (parseApprovalList(execResult.value, parseExecApprovalRequested) ?? [])
-        : currentApprovalsForKind(state.execApprovalQueue, "exec");
-    const pluginApprovals =
-      pluginResult.status === "fulfilled"
-        ? (parseApprovalList(pluginResult.value, parsePluginApprovalRequested) ?? [])
-        : currentApprovalsForKind(state.execApprovalQueue, "plugin");
-    const systemAgentApprovals =
-      systemAgentResult.status === "fulfilled"
-        ? (parseApprovalList(systemAgentResult.value, parseSystemAgentApprovalRequested) ?? [])
-        : currentApprovalsForKind(state.execApprovalQueue, "system-agent");
     const refreshed = mergeRefreshedApprovalQueue(
-      sortApprovalsOldestFirst([...execApprovals, ...pluginApprovals, ...systemAgentApprovals]),
+      [
+        ...readRefreshedApprovals(execResult, "exec", state.execApprovalQueue),
+        ...readRefreshedApprovals(pluginResult, "plugin", state.execApprovalQueue),
+        ...readRefreshedApprovals(systemAgentResult, "system-agent", state.execApprovalQueue),
+      ],
       refreshStartedWith,
       state.execApprovalQueue,
       refresh.removedIds,
@@ -475,8 +415,12 @@ export async function refreshPendingApprovalQueue(
       return false;
     }
     state.execApprovalQueue = refreshed;
-    pruneExecApprovalErrors(state);
     const refreshedIds = new Set(refreshed.map((entry) => entry.id));
+    for (const id of state.execApprovalErrors.keys()) {
+      if (!refreshedIds.has(id)) {
+        state.execApprovalErrors.delete(id);
+      }
+    }
     for (const id of state.execApprovalExpiryTimers?.keys() ?? []) {
       if (!refreshedIds.has(id)) {
         clearApprovalExpiryTimer(state, id);

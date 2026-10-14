@@ -7,11 +7,45 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
 type CronStoreDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "cron_job_scratch" | "cron_jobs" | "cron_store_epochs"
+  | "cron_job_scratch"
+  | "cron_jobs"
+  | "operator_approval_standing_grants"
+  | "operator_approval_standing_grant_generations"
 >;
 
-/** Read shape for rows in the cron_jobs SQLite table. */
+// Keep native integer conversion in the table's column order.
+export const CRON_JOB_READ_COLUMNS = [
+  "job_id",
+  "declaration_key",
+  "enabled",
+  "agent_id",
+  "payload_kind",
+  "job_json",
+  "state_json",
+  "runtime_updated_at_ms",
+  "schedule_identity",
+  "sort_order",
+  "updated_at",
+] as const;
+
+// Writable opens install the additive projections before callers use this shape.
+export const CRON_JOB_GENERATION_READ_COLUMNS = [
+  ...CRON_JOB_READ_COLUMNS.slice(0, 6),
+  "grant_definition_revision",
+  "grant_definition_generation",
+  "grant_definition_updated_at",
+  ...CRON_JOB_READ_COLUMNS.slice(6),
+] as const;
+
+/** Complete stored row used by independent cron inventories. */
 export type CronJobRow = Selectable<CronJobsTable>;
+
+/** Read shape consumed by cron decoding, conflict checks, and owner migration. */
+export type CronJobReadRow = Pick<CronJobRow, (typeof CRON_JOB_READ_COLUMNS)[number]>;
+export type CronJobGenerationReadRow = Pick<
+  CronJobRow,
+  (typeof CRON_JOB_GENERATION_READ_COLUMNS)[number]
+>;
 
 /** Insert/update shape for rows in the cron_jobs SQLite table. */
 export type CronJobInsert = Insertable<CronJobsTable>;
@@ -19,13 +53,4 @@ export type CronJobInsert = Insertable<CronJobsTable>;
 /** Creates the Kysely facade scoped to cron_jobs for synchronous SQLite access. */
 export function getCronStoreKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<CronStoreDatabase>(db);
-}
-
-export function ensureCronStoreEpochSchema(db: DatabaseSync): void {
-  db.exec(/* sqlite-allow-raw: additive schema DDL is outside Kysely's query builder. */ `
-    CREATE TABLE IF NOT EXISTS cron_store_epochs (
-      store_key TEXT PRIMARY KEY,
-      store_epoch INTEGER NOT NULL DEFAULT 0
-    ) STRICT
-  `);
 }

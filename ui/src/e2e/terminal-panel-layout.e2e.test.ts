@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiTerminalReady,
@@ -16,13 +16,18 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const screenshotDir = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+const screenshotDirParent = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+let screenshotDir: string | undefined;
+beforeEach(() => {
+  screenshotDir = screenshotDirParent
+    ? createControlUiE2eArtifactDir("terminal-panel-layout", screenshotDirParent)
+    : undefined;
+});
 
 async function captureLayout(page: Page, theme: string, state: string): Promise<void> {
   if (!screenshotDir) {
     return;
   }
-  await fs.mkdir(screenshotDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     caret: "hide",
@@ -98,10 +103,12 @@ suite.define(() => {
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
           await page.keyboard.press("Control+Backquote");
           await gateway.waitForRequest("terminal.open");
+          const terminalOutput =
+            "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ";
           await gateway.emitGatewayEvent("terminal.data", {
             sessionId: `terminal-layout-${theme}`,
-            seq: 0,
-            data: "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ",
+            seq: terminalOutput.length,
+            data: terminalOutput,
           });
 
           const panel = page.locator("openclaw-terminal-panel");

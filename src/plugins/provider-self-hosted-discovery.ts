@@ -1,7 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -10,7 +12,6 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
@@ -54,6 +55,7 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
   "context_size",
+  "max_model_len",
 ] as const;
 
 function readOpenAICompatibleContextWindow(
@@ -89,7 +91,7 @@ function buildSelfHostedDiscoveryHeaders(params: {
 
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
-  origin: string;
+  requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
   apiKey?: string;
   headers?: Record<string, string>;
   acceptJson?: boolean;
@@ -103,7 +105,7 @@ async function fetchSelfHostedDiscoveryJson(params: {
     guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+      policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       auditContext: "self-hosted-provider-discovery",
@@ -143,10 +145,7 @@ function readDiscoveryRows(body: unknown): Record<string, unknown>[] {
   if (!Array.isArray(bodyRecord?.data)) {
     throw new Error("model list must contain data[]");
   }
-  return bodyRecord.data.flatMap((entry) => {
-    const row = asOptionalRecord(entry);
-    return row ? [row] : [];
-  });
+  return bodyRecord.data.filter(isRecord);
 }
 
 function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
@@ -165,39 +164,33 @@ function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: strin
 }
 
 /** Guarded model-row discovery for OpenAI-compatible self-hosted servers. */
-async function discoverOpenAICompatibleModelRows(params: {
-  inferenceBaseUrl: string;
-  serverBaseUrl?: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  label: string;
-  healthPath?: string;
-  modelsPathOrder?: "inference" | "server-first";
-  routerModelProps?: boolean;
-  discoverRuntimeContext?: boolean;
-  timeoutMs?: number;
-  propsTimeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<OpenAICompatibleModelDiscoveryResult> {
-  const inferenceBaseUrl = params.inferenceBaseUrl.trim().replace(/\/+$/, "");
+async function discoverOpenAICompatibleModelRows(
+  params: OpenAICompatibleLocalModelsParams,
+): Promise<OpenAICompatibleModelDiscoveryResult> {
+  const inferenceBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
-  const origin = new URL(serverBaseUrl).origin;
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const requestPolicy = resolveProviderRequestPolicyConfig({
+    baseUrl: inferenceBaseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
+  const request = {
+    ...params,
+    requestPolicy,
+    timeoutMs,
+    acceptJson: params.modelsPathOrder === "server-first",
+    readBody: true,
+  };
   let health: "ready" | "loading" | "unknown" = "unknown";
 
   if (params.healthPath) {
     const path = params.healthPath;
     const healthResult = await fetchSelfHostedDiscoveryJson({
+      ...request,
       url: `${serverBaseUrl}${path}`,
-      origin,
-      apiKey: params.apiKey,
-      headers: params.headers,
       acceptJson: true,
-      timeoutMs,
-      signal: params.signal,
       readBody: false,
-      label: params.label,
     });
     if (healthResult.kind === "unreachable") {
       return healthResult;
@@ -219,94 +212,80 @@ async function discoverOpenAICompatibleModelRows(params: {
           { path: "/v1/models", url: `${inferenceBaseUrl}/models` },
         ]
       : [{ path: "/v1/models", url: `${inferenceBaseUrl}/models` }];
-  let modelsPath = modelCandidates[0]?.path ?? "/v1/models";
-  let modelsResult: DiscoveryResponse | undefined;
-  for (const [index, candidate] of modelCandidates.entries()) {
-    modelsPath = candidate.path;
-    modelsResult = await fetchSelfHostedDiscoveryJson({
+  let modelList:
+    | { kind: "success"; models: Record<string, unknown>[] }
+    | Exclude<OpenAICompatibleModelDiscoveryResult, { kind: "success" }>
+    | undefined;
+  for (const candidate of modelCandidates) {
+    const result = await fetchSelfHostedDiscoveryJson({
+      ...request,
       url: candidate.url,
-      origin,
-      apiKey: params.apiKey,
-      headers: params.headers,
-      acceptJson: params.modelsPathOrder === "server-first",
-      timeoutMs,
-      signal: params.signal,
-      readBody: true,
-      label: params.label,
     });
+    if (result.kind === "unreachable") {
+      return result;
+    }
+    if (result.kind === "invalid-response") {
+      modelList = { ...result, path: candidate.path };
+    } else if (!result.ok) {
+      modelList = { kind: "http-error", path: candidate.path, status: result.status };
+    } else {
+      try {
+        modelList = { kind: "success", models: readDiscoveryRows(result.body) };
+      } catch (error) {
+        modelList = { kind: "invalid-response", path: candidate.path, error };
+      }
+    }
+    // A root endpoint may serve a web app instead of a model list. Try the
+    // inference endpoint, while keeping auth and service failures terminal.
     if (
-      modelsResult.kind !== "response" ||
-      modelsResult.status !== 404 ||
-      index === modelCandidates.length - 1
+      modelList.kind === "success" ||
+      (modelList.kind === "http-error" && modelList.status !== 404)
     ) {
       break;
     }
   }
-  if (!modelsResult || modelsResult.kind === "unreachable") {
-    return modelsResult ?? { kind: "unreachable", error: new Error("missing model response") };
+  if (!modelList || modelList.kind !== "success") {
+    return modelList ?? { kind: "unreachable", error: new Error("missing model response") };
   }
-  if (modelsResult.kind === "invalid-response") {
-    return { ...modelsResult, path: modelsPath };
-  }
-  if (!modelsResult.ok) {
-    return { kind: "http-error", path: modelsPath, status: modelsResult.status };
-  }
-
-  let models: Record<string, unknown>[];
-  try {
-    models = readDiscoveryRows(modelsResult.body);
-  } catch (error) {
-    return { kind: "invalid-response", path: modelsPath, error };
-  }
-  const rows: OpenAICompatibleModelDiscoveryRow[] = models.map((model) => ({ model }));
+  const rows: OpenAICompatibleModelDiscoveryRow[] = modelList.models.map((model) => ({ model }));
   if (params.discoverRuntimeContext !== false) {
     const routerMode =
       params.routerModelProps &&
-      models.some((model) => asOptionalRecord(model.status) !== undefined);
-    const queryByModel = routerMode || (!params.routerModelProps && models.length > 1);
-    const probeIndexes = models
-      .map((model, index) => (shouldProbeRuntimeProps(model) ? index : -1))
-      .filter((index) => index >= 0)
+      rows.some(({ model }) => asOptionalRecord(model.status) !== undefined);
+    const queryByModel = routerMode || (!params.routerModelProps && rows.length > 1);
+    const probeRows = rows
+      .filter(({ model }) => shouldProbeRuntimeProps(model))
       .slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
-    const deadline = Date.now() + timeoutMs;
-    const { results } = await runTasksWithConcurrency({
+    const deadline = performance.now() + timeoutMs;
+    await runTasksWithConcurrency({
       limit: SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY,
       errorMode: "stop",
       throwOnError: true,
-      tasks: probeIndexes.map((index) => async () => {
-        const remainingMs = deadline - Date.now();
+      tasks: probeRows.map((row) => async () => {
+        const remainingMs = deadline - performance.now();
         if (remainingMs <= 0) {
-          return undefined;
+          return;
         }
-        const model = models[index];
-        const modelId = normalizeOptionalString(model?.id);
-        if (!model || !modelId) {
-          return undefined;
+        const modelId = normalizeOptionalString(row.model.id);
+        if (!modelId) {
+          return;
         }
         const result = await fetchSelfHostedDiscoveryJson({
+          ...request,
           url: resolveRuntimePropsUrl({
             serverBaseUrl,
             modelId: queryByModel ? modelId : undefined,
           }),
-          origin,
-          apiKey: params.apiKey,
-          headers: params.headers,
-          acceptJson: params.modelsPathOrder === "server-first",
           timeoutMs: Math.min(params.propsTimeoutMs ?? timeoutMs, remainingMs),
-          signal: params.signal,
-          readBody: true,
           label: `${params.label} /props`,
         });
         const props =
           result.kind === "response" && result.ok ? asOptionalRecord(result.body) : undefined;
-        return props ? ([index, props] as const) : undefined;
+        if (props) {
+          row.props = props;
+        }
       }),
     });
-    for (const result of results) {
-      if (result) {
-        rows[result[0]] = { model: models[result[0]]!, props: result[1] };
-      }
-    }
   }
 
   return { kind: "success", health, rows, fetchedAt: Date.now() };
@@ -314,6 +293,7 @@ async function discoverOpenAICompatibleModelRows(params: {
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -347,19 +327,10 @@ export async function discoverOpenAICompatibleLocalModels(
   }
 
   const result = await discoverOpenAICompatibleModelRows({
-    inferenceBaseUrl: params.baseUrl,
-    serverBaseUrl: params.serverBaseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    label: params.label,
-    healthPath: params.healthPath,
-    modelsPathOrder: params.modelsPathOrder,
-    routerModelProps: params.routerModelProps,
+    ...params,
     discoverRuntimeContext:
       params.contextWindow === undefined && params.discoverRuntimeContext !== false,
-    timeoutMs: params.timeoutMs,
     propsTimeoutMs: params.propsTimeoutMs ?? 2_500,
-    signal: params.signal,
   });
   if (params.rawResult) {
     return result;
@@ -378,12 +349,24 @@ export async function discoverOpenAICompatibleLocalModels(
     return [];
   }
 
+  const topLevelContextByModelId = new Map<string, number>();
+  for (const { model } of result.rows) {
+    const modelId = normalizeOptionalString(model.id);
+    const contextWindow = readOpenAICompatibleContextWindow(model);
+    if (modelId && contextWindow !== undefined) {
+      topLevelContextByModelId.set(modelId, contextWindow);
+    }
+  }
+
   return result.rows.flatMap(({ model, props }) => {
     const modelId = normalizeOptionalString(model.id);
     if (!modelId) {
       return [];
     }
     const meta = asOptionalRecord(model.meta);
+    const parentId = normalizeOptionalString(model.parent);
+    const parentContextWindow =
+      parentId && parentId !== modelId ? topLevelContextByModelId.get(parentId) : undefined;
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
@@ -397,6 +380,7 @@ export async function discoverOpenAICompatibleLocalModels(
         params.contextWindow ??
         readPositiveInteger(meta?.n_ctx_train) ??
         readOpenAICompatibleContextWindow(model) ??
+        parentContextWindow ??
         SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),

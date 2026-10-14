@@ -1,6 +1,10 @@
 // Lmstudio tests cover runtime plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 import {
@@ -62,7 +66,7 @@ describe("lmstudio-runtime", () => {
       resolveLmstudioRuntimeApiKey({
         config: buildLmstudioConfig({ auth: "api-key" }),
       }),
-    ).rejects.toThrow(/LM Studio API key is required/i);
+    ).rejects.toThrow('or run "openclaw models auth login --provider lmstudio".');
   });
 
   it("falls back to configured env marker key when profile resolution fails", async () => {
@@ -81,20 +85,6 @@ describe("lmstudio-runtime", () => {
         },
       }),
     ).resolves.toBe("template-lmstudio-key");
-  });
-
-  it("accepts synthesized lmstudio-local for non-explicit auth mode", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      source: "models.providers.lmstudio (synthetic local key)",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig(),
-      }),
-    ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
   });
 
   it("accepts synthesized lmstudio-local for explicit api-key mode", async () => {
@@ -125,22 +115,6 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
-  it("allows header-only runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
-    );
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("allows header-only runtime auth when an api key env template is unset", async () => {
     resolveApiKeyForProviderMock.mockRejectedValueOnce(
       new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
@@ -159,59 +133,21 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("suppresses profile runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-profile-key",
-      source: "profile:lmstudio:default",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
+  it.each(["profile:lmstudio:default", "env:LM_API_TOKEN", "shell env: LM_API_TOKEN"])(
+    "suppresses runtime auth from %s when Authorization is configured",
+    async (source) => {
+      resolveApiKeyForProviderMock.mockResolvedValueOnce({
+        apiKey: "stale-key",
+        source,
+        mode: "api-key",
+      });
+      await expect(
+        resolveLmstudioRuntimeApiKey({
+          config: buildLmstudioConfig({ headers: { Authorization: "Bearer proxy-token" } }),
         }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("suppresses env runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-env-key",
-      source: "env:LM_API_TOKEN",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("suppresses shell env runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-shell-env-key",
-      source: "shell env: LM_API_TOKEN",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("throws when explicit api-key mode cannot resolve any key", async () => {
     resolveApiKeyForProviderMock.mockRejectedValue(
@@ -231,53 +167,32 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("resolves SecretRef api key and headers", async () => {
-    const headerRef = {
-      "X-Proxy-Auth": {
-        source: "env" as const,
-        provider: "default" as const,
-        id: "LMSTUDIO_PROXY_TOKEN",
-      },
-    };
+  it.each([
+    {
+      name: "a configured env marker resolves its concrete credential",
+      apiKey: "GOOGLE_API_KEY",
+      env: { GOOGLE_API_KEY: "direct-env-key" },
+      expected: "direct-env-key",
+    },
+    {
+      name: "a SecretRef resolving to an env marker is not dereferenced again",
+      apiKey: { source: "env", provider: "default", id: "LM_API_TOKEN" },
+      env: { LM_API_TOKEN: "GOOGLE_API_KEY", GOOGLE_API_KEY: "nested-env-key" },
+      expected: undefined,
+    },
+    {
+      name: "a configured synthetic auth marker is suppressed",
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      env: {},
+      expected: undefined,
+    },
+  ])("preserves configured auth semantics when $name", async ({ apiKey, env, expected }) => {
     await expect(
       resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "LM_API_TOKEN",
-          },
-        }),
-        env: {
-          LM_API_TOKEN: "secretref-lmstudio-key",
-        },
+        config: buildLmstudioConfig({ apiKey }),
+        env,
       }),
-    ).resolves.toBe("secretref-lmstudio-key");
-
-    await expect(
-      resolveLmstudioProviderHeaders({
-        config: buildLmstudioConfig({ headers: headerRef }),
-        env: {
-          LMSTUDIO_PROXY_TOKEN: "proxy-token",
-        },
-        headers: headerRef,
-      }),
-    ).resolves.toEqual({
-      "X-Proxy-Auth": "proxy-token",
-    });
-  });
-
-  it("resolves env-template api keys from config", async () => {
-    await expect(
-      resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: "${LM_API_TOKEN}",
-        }),
-        env: {
-          LM_API_TOKEN: "template-lmstudio-key",
-        },
-      }),
-    ).resolves.toBe("template-lmstudio-key");
+    ).resolves.toBe(expected);
   });
 
   it("resolves arbitrary env-template api keys from config", async () => {
@@ -293,15 +208,24 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("custom-template-lmstudio-key");
   });
 
-  it("throws a path-specific error when an env-template api key cannot be resolved", async () => {
+  it.each([
+    { name: "env template", apiKey: "${LMSTUDIO_API_KEY}" },
+    {
+      name: "SecretRef",
+      apiKey: { source: "env", provider: "default", id: "LMSTUDIO_API_KEY" },
+    },
+  ])("fails closed for an unresolved $name unless explicitly allowed", async ({ apiKey }) => {
+    const options = {
+      config: buildLmstudioConfig({ apiKey }),
+      env: {},
+    };
+
+    await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
+      'models.providers["lmstudio"].apiKey',
+    );
     await expect(
-      resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: "${LMSTUDIO_API_KEY}",
-        }),
-        env: {},
-      }),
-    ).rejects.toThrow(/models\.providers\.lmstudio\.apiKey/i);
+      resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
+    ).resolves.toBeUndefined();
   });
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {
@@ -319,6 +243,54 @@ describe("lmstudio-runtime", () => {
         headers: headerRef,
       }),
     ).rejects.toThrow(/models\.providers\.lmstudio\.headers\.X-Proxy-Auth/i);
+  });
+
+  describe.each(["constructor", "prototype"])("loaded %s header", (headerName) => {
+    it.each([
+      { name: "missing reference", input: "${LMSTUDIO_HEADER_TEST_TOKEN}", expected: undefined },
+      {
+        name: "escaped literal",
+        input: "$${LMSTUDIO_HEADER_TEST_TOKEN}",
+        expected: "${LMSTUDIO_HEADER_TEST_TOKEN}",
+      },
+      {
+        name: "resolved reference",
+        input: "${LMSTUDIO_HEADER_TEST_TOKEN}",
+        token: "resolved-header-token",
+        expected: "resolved-header-token",
+      },
+    ])("preserves $name semantics in request headers", async ({ input, token, expected }) => {
+      const home = await createTempHomeEnv("openclaw-lmstudio-header-");
+      try {
+        const configPath = path.join(home.home, ".openclaw", "openclaw.json");
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+        vi.stubEnv("LMSTUDIO_HEADER_TEST_TOKEN", token);
+        await fs.writeFile(
+          configPath,
+          JSON.stringify(buildLmstudioConfig({ headers: { [headerName]: input } })),
+        );
+        const config = getRuntimeConfig({
+          pin: false,
+          skipPluginValidation: true,
+          skipShellEnvFallback: true,
+        });
+        const headers = resolveLmstudioProviderHeaders({
+          config,
+          env: {},
+          headers: config.models?.providers?.lmstudio?.headers,
+        });
+        if (expected === undefined) {
+          await expect(headers).rejects.toThrow(`models.providers.lmstudio.headers.${headerName}`);
+        } else {
+          expect(buildLmstudioAuthHeaders({ headers: await headers })).toEqual({
+            [headerName]: expected,
+          });
+        }
+      } finally {
+        vi.unstubAllEnvs();
+        await home.restore();
+      }
+    });
   });
 
   it("builds auth headers with key precedence and json support", () => {

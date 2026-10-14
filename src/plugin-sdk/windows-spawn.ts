@@ -129,7 +129,8 @@ export function detectWindowsSpawnCommandInlineArgs(
   }
   const normalizedToken = parsed.token.replace(/\\/g, "/");
   const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
-  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+  // Existing paths can contain spaces after a directory named node or pnpm.
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable) || isFilePath(command)) {
     return null;
   }
   return {
@@ -138,10 +139,14 @@ export function detectWindowsSpawnCommandInlineArgs(
   };
 }
 
-/** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
-export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
+/** Resolve PATH/PATHEXT before inspecting wrappers; relative paths use the supplied child cwd. */
+export function resolveWindowsExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd?: string,
+): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
-    return command;
+    return cwd && !path.isAbsolute(command) ? path.resolve(cwd, command) : command;
   }
 
   const pathValue =
@@ -161,11 +166,12 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
       );
 
   for (const dir of pathEntries) {
+    const directory = cwd ? path.resolve(cwd, dir) : dir;
     for (const ext of pathExt) {
       const normalizedExt = normalizeLowercaseStringOrEmpty(ext);
       const uppercaseExt = ext.toUpperCase();
       for (const candidateExt of [ext, normalizedExt, uppercaseExt]) {
-        const candidate = path.join(dir, `${command}${candidateExt}`);
+        const candidate = path.join(directory, `${command}${candidateExt}`);
         if (isFilePath(candidate)) {
           return candidate;
         }
@@ -237,24 +243,21 @@ function resolveBinEntry(
   binField: string | Record<string, string> | undefined,
 ): string | null {
   if (typeof binField === "string") {
-    const trimmed = normalizeOptionalString(binField);
-    return trimmed || null;
+    return normalizeOptionalString(binField) ?? null;
   }
   if (!binField || typeof binField !== "object") {
     return null;
   }
 
   if (packageName) {
-    const preferred = binField[packageName];
-    const normalizedPreferred =
-      typeof preferred === "string" ? normalizeOptionalString(preferred) : undefined;
+    const normalizedPreferred = normalizeOptionalString(binField[packageName]);
     if (normalizedPreferred) {
       return normalizedPreferred;
     }
   }
 
   for (const value of Object.values(binField)) {
-    const normalizedValue = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+    const normalizedValue = normalizeOptionalString(value);
     if (normalizedValue) {
       return normalizedValue;
     }
@@ -325,50 +328,28 @@ export function resolveWindowsSpawnProgramCandidate(
 
   const resolvedCommand = resolveWindowsExecutablePath(params.command, env);
   const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
-  if (ext === ".js" || ext === ".cjs" || ext === ".mjs") {
+  const isWrapper = ext === ".cmd" || ext === ".bat";
+  const entrypoint = isWrapper
+    ? (resolveEntrypointFromCmdShim(resolvedCommand) ??
+      resolveEntrypointFromPackageJson(resolvedCommand, params.packageName))
+    : ext === ".js" || ext === ".cjs" || ext === ".mjs"
+      ? resolvedCommand
+      : undefined;
+  if (entrypoint) {
+    const isExe = normalizeLowercaseStringOrEmpty(path.extname(entrypoint)) === ".exe";
     return {
-      command: execPath,
-      leadingArgv: [resolvedCommand],
-      resolution: "node-entrypoint",
+      command: isExe ? entrypoint : execPath,
+      leadingArgv: isExe ? [] : [entrypoint],
+      resolution: isExe ? "exe-entrypoint" : "node-entrypoint",
       windowsHide: true,
     };
   }
 
-  if (ext === ".cmd" || ext === ".bat") {
-    const entrypoint =
-      resolveEntrypointFromCmdShim(resolvedCommand) ??
-      resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);
-    if (entrypoint) {
-      const entryExt = normalizeLowercaseStringOrEmpty(path.extname(entrypoint));
-      if (entryExt === ".exe") {
-        return {
-          command: entrypoint,
-          leadingArgv: [],
-          resolution: "exe-entrypoint",
-          windowsHide: true,
-        };
-      }
-      return {
-        command: execPath,
-        leadingArgv: [entrypoint],
-        resolution: "node-entrypoint",
-        windowsHide: true,
-      };
-    }
-
-    // Unresolved .cmd/.bat wrappers are not passed through cmd.exe unless the
-    // caller explicitly accepts shell metacharacter parsing with allowShellFallback.
-    return {
-      command: resolvedCommand,
-      leadingArgv: [],
-      resolution: "unresolved-wrapper",
-    };
-  }
-
+  // Unresolved wrappers need the caller's explicit shell-fallback policy.
   return {
     command: resolvedCommand,
     leadingArgv: [],
-    resolution: "direct",
+    resolution: isWrapper ? "unresolved-wrapper" : "direct",
   };
 }
 

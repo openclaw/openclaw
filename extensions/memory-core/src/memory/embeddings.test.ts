@@ -8,6 +8,7 @@ import {
   createEmbeddingProvider,
   resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderFallbackRemote,
+  resolveEmbeddingProviderIndexIdentity,
 } from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
@@ -17,8 +18,10 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   acquireLocalService: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
-  DEFAULT_LOCAL_MODEL: "nomic-embed-text",
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
+  >()),
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
@@ -34,35 +37,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
     if (!genericAdapter) {
       return undefined;
     }
-    return {
-      ...genericAdapter,
-      create: async (options) => {
-        const result = await genericAdapter.create({
-          ...options,
-          ...(typeof options.outputDimensionality === "number"
-            ? { dimensions: options.outputDimensionality }
-            : {}),
-        });
-        const provider = result.provider;
-        if (!provider) {
-          return { ...result, provider: null };
-        }
-        return {
-          ...result,
-          provider: {
-            ...provider,
-            embedQuery: (text, callOptions) =>
-              provider.embed(text, { ...callOptions, inputType: "query" }),
-            embedBatch: (texts, callOptions) =>
-              provider.embedBatch(texts, { ...callOptions, inputType: "document" }),
-            ...(provider.close ? { close: () => provider.close?.() } : {}),
-          },
-        };
-      },
-    } satisfies MemoryEmbeddingProviderAdapter;
+    return genericAdapter;
   },
-  listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
-  listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
 }));
 
 const missingBedrockCredentialsError = new Error(
@@ -144,6 +120,32 @@ describe("createEmbeddingProvider", () => {
     clearTestMemoryAdapters();
   });
 
+  it("uses the provider's canonical model for cold identity and creation without inventing a cache key", async () => {
+    registerTestMemoryAdapter({
+      id: "dynamic",
+      normalizeModel: ({ model }) => model.replace(/^dynamic\//, ""),
+      create: async ({ model }) => ({
+        provider: {
+          id: "dynamic",
+          model,
+          embed: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+    const options = { ...createOptions("dynamic"), model: " dynamic/embed-v1 " };
+    expect(resolveEmbeddingProviderIndexIdentity(options)).toEqual({
+      provider: { id: "dynamic", model: "embed-v1" },
+      cacheKeyData: undefined,
+      aliases: undefined,
+    });
+    expect((await createEmbeddingProvider(options)).provider?.model).toBe("embed-v1");
+    expect(resolveEmbeddingProviderIndexIdentity({ ...options, model: "" })?.provider).toEqual({
+      id: "dynamic",
+      model: "",
+    });
+  });
+
   it("normalizes legacy auto mode to OpenAI", async () => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter({ id: "bedrock" }));
     registerTestMemoryAdapter({
@@ -154,7 +156,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
@@ -198,96 +200,138 @@ describe("createEmbeddingProvider", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["ollama", "lmstudio", "mistral"] as const)(
-    "keeps the primary endpoint and credentials out of the %s creation fallback",
-    async (fallback) => {
-      const primaryCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
-        throw new Error("synthetic primary provider unavailable");
-      });
-      const fallbackCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => ({
-        provider: {
-          id: fallback,
-          model: `${fallback}-embedding`,
-          embedQuery: async () => [1],
-          embedBatch: async (texts) => texts.map(() => [1]),
-        },
-      }));
-      registerTestMemoryAdapter({ id: "openai", create: primaryCreate });
-      registerTestMemoryAdapter({ id: fallback, create: fallbackCreate });
+  it("keeps the primary endpoint and credentials out of the creation fallback", async () => {
+    const fallback = "ollama";
+    const primaryCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
+      throw new Error("synthetic primary provider unavailable");
+    });
+    const fallbackCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => ({
+      provider: {
+        id: fallback,
+        model: `${fallback}-embedding`,
+        embed: async () => [1],
+        embedBatch: async (texts) => texts.map(() => [1]),
+      },
+    }));
+    registerTestMemoryAdapter({ id: "openai", create: primaryCreate });
+    registerTestMemoryAdapter({ id: fallback, create: fallbackCreate });
 
-      const sharedRemote = {
-        nonBatchConcurrency: 3,
-        batch: {
-          enabled: true,
-          wait: false,
-          concurrency: 2,
-          pollIntervalMs: 250,
-          timeoutMinutes: 5,
-        },
-      };
-      const remote = {
-        baseUrl: "https://primary-openai.invalid/v1",
-        apiKey: "synthetic-primary-openai-api-key",
-        headers: {
-          Authorization: "Bearer synthetic-primary-openai-auth",
-          "X-OpenAI-Secret": "synthetic-primary-openai-header",
-        },
-        ...sharedRemote,
-      };
-      const fallbackProviderConfig = {
-        baseUrl: `https://${fallback}-provider.invalid/v1`,
-        apiKey: "synthetic-fallback-owned-api-key",
-        headers: { "X-Fallback-Auth": "synthetic-fallback-owned-header" },
-        models: [],
-      };
-      const primaryOptions = createOptions("openai");
-      const config = {
-        ...primaryOptions.config,
-        models: { providers: { [fallback]: fallbackProviderConfig } },
-      } satisfies OpenClawConfig;
-      const local = { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 };
+    const sharedRemote = {
+      batch: {
+        enabled: true,
+        wait: false,
+        concurrency: 2,
+        pollIntervalMs: 250,
+        timeoutMinutes: 5,
+      },
+    };
+    const remote = {
+      baseUrl: "https://primary-openai.invalid/v1",
+      apiKey: "synthetic-primary-openai-api-key",
+      headers: {
+        Authorization: "Bearer synthetic-primary-openai-auth",
+        "X-OpenAI-Secret": "synthetic-primary-openai-header",
+      },
+      ...sharedRemote,
+    };
+    const fallbackProviderConfig = {
+      baseUrl: `https://${fallback}-provider.invalid/v1`,
+      apiKey: "synthetic-fallback-owned-api-key",
+      headers: { "X-Fallback-Auth": "synthetic-fallback-owned-header" },
+      models: [],
+    };
+    const primaryOptions = createOptions("openai");
+    const config = {
+      ...primaryOptions.config,
+      models: { providers: { [fallback]: fallbackProviderConfig } },
+    } satisfies OpenClawConfig;
+    const local = { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 };
 
-      const result = await createEmbeddingProvider({
-        ...primaryOptions,
+    const result = await createEmbeddingProvider({
+      ...primaryOptions,
+      config,
+      fallback,
+      model: "text-embedding-3-small",
+      remote,
+      inputType: "passage",
+      queryInputType: "query",
+      documentInputType: "document",
+      outputDimensionality: 768,
+      local,
+    });
+
+    expect(primaryCreate).toHaveBeenCalledWith(expect.objectContaining({ remote, config }));
+    expect(primaryCreate.mock.calls[0]?.[0].remote).toBe(remote);
+    expect(fallbackCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: fallback,
+        remote: sharedRemote,
         config,
-        fallback,
+        agentDir: primaryOptions.agentDir,
+        acquireLocalService: primaryOptions.acquireLocalService,
         model: "text-embedding-3-small",
-        remote,
         inputType: "passage",
         queryInputType: "query",
         documentInputType: "document",
-        outputDimensionality: 768,
+        dimensions: 768,
+        fallback: "none",
         local,
-      });
+      }),
+    );
+    expect(fallbackCreate.mock.calls[0]?.[0].remote).toEqual(sharedRemote);
+    expect(fallbackCreate.mock.calls[0]?.[0].config.models?.providers?.[fallback]).toEqual(
+      fallbackProviderConfig,
+    );
+    expect(result).toMatchObject({
+      requestedProvider: "openai",
+      fallbackFrom: "openai",
+      provider: { id: fallback },
+    });
+  });
 
-      expect(primaryCreate).toHaveBeenCalledWith(expect.objectContaining({ remote, config }));
-      expect(primaryCreate.mock.calls[0]?.[0].remote).toBe(remote);
-      expect(fallbackCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: fallback,
-          remote: sharedRemote,
-          config,
-          agentDir: primaryOptions.agentDir,
-          acquireLocalService: primaryOptions.acquireLocalService,
-          model: "text-embedding-3-small",
-          inputType: "passage",
-          queryInputType: "query",
-          documentInputType: "document",
-          outputDimensionality: 768,
-          local,
-        }),
-      );
-      expect(fallbackCreate.mock.calls[0]?.[0].remote).toEqual(sharedRemote);
-      expect(fallbackCreate.mock.calls[0]?.[0].config.models?.providers?.[fallback]).toEqual(
-        fallbackProviderConfig,
-      );
-      expect(result).toMatchObject({
-        requestedProvider: "openai",
-        fallbackFrom: "openai",
-        provider: { id: fallback },
-      });
-    },
-  );
+  it.each([
+    { name: "fallback that serves its own model", fallbackDefaultModel: "nomic-embed-text" },
+    { name: "fallback without a default model", fallbackDefaultModel: undefined },
+  ])("hands the creation fallback the model it serves: $name", async ({ fallbackDefaultModel }) => {
+    const primaryModel = "text-embedding-3-small";
+    const fallbackCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async ({ model }) => ({
+      provider: {
+        id: "ollama",
+        model,
+        embed: async () => [1],
+        embedBatch: async (texts) => texts.map(() => [1]),
+      },
+    }));
+    registerTestMemoryAdapter({
+      id: "openai",
+      defaultModel: primaryModel,
+      create: async () => {
+        throw new Error("synthetic primary provider unavailable");
+      },
+    });
+    registerTestMemoryAdapter({
+      id: "ollama",
+      ...(fallbackDefaultModel ? { defaultModel: fallbackDefaultModel } : {}),
+      create: fallbackCreate,
+    });
+
+    const options = { ...createOptions("openai"), model: primaryModel, fallback: "ollama" };
+    const result = await createEmbeddingProvider(options);
+
+    // The configured model names the primary provider. Both fallback entry points must
+    // agree on what the fallback is asked to serve.
+    const runtimeActivationModel = resolveEmbeddingProviderFallbackModel(
+      "ollama",
+      primaryModel,
+      options.config,
+    );
+    const expectedModel = fallbackDefaultModel ?? primaryModel;
+    expect(runtimeActivationModel).toBe(expectedModel);
+    expect(fallbackCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: expectedModel }),
+    );
+    expect(result.provider?.model).toBe(expectedModel);
+  });
 
   it("does not run priority-based auto-selection after a skippable setup failure", async () => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
@@ -299,7 +343,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
@@ -345,8 +389,10 @@ describe("createEmbeddingProvider", () => {
 
     expect(result.provider?.id).toBe("generic");
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
-    await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([1]);
+    await expect(result.provider?.embedBatch(["doc"], { inputType: "document" })).resolves.toEqual([
+      [3],
+    ]);
     await result.provider?.close?.();
     expect(genericProvider.closed).toBe(true);
   });
@@ -400,7 +446,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "legacy",
           model: "legacy-model",
-          embedQuery: async () => [0],
+          embed: async () => [0],
           embedBatch: async (texts) => texts.map(() => [0]),
         },
       }),
@@ -409,7 +455,7 @@ describe("createEmbeddingProvider", () => {
     const result = await createEmbeddingProvider(createOptions("openai-compatible"));
 
     expect(result.provider?.id).toBe("legacy");
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([0]);
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([0]);
   });
 
   it("reports the llama.cpp plugin install command when local is unregistered", async () => {
@@ -427,7 +473,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "legacy",
           model: "legacy-model",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
@@ -449,7 +495,7 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
-  it("uses config-scoped lookup for generic fallback model resolution", () => {
+  it("uses config-scoped defaults for cold identity and fallback model resolution", () => {
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
       defaultModel: "generic-default",
@@ -466,6 +512,10 @@ describe("createEmbeddingProvider", () => {
     );
 
     expect(model).toBe("generic-default");
-    expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
+    expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
+      id: "openai-compatible",
+      model: "generic-default",
+    });
+    expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config, options.config]);
   });
 });

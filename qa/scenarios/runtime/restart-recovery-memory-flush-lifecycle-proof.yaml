@@ -12,7 +12,7 @@ scenario:
   objective: Prove a forced pre-admission memory flush cannot own the parent session lifecycle and the channel turn still receives a reply.
   successCriteria:
     - A synthetic channel turn creates the parent session.
-    - The next turn forces a pre-admission memory flush through the real Gateway child and mock provider.
+    - The next turn delivers its foreground reply, then records the forced memory flush through the real Gateway child and mock provider.
     - The parent session remains terminally healthy and the second turn receives a visible reply.
   gatewayConfigPatch:
     agents:
@@ -31,7 +31,7 @@ scenario:
   execution:
     kind: flow
     runtime: openclaw
-    summary: Force a memory-flush child before a synthetic channel turn, then verify parent lifecycle and delivery.
+    summary: Force post-delivery memory maintenance for a synthetic channel turn, then verify its eventual fact, parent lifecycle, and delivery.
     channel: qa-channel
     config:
       conversationPrefix: restart-recovery-memory-flush
@@ -103,17 +103,17 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: proofReply
-        - call: readRawQaSessionStore
-          saveAs: store
+        - call: waitForCondition
+          saveAs: sessionEntry
           args:
-            - ref: env
-        - set: sessionEntry
-          value:
-            expr: "store[sessionKey]"
+            - lambda:
+                async: true
+                expr: "readRawQaSessionStore(env).then((store) => { const entry = store[sessionKey]; return entry?.memoryFlush?.kind === 'succeeded' ? entry : undefined; })"
+            - 60000
+            - 100
         - assert:
             expr: "sessionEntry?.memoryFlush?.kind === 'succeeded'"
-            message:
-              expr: "`forced memory flush did not succeed: ${JSON.stringify({ sessionKey, storeKeys: Object.keys(store), sessionEntry })}`"
+            message: forced post-delivery memory flush did not succeed
         - assert:
             expr: "sessionEntry?.status === 'done' && sessionEntry?.abortedLastRun !== true"
             message:

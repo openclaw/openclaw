@@ -2,13 +2,15 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -18,11 +20,7 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
     ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
     const rows = db
       .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
-      .all() as Array<{
-      approval_id?: unknown;
-      kind?: unknown;
-      resolution_ref?: unknown;
-    }>;
+      .all();
     const update = db.prepare(
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
     );
@@ -61,77 +59,10 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   });
 }
 
-export function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
-  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
-    return;
-  }
-  // Before requester_agent_id existed, scoped subagent/ACP rows stored the
-  // requester in agent_id. Repair only rows with recoverable requester
-  // provenance; global legacy rows must keep the existing fallback behavior.
-  db.exec(`
-    UPDATE task_runs
-    SET
-      requester_agent_id = CASE
-        WHEN owner_key GLOB 'agent:*:*' THEN substr(
-          owner_key,
-          7,
-          instr(substr(owner_key, 7), ':') - 1
-        )
-        WHEN requester_session_key GLOB 'agent:*:*' THEN substr(
-          requester_session_key,
-          7,
-          instr(substr(requester_session_key, 7), ':') - 1
-        )
-        WHEN agent_id <> substr(
-          child_session_key,
-          7,
-          instr(substr(child_session_key, 7), ':') - 1
-        ) THEN agent_id
-        ELSE NULL
-      END,
-      agent_id = substr(
-        child_session_key,
-        7,
-        instr(substr(child_session_key, 7), ':') - 1
-      )
-    WHERE requester_agent_id IS NULL
-      AND runtime IN ('subagent', 'acp')
-      AND child_session_key GLOB 'agent:*:*'
-      AND instr(substr(child_session_key, 7), ':') > 1
-      AND (
-        owner_key GLOB 'agent:*:*'
-        OR requester_session_key GLOB 'agent:*:*'
-        OR (
-          agent_id IS NOT NULL
-          AND agent_id <> substr(
-            child_session_key,
-            7,
-            instr(substr(child_session_key, 7), ':') - 1
-          )
-        )
-      );
-  `);
-}
-
-export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
-  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
-    return;
-  }
-  // Successful sidecar imports archive their source, so database open must
-  // also canonicalize rows already copied by released migrations.
-  db.exec(`
-    UPDATE task_runs
-    SET delivery_status = 'not_applicable'
-    WHERE delivery_status = 'not-requested';
-  `);
-}
-
 type LegacyRetainedResultRow = {
   run_id: string;
   payload_json: string;
-  pending_final_delivery_payload_json: string | null;
-  frozen_result_text: string | null;
-  fallback_frozen_result_text: string | null;
+  pending_final_delivery_payload_json?: string | null;
 };
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
@@ -142,68 +73,41 @@ function nullableTextValue(record: Record<string, unknown> | null, key: string) 
   return typeof value === "string" || value === null ? value : undefined;
 }
 
-function selectLegacyRetainedTaskResult(
-  completion: Record<string, unknown>,
-  primary: string | null | undefined,
-  fallback: string | null | undefined,
-): string | null {
-  const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
-  if (terminalReply) {
-    return terminalReply.disposition === "visible" ? terminalReply.text : null;
-  }
-  return selectDeliverableSessionsReply(primary, fallback) ?? null;
-}
-
-/** Promote shipped retained results before runtime hydrates canonical subagent/task state. */
+/** Promote shipped retained results before runtime hydrates canonical subagent state. */
 export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
-  if (
-    !tableExists(db, "subagent_runs") ||
-    !tableHasColumn(db, "subagent_runs", "pending_final_delivery_payload_json") ||
-    !tableHasColumn(db, "subagent_runs", "frozen_result_text") ||
-    !tableHasColumn(db, "subagent_runs", "fallback_frozen_result_text")
-  ) {
+  if (!tableExists(db, "subagent_runs")) {
     return;
   }
   const repair = () => {
+    const hasLegacyPendingPayload = tableHasColumn(
+      db,
+      "subagent_runs",
+      "pending_final_delivery_payload_json",
+    );
     const rows = db
       .prepare(
-        `SELECT run_id, payload_json, pending_final_delivery_payload_json,
-                frozen_result_text, fallback_frozen_result_text
-           FROM subagent_runs`,
+        hasLegacyPendingPayload
+          ? "SELECT run_id, payload_json, pending_final_delivery_payload_json FROM subagent_runs"
+          : "SELECT run_id, payload_json FROM subagent_runs",
       )
       .all() as LegacyRetainedResultRow[];
     const updateRun = db.prepare(
       `UPDATE subagent_runs
-          SET payload_json = ?,
-              pending_final_delivery_payload_json = ?,
-              frozen_result_text = ?,
-              fallback_frozen_result_text = ?
+          SET payload_json = ?
         WHERE run_id = ?`,
     );
-    const canProjectTasks =
-      tableExists(db, "task_runs") && tableHasColumn(db, "task_runs", "progress_summary");
-    const updateTask = canProjectTasks
-      ? db.prepare(
-          `UPDATE task_runs
-              SET progress_summary = ?
-            WHERE runtime = 'subagent'
-              AND run_id = ?
-              AND (progress_summary IS NULL
-                OR trim(progress_summary) = ''
-                OR (? IS NOT NULL AND trim(progress_summary) = ?))`,
-        )
-      : undefined;
-
     for (const row of rows) {
-      const payload = parseJsonRecord(row.payload_json);
-      const completion = payload ? recordField(payload, "completion") : null;
+      const stored = safeParseJsonRecord(row.payload_json) ?? null;
+      const parent = stored ? asNullableRecord(stored.parentCompletion) : null;
+      const payload = parent?.completionTarget === "parent" ? parent : stored;
+      const completion = payload ? asNullableRecord(payload.completion) : null;
       if (!payload || !completion) {
         continue;
       }
-      const delivery = recordField(payload, "delivery");
-      const deliveryPayload = delivery ? recordField(delivery, "payload") : null;
+      const delivery = asNullableRecord(payload.delivery);
+      const deliveryPayload = delivery ? asNullableRecord(delivery.payload) : null;
       const pendingPayload = row.pending_final_delivery_payload_json
-        ? parseJsonRecord(row.pending_final_delivery_payload_json)
+        ? (safeParseJsonRecord(row.pending_final_delivery_payload_json) ?? null)
         : null;
       const hasLegacyResult = Boolean(
         (deliveryPayload &&
@@ -233,24 +137,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       }
       delete deliveryPayload?.frozenResultText;
       delete deliveryPayload?.fallbackFrozenResultText;
-      delete pendingPayload?.frozenResultText;
-      delete pendingPayload?.fallbackFrozenResultText;
-      const primary = nullableTextValue(completion, "resultText");
-      const fallback = nullableTextValue(completion, "fallbackResultText");
-      updateRun.run(
-        JSON.stringify(payload),
-        pendingPayload ? JSON.stringify(pendingPayload) : row.pending_final_delivery_payload_json,
-        typeof primary === "string" ? primary : null,
-        typeof fallback === "string" ? fallback : null,
-        row.run_id,
-      );
-      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
-      const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
-      const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
-      if (updateTask && (taskResult || terminalReply)) {
-        const retainedPrimary = primary?.trim() || null;
-        updateTask.run(taskResult, taskRunId, retainedPrimary, retainedPrimary);
-      }
+      updateRun.run(JSON.stringify(stored), row.run_id);
     }
   };
   if (db.isTransaction) {
@@ -299,20 +186,6 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
   `);
 }
 
-/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
-export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
-  if (!tableExists(db, "subagent_runs")) {
-    return;
-  }
-  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
-  db.exec(`
-    UPDATE subagent_runs
-    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
-    WHERE json_valid(payload_json)
-      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
-  `);
-}
-
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   if (
     !tableExists(db, "acp_replay_events") ||
@@ -320,26 +193,61 @@ export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   ) {
     return;
   }
-  const pendingEvent = db
-    .prepare("SELECT 1 FROM acp_replay_events WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  const pendingSession = db
-    .prepare("SELECT 1 FROM acp_replay_sessions WHERE estimated_bytes = 0 LIMIT 1")
-    .get();
-  if (!pendingEvent && !pendingSession) {
-    return;
+  // The schema/Doctor owner holds the transaction. Stream canonical text in Node
+  // so UTF-16 databases, NUL and existing JSON formatting use the writer's units.
+  const replayDb =
+    getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "acp_replay_events" | "acp_replay_sessions">
+    >(db);
+  const updateEvent = db.prepare(
+    "UPDATE acp_replay_events SET estimated_bytes = ? WHERE session_id = ? AND seq = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "session_key", "run_id", "update_json", "estimated_bytes"]),
+  )) {
+    const expected = estimateAcpEventRowBytes({
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      runId: row.run_id,
+      updateJson: row.update_json,
+    });
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateEvent.run(expected, row.session_id, row.seq);
+    }
   }
-  db.exec(`
-    UPDATE acp_replay_events
-       SET estimated_bytes = length(session_id) + length(session_key) + length(update_json)
-             + COALESCE(length(run_id), 0) + 32
-     WHERE estimated_bytes = 0;
-    UPDATE acp_replay_sessions
-       SET estimated_bytes = length(session_id) + length(session_key) + length(cwd) + 32
-             + COALESCE((SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
-                          WHERE e.session_id = acp_replay_sessions.session_id), 0)
-     WHERE estimated_bytes = 0;
-  `);
+  const updateSession = db.prepare(
+    "UPDATE acp_replay_sessions SET estimated_bytes = ? WHERE session_id = ?",
+  );
+  for (const row of iterateSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_sessions as s")
+      .select(["s.session_id", "s.session_key", "s.cwd", "s.estimated_bytes"])
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            eb
+              .selectFrom("acp_replay_events as e")
+              .select((events) => events.fn.sum<number>("e.estimated_bytes").as("total"))
+              .whereRef("e.session_id", "=", "s.session_id"),
+            eb.val(0),
+          )
+          .as("event_bytes"),
+      ),
+  )) {
+    const expected =
+      estimateAcpSessionRowBytes({
+        sessionId: row.session_id,
+        sessionKey: row.session_key,
+        cwd: row.cwd,
+      }) + sqliteNumber(row.event_bytes);
+    if (sqliteNumber(row.estimated_bytes) !== expected) {
+      updateSession.run(expected, row.session_id);
+    }
+  }
 }
 
 export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
@@ -368,7 +276,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   );
   for (const row of rows) {
     update.run(
-      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
+      JSON.stringify({ ts: sqliteNumber(row.ts), jobId: row.job_id, action: "finished" }),
       row.store_key,
       row.job_id,
       row.seq,
@@ -376,106 +284,15 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   }
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(value) ?? null;
-}
-
-function textField(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
+function textField(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | null {
-  return asFiniteNumber(record[key]) ?? null;
-}
-
-function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  return asNullableRecord(record[key]);
-}
-
-function jsonField(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-function cronSessionTargetField(record: Record<string, unknown>): string | null {
-  const value = textField(record, "sessionTarget");
-  if (!value) {
-    return null;
-  }
-  return value === "main" ||
-    value === "isolated" ||
-    value === "current" ||
-    value.startsWith("session:")
-    ? value
-    : null;
-}
-
-function cronWakeModeField(record: Record<string, unknown>): string | null {
-  const value = textField(record, "wakeMode");
-  return value === "now" || value === "next-heartbeat" ? value : null;
-}
-
-function booleanField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "boolean" ? (value ? 1 : 0) : null;
-}
-
-function failureDestinationField(
-  record: Record<string, unknown> | null,
-  key: "accountId" | "channel" | "mode" | "to",
-): string | null {
-  if (!record || !Object.hasOwn(record, key)) {
-    return null;
-  }
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : "";
-}
-
-export function migrateLegacyCronDeliveryThreadIds(db: DatabaseSync): void {
-  const rows = db
-    .prepare(
-      `SELECT store_key, job_id, job_json, delivery_thread_id
-         FROM cron_jobs
-        WHERE delivery_thread_id_type IS NULL`,
-    )
-    .all() as Array<{
-    store_key: string;
-    job_id: string;
-    job_json: string;
-    delivery_thread_id: string | null;
-  }>;
-  const update = db.prepare(
-    `UPDATE cron_jobs
-        SET delivery_thread_id = ?, delivery_thread_id_type = ?
-      WHERE store_key = ? AND job_id = ? AND delivery_thread_id_type IS NULL`,
-  );
-  for (const row of rows) {
-    const job = parseJsonRecord(row.job_json);
-    const delivery = job ? recordField(job, "delivery") : null;
-    const typed = delivery?.threadId;
-    if (row.delivery_thread_id === null) {
-      // The first normalized cron migration could not project numeric thread IDs.
-      // Recover only that known lost shape while this type column is first added.
-      if (typeof typed === "number" && Number.isFinite(typed)) {
-        update.run(String(typed), "number", row.store_key, row.job_id);
-      }
-      continue;
-    }
-    const type =
-      typeof typed === "number" &&
-      Number.isFinite(typed) &&
-      String(typed) === row.delivery_thread_id
-        ? "number"
-        : "string";
-    update.run(row.delivery_thread_id, type, row.store_key, row.job_id);
-  }
 }
 
 export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
   if (
     !tableExists(db, "cron_jobs") ||
     !tableHasColumn(db, "cron_jobs", "job_json") ||
-    !tableHasColumn(db, "cron_jobs", "schedule_kind") ||
     !tableHasColumn(db, "cron_jobs", "payload_kind")
   ) {
     return;
@@ -484,8 +301,7 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     .prepare(
       `SELECT store_key, job_id, job_json, updated_at
          FROM cron_jobs
-        WHERE schedule_kind = 'manual'
-           OR payload_kind = 'message'
+        WHERE payload_kind = 'message'
            OR name = ''`,
     )
     .all() as Array<{
@@ -501,68 +317,27 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     `UPDATE cron_jobs
         SET name = ?,
             enabled = ?,
-            delete_after_run = ?,
-            created_at_ms = ?,
             agent_id = ?,
-            session_key = ?,
-            schedule_kind = ?,
-            schedule_expr = ?,
-            schedule_tz = ?,
-            every_ms = ?,
-            anchor_ms = ?,
-            at = ?,
-            stagger_ms = ?,
-            session_target = ?,
-            wake_mode = ?,
             payload_kind = ?,
-            payload_message = ?,
-            payload_model = ?,
-            payload_fallbacks_json = ?,
-            payload_thinking = ?,
-            payload_timeout_seconds = ?,
-            payload_allow_unsafe_external_content = ?,
-            payload_external_content_source_json = ?,
-            payload_light_context = ?,
-            payload_tools_allow_json = ?,
-            delivery_mode = ?,
-            delivery_channel = ?,
-            delivery_to = ?,
-            delivery_thread_id = ?,
-            delivery_account_id = ?,
-            delivery_best_effort = ?,
-            delivery_completion_mode = ?,
-            delivery_completion_to = ?,
-            failure_delivery_mode = ?,
-            failure_delivery_channel = ?,
-            failure_delivery_to = ?,
-            failure_delivery_account_id = ?,
-            failure_alert_disabled = ?,
-            failure_alert_after = ?,
-            failure_alert_channel = ?,
-            failure_alert_to = ?,
-            failure_alert_cooldown_ms = ?,
-            failure_alert_include_skipped = ?,
-            failure_alert_mode = ?,
-            failure_alert_account_id = ?,
             runtime_updated_at_ms = ?
       WHERE store_key = ?
         AND job_id = ?`,
   );
   for (const row of rows) {
-    const job = parseJsonRecord(row.job_json);
+    const job = safeParseJsonRecord(row.job_json) ?? null;
     if (!job) {
       continue;
     }
-    // Legacy cron rows kept the contract in job_json; columns are a queryable projection of it.
-    const schedule = recordField(job, "schedule");
-    const payload = recordField(job, "payload");
-    const scheduleKind = textField(schedule ?? {}, "kind");
-    const payloadKind = textField(payload ?? {}, "kind");
-    const isAt = scheduleKind === "at" && textField(schedule ?? {}, "at");
-    const isEvery = scheduleKind === "every" && numberField(schedule ?? {}, "everyMs") != null;
-    const isCron = scheduleKind === "cron" && textField(schedule ?? {}, "expr");
-    const isSystemEvent = payloadKind === "systemEvent" && textField(payload ?? {}, "text");
-    const isAgentTurn = payloadKind === "agentTurn" && textField(payload ?? {}, "message");
+    // Legacy defaults are repaired only in the query-bearing projection; job_json owns config.
+    const schedule = asNullableRecord(job.schedule);
+    const payload = asNullableRecord(job.payload);
+    const scheduleKind = textField(schedule, "kind");
+    const payloadKind = textField(payload, "kind");
+    const isAt = scheduleKind === "at" && textField(schedule, "at");
+    const isEvery = scheduleKind === "every" && asFiniteNumber(schedule?.everyMs) != null;
+    const isCron = scheduleKind === "cron" && textField(schedule, "expr");
+    const isSystemEvent = payloadKind === "systemEvent" && textField(payload, "text");
+    const isAgentTurn = payloadKind === "agentTurn" && textField(payload, "message");
     if (
       !schedule ||
       !payload ||
@@ -571,84 +346,16 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     ) {
       continue;
     }
-    const fallbackTime = Number(row.updated_at) || 0;
-    const delivery = recordField(job, "delivery");
-    const completionDestination = delivery ? recordField(delivery, "completionDestination") : null;
-    const failureDestination = delivery ? recordField(delivery, "failureDestination") : null;
-    const failureAlertValue = job.failureAlert;
-    const failureAlert =
-      failureAlertValue &&
-      typeof failureAlertValue === "object" &&
-      !Array.isArray(failureAlertValue)
-        ? (failureAlertValue as Record<string, unknown>)
-        : null;
     update.run(
       textField(job, "name") ?? row.job_id,
       job.enabled === false ? 0 : 1,
-      booleanField(job, "deleteAfterRun"),
-      numberField(job, "createdAtMs") ?? fallbackTime,
       textField(job, "agentId"),
-      textField(job, "sessionKey"),
-      scheduleKind,
-      isCron ? textField(schedule, "expr") : null,
-      isCron ? textField(schedule, "tz") : null,
-      isEvery ? numberField(schedule, "everyMs") : null,
-      isEvery ? numberField(schedule, "anchorMs") : null,
-      isAt ? textField(schedule, "at") : null,
-      isCron ? numberField(schedule, "staggerMs") : null,
-      cronSessionTargetField(job) ?? (payloadKind === "agentTurn" ? "isolated" : "main"),
-      cronWakeModeField(job) ?? "now",
       payloadKind,
-      isSystemEvent ? textField(payload, "text") : textField(payload, "message"),
-      isAgentTurn ? textField(payload, "model") : null,
-      isAgentTurn ? jsonField(payload.fallbacks) : null,
-      isAgentTurn ? textField(payload, "thinking") : null,
-      isAgentTurn ? numberField(payload, "timeoutSeconds") : null,
-      isAgentTurn && typeof payload.allowUnsafeExternalContent === "boolean"
-        ? payload.allowUnsafeExternalContent
-          ? 1
-          : 0
-        : null,
-      isAgentTurn ? jsonField(payload.externalContentSource) : null,
-      isAgentTurn && typeof payload.lightContext === "boolean"
-        ? payload.lightContext
-          ? 1
-          : 0
-        : null,
-      isAgentTurn ? jsonField(payload.toolsAllow) : null,
-      delivery ? textField(delivery, "mode") : null,
-      delivery ? textField(delivery, "channel") : null,
-      delivery ? textField(delivery, "to") : null,
-      delivery ? textField(delivery, "threadId") : null,
-      delivery ? textField(delivery, "accountId") : null,
-      delivery && typeof delivery.bestEffort === "boolean" ? (delivery.bestEffort ? 1 : 0) : null,
-      completionDestination ? textField(completionDestination, "mode") : null,
-      completionDestination ? textField(completionDestination, "to") : null,
-      failureDestinationField(failureDestination, "mode"),
-      failureDestinationField(failureDestination, "channel"),
-      failureDestinationField(failureDestination, "to"),
-      failureDestinationField(failureDestination, "accountId"),
-      failureAlertValue === false ? 1 : failureAlert ? 0 : null,
-      failureAlert ? numberField(failureAlert, "after") : null,
-      failureAlert ? textField(failureAlert, "channel") : null,
-      failureAlert ? textField(failureAlert, "to") : null,
-      failureAlert ? numberField(failureAlert, "cooldownMs") : null,
-      failureAlert && typeof failureAlert.includeSkipped === "boolean"
-        ? failureAlert.includeSkipped
-          ? 1
-          : 0
-        : null,
-      failureAlert ? textField(failureAlert, "mode") : null,
-      failureAlert ? textField(failureAlert, "accountId") : null,
-      numberField(job, "updatedAtMs") ?? fallbackTime,
+      asFiniteNumber(job.updatedAtMs) ?? (sqliteNumber(row.updated_at) || 0),
       row.store_key,
       row.job_id,
     );
   }
-}
-
-function metadataStringField(record: Record<string, unknown>, key: string): string | null {
-  return textField(record, key);
 }
 
 export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
@@ -696,37 +403,31 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
         AND id = ?`,
   );
   for (const row of rows) {
-    const entry = parseJsonRecord(row.entry_json);
+    const entry = safeParseJsonRecord(row.entry_json) ?? null;
     if (!entry) {
       continue;
     }
     // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
-    const session = recordField(entry, "session");
-    const route = recordField(entry, "route");
-    const deliveryContext = recordField(entry, "deliveryContext");
+    const session = asNullableRecord(entry.session);
+    const route = asNullableRecord(entry.route);
+    const deliveryContext = asNullableRecord(entry.deliveryContext);
     update.run(
-      metadataStringField(entry, "kind"),
-      metadataStringField(entry, "sessionKey") ??
-        (session ? metadataStringField(session, "key") : null),
-      metadataStringField(entry, "channel") ??
-        (route ? metadataStringField(route, "channel") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "channel") : null),
-      metadataStringField(entry, "to") ??
-        (route ? metadataStringField(route, "to") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "to") : null),
-      metadataStringField(entry, "accountId") ??
-        (route ? metadataStringField(route, "accountId") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "accountId") : null),
+      textField(entry, "kind"),
+      textField(entry, "sessionKey") ?? textField(session, "key"),
+      textField(entry, "channel") ??
+        textField(route, "channel") ??
+        textField(deliveryContext, "channel"),
+      textField(entry, "to") ?? textField(route, "to") ?? textField(deliveryContext, "to"),
+      textField(entry, "accountId") ??
+        textField(route, "accountId") ??
+        textField(deliveryContext, "accountId"),
       asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
       asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
-      metadataStringField(entry, "lastError"),
-      metadataStringField(entry, "recoveryState"),
+      textField(entry, "lastError"),
+      textField(entry, "recoveryState"),
       asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
       row.queue_name,
       row.id,
     );
   }
 }
-
-// The caller owns the state.schema.ensure transaction so every probe, DDL
-// change, and backfill observes one authoritative schema across processes.

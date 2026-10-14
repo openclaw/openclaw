@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements commands behavior.
 export function stripMentionsForCommand(
   text: string,
   mentionRegexes: RegExp[],

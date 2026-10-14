@@ -6,6 +6,7 @@ import {
   terminateVitestProcessGroupForTimeout,
   writeVitestProcessDiagnostics,
 } from "../../scripts/vitest-process-group.mts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -107,29 +108,33 @@ describe("vitest process diagnostics", () => {
     );
   });
 
-  posixIt("preserves SIGTERM exit 143 and the final failure trailer end to end", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        nodePath.resolve("scripts/run-vitest.mjs"),
-        "run",
-        "--config",
-        "test/vitest/vitest.tooling.config.ts",
-        "test/scripts/run-vitest-profile.test.ts",
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "0",
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1",
+  posixIt.each(["mjs", "mts"])(
+    "preserves SIGTERM exit 143 and one final %s trailer end to end",
+    (extension) => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          nodePath.resolve(`scripts/run-vitest.${extension}`),
+          "run",
+          "--config",
+          "test/vitest/vitest.tooling.config.ts",
+          "test/scripts/run-vitest-profile.test.ts",
+        ],
+        {
+          encoding: "utf8",
+          env: testRunnerFixtureEnv({
+            OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "0",
+            OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1",
+          }),
+          timeout: 15_000,
         },
-        timeout: 15_000,
-      },
-    );
+      );
 
-    expect(result.signal).toBe("SIGTERM");
-    expect(128 + osConstants.signals.SIGTERM).toBe(143);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 143)");
-  });
+      expect(result.signal).toBe("SIGTERM");
+      expect(128 + osConstants.signals.SIGTERM).toBe(143);
+      const trailer = `[${extension === "mjs" ? "test" : "vitest"}] FAILED (exit 143)`;
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
+    },
+  );
 });

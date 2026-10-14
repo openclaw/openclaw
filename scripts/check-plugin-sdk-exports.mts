@@ -13,6 +13,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -21,6 +22,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -29,26 +33,19 @@ import {
   isPrivateQaPluginSdkBuild,
 } from "./lib/plugin-sdk-declaration-budget.mts";
 import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mts";
+import { findUndeclaredBundlerHelperDtsExports } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
-const nativePreviewPackageJsonPath = resolve(
-  repoRoot,
-  "node_modules/@typescript/native-preview/package.json",
-);
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8")) as {
-  bin?: { tsgo?: string };
-};
-const nativePreviewTsgoBin = nativePreviewPackageJson.bin?.tsgo;
-if (!nativePreviewTsgoBin) {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
-}
-const tsgoPath = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewTsgoBin);
+const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
+  "diagnostic-flags": ["isDiagnosticFlagEnabled"],
+  "diagnostic-runtime": ["areDiagnosticsEnabledForProcess", "createSubsystemLogger"],
   "secret-input-runtime": [
+    "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",
     "hasConfiguredSecretInput",
     "isSecretRef",
@@ -57,6 +54,25 @@ const requiredSubpathExports: Record<string, string[]> = {
     "resolveSecretInputString",
   ],
 };
+
+// These private runtime facades have declarations only in the private-QA profile.
+// Do not require their types from ordinary public-package builds.
+const privateRuntimeConsumers = isPrivateQaPluginSdkBuild(process.env)
+  ? `import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+import type { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+
+type RecoveryDeliver = NonNullable<Parameters<typeof drainPendingDeliveries>[0]["deliver"]>;
+type RecoveryParams = Parameters<RecoveryDeliver>[0];
+type RecoveryContextIsPrivate = RequireNever<Extract<keyof RecoveryParams, PrivateQueueContextKeys>>;
+
+// Private facade declarations must preserve callable access to persist.
+declare const sessionManager: SessionManager;
+declare const sessionEntry: SessionEntry;
+sessionManager.persist(sessionEntry);
+sessionManager.persist(sessionEntry, {});
+// @ts-expect-error Persist still requires a complete session entry.
+sessionManager.persist({});`
+  : "";
 
 let missing = 0;
 
@@ -69,8 +85,140 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+  EmbeddingProviderBatchRuntime,
+} from "openclaw/plugin-sdk/embedding-provider-runtime-contract";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressIdentitySubjectInput,
+  IdentifierAuthentication,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Host admission evidence is intentionally private to core.
+import type { ChannelAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Plugins cannot mint host admission evidence.
+import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Plugins cannot register host evidence owners.
+import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type { ClientRequestArgs } from "node:http";
+import type { ClientOptions as PublishedClientOptions, WebSocket as PublishedWebSocket } from "ws";
+import { WebSocket, type ClientOptions } from "openclaw/plugin-sdk/websocket-runtime";
 import { z } from "zod";
+${privateRuntimeConsumers}
+
+type RequireNever<T extends never> = T;
+type RequireTrue<T extends true> = T;
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false;
+type PrivateQueueContextKeys =
+  | "conversationDeliveryTarget"
+  | "deliveryQueueStateContext"
+  | "databaseAgentId"
+  | "supervisorMode"
+  | "env";
+type SendParams = Parameters<typeof sendDurableMessageBatch>[0];
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+// Database context stays private even when public aliases derive from core types.
+type SendContextIsPrivate = RequireNever<Extract<keyof SendParams, PrivateQueueContextKeys>>;
+type CompletionContextIsPrivate = RequireNever<
+  Extract<KeysOfUnion<NonNullable<SendParams["deliveryCompletion"]>>, PrivateQueueContextKeys>
+>;
+type QueueOwner = NonNullable<SendParams["deliveryQueueOwner"]>;
+type FailureRecorder = Parameters<QueueOwner["fail"]>[0];
+type FailureRecorderArgsUnchanged = RequireTrue<Equal<Parameters<FailureRecorder>, [
+  id: string,
+  error: string,
+  stateDir?: string,
+  expectedPlatformSendAttemptId?: string | null,
+]>>;
+type AckOptionsUnchanged = RequireTrue<Equal<NonNullable<Parameters<QueueOwner["ack"]>[0]>, {
+  retainSpoolArtifacts?: boolean;
+  suppressCompletionReceipt?: boolean;
+  expectedPlatformSendAttemptId?: string | null;
+}>>;
+
+// Compile-only consumers retain the WebSocket contract shipped in v2026.9.6.
+type WebSocketOptionsUnchanged = RequireTrue<Equal<ClientOptions, PublishedClientOptions>>;
+type WebSocketConstructorUnchanged = RequireTrue<Equal<typeof WebSocket, typeof PublishedWebSocket>>;
+const legacyWebSocketOptions: ClientOptions = {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+};
+const legacySocket = new WebSocket("wss://gateway.example", legacyWebSocketOptions);
+new WebSocket(null);
+new WebSocket(new URL("wss://gateway.example"), {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", ["fixture"], {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", "fixture", legacyWebSocketOptions);
+const httpWebSocketOptions: ClientRequestArgs = { agent: false };
+new WebSocket("wss://gateway.example", undefined, httpWebSocketOptions);
+const legacySocketArgs: ConstructorParameters<typeof WebSocket> = [
+  new URL("wss://gateway.example"), undefined, legacyWebSocketOptions,
+];
+new WebSocket(...legacySocketArgs);
+const closedSocketState: typeof PublishedWebSocket.CLOSED = WebSocket.CLOSED;
+legacySocket.on("message", (_data, isBinary) => {
+  const binary: boolean = isBinary;
+  void binary;
+});
+void closedSocketState;
+
+// Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
+const legacyModelsData = {
+  byProvider: new Map<string, Set<string>>(),
+  providers: [],
+  resolvedDefault: { provider: "fixture-provider", model: "fixture-model" },
+  modelNames: new Map<string, string>(),
+};
+const modelsData: ModelsProviderData = legacyModelsData;
+const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
+void modelsData;
+void modelsAdapter;
+declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
+const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
+void preparedCatalog;
+// @ts-expect-error Prepared selections require their typed catalog metadata.
+const incompletePrepared: typeof preparedModelsData = legacyModelsData;
+void incompletePrepared;
+void defineToolPlugin;
+
+const identifierAuthentication: IdentifierAuthentication = "verified";
+const meetsMinimum: boolean = meetsIdentifierAuthentication(identifierAuthentication, "asserted");
+void meetsMinimum;
+const subject: ChannelIngressIdentitySubjectInput = {
+  stableId: "provider-user-id",
+  authentication: { "provider-user-id": identifierAuthentication },
+};
+void subject;
+const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
+  primary: { authentication: identifierAuthentication },
+});
+const entryAuthentication: IdentifierAuthentication | undefined = classifyEntryAuthentication("provider-user-id");
+void entryAuthentication;
+
+const batchEmbed: EmbeddingProviderBatchRuntime["batchEmbed"] = async (options: EmbeddingBatchOptions) => {
+  const chunks: EmbeddingBatchChunk[] = options.chunks;
+  return chunks.map(() => [1]);
+};
+const batchRuntimes: EmbeddingProviderBatchRuntime[] = [
+  { batchEmbed },
+  { batchEmbed, sourceWideBatchEmbed: true },
+  { batchEmbed, sourceWideBatchEmbed: false },
+];
+const batchRuntimeWithInternalPolicy = {
+  batchEmbed,
+  // @ts-expect-error Cache identity is not part of the public batch contract.
+  cacheKeyData: {},
+} satisfies EmbeddingProviderBatchRuntime;
+void batchRuntimes;
+void batchRuntimeWithInternalPolicy;
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",
@@ -91,6 +239,10 @@ export default defineChannelPluginEntry({
 `,
     );
     writeFileSync(join(consumerRoot, "package.json"), '{"private":true,"type":"module"}\n');
+    // Keep skipLibCheck on for this in-tree consumer: workspace @openclaw/ai
+    // declaration caches can omit .d.mts while still shipping .mjs, which makes
+    // skipLibCheck:false fail with TS7016 before the helper scan below. Packed
+    // release-check still uses skipLibCheck:false against a complete tarball.
     writeFileSync(
       join(consumerRoot, "tsconfig.json"),
       `{
@@ -110,15 +262,19 @@ export default defineChannelPluginEntry({
     const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
     mkdirSync(dirname(openclawPackagePath), { recursive: true });
     symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
-    symlinkSync(
-      join(repoRoot, "node_modules", "zod"),
-      join(consumerRoot, "node_modules", "zod"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    for (const dependency of ["zod", "ws", "@types/ws"]) {
+      const dependencyPath = join(consumerRoot, "node_modules", dependency);
+      mkdirSync(dirname(dependencyPath), { recursive: true });
+      symlinkSync(
+        join(repoRoot, "node_modules", dependency),
+        dependencyPath,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     const result = spawnSync(
-      process.execPath,
-      [tsgoPath, "-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
+      tsgoPath,
+      ["-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
       { cwd: consumerRoot, encoding: "utf8" },
     );
     if (result.error) {
@@ -232,14 +388,17 @@ if (declarationBudget.shouldFail) {
     declarationBudget.budgetKind === "private-qa-public-entry"
       ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
       : "PLUGIN SDK";
-  console.error(
-    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
-  );
-  console.error(
-    `Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance.`,
-  );
-  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
-  missing += 1;
+  if (
+    reportLimitViolations([
+      {
+        file: "scripts/lib/plugin-sdk-declaration-budget.mts",
+        title: "Plugin SDK declaration size budget",
+        message: `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
+      },
+    ])
+  ) {
+    missing += 1;
+  }
 } else if (declarationBudget.budgetKind === "private-qa-public-entry") {
   console.log(
     `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
@@ -248,6 +407,51 @@ if (declarationBudget.shouldFail) {
   console.log(
     `Public plugin SDK declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance).`,
   );
+}
+
+{
+  const rootDist = resolve(scriptDir, "..", "dist");
+  if (!existsSync(rootDist)) {
+    console.error("UNDECLARED BUNDLER HELPER DTS EXPORT: missing dist/ for helper export scan");
+    missing += 1;
+  } else {
+    // tsx's synchronous lexer misparses emitted `using` helpers with this shebang.
+    const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+    try {
+      const queue = [rootDist];
+      const visitedDirs = new Set<string>();
+      while (queue.length > 0) {
+        const dir = queue.pop()!;
+        if (visitedDirs.has(dir)) {
+          continue;
+        }
+        visitedDirs.add(dir);
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            queue.push(fullPath);
+            continue;
+          }
+          if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
+            continue;
+          }
+          const sourceText = readFileSync(fullPath, "utf8");
+          for (const finding of findUndeclaredBundlerHelperDtsExports(
+            sourceText,
+            fullPath,
+            parser,
+          )) {
+            console.error(
+              `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
+            );
+            missing += 1;
+          }
+        }
+      }
+    } finally {
+      parser.close();
+    }
+  }
 }
 
 if (missing > 0) {

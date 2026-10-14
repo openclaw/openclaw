@@ -14,50 +14,48 @@ function workSession(): SidebarRecentSession {
 }
 
 describe("resolveSidebarSessionSubtitle", () => {
-  it("does not fall back to a backing work subtitle when catalog display omits one", () => {
+  it("shows tool progress in previews without displacing critical status", () => {
+    const params = {
+      session: { ...workSession(), hasActiveRun: true, activeRunIds: ["run-1"] },
+      hasDisplay: false,
+      displaySubtitle: undefined,
+      sidebarLiveActivity: true,
+      showPreview: true,
+      narrationLine: "Earlier assistant narration",
+      toolActivity: { name: "exec", text: "Running focused tests" },
+    };
+    expect(resolveSidebarSessionSubtitle(params)).toEqual({
+      subtitle: "Running focused tests",
+      narration: undefined,
+      toolName: "exec",
+    });
+    expect(resolveSidebarSessionSubtitle({ ...params, showPreview: false })).toEqual({
+      subtitle: undefined,
+      narration: undefined,
+    });
     expect(
       resolveSidebarSessionSubtitle({
-        session: workSession(),
-        hasDisplay: true,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: undefined,
-      }),
-    ).toEqual({ subtitle: undefined, narration: undefined });
-  });
-
-  it("ignores live narration when a stale running status has no projected active run", () => {
+        ...params,
+        observerDigest: {
+          runId: "run-1",
+          headline: "Needs a credential",
+          health: "stuck",
+          revision: 1,
+          updatedAt: 2000,
+        },
+      }).subtitle,
+    ).toBe("Needs a credential");
     expect(
       resolveSidebarSessionSubtitle({
-        session: { ...workSession(), status: "running" },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: "Still running",
-      }),
-    ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
+        ...params,
+        session: { ...params.session, attention: { kind: "question", requests: [] } },
+      }).subtitle,
+    ).toBeUndefined();
   });
 
-  it("explains when admitted work is waiting for a concurrency slot", () => {
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: { ...workSession(), hasActiveRun: true, status: "queued" },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: undefined,
-      }),
-    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
-  });
-
-  it.each(["stuck", "waiting-on-user"] as const)(
+  it.each(["waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {
@@ -67,7 +65,6 @@ describe("resolveSidebarSessionSubtitle", () => {
             status: "running",
           },
           hasDisplay: false,
-          displaySubtitle: undefined,
           sidebarLiveActivity: true,
           showPreview: false,
           narrationLine: "Using bash",
@@ -83,180 +80,7 @@ describe("resolveSidebarSessionSubtitle", () => {
     },
   );
 
-  it("still hides a non-critical observer headline when previews are hidden", () => {
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: {
-          ...workSession(),
-          hasActiveRun: true,
-          activeRunIds: ["run-1"],
-          status: "running",
-        },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: false,
-        narrationLine: undefined,
-        observerDigest: {
-          runId: "run-1",
-          headline: "Running checks",
-          health: "on-track",
-          updatedAt: 2_000,
-          revision: 1,
-        },
-      }),
-    ).toEqual({ subtitle: undefined, narration: undefined });
-  });
-
-  it("keeps the concurrency-slot explanation when previews are hidden", () => {
-    // Without it a queued run reads as an idle session: a visible non-outcome.
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: { ...workSession(), hasActiveRun: true, status: "queued" },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: false,
-        narrationLine: undefined,
-      }),
-    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
-  });
-
-  it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
-    const session: SidebarRecentSession = {
-      ...workSession(),
-      hasActiveRun: true,
-      activeRunIds: ["run-1"],
-      status: "running",
-      agentStatusNote: "Waiting for deployment",
-      attention: { kind: "question" },
-    };
-    const observerDigest = {
-      runId: "run-1",
-      headline: "Running checks",
-      health: "on-track" as const,
-      updatedAt: 2_000,
-      revision: 1,
-    };
-    const resolve = (overrides: Partial<SidebarRecentSession> = {}) =>
-      resolveSidebarSessionSubtitle({
-        session: { ...session, ...overrides },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: "Using test runner",
-        observerDigest,
-      });
-
-    expect(resolve().subtitle).toBe("Waiting for your answer");
-    expect(resolve({ attention: { kind: "none" } }).subtitle).toBe("Waiting for deployment");
-    expect(resolve({ attention: { kind: "none" }, agentStatusNote: undefined }).subtitle).toBe(
-      "Running checks",
-    );
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: {
-          ...session,
-          attention: { kind: "none" },
-          agentStatusNote: undefined,
-          observerDigest: undefined,
-        },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: "Using test runner",
-        observerDigest: null,
-      }),
-    ).toEqual({ subtitle: "Using test runner", narration: "Using test runner" });
-  });
-
-  it("suppresses missing and stale projected digests for an active run", () => {
-    const session: SidebarRecentSession = {
-      ...workSession(),
-      hasActiveRun: true,
-      activeRunIds: ["run-2"],
-      status: "running",
-    };
-    const resolve = (runId: string | undefined) =>
-      resolveSidebarSessionSubtitle({
-        session,
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: "Using test runner",
-        observerDigest: {
-          runId,
-          headline: "Old digest",
-          health: "on-track",
-          updatedAt: 2_000,
-          revision: 1,
-        },
-      });
-
-    expect(resolve(undefined)).toEqual({
-      subtitle: "Using test runner",
-      narration: "Using test runner",
-    });
-    expect(resolve("run-1")).toEqual({
-      subtitle: "Using test runner",
-      narration: "Using test runner",
-    });
-    expect(resolve("run-2")).toEqual({ subtitle: "Old digest", narration: undefined });
-  });
-
-  it("prefers an unread idle final digest over the last reply", () => {
-    const observerDigest = {
-      headline: "Finished with warnings",
-      health: "done" as const,
-      updatedAt: 2_000,
-      revision: 2,
-    };
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: {
-          ...workSession(),
-          lastMessagePreview: "The final reply is durable.",
-          observerDigest,
-          lastReadAt: 1_999,
-        },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: undefined,
-        observerDigest: null,
-      }).subtitle,
-    ).toBe("Finished with warnings");
-  });
-
-  it("falls back to the last reply after the idle final digest is read", () => {
-    expect(
-      resolveSidebarSessionSubtitle({
-        session: {
-          ...workSession(),
-          lastMessagePreview: "The final reply is durable.",
-          observerDigest: {
-            headline: "Finished with warnings",
-            health: "done",
-            updatedAt: 2_000,
-            revision: 2,
-          },
-          lastReadAt: 2_000,
-        },
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: undefined,
-        observerDigest: null,
-      }).subtitle,
-    ).toBe("The final reply is durable.");
-  });
-
-  it("keeps attention and agent status ahead of the idle digest and last reply", () => {
+  it("keeps subtitle-owned attention and agent status ahead of the idle digest and last reply", () => {
     const session = {
       ...workSession(),
       lastMessagePreview: "The final reply is durable.",
@@ -272,7 +96,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -281,43 +104,24 @@ describe("resolveSidebarSessionSubtitle", () => {
 
     expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
     expect(
-      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
-    ).toBe("Waiting for your answer");
-  });
-
-  it("does not let a prior last-message preview displace running activity", () => {
-    const session = {
-      ...workSession(),
-      hasActiveRun: true,
-      activeRunIds: ["run-1"],
-      lastMessagePreview: "Reply from the previous run",
-    };
-
+      resolve({
+        attention: { kind: "question", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
+    ).toBeUndefined();
     expect(
-      resolveSidebarSessionSubtitle({
-        session,
-        hasDisplay: false,
-        displaySubtitle: undefined,
-        sidebarLiveActivity: true,
-        showPreview: true,
-        narrationLine: "Running the focused tests",
-        observerDigest: {
-          runId: "run-1",
-          headline: "Implementing the repair",
-          health: "on-track",
-          updatedAt: 2_000,
-          revision: 1,
-        },
-      }).subtitle,
-    ).toBe("Implementing the repair");
+      resolve({
+        attention: { kind: "approval", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
+    ).toBe("Waiting for approval");
   });
 
-  it("keeps attention visible while hiding every preview candidate", () => {
+  it("hides error details and ambient text when previews are hidden", () => {
     const hidden = (session: SidebarRecentSession, narrationLine?: string) =>
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine,
@@ -327,11 +131,15 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(
       hidden({
         ...workSession(),
-        attention: { kind: "error", reason: "Deployment failed" },
+        attention: {
+          kind: "error",
+          reason: "⚠️ ✉️ Message failed: deployment unavailable",
+          sourceSessionKey: "agent:main:deployment",
+        },
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed: Deployment failed");
+    ).toBeUndefined();
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

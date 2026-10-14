@@ -1,7 +1,10 @@
 // Memory Core tests cover manager provider lifecycle lease behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
+import * as generationLease from "./manager-index-generation-lease.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -37,10 +40,7 @@ describe("memory index", () => {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       beginSyncProviderGeneration: () => void;
       endSyncProviderGeneration: () => void;
-      indexFile: (
-        entry: IndexEntry,
-        options: { source: "memory"; content: string },
-      ) => Promise<void>;
+      indexFile: (entry: IndexEntry, source: "memory") => Promise<void>;
       db: {
         prepare: (sql: string) => {
           get: (...params: unknown[]) => { model?: string } | undefined;
@@ -72,12 +72,14 @@ describe("memory index", () => {
     };
     const first = createEntry("fts-first");
     const second = createEntry("fts-second");
+    await fs.writeFile(first.absPath, first.content);
+    await fs.writeFile(second.absPath, second.content);
 
     fields.beginSyncProviderGeneration();
     try {
-      await fields.indexFile(first, { source: "memory", content: first.content });
+      await fields.indexFile(first, "memory");
       await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
-      await fields.indexFile(second, { source: "memory", content: second.content });
+      await fields.indexFile(second, "memory");
     } finally {
       fields.endSyncProviderGeneration();
     }
@@ -98,9 +100,8 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
       provider: {
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
-      embedQueryWithRetry: (text: string) => Promise<number[]>;
       retireCurrentProvider: () => Promise<void>;
     };
     if (!fields.provider) {
@@ -114,13 +115,13 @@ describe("memory index", () => {
     const firstQueryStarted = new Promise<void>((resolve) => {
       markFirstQueryStarted = resolve;
     });
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       markFirstQueryStarted();
       await firstQueryGate;
       return [1, 0, 0, 0];
     };
 
-    const queryPromise = fields.embedQueryWithRetry("alpha");
+    const queryPromise = manager.search("alpha");
     await firstQueryStarted;
     const retirementPromise = fields.retireCurrentProvider();
     let retirementSettled = false;
@@ -140,7 +141,9 @@ describe("memory index", () => {
       releaseFirstQuery();
     }
 
-    await expect(queryPromise).resolves.toEqual([1, 0, 0, 0]);
+    await expect(queryPromise).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
     await retirementPromise;
     expect(providerFixture.providerCloseCalls).toBe(1);
   });
@@ -148,7 +151,7 @@ describe("memory index", () => {
   it("uses the leased provider runtime after retirement starts", async () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     type QueryProvider = {
-      embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+      embed: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
     };
     const fields = manager as unknown as {
       provider: QueryProvider | null;
@@ -159,7 +162,6 @@ describe("memory index", () => {
         text: string,
         signal: AbortSignal | undefined,
         provider: QueryProvider,
-        markDegraded: boolean,
         providerRuntime: { inlineQueryTimeoutMs?: number },
       ) => Promise<number[]>;
     };
@@ -170,7 +172,7 @@ describe("memory index", () => {
     }
     const providerRuntime = { inlineQueryTimeoutMs: 10 };
     fields.providerRuntime = providerRuntime;
-    provider.embedQuery = async (_text, options) =>
+    provider.embed = async (_text, options) =>
       await new Promise<number[]>((resolve, reject) => {
         const timer = setTimeout(() => resolve([1, 0, 0, 0]), 100);
         options?.signal?.addEventListener(
@@ -189,7 +191,7 @@ describe("memory index", () => {
     try {
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       await expect(
-        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+        fields.embedQueryWithRetry("alpha", undefined, provider, providerRuntime),
       ).rejects.toThrow("timed out");
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
@@ -204,7 +206,7 @@ describe("memory index", () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      searchVector: () => Promise<unknown[]>;
+      searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
       closing: boolean;
       closed: boolean;
     };
@@ -219,9 +221,22 @@ describe("memory index", () => {
     fields.searchVector = async () => {
       markVectorSearchStarted();
       await vectorSearchGate;
-      return [];
+      return { results: [], candidates: [] };
     };
 
+    const generationReleaseStarted = createDeferred<void>();
+    const generationReleaseGate = createDeferred<void>();
+    const acquireGeneration = generationLease.acquireMemoryIndexReadGeneration;
+    vi.spyOn(generationLease, "acquireMemoryIndexReadGeneration").mockImplementationOnce(
+      async (...args) => {
+        const release = await acquireGeneration(...args);
+        return async () => {
+          generationReleaseStarted.resolve();
+          await generationReleaseGate.promise;
+          await release();
+        };
+      },
+    );
     const searchPromise = manager.search("alpha");
     await vectorSearchStarted;
     const closePromise = manager.close();
@@ -240,8 +255,17 @@ describe("memory index", () => {
       expect(fields.closing).toBe(true);
       expect(fields.closed).toBe(false);
       expect(providerFixture.providerCloseCalls).toBe(0);
+      releaseVectorSearch();
+      await generationReleaseStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closeSettled).toBe(false);
+      expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
       releaseVectorSearch();
+      generationReleaseGate.resolve();
+      await Promise.allSettled([searchPromise, closePromise]);
     }
 
     await expect(searchPromise).resolves.toBeDefined();
@@ -297,19 +321,18 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
       provider: {
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
     providerFixture.providerCreationFailure = "fallback-provider";
@@ -325,20 +348,19 @@ describe("memory index", () => {
   it("retries the optional primary after fallback initialization fails", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
       provider: {
         id: string;
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
     providerFixture.providerCreationFailure = "fallback-provider";
@@ -358,17 +380,16 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      provider: { embedQuery: (text: string) => Promise<number[]> } | null;
+      provider: { embed: (text: string) => Promise<number[]> } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
     providerFixture.providerNullResult = "fallback-provider";
@@ -384,17 +405,16 @@ describe("memory index", () => {
   it("retries an optional primary after a null fallback result", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      provider: { id: string; embedQuery: (text: string) => Promise<number[]> } | null;
+      provider: { id: string; embed: (text: string) => Promise<number[]> } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
     providerFixture.providerNullResult = "fallback-provider";
@@ -409,20 +429,19 @@ describe("memory index", () => {
   it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
       provider: {
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
       ensureProviderInitialized: () => Promise<void>;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
     const ensureProviderInitialized = fields.ensureProviderInitialized.bind(manager);

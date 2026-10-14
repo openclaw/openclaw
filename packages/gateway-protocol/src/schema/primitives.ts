@@ -9,6 +9,7 @@ import {
   SINGLE_VALUE_FILE_REF_ID,
 } from "../secret-ref-contract.js";
 import { closedObject } from "./closed-object.js";
+import { USER_PROFILE_ID_MAX_LENGTH } from "./user-profile-constants.js";
 
 /**
  * Shared schema primitives reused by gateway protocol request/result schemas.
@@ -22,6 +23,17 @@ const SESSION_LABEL_MAX_LENGTH = 512;
 
 /** Non-empty string primitive for protocol fields that reject blank values. */
 export const NonEmptyString = Type.String({ minLength: 1 });
+/** SHA-256 hex content version accepted by workspace and skill file operations. */
+export const Sha256String = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-fA-F0-9]{64}$",
+});
+
+export const UserProfileIdSchema = Type.String({
+  minLength: 1,
+  maxLength: USER_PROFILE_ID_MAX_LENGTH,
+});
 /** Maximum stable session key length accepted by chat-send protocol requests. */
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
 /** Chat-send session key string primitive with bounded length. */
@@ -41,6 +53,10 @@ export const InputProvenanceSchema = closedObject({
   sourceSessionKey: Type.Optional(Type.String()),
   sourceChannel: Type.Optional(Type.String()),
   sourceTool: Type.Optional(Type.String()),
+  sourceRole: Type.Optional(Type.Literal("subagent")),
+  sourcePromptPrefix: Type.Optional(Type.String()),
+  jobId: Type.Optional(Type.String()),
+  runId: Type.Optional(Type.String()),
 });
 
 /** Closed gateway client id schema aligned with `GATEWAY_CLIENT_IDS`. */

@@ -1,31 +1,65 @@
-// Type-only outbound delivery queue contracts shared by storage and failure lifecycle owners.
+// Outbound delivery queue contracts shared by storage and failure lifecycle owners.
+import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendReconciliationResult,
   OutboundReplyFacts,
-  RenderedMessageBatchPlanItem,
+  RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "../delivery-queue-sqlite.types.js";
+import type { IndexedOutboundAuditTerminal } from "./deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
-export type QueuedRenderedMessageBatchPlan = {
-  payloadCount: number;
-  textCount: number;
-  mediaCount: number;
-  voiceCount: number;
-  presentationCount: number;
-  interactiveCount: number;
-  channelDataCount: number;
-  items: readonly RenderedMessageBatchPlanItem[];
-};
+export const FINAL_TEXT_RECOVERY_MAX_ATTEMPTS = 2;
+
+/** Serializable owner callback for a durable queue entry. */
+export type DurableDeliveryCompletion =
+  | {
+      kind: "conversation";
+      agentId: string;
+      operationId: string;
+      storePath?: string;
+      /** Present on Gateway-owned conversation intents created with route authorization. */
+      routeFingerprint?: string;
+    }
+  | {
+      kind: "pending-final";
+      /** Null means an owner was admitted without recoverable authority; fail closed. */
+      commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
+      /** Older queue records retain the canonical locator's original owner selection. */
+      agentId?: string;
+      deliveryId: string;
+      intentId: string;
+      sessionId: string;
+      sessionKey: string;
+      storePath: string;
+      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+    };
+
+export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
+  if (typeof entry.availableAt !== "number" || !(entry.availableAt > now)) {
+    return false;
+  }
+  return entry.requiresProducerClaim === true
+    ? entry.recoveryState === "producer_claimed" ||
+        entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send"
+    : (typeof entry.completionRetention === "object" ||
+        entry.completionRetention === "permanent") &&
+        entry.recoveryState === "producer_claimed";
+}
 
 export type QueuedReplyPayloadSendingHook = {
   kind: ReplyDispatchKind;
@@ -36,15 +70,19 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
+  sessionGeneration?: SessionDeliveryGeneration;
   channel: string;
   to: string;
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
   requireUnknownSendReconciliation?: boolean;
+  retryAmbiguousFinalText?: true;
+  /** Current failed attempt had a typed transport error and no accepted message. */
+  ambiguousTransportError?: true;
   requiresProducerClaim?: boolean;
   preparedBatch?: PreparedOutboundBatch;
   payloads?: ReplyPayload[];
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
+  renderedBatchPlan?: RenderedMessageBatchPlan;
   threadId?: string | number | null;
   reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
@@ -67,26 +105,15 @@ export type QueuedDeliveryPayload = {
   maxRetries?: number;
 };
 
-type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
+export interface LegacyQueuedDelivery extends Omit<
+  QueuedDelivery,
+  "preparedBatch" | "settlement" | "retainOnFailure" | "recoveryState"
+> {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-};
-
-export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
+  recoveryState?: Exclude<QueuedDelivery["recoveryState"], "settlement_pending">;
 }
 
 export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {
@@ -96,19 +123,21 @@ export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {
   legacyPreparationLeaseExpiresAt?: number;
 };
 
-export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
-  preparedBatch: PreparedOutboundBatch;
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
-  retainOnFailure?: true;
-};
+export type DeliveryFailureSettlement = {
+  error: string;
+  unknownSendCleanup?: true;
+  terminals?: readonly IndexedOutboundAuditTerminal[];
+} & ({ outcome: "unknown" } | { outcome: "failed"; rejectionError?: string });
+
+export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> &
+  Omit<DeliveryQueueEntryState, "attemptCount" | "recoveryState" | "acknowledgedAt"> & {
+    preparedBatch: PreparedOutboundBatch;
+    attemptCount: number;
+    effectiveReplyToId?: string | null;
+    recoveryState?:
+      | "producer_claimed"
+      | "send_attempt_started"
+      | "unknown_after_send"
+      | "settlement_pending";
+    settlement?: DeliveryFailureSettlement;
+  };

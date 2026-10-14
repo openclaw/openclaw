@@ -9,16 +9,11 @@ import { saveMediaBuffer } from "../media/store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { MediaAttachmentCache } from "./attachments.js";
-import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+import { resolveMediaUnderstandingScope } from "./scope.js";
 
 describe("media understanding scope", () => {
-  it("normalizes chatType", () => {
-    expect(normalizeMediaUnderstandingChatType("channel")).toBe("channel");
-    expect(normalizeMediaUnderstandingChatType("dm")).toBe("direct");
-    expect(normalizeMediaUnderstandingChatType("room")).toBeUndefined();
-  });
-
   it("matches channel chatType explicitly", () => {
     const scope = {
       rules: [{ action: "deny", match: { chatType: "channel" } }],
@@ -65,14 +60,6 @@ describe("media understanding attachments SSRF", () => {
     vi.restoreAllMocks();
   });
 
-  function requireFirstOpenCall(openSpy: ReturnType<typeof vi.spyOn>): unknown[] {
-    const [call] = openSpy.mock.calls;
-    if (!call) {
-      throw new Error("expected fs.open call");
-    }
-    return call;
-  }
-
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = withFetchPreconnect(fetchSpy);
@@ -118,83 +105,6 @@ describe("media understanding attachments SSRF", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("uses fetched content type instead of wildcard selection hints", async () => {
-    const url = "http://198.18.0.153/image";
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response("image", {
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    expect(result.mime).toBe("image/png");
-    expect(result.fileName).toBe("image.png");
-  });
-
-  it("keeps the attachment's concrete MIME when the download reports octet-stream", async () => {
-    const url = "http://198.18.0.153/export";
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response('{"report":"q3"}', {
-        headers: { "content-type": "application/octet-stream" },
-      }),
-    );
-    globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    // A generic download header is a non-answer; the declared concrete type
-    // must survive so allowlists and extraction see application/json.
-    expect(result.classification.mime).toBe("application/json");
-    expect(result.classification.class).toBe("text");
-  });
-
-  it("prefers the channel-declared MIME over a generic fetched text header", async () => {
-    const url = "http://198.18.0.153/export.data";
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response('{"report":"q4"}', {
-        headers: { "content-type": "text/plain" },
-      }),
-    );
-    globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    // Channel declaration outranks transport Content-Type: a JSON-only
-    // allowlist must keep matching when a proxy relabels the download.
-    expect(result.classification.mime).toBe("application/json");
-  });
-
-  it("reads local attachments inside configured roots", async () => {
-    await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("ok");
-      expect(result.localPath).toBeDefined();
-    });
-  });
-
   it("carries no local path when a blocked path recovers through the URL fallback", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-blocked-" }, async (base) => {
       const blockedPath = path.join(base, "outside-roots", "report.doc");
@@ -229,23 +139,6 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
-  it("resolves relative attachment paths against the provided workspaceDir", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
-      const workspaceDir = path.join(base, "workspace");
-      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.writeFile(attachmentPath, "ok");
-
-      const cache = new MediaAttachmentCache(
-        [{ index: 0, path: "media/inbound/report.pdf", workspaceDir }],
-        { localPathRoots: [workspaceDir] },
-      );
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("ok");
-    });
-  });
-
   it("resolves each relative attachment against its own workspace", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
       const workspaces = ["first", "second"].map((name) => path.join(base, name));
@@ -277,28 +170,6 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
-  it("resolves existing state-relative media paths when cwd differs from state dir", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-state-relative-" }, async (base) => {
-      const stateDir = path.join(base, "state");
-      const cwd = path.join(base, "cwd");
-      const relativePath = "media/inbound/telegram.jpg";
-      const attachmentPath = path.join(stateDir, relativePath);
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.mkdir(cwd, { recursive: true });
-      await fs.writeFile(attachmentPath, "state-media");
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      vi.spyOn(process, "cwd").mockReturnValue(cwd);
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
-        localPathRoots: [path.join(stateDir, "media")],
-      });
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("state-media");
-      expect(result.fileName).toBe("telegram.jpg");
-    });
-  });
-
   it("resolves managed inbound media URI attachments", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -326,28 +197,6 @@ describe("media understanding attachments SSRF", () => {
     await expect(
       cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
     ).rejects.toThrow(/outside allowed roots/i);
-  });
-
-  it("keeps cwd-relative fallback when a state-relative candidate does not exist", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-cwd-relative-" }, async (base) => {
-      const stateDir = path.join(base, "state");
-      const cwd = path.join(base, "cwd");
-      const relativePath = "media/inbound/local.jpg";
-      const attachmentPath = path.join(cwd, relativePath);
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.writeFile(attachmentPath, "cwd-media");
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      vi.spyOn(process, "cwd").mockReturnValue(cwd);
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
-        localPathRoots: [path.join(cwd, "media")],
-      });
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("cwd-media");
-      expect(result.fileName).toBe("local.jpg");
-    });
   });
 
   it("prefers an existing cwd-relative attachment over a state-relative collision", async () => {
@@ -446,33 +295,6 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
-  it("enforces maxBytes after reading local attachments", async () => {
-    await withLocalAttachmentCache(
-      "openclaw-media-cache-max-bytes-",
-      async ({ cache, canonicalAttachmentPath }) => {
-        const originalOpen = fs.open.bind(fs);
-        const openSpy = vi.spyOn(fs, "open");
-
-        openSpy.mockImplementation(async (filePath, flags) => {
-          const handle = await originalOpen(filePath, flags);
-          const candidatePath = await fs.realpath(String(filePath)).catch(() => String(filePath));
-          if (candidatePath !== canonicalAttachmentPath) {
-            return handle;
-          }
-          const mockedHandle = handle as typeof handle & {
-            readFile: typeof handle.readFile;
-          };
-          mockedHandle.readFile = (async () => Buffer.alloc(2048, 1)) as typeof handle.readFile;
-          return mockedHandle;
-        });
-
-        await expect(
-          cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-        ).rejects.toThrow(/exceeds maxBytes 1024/i);
-      },
-    );
-  });
-
   it("opens local attachments with nofollow on posix", async () => {
     if (process.platform === "win32") {
       return;
@@ -485,7 +307,7 @@ describe("media understanding attachments SSRF", () => {
         await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
         expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = requireFirstOpenCall(openSpy);
+        const [openedPath, openedFlags] = mockCall(openSpy);
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );

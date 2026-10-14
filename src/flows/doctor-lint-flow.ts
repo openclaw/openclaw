@@ -1,14 +1,45 @@
-// Doctor lint flow runs lint-like doctor checks and formats findings.
+import { formatCliCommand } from "../cli/command-format.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
+  isHealthCheckEnabledByDefault,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
   type HealthFindingSeverity,
 } from "./health-checks.js";
+
+export const stateSchemaHealthCheck: HealthCheck = {
+  id: "core/doctor/state-schema",
+  kind: "core",
+  description: "Shared state migrations require explicit repair.",
+  async detect(ctx) {
+    const state = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db, path }) => ({ version: readStateSchemaContentVersion(db), path }),
+      { env: ctx.env },
+    );
+    if (!state || state.version >= OPENCLAW_STATE_SCHEMA_VERSION) {
+      return [];
+    }
+    const command = formatCliCommand("openclaw doctor --fix", ctx.env);
+    return [
+      {
+        checkId: "core/doctor/state-schema",
+        severity: "warning",
+        path: state.path,
+        requirement: "state-schema-migration-pending",
+        message: `Shared state schema migration pending (${state.version} → ${OPENCLAW_STATE_SCHEMA_VERSION}); run ${command}.`,
+        fixHint: `Run \`${command}\` to migrate the shared state database.`,
+      },
+    ];
+  },
+};
 
 // Non-mutating health-check runner used by `openclaw doctor --lint`.
 export interface DoctorLintRunOptions {
@@ -39,13 +70,10 @@ export async function runDoctorLintChecks(
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
-    if (only.size === 0 && !includeDefaultDisabled && isDefaultDisabled(c)) {
+    if (only.size === 0 && !includeDefaultDisabled && !isHealthCheckEnabledByDefault(c)) {
       return false;
     }
-    if (skip.has(c.id)) {
-      return false;
-    }
-    return true;
+    return !skip.has(c.id);
   });
 
   const findings: HealthFinding[] = [];
@@ -72,10 +100,17 @@ export async function runDoctorLintChecks(
         findings.push(f);
       }
     } catch (err) {
+      const aborted =
+        err instanceof OpenClawStateLeaseAcquisitionError && err.outcome.kind === "aborted"
+          ? err.outcome
+          : undefined;
       findings.push({
         checkId: check.id,
-        severity: "error",
-        message: `health check threw: ${scrubDoctorErrorMessage(err)}`,
+        severity: aborted ? "info" : "error",
+        ...(aborted ? { errorCode: "OPENCLAW_STATE_LEASE_ABORTED" } : {}),
+        message: aborted
+          ? `state lease inspection not performed: aborted after ${aborted.elapsedMs} ms by the caller's signal`
+          : `health check threw: ${scrubDoctorErrorMessage(err)}`,
       });
     }
   }
@@ -89,8 +124,12 @@ export async function runDoctorLintChecks(
   };
 }
 
-function isDefaultDisabled(check: HealthCheck): boolean {
-  return "defaultEnabled" in check && check.defaultEnabled === false;
+/** Internal update gate selection; public Doctor lint remains selector-driven. */
+export function selectUpdateReadinessChecks(
+  checks: readonly HealthCheck[],
+  phase: "post-plugin",
+): readonly HealthCheck[] {
+  return checks.filter((check) => "updateReadiness" in check && check.updateReadiness === phase);
 }
 
 // Stable ordering keeps CLI output and tests deterministic across registry order changes.

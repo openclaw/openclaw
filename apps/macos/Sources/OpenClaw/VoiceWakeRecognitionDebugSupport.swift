@@ -12,15 +12,14 @@ enum VoiceWakeRecognitionDebugSupport {
         isFinal: Bool,
         loggerLevel: Logger.Level,
         lastLoggedText: inout String?,
-        lastLoggedAt: inout Date?,
-        minRepeatInterval: TimeInterval = 0.25) -> Bool
+        lastLoggedAt: inout Date?) -> Bool
     {
         guard !transcript.isEmpty else { return false }
         guard loggerLevel == .debug || loggerLevel == .trace else { return false }
         if transcript == lastLoggedText,
            !isFinal,
            let last = lastLoggedAt,
-           Date().timeIntervalSince(last) < minRepeatInterval
+           Date().timeIntervalSince(last) < 0.25
         {
             return false
         }
@@ -73,6 +72,14 @@ enum VoiceWakeRecognitionDebugSupport {
         TranscriptSummary(
             textOnly: WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers),
             timingCount: segments.count(where: { $0.start > 0 || $0.duration > 0 }))
+    }
+
+    static func segmentSummary(_ segments: [WakeWordSegment]) -> String {
+        segments.map { seg in
+            let start = String(format: "%.2f", seg.start)
+            let end = String(format: "%.2f", seg.end)
+            return "\(seg.text)@\(start)-\(end)"
+        }.joined(separator: ", ")
     }
 
     static func matchSummary(_ match: WakeWordGateMatch?) -> String {

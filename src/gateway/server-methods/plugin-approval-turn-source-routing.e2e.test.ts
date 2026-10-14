@@ -17,11 +17,8 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store-write
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "../test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "../test-helpers.listener.js";
 import {
   configureManualGatewayBackgroundEnv,
   MANUAL_GATEWAY_ENV_KEYS,
@@ -61,17 +58,19 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getGatewayE2ePortBlock();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "plugin-approval-turn-source-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
 
     // No operator approval client; only a requester with APPROVALS_SCOPE.
     // This is the state that triggers the no-route expiry in the unfixed code.

@@ -1,4 +1,3 @@
-// Telegram plugin module implements dm access behavior.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
@@ -7,26 +6,11 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
+import type { TelegramLogger } from "./bot-message-context.types.js";
 import { renderTelegramHtmlText } from "./format.js";
-import {
-  createTelegramIngressSubject,
-  createTelegramIngressResolver,
-  telegramAllowEntries,
-} from "./ingress.js";
+import { createTelegramIngressResolver, telegramAllowEntries } from "./ingress.js";
 
-type TelegramDmAccessLogger = {
-  info: (obj: Record<string, unknown>, msg: string) => void;
-};
-
-type TelegramSenderIdentity = {
-  username: string;
-  userId: string | null;
-  candidateId: string;
-  firstName?: string;
-  lastName?: string;
-};
-
-function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSenderIdentity {
+function resolveTelegramSenderIdentity(msg: Message, chatId: number) {
   const from = msg.from;
   const userId = from?.id != null ? String(from.id) : null;
   return {
@@ -38,17 +22,15 @@ function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSe
   };
 }
 
-async function decideTelegramDmAccess(params: {
-  accountId: string;
-  dmPolicy: DmPolicy;
-  sender: TelegramSenderIdentity;
-  effectiveDmAllow: NormalizedAllowFrom;
-}) {
+async function decideTelegramDmAccess(
+  params: { accountId: string; dmPolicy: DmPolicy; effectiveDmAllow: NormalizedAllowFrom },
+  candidateId: string,
+) {
   const result = await createTelegramIngressResolver({ accountId: params.accountId }).message({
-    subject: createTelegramIngressSubject(params.sender.candidateId),
+    subject: { stableId: candidateId },
     conversation: {
       kind: "direct",
-      id: params.sender.candidateId,
+      id: candidateId,
     },
     dmPolicy: params.dmPolicy,
     groupPolicy: "disabled",
@@ -68,12 +50,7 @@ export async function isTelegramDmAccessAllowed(params: {
     return false;
   }
   const sender = resolveTelegramSenderIdentity(params.msg, params.chatId);
-  const access = await decideTelegramDmAccess({
-    accountId: params.accountId,
-    dmPolicy: params.dmPolicy,
-    sender,
-    effectiveDmAllow: params.effectiveDmAllow,
-  });
+  const access = await decideTelegramDmAccess(params, sender.candidateId);
   return access.decision === "allow";
 }
 
@@ -85,20 +62,10 @@ export async function enforceTelegramDmAccess(params: {
   effectiveDmAllow: NormalizedAllowFrom;
   accountId: string;
   bot: Bot;
-  logger: TelegramDmAccessLogger;
+  logger: TelegramLogger;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
 }): Promise<boolean> {
-  const {
-    isGroup,
-    dmPolicy,
-    msg,
-    chatId,
-    effectiveDmAllow,
-    accountId,
-    bot,
-    logger,
-    upsertPairingRequest,
-  } = params;
+  const { isGroup, dmPolicy, msg, chatId, accountId, bot, logger, upsertPairingRequest } = params;
   if (isGroup) {
     return true;
   }
@@ -107,12 +74,7 @@ export async function enforceTelegramDmAccess(params: {
   }
 
   const sender = resolveTelegramSenderIdentity(msg, chatId);
-  const access = await decideTelegramDmAccess({
-    accountId,
-    dmPolicy,
-    sender,
-    effectiveDmAllow,
-  });
+  const access = await decideTelegramDmAccess(params, sender.candidateId);
   if (access.decision === "allow") {
     return true;
   }
@@ -124,7 +86,6 @@ export async function enforceTelegramDmAccess(params: {
 
   if (access.decision === "pairing") {
     try {
-      const telegramUserId = sender.userId ?? sender.candidateId;
       await createChannelPairingChallengeIssuer({
         channel: "telegram",
         accountId,
@@ -136,8 +97,8 @@ export async function enforceTelegramDmAccess(params: {
             meta,
           }),
       })({
-        senderId: telegramUserId,
-        senderIdLine: `Your Telegram user id: ${telegramUserId}`,
+        senderId: sender.candidateId,
+        senderIdLine: `Your Telegram user id: ${sender.candidateId}`,
         meta: {
           username: sender.username || undefined,
           firstName: sender.firstName,

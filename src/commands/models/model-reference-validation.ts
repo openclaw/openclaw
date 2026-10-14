@@ -1,16 +1,29 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
+import { getProviderRegistryIndex } from "../../plugins/provider-registry-index.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 type ModelReferenceInspection = {
   ref: string;
   provider: string;
   model: string;
-  status: "known" | "unknown-model" | "unknown-provider";
+  /**
+   * `uncatalogued-provider`: the provider is installed or configured but
+   * contributes no catalog rows to compare against (no manifest seed rows and
+   * no `models.providers.<id>.models`), so membership cannot be judged offline.
+   */
+  status:
+    | "known"
+    | "unknown-model"
+    | "uncatalogued-provider"
+    | "unknown-provider"
+    | "unverified-provider";
 };
 
 type ModelReferenceInspectionParams = {
@@ -18,6 +31,7 @@ type ModelReferenceInspectionParams = {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
+  providerRegistryAvailable?: boolean;
 };
 
 function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
@@ -28,8 +42,10 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
       env: params.env ?? process.env,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
+  const runtimeRegistry = getPluginRuntimeGenerationRegistry();
   const knownProviders = new Set(
     [
+      ...(runtimeRegistry ? getProviderRegistryIndex(runtimeRegistry.providers).refs.keys() : []),
       ...snapshot.owners.providers.keys(),
       ...snapshot.owners.modelCatalogProviders.keys(),
       ...snapshot.owners.cliBackends.keys(),
@@ -38,15 +54,19 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
       .map(normalizeProviderId)
       .filter(Boolean),
   );
-  const knownModels = new Set(
-    planEffectiveModelCatalogRows({
-      registry: snapshot.manifestRegistry,
-      config: params.cfg,
-    }).rows.map((row) => row.mergeKey),
-  );
+  const knownModels = new Set<string>();
+  const cataloguedProviders = new Set<string>();
+  for (const row of planEffectiveModelCatalogRows({
+    registry: snapshot.manifestRegistry,
+    config: params.cfg,
+  }).rows) {
+    knownModels.add(row.mergeKey);
+    cataloguedProviders.add(normalizeProviderId(row.provider));
+  }
   for (const [provider, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
     for (const model of providerConfig.models ?? []) {
       knownModels.add(buildModelCatalogMergeKey(provider, model.id));
+      cataloguedProviders.add(normalizeProviderId(provider));
     }
   }
   const inspect = (candidate: { provider: string; model: string }): ModelReferenceInspection => {
@@ -54,11 +74,22 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     const model = candidate.model.trim();
     const ref = `${provider}/${model}`;
     if (!knownProviders.has(provider)) {
-      return { ref, provider, model, status: "unknown-provider" };
+      const unavailable =
+        params.providerRegistryAvailable === false || snapshot.plugins.length === 0;
+      return {
+        ref,
+        provider,
+        model,
+        status: unavailable ? "unverified-provider" : "unknown-provider",
+      };
     }
-    const status = knownModels.has(buildModelCatalogMergeKey(provider, model))
-      ? "known"
-      : "unknown-model";
+    if (knownModels.has(buildModelCatalogMergeKey(provider, model))) {
+      return { ref, provider, model, status: "known" };
+    }
+    // A provider with zero catalog rows (runtime-discovered catalogs such as
+    // OpenRouter) gives the membership check nothing to compare against, so an
+    // unlisted id there is not evidence of a typo.
+    const status = cataloguedProviders.has(provider) ? "unknown-model" : "uncatalogued-provider";
     return { ref, provider, model, status };
   };
   return { inspect, snapshot };
@@ -76,9 +107,17 @@ export function inspectConfiguredModelReferences(
   params: ModelReferenceInspectionParams,
 ): Array<ModelReferenceInspection & { active: boolean }> {
   const { inspect, snapshot } = createModelReferenceInspector(params);
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({
+    cfg: params.cfg,
+    metadataSnapshot: snapshot,
+  });
   // `inspect` returns a fresh object per call, so tagging it in place avoids a
   // per-entry spread copy without sharing state between entries.
-  return resolveConfiguredEntries(params.cfg, snapshot).entries.map((entry) =>
+  return resolveConfiguredModelEntries({
+    cfg: params.cfg,
+    allowPluginNormalization: false,
+    canonicalizeRef: canonicalizer.ref,
+  }).entries.map((entry) =>
     Object.assign(inspect(entry.ref), {
       active: [...entry.tags].some((tag) => tag !== "configured"),
     }),

@@ -28,7 +28,7 @@ struct RemoteGatewayProbeTests {
             },
             sessionBox: WebSocketSessionBox(session: session))
 
-        let result = await RemoteGatewayProbe._testProbeGateway(
+        let result = await RemoteGatewayProbe.probeGateway(
             connection: gateway,
             timeoutMs: 0)
 
@@ -36,6 +36,42 @@ struct RemoteGatewayProbeTests {
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.latestTask()?.state == .running)
         #expect(session.latestTask()?.snapshotSendCount() == 2)
+        await gateway.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func `protocol mismatch remains actionable on the next probe`(structured: Bool) async {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                let detail = structured ? #""code":"PROTOCOL_MISMATCH","# : ""
+                return .data(Data(
+                    """
+                    {"type":"res","id":"\(id)","ok":false,"error":{"code":"INVALID_REQUEST",
+                    "message":"protocol mismatch","details":{\(detail)"expectedProtocol":3}}}
+                    """.utf8))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: {
+                try (url: #require(URL(string: "ws://gateway.example.test")), token: nil, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        let first = await RemoteGatewayProbe.probeGateway(connection: gateway, timeoutMs: 0)
+        // A short probe must receive the same rejection, not spend its budget
+        // behind the prior handshake's shared transport backoff (initially 500ms).
+        let second = await RemoteGatewayProbe.probeGateway(connection: gateway, timeoutMs: 250)
+        #expect(first == second)
+        if case let .failed(message) = second {
+            #expect(message.contains("Gateway update required"))
+        } else {
+            Issue.record("incompatible Gateway unexpectedly passed the probe")
+        }
+        #expect(session.snapshotMakeCount() == 2)
         await gateway.shutdown()
     }
 
@@ -52,7 +88,7 @@ struct RemoteGatewayProbeTests {
             },
             sessionBox: WebSocketSessionBox(session: session))
 
-        let result = await RemoteGatewayProbe._testProbeGateway(
+        let result = await RemoteGatewayProbe.probeGateway(
             connection: gateway,
             timeoutMs: 10)
 

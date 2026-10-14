@@ -9,8 +9,11 @@
  * @module @openclaw/oc-path/edit
  */
 
-import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { AstItem, FrontmatterEntry, MdAst } from "./ast.js";
+import { rebuildMdRaw } from "./emit.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
+import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
 
 type MdEditResult =
@@ -30,9 +33,6 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
       return { ok: false, reason: "unresolved" };
     }
     const idx = ast.frontmatter.findIndex((e) => e.key === key);
-    if (idx === -1) {
-      return { ok: false, reason: "unresolved" };
-    }
     const existing = ast.frontmatter[idx];
     if (existing === undefined) {
       return { ok: false, reason: "unresolved" };
@@ -40,32 +40,18 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
     const newEntry: FrontmatterEntry = { ...existing, value: newValue };
     const newFm = ast.frontmatter.slice();
     newFm[idx] = newEntry;
-    return finalize({ ...ast, frontmatter: newFm });
+    return { ok: true, ast: rebuildMdRaw({ ...ast, frontmatter: newFm }) };
   }
 
   if (path.section === undefined || path.item === undefined || path.field === undefined) {
     return { ok: false, reason: "not-writable" };
   }
 
-  const sectionSlug = path.section.toLowerCase();
-  const blockIdx = ast.blocks.findIndex((b) => b.slug === sectionSlug);
-  if (blockIdx === -1) {
+  const match = resolveMdOcPath(ast, { ...path, field: undefined });
+  if (match?.kind !== "item") {
     return { ok: false, reason: "unresolved" };
   }
-  const block = ast.blocks[blockIdx];
-  if (block === undefined) {
-    return { ok: false, reason: "unresolved" };
-  }
-
-  const itemSlug = path.item.toLowerCase();
-  const itemIdx = block.items.findIndex((i) => i.slug === itemSlug);
-  if (itemIdx === -1) {
-    return { ok: false, reason: "unresolved" };
-  }
-  const item = block.items[itemIdx];
-  if (item === undefined) {
-    return { ok: false, reason: "unresolved" };
-  }
+  const { node: item, block } = match;
   if (item.kv === undefined) {
     return { ok: false, reason: "no-item-kv" };
   }
@@ -73,79 +59,40 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
     return { ok: false, reason: "unresolved" };
   }
 
+  const bodyLines = block.bodyText.split("\n");
+  const bodyLine = item.line - block.line - 1;
+  const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:[ \\t]*)`).exec(
+    bodyLines.slice(bodyLine).join("\n"),
+  )?.[1];
+  if (prefix === undefined) {
+    return { ok: false, reason: "unresolved" };
+  }
+  const prefixLines = prefix.split("\n");
+  const oldLineCount = item.kv.value.split("\n").length;
+  const lineDelta = newValue.split("\n").length - oldLineCount;
+  if (item.kv.value !== newValue) {
+    // Restrict replacement to the selected item; duplicate keys and code fences
+    // elsewhere in the block must not redirect the write.
+    bodyLines.splice(
+      bodyLine + prefixLines.length - 1,
+      oldLineCount,
+      `${prefix.slice(prefix.lastIndexOf("\n") + 1)}${newValue}`,
+    );
+  }
   const newItem: AstItem = { ...item, kv: { key: item.kv.key, value: newValue } };
-  const newItems = block.items.slice();
-  newItems[itemIdx] = newItem;
-  const newBlock: AstBlock = {
+  const itemIdx = block.items.indexOf(item);
+  const newItems = block.items.map((entry, index) =>
+    index === itemIdx
+      ? newItem
+      : index > itemIdx && lineDelta !== 0
+        ? { ...entry, line: entry.line + lineDelta }
+        : entry,
+  );
+  const newBlocks = ast.blocks.slice();
+  newBlocks[ast.blocks.indexOf(block)] = {
     ...block,
     items: newItems,
-    bodyText: rebuildBlockBody(block, newItems),
+    bodyText: bodyLines.join("\n"),
   };
-  const newBlocks = ast.blocks.slice();
-  newBlocks[blockIdx] = newBlock;
-  return finalize({ ...ast, blocks: newBlocks });
-}
-
-// In-place substitution on `bodyText` so round-trip emit reflects the
-// edit. Items without a matching bullet line are skipped (render mode
-// uses structural fields anyway).
-function rebuildBlockBody(block: AstBlock, newItems: readonly AstItem[]): string {
-  let body = block.bodyText;
-  for (let i = 0; i < newItems.length; i++) {
-    const newItem = newItems[i];
-    const oldItem = block.items[i];
-    if (newItem === undefined || oldItem === undefined) {
-      continue;
-    }
-    if (newItem.kv === undefined || oldItem.kv === undefined) {
-      continue;
-    }
-    if (newItem.kv.value === oldItem.kv.value) {
-      continue;
-    }
-    const re = new RegExp(`^(\\s*-\\s*${escapeRegex(oldItem.kv.key)}\\s*:\\s*).*$`, "m");
-    body = body.replace(re, `$1${newItem.kv.value}`);
-  }
-  return body;
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function finalize(ast: MdAst): MdEditResult {
-  const parts: string[] = [];
-  if (ast.frontmatter.length > 0) {
-    parts.push("---");
-    for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
-    }
-    parts.push("---");
-  }
-  if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(ast.preamble);
-  }
-  for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
-  }
-  return { ok: true, ast: { ...ast, raw: parts.join("\n") } };
-}
-
-function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
-  return value;
+  return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
 }

@@ -1,49 +1,51 @@
-// Line plugin module implements bot behavior.
-import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
-  createNonExitingRuntime,
-  logVerbose,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk/runtime-env";
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
-import type { LineInboundContext } from "./bot-message-context.js";
-import type { ResolvedLineAccount } from "./types.js";
-import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
+import { createLineWebhookSpool } from "./webhook-spool.js";
 
 const DEFAULT_MEDIA_MAX_MB = 10;
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 
 interface LineBotOptions {
-  channelAccessToken: string;
-  channelSecret: string;
   accountId?: string;
-  runtime?: RuntimeEnv;
+  runtime: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;
-  config?: OpenClawConfig;
-  mediaMaxMb?: number;
-  onMessage?: (
-    ctx: LineInboundContext,
-    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
-  ) => Promise<void>;
+  config: OpenClawConfig;
+  onMessage: Parameters<typeof handleLineWebhookEvents>[1]["processMessage"];
 }
 
-interface LineBot {
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
-  account: ResolvedLineAccount;
-  stop: () => Promise<void>;
-}
-
-export function createLineBot(opts: LineBotOptions): LineBot {
-  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-
-  const cfg = opts.config ?? getRuntimeConfig();
+export function createLineBot(opts: LineBotOptions) {
+  const { runtime, config: startupConfig } = opts;
+  // LINE monitors outlive reloads outside `channels.line`. Bind snapshot ownership
+  // once at startup; checking after reload would compare against the replaced source
+  // and pin a process-owned monitor to stale config.
+  const startupRuntimeConfig = getRuntimeConfigSnapshot();
+  const startupRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  // A snapshot without its source cannot prove that a distinct supplied config is
+  // process-owned, so keep scoped monitors pinned through later global reloads.
+  const followsRuntimeConfig =
+    startupRuntimeConfig === startupConfig ||
+    (startupRuntimeSourceConfig !== null &&
+      selectApplicableRuntimeConfig({
+        inputConfig: startupConfig,
+        runtimeConfig: startupRuntimeConfig,
+        runtimeSourceConfig: startupRuntimeSourceConfig,
+      }) === startupRuntimeConfig);
+  const resolveTurnConfig = (): OpenClawConfig =>
+    (followsRuntimeConfig ? getRuntimeConfigSnapshot() : undefined) ?? startupConfig;
+  // `channels.line` changes restart the monitor, so account credentials and settings
+  // remain startup-prepared facts.
   const account = resolveLineAccount({
-    cfg,
+    cfg: startupConfig,
     accountId: opts.accountId,
   });
 
@@ -51,35 +53,36 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   // link. `??` alone keeps a configured 0 or negative and turns every inbound
   // media download into a 0-byte budget the media core rejects, which degrades
   // the attachment to an unavailable notice without naming the setting.
+  const configuredMediaMaxMb = account.config.mediaMaxMb;
   const effectiveMediaMaxMb =
-    [opts.mediaMaxMb, account.config.mediaMaxMb].find(
-      (value) => typeof value === "number" && value > 0,
-    ) ?? DEFAULT_MEDIA_MAX_MB;
+    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+      ? configuredMediaMaxMb
+      : DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = effectiveMediaMaxMb * 1024 * 1024;
 
-  const processMessage =
-    opts.onMessage ??
-    (async () => {
-      logVerbose("line: no message handler configured");
-    });
   const groupHistories = new Map<string, HistoryEntry[]>();
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
     runtime,
-    deliver: async (event, _destination, control) =>
-      await handleLineWebhookEvents([event], {
+    deliver: async (events, _destination, control) => {
+      const cfg = resolveTurnConfig();
+      await handleLineWebhookEvents([...events], {
         cfg,
         account,
         runtime,
         buildContext: opts.buildContext,
         mediaMaxBytes,
-        processMessage,
+        processMessage: opts.onMessage,
         ...(control.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),
+        ...(control.missingParts === undefined ? {} : { missingParts: control.missingParts }),
         groupHistories,
-        historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      }),
+        historyLimit: resolvePromptHistoryLimit(
+          account.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
+        ),
+      });
+    },
   });
   spool.start();
 

@@ -1,4 +1,9 @@
-import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalogSession,
+  SessionCreatedActor,
+} from "../../../../packages/gateway-protocol/src/index.ts";
+import { pathDisplayName } from "../path-display.ts";
+import { presenceViewerLabel } from "../presence-users.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
 
@@ -6,102 +11,133 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
+// Sidebar, table, and catalog groups share keys from projected identities;
+// raw actor ids can alias profiles or collide across identity namespaces.
+export function sessionActorGroupId(owner: SessionCreatedActor | undefined): string {
+  const identity = owner?.identity;
+  if (!identity) {
+    return "";
+  }
+  return identity.type === "profile" || identity.type === "agent"
+    ? `${identity.type}:${identity.id}`
+    : JSON.stringify(identity, Object.keys(identity).toSorted());
+}
+
+// Canonicalize a checkout path for grouping: strip trailing separators so
+// `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
+// folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
+// (the lazy prefix picks the outermost repo root). Returns null for separator-only
+// paths or worktrees with no origin repo.
+export function foldWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
+}
+
 type CatalogProjectGroup = {
+  kind: "custom" | "project" | "person";
   key: string;
+  // Collapse ids predate the group-kind namespace. Read the old suffix until
+  // the next toggle migrates that section to its canonical id.
+  legacySectionKey?: string;
   label: string;
   title: string;
   sessions: SessionCatalogSession[];
 };
 
-export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogSession[]): {
-  groups: CatalogProjectGroup[];
-  ungrouped: SessionCatalogSession[];
-} {
-  // Custom groups are collected separately so they sort ahead of project groups
-  // regardless of session order; interleaving by first-seen would make section
-  // order depend on the roster's sort.
-  const customGroups: CatalogProjectGroup[] = [];
-  const projectGroups: CatalogProjectGroup[] = [];
-  const groupsByPath = new Map<string, CatalogProjectGroup>();
+function collectCatalogGroups(
+  sessions: readonly SessionCatalogSession[],
+  resolve: (
+    session: SessionCatalogSession,
+    groups: ReadonlyMap<string, CatalogProjectGroup>,
+  ) => CatalogProjectGroup | null,
+  compare: (left: CatalogProjectGroup, right: CatalogProjectGroup) => number,
+): { groups: CatalogProjectGroup[]; ungrouped: SessionCatalogSession[] } {
+  const groups = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
-
   for (const session of sessions) {
-    const customGroup = session.customGroup?.trim();
-    if (customGroup) {
-      const key = `custom:${customGroup}`;
-      let group = groupsByPath.get(key);
-      if (!group) {
-        group = {
-          key,
-          label: customGroup,
-          title: `Custom group: ${customGroup}`,
-          sessions: [],
-        };
-        groupsByPath.set(key, group);
-        customGroups.push(group);
-      }
-      group.sessions.push(session);
-      continue;
-    }
-    // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    let group = groupsByPath.get(projectPath);
+    const group = resolve(session, groups);
     if (!group) {
-      group = {
-        key: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
-        title: projectPath,
-        sessions: [],
-      };
-      groupsByPath.set(projectPath, group);
-      projectGroups.push(group);
+      ungrouped.push(session);
+      continue;
     }
     group.sessions.push(session);
+    groups.set(group.key, group);
   }
-
-  return { groups: [...customGroups, ...projectGroups], ungrouped };
+  return { groups: [...groups.values()].toSorted(compare), ungrouped };
 }
 
-/** Groups adopted sessions by their creator identity. Native threads only carry
-    `createdActor` once adopted (the gateway strips provider-supplied actors), so
-    unattributed sessions intentionally fall to the flat ungrouped tail. */
-export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSession[]): {
-  groups: CatalogProjectGroup[];
-  ungrouped: SessionCatalogSession[];
-} {
-  const groupsById = new Map<string, CatalogProjectGroup>();
-  const ungrouped: SessionCatalogSession[] = [];
+export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogSession[]) {
+  return collectCatalogGroups(
+    sessions,
+    (session, groups) => {
+      const customGroup = session.customGroup?.trim();
+      if (customGroup) {
+        const key = `custom:${customGroup}`;
+        return (
+          groups.get(key) ?? {
+            kind: "custom",
+            key,
+            legacySectionKey: key,
+            label: customGroup,
+            title: `Custom group: ${customGroup}`,
+            sessions: [],
+          }
+        );
+      }
+      // Missing project identities stay in the flat tail, including worktrees with no origin.
+      const trimmedPath = session.cwd?.trim();
+      const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
+      return projectPath
+        ? (groups.get(`project:${projectPath}`) ?? {
+            kind: "project",
+            key: `project:${projectPath}`,
+            legacySectionKey: projectPath,
+            label: pathDisplayName(projectPath),
+            title: projectPath,
+            sessions: [],
+          })
+        : null;
+    },
+    // Preserve first occurrence within each kind, with custom groups ahead of projects.
+    (left, right) => Number(right.kind === "custom") - Number(left.kind === "custom"),
+  );
+}
 
-  for (const session of sessions) {
-    const actor = session.createdActor;
-    if (!actor?.id) {
-      ungrouped.push(session);
-      continue;
-    }
-    const key = `person:${actor.id}`;
-    let group = groupsById.get(key);
-    if (!group) {
-      const label = actor.label?.trim() || actor.id;
-      group = { key, label, title: `Created by ${label}`, sessions: [] };
-      groupsById.set(key, group);
-    }
-    group.sessions.push(session);
-  }
-
-  // Label order keeps the section stable regardless of roster sort.
-  const groups = [...groupsById.values()].toSorted((a, b) => a.label.localeCompare(b.label));
-  return { groups, ungrouped };
+/** Native threads have no attributed creator until the Gateway adopts them. */
+export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSession[]) {
+  return collectCatalogGroups(
+    sessions,
+    (session, groups) => {
+      const actor = session.createdActor;
+      const actorGroupId = sessionActorGroupId(actor);
+      if (!actor?.identity || !actorGroupId) {
+        return null;
+      }
+      const key = `person:${actorGroupId}`;
+      const existing = groups.get(key);
+      if (existing) {
+        return existing;
+      }
+      const label =
+        actor.identity.type === "profile"
+          ? presenceViewerLabel({
+              id: actor.identity.id,
+              name: actor.label?.trim() || actor.identity.id,
+            })
+          : actor.label?.trim() || actor.identity.id;
+      return {
+        kind: "person",
+        key,
+        legacySectionKey: `person:${actor.id}`,
+        label,
+        title: `Created by ${label}`,
+        sessions: [],
+      };
+    },
+    (left, right) => left.label.localeCompare(right.label),
+  );
 }

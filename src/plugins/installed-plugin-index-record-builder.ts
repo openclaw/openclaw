@@ -12,10 +12,11 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
-import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
@@ -29,7 +30,8 @@ import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import { isPathInside } from "./path-safety.js";
+import { pluginCacheRealpathSync, readPluginCacheFile } from "./plugin-cache-files.js";
 import { hasKind } from "./slots.js";
 
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
@@ -72,96 +74,55 @@ function buildContributionInfo(record: PluginManifestRecord): InstalledPluginCon
   };
 }
 
+const ACTIVATION_COMPAT_CODES = [
+  ["onProviders", "activation-provider-hint"],
+  ["onAgentHarnesses", "activation-agent-harness-hint"],
+  ["onChannels", "activation-channel-hint"],
+  ["onCommands", "activation-command-hint"],
+  ["onRoutes", "activation-route-hint"],
+  ["onConfigPaths", "activation-config-path-hint"],
+  ["onCapabilities", "activation-capability-hint"],
+] as const;
+
 /** Collects compatibility codes implied by a manifest's legacy or activation surfaces. */
 export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
-  const codes: PluginCompatCode[] = [];
-  if (record.activation?.onProviders?.length) {
-    codes.push("activation-provider-hint");
-  }
-  if (record.activation?.onAgentHarnesses?.length) {
-    codes.push("activation-agent-harness-hint");
-  }
-  if (record.activation?.onChannels?.length) {
-    codes.push("activation-channel-hint");
-  }
-  if (record.activation?.onCommands?.length) {
-    codes.push("activation-command-hint");
-  }
-  if (record.activation?.onRoutes?.length) {
-    codes.push("activation-route-hint");
-  }
-  if (record.activation?.onConfigPaths?.length) {
-    codes.push("activation-config-path-hint");
-  }
-  if (record.activation?.onCapabilities?.length) {
-    codes.push("activation-capability-hint");
-  }
-  return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
-}
-
-function resolvePackageJsonPath(
-  candidate: PluginCandidate | undefined,
-  realpathCache: Map<string, string>,
-): string | undefined {
-  if (!candidate?.packageDir) {
-    return undefined;
-  }
-  const packageDir =
-    safeRealpathSync(candidate.packageDir, realpathCache) ?? path.resolve(candidate.packageDir);
-  const packageJsonPath = path.join(packageDir, "package.json");
-  const rootDir =
-    candidate.rootDir === candidate.packageDir
-      ? packageDir
-      : (safeRealpathSync(candidate.rootDir, realpathCache) ?? path.resolve(candidate.rootDir));
-  const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
-  return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
-    ? packageJsonPath
-    : undefined;
-}
-
-function resolvePackageJsonRelativePath(
-  rootDir: string,
-  packageJsonPath: string,
-  realpathCache: Map<string, string>,
-): string {
-  const resolvedRootDir =
-    rootDir === path.dirname(packageJsonPath)
-      ? path.dirname(packageJsonPath)
-      : (safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir));
-  const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
-  return relativePath.split(path.sep).join("/");
+  return ACTIVATION_COMPAT_CODES.filter(([key]) => record.activation?.[key]?.length)
+    .map(([, code]) => code)
+    .toSorted();
 }
 
 function resolvePackageJsonRecord(params: {
   candidate: PluginCandidate | undefined;
-  packageJsonPath: string | undefined;
-  diagnostics: PluginDiagnostic[];
-  pluginId: string;
-  realpathCache: Map<string, string>;
+  rejectHardlinks: boolean;
 }): InstalledPluginIndexRecord["packageJson"] | undefined {
-  if (!params.candidate?.packageDir || !params.packageJsonPath) {
+  const { candidate } = params;
+  if (!candidate?.packageDir) {
     return undefined;
   }
-  const hash = safeHashFile({
-    filePath: params.packageJsonPath,
-    pluginId: params.pluginId,
-    diagnostics: params.diagnostics,
-    required: false,
+  const file = readPluginCacheFile({
+    rootDir: candidate.packageDir,
+    relativePath: "package.json",
+    rejectHardlinks: params.rejectHardlinks,
   });
-  if (!hash) {
+  if (!file.ok) {
     return undefined;
   }
-  const fileSignature = safeFileSignature(params.packageJsonPath);
+  const rootDir =
+    candidate.rootDir === candidate.packageDir
+      ? file.rootRealPath
+      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
+  if (!isPathInside(rootDir, file.path)) {
+    return undefined;
+  }
+  // Persist the package entry path, even when its checked target uses another filename.
+  const packageJsonPath = path.join(file.rootRealPath, "package.json");
+  const relativePath = path.relative(rootDir, packageJsonPath) || "package.json";
   return {
-    path: resolvePackageJsonRelativePath(
-      params.candidate.rootDir,
-      params.packageJsonPath,
-      params.realpathCache,
-    ),
-    hash,
-    ...(fileSignature ? { fileSignature } : {}),
+    path: relativePath.split(path.sep).join("/"),
+    hash: file.hash,
+    fileSignature: file.signature,
   };
 }
 
@@ -205,33 +166,35 @@ function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
   });
 }
 
-function resolveManifestHash(params: {
+function readRecordFile(params: {
   record: PluginManifestRecord;
+  filePath: string;
+  boundaryRoot?: string;
+  rejectHardlinks: boolean;
+  required: boolean;
   diagnostics: PluginDiagnostic[];
-}): string {
-  if (hasOptionalMissingPluginManifestFile(params.record)) {
-    return hashManifestlessBundleRecord(params.record);
-  }
-  const hash = safeHashFile({
-    filePath: params.record.manifestPath,
-    pluginId: params.record.id,
-    diagnostics: params.diagnostics,
-    required: true,
+}) {
+  const rootDir = params.boundaryRoot ?? params.record.rootDir;
+  const file = readPluginCacheFile({
+    rootDir,
+    relativePath: path.relative(rootDir, params.filePath),
+    rejectHardlinks: params.rejectHardlinks,
+    ...(params.required && path.extname(params.filePath) === ".json"
+      ? { maxBytes: 256 * 1024 }
+      : {}),
   });
-  if (hash) {
-    return hash;
+  if (file.ok) {
+    return file;
   }
-  return "";
-}
-
-function buildCandidateLookup(
-  candidates: readonly PluginCandidate[],
-): Map<string, PluginCandidate> {
-  const bySource = new Map<string, PluginCandidate>();
-  for (const candidate of candidates) {
-    bySource.set(candidate.source, candidate);
+  if (params.required) {
+    params.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.filePath,
+      message: `installed plugin index could not hash ${params.filePath}: ${file.failure.reason}`,
+    });
   }
-  return bySource;
+  return undefined;
 }
 
 export function buildInstalledPluginIndexRecords(params: {
@@ -240,13 +203,20 @@ export function buildInstalledPluginIndexRecords(params: {
   config?: OpenClawConfig;
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
+  /** Index builds scoped to an explicit env stamp that env's compat decisions. */
+  env?: NodeJS.ProcessEnv;
 }): InstalledPluginIndexRecord[] {
-  const candidateBySource = buildCandidateLookup(params.candidates);
+  const candidateBySource = new Map(
+    params.candidates.map((candidate) => [candidate.source, candidate]),
+  );
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  const realpathCache = new Map<string, string>();
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateBySource.get(record.source);
-    const packageJsonPath = resolvePackageJsonPath(candidate, realpathCache);
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env: params.env,
+    });
     const installOwner =
       candidate && isPluginCandidateInstallOwnerAmbiguous(candidate)
         ? undefined
@@ -259,32 +229,38 @@ export function buildInstalledPluginIndexRecords(params: {
     const packageChannel = normalizePackageChannel(
       record.packageChannel ?? candidate?.packageManifest?.channel,
     );
-    const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
-    const doctorContractPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
-    const doctorContractHash = doctorContractPath
-      ? safeHashFile({
-          filePath: doctorContractPath,
-          pluginId: record.id,
+    const manifestless = hasOptionalMissingPluginManifestFile(record);
+    const manifestFile = manifestless
+      ? undefined
+      : readRecordFile({
+          record,
+          filePath: record.manifestPath,
+          rejectHardlinks,
+          required: true,
+          diagnostics: params.diagnostics,
+        });
+    const manifestHash = manifestless
+      ? hashManifestlessBundleRecord(record)
+      : (manifestFile?.hash ?? "");
+    const doctorContractArtifact = resolvePluginDoctorContractArtifact(record);
+    const doctorContractFile = doctorContractArtifact
+      ? readRecordFile({
+          record,
+          filePath: doctorContractArtifact.modulePath,
+          boundaryRoot: doctorContractArtifact.boundaryRoot,
+          rejectHardlinks,
           diagnostics: params.diagnostics,
           required: false,
         })
       : undefined;
-    const doctorContractFile = doctorContractPath
-      ? safeFileSignature(doctorContractPath)
-      : undefined;
-    const manifestFile = hasOptionalMissingPluginManifestFile(record)
-      ? undefined
-      : safeFileSignature(record.manifestPath);
     const packageJson = resolvePackageJsonRecord({
       candidate,
-      packageJsonPath,
-      diagnostics: params.diagnostics,
-      pluginId: record.id,
-      realpathCache,
+      rejectHardlinks,
     });
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
@@ -293,9 +269,13 @@ export function buildInstalledPluginIndexRecords(params: {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
-      ...(doctorContractHash ? { doctorContractHash } : {}),
-      ...(doctorContractFile ? { doctorContractFile } : {}),
-      ...(manifestFile ? { manifestFile } : {}),
+      ...(doctorContractFile
+        ? {
+            doctorContractHash: doctorContractFile.hash,
+            doctorContractFile: doctorContractFile.signature,
+          }
+        : {}),
+      ...(manifestFile ? { manifestFile: manifestFile.signature } : {}),
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,

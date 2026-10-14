@@ -1,27 +1,21 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
-  type PortalCloseParams,
-  type PortalOpenParams,
   type PortalSummary,
   validatePortalCloseParams,
   validatePortalListParams,
   validatePortalOpenParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-
-function invalidParams(method: string, errors: unknown, respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${method} params: ${formatValidationErrors(errors as never)}`,
-    ),
-  );
-}
+import {
+  createPortalOperations,
+  redactPortalSummary,
+  type GatewayPortalService,
+} from "../portals/portal-service.js";
+import { resolveSessionEnvironmentCaller } from "./environments.session.js";
+import { broadcastPortalChange, sessionPortalHandlers } from "./portals.session.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { defineValidatedGatewayMethod } from "./validation.js";
 
 function requirePortalService(
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
@@ -34,88 +28,132 @@ function requirePortalService(
   return service;
 }
 
-function redactPortalSummary(summary: PortalSummary): PortalSummary {
-  const { tokenQuery: _tokenQuery, url: _url, ...redacted } = summary;
-  return redacted;
+async function portalOperations(
+  options: GatewayRequestHandlerOptions,
+  service: GatewayPortalService,
+  environmentId?: string,
+) {
+  if (!environmentId) {
+    return { operations: createPortalOperations(service), release() {} };
+  }
+  const { context } = options;
+  const environments = context.workerEnvironmentService;
+  if (!environments) {
+    throw new Error("Conversation environments are unavailable");
+  }
+  const caller = await resolveSessionEnvironmentCaller(options);
+  try {
+    const binding = environments.findSessionAttachment(caller.identity);
+    if (!binding || binding.environmentId !== environmentId) {
+      throw new Error("Portal environment is not attached to this conversation");
+    }
+    const assertCurrent = () => {
+      caller.assertCurrent();
+      environments.assertSessionAttachment(binding);
+    };
+    assertCurrent();
+    return {
+      release: caller.release,
+      operations: createPortalOperations(service, {
+        ...binding,
+        assertCurrent,
+        ownershipError: "Portal does not belong to the attached environment",
+        async prepareTarget(remotePort) {
+          await environments.touchSessionAttachment(binding);
+          assertCurrent();
+          const connection = await environments.openNodePortal({
+            environmentId: binding.environmentId,
+            ownerEpoch: binding.ownerEpoch,
+            remotePort,
+          });
+          return {
+            ...connection,
+            connect: () =>
+              connection.connect(
+                () => environments.assertSessionAttachment(binding),
+                () => environments.touchSessionAttachment(binding),
+              ),
+          };
+        },
+      }),
+    };
+  } catch (error) {
+    caller.release();
+    throw error;
+  }
+}
+
+async function mutatePortal(
+  options: GatewayRequestHandlerOptions,
+  environmentId: string | undefined,
+  mutate: (portals: ReturnType<typeof createPortalOperations>) => Promise<unknown>,
+) {
+  const service = requirePortalService(options.context, options.respond);
+  if (!service) {
+    return;
+  }
+  let scope: Awaited<ReturnType<typeof portalOperations>> | undefined;
+  try {
+    scope = await portalOperations(options, service, environmentId);
+    const result = await mutate(scope.operations);
+    broadcastPortalChange(options.context, service);
+    options.respond(true, result, undefined);
+  } catch (error) {
+    options.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+    );
+  } finally {
+    scope?.release();
+  }
 }
 
 export const portalHandlers: GatewayRequestHandlers = {
-  "portal.list": ({ params, respond, context, client }) => {
-    if (!validatePortalListParams(params)) {
-      invalidParams("portal.list", validatePortalListParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const portals = service.list();
-    respond(
-      true,
-      {
-        portals:
-          scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
-            ? portals
-            : portals.map(redactPortalSummary),
-      },
-      undefined,
-    );
-  },
-  "portal.open": async ({ params, respond, context }) => {
-    if (!validatePortalOpenParams(params)) {
-      invalidParams("portal.open", validatePortalOpenParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    try {
-      const request = params as PortalOpenParams;
-      const portal = await service.open({
-        targetPort: request.port,
-        ...(request.title !== undefined ? { title: request.title } : {}),
-        ...(request.description !== undefined ? { description: request.description } : {}),
-        ...(request.path !== undefined ? { path: request.path } : {}),
-      });
-      context.broadcast(
-        "portal.changed",
-        { portals: service.list().map(redactPortalSummary) },
-        { dropIfSlow: true },
-      );
-      respond(true, portal, undefined);
-    } catch (error) {
+  ...sessionPortalHandlers,
+  "portal.list": defineValidatedGatewayMethod(
+    "portal.list",
+    validatePortalListParams,
+    async (options) => {
+      const { params, respond, context, client } = options;
+      const service = requirePortalService(context, respond);
+      if (!service) {
+        return;
+      }
+      const scopes = client?.connect.scopes ?? [];
+      let portals: PortalSummary[];
+      try {
+        const scope = await portalOperations(options, service, params.environmentId);
+        try {
+          portals = scope.operations.list().portals;
+        } finally {
+          scope.release();
+        }
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+        return;
+      }
       respond(
-        false,
+        true,
+        {
+          portals:
+            scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
+              ? portals
+              : portals.map(redactPortalSummary),
+        },
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
       );
-    }
-  },
-  "portal.close": async ({ params, respond, context }) => {
-    if (!validatePortalCloseParams(params)) {
-      invalidParams("portal.close", validatePortalCloseParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    try {
-      await service.close((params as PortalCloseParams).id);
-      context.broadcast(
-        "portal.changed",
-        { portals: service.list().map(redactPortalSummary) },
-        { dropIfSlow: true },
-      );
-      respond(true, { closed: true }, undefined);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
-      );
-    }
-  },
+    },
+  ),
+  "portal.open": defineValidatedGatewayMethod("portal.open", validatePortalOpenParams, (options) =>
+    mutatePortal(options, options.params.environmentId, (portals) => portals.open(options.params)),
+  ),
+  "portal.close": defineValidatedGatewayMethod(
+    "portal.close",
+    validatePortalCloseParams,
+    (options) =>
+      mutatePortal(options, options.params.environmentId, (portals) =>
+        portals.close(options.params.id),
+      ),
+  ),
 };

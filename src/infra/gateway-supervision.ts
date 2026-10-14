@@ -7,16 +7,8 @@ export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-u
 export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
   "service management skipped: non-default state dir or config path";
 
-type GatewaySupervisorMode = "auto" | "external";
-
-function resolveGatewaySupervisorMode(env: NodeJS.ProcessEnv = process.env): GatewaySupervisorMode {
-  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external"
-    ? "external"
-    : "auto";
-}
-
 export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveGatewaySupervisorMode(env) === "external";
+  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
 export function formatExternalSupervisorActionRequired(action: string): string {
@@ -62,7 +54,7 @@ export function assertGatewayServiceMutationAllowed(
   }
   if (!isDefaultInstallIdentity(env)) {
     throw new Error(
-      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
     );
   }
 }

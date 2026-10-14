@@ -1,11 +1,20 @@
 {
   "id": "amazon-bedrock-mantle",
+  "categories": ["models"],
   "name": "Amazon Bedrock Mantle",
   "description": "OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routing.",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
+  "configGroups": [
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 10,
+      "properties": ["discovery"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

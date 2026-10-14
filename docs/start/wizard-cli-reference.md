@@ -15,7 +15,23 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-Local mode (default) walks you through:
+Fresh local guided onboarding shows a one-line pointer to the
+[security guide](/gateway/security) and one choice: **Quick start** or
+**Custom setup**. Quick start records the security acknowledgment; Custom setup
+shows the full security note and asks for confirmation. Quick start reuses
+detected AI access, verifies it, saves config, and opens the web
+dashboard with a foreground Gateway. It uses agent name `main` and full access,
+leaves telemetry consent unset, and skips route confirmation, memory import,
+and app recommendations. **Ctrl+C** stops the Gateway without removing config;
+`openclaw gateway install` enables background operation later.
+
+Custom setup keeps the full guided prompts. If Quick start finds no usable
+route, it continues with manual provider setup and the remaining guided steps,
+including Gateway service installation. The Quick start defaults for agent name
+(`main`), access mode (full access), and telemetry (consent unset) stay.
+See [Guided default](/start/wizard#guided-default).
+
+The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
 
 - Workspace location and bootstrap files
 - Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
@@ -30,6 +46,9 @@ Remote mode configures this machine to connect to a Gateway elsewhere. It does
 not install or modify anything on the remote host.
 
 ## Local flow details
+
+These steps describe the classic wizard. The guided Quick start lane is
+described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
 <Steps>
   <Step title="Setup mode">
@@ -78,6 +97,12 @@ not install or modify anything on the remote host.
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
+    - The prompt and `--workspace` reject files, non-directory ancestors,
+      dangling symbolic links, and symlink loops at the workspace path or any
+      ancestor, identifying the failing path. Other inspection failures, such
+      as permission errors, are reported, not treated as missing directories.
+      Missing directories and symbolic links to existing directories are
+      allowed.
     - Seeds workspace files needed for first-run bootstrap.
     - On rerun, an existing agent roster keeps its fleet-wide workspace unless
       you explicitly confirm the move. Non-interactive reruns warn and preserve
@@ -90,16 +115,20 @@ not install or modify anything on the remote host.
 
   </Step>
   <Step title="Gateway">
-    - Prompts for port, bind, auth mode, and Tailscale exposure.
-    - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
-    - In token mode, interactive setup offers:
-      - **Generate/store plaintext token** (default)
+    - Prompts for port, bind, secret storage, and Tailscale exposure.
+    - Generates a Gateway secret by default in token mode, without asking you
+      to choose token or password. Existing password-mode configs are preserved.
+      Use `--gateway-auth password` or `--gateway-password <value>` to choose
+      a password explicitly. Tailscale Funnel still requires password mode.
+    - Keep shared-secret auth enabled even for loopback so local WS clients must authenticate.
+    - For the generated secret, interactive setup offers:
+      - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
-      - QuickStart reuses an existing `gateway.auth.token` SecretRef from an
-        `env`, `file`, `exec`, or `store` provider for its probe and dashboard
+      - Classic QuickStart reuses an existing `gateway.auth.token` SecretRef from an
+        `env`, `file`, `exec`, or `store` provider for its check and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
-    - In password mode, interactive setup also supports plaintext or SecretRef storage.
+    - Explicit or existing password mode also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -146,7 +175,8 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+      QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
       token ref blocks daemon installation with remediation guidance.
@@ -157,7 +187,7 @@ not install or modify anything on the remote host.
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
+    - `openclaw status --deep` adds the live gateway health check to status output, including channel checks when supported.
 
   </Step>
   <Step title="Finish">
@@ -179,7 +209,8 @@ not install or modify anything on the remote host.
 What you set:
 
 - Remote gateway URL (`ws://...` or `wss://...`)
-- Token, password, or no auth, matching the remote Gateway's configuration
+- One Gateway secret (token or password), or explicit confirmation to connect
+  without a shared secret
 
 <Steps>
   <Step title="Discovery (optional)">
@@ -192,12 +223,18 @@ What you set:
     When a beacon is selected, choose direct WebSocket or an SSH tunnel:
     - **Direct**: connects over `wss://` and prompts to trust the discovered
       TLS fingerprint (trust-on-first-use pinning; only pinned if you accept).
-    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-      command to run first, then connects to the local tunnel endpoint.
+    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:<gateway-port> <user>@<host>`
+      command using the resolved Gateway service port, with `-p <ssh-port>` when
+      advertised. Run it first, then connect to the local tunnel endpoint at
+      `ws://127.0.0.1:18789`.
   </Step>
   <Step title="Auth">
-    Choose token (recommended), password, or no auth, then optionally store it
-    as a SecretRef instead of plaintext.
+    Enter the configured token or password in **Gateway secret**. The Gateway
+    accepts either wire field; interactive setup stores the secret as
+    `gateway.remote.token`, optionally as a SecretRef instead of plaintext.
+    To connect without a shared secret, leave it blank, decline keeping an
+    existing credential if offered, and confirm **Continue without a Gateway secret?**.
+    Reference storage offers that confirmation before asking for the reference.
   </Step>
 </Steps>
 
@@ -211,6 +248,10 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
 If a provider setup step fails in interactive onboarding (for example a CLI reuse option
 without a local sign-in), the wizard shows the error and returns to the provider picker
 instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
+
+The model defaults and provider support statements below describe v2026.9.3. Model
+defaults move with the product baseline, so check [Models](/concepts/models) if you are
+on a different release.
 
 <AccordionGroup>
   <Accordion title="Anthropic API key">
@@ -228,21 +269,21 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
     Browser flow; paste `code#state`.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to the same tier.
 
     Adding or reauthenticating OpenAI preserves an existing explicit primary
@@ -293,8 +334,8 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
     More detail: [Synthetic](/providers/synthetic).
   </Accordion>
   <Accordion title="Ollama (Cloud and local open models)">
-    Prompts for `Cloud + Local`, `Cloud only`, or `Local only` first.
-    `Cloud only` uses `OLLAMA_API_KEY` with `https://ollama.com`.
+    Prompts for `Cloud + Local` or `Local only` first.
+    For hosted models without a local Ollama host, choose `Ollama Cloud` (`--auth-choice ollama-cloud`) instead.
     The host-backed modes prompt for base URL (default `http://127.0.0.1:11434`), discover available models, and suggest defaults.
     `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
     More detail: [Ollama](/providers/ollama).
@@ -305,6 +346,7 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
   </Accordion>
   <Accordion title="Custom provider">
     Works with OpenAI-compatible, OpenAI Responses-compatible, and Anthropic-compatible endpoints.
+    The API base URL must use `http://` or `https://`; other URL schemes are rejected before verification.
 
     Interactive onboarding supports the same API key storage choices as other provider API key flows:
     - **Paste API key now** (plaintext)
@@ -340,8 +382,11 @@ Model behavior:
 
 Credential and profile paths:
 
-- Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
+- Agent-local auth profiles (API keys, tokens, and OAuth): `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).
+- Shared auth profiles: `~/.openclaw/state/openclaw.sqlite`; agent-local profiles override this read-through base. Older installs keep the shared store in the main agent's database until `openclaw doctor --fix` relocates it.
+- Legacy import only: `auth-profiles.json`, per-agent `auth.json`, and `~/.openclaw/credentials/oauth.json`. Run `openclaw doctor --fix` to import them into SQLite; new logins do not write these files.
+
+Paths respect `$OPENCLAW_STATE_DIR`. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for shared-store and agent-local behavior.
 
 Credential storage mode:
 
@@ -361,21 +406,45 @@ Credential storage mode:
   - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
   - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
-- Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
-  - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
-  - Password mode: plaintext or SecretRef.
+- Gateway setup generates a secret in token mode by default. Interactive storage
+  choices are **Generate/store plaintext secret** (default) or **Use SecretRef**.
+  Existing password mode, `--gateway-auth password`, or `--gateway-password <value>`
+  uses password storage, with plaintext or SecretRef support.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 - The named environment variable must be non-empty in the onboarding process.
   `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Existing plaintext setups continue to work unchanged.
 
-<Note>
-Headless and server tip: complete OAuth on a machine with a browser, then copy
-that agent's `auth-profiles.json` (for example
-`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
-`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
-is only a legacy import source.
-</Note>
+## Headless and server setup
+
+Run auth setup **on the Gateway host**, using the same OS user and state directory
+as the Gateway. Over SSH, use an interactive terminal:
+
+```bash
+openclaw configure --section model
+```
+
+Choose your provider's supported auth method. For a browser OAuth flow, open the
+displayed URL in your local browser and paste the redirect URL or authorization
+code back into the terminal on the Gateway host when prompted. If the provider
+offers device-code login, complete the displayed URL/code in your local browser
+while the Gateway host's login process waits. The completed login persists the
+credential on that host in SQLite; no credential file handoff is needed.
+
+For a specific agent, run `openclaw models auth login --provider <id> --agent <agentId>`
+on the Gateway host. See [Models CLI](/cli/models#auth-profiles) and
+[OAuth](/concepts/oauth).
+
+For unattended setup, use a provider API key with
+[non-interactive onboarding](/cli/onboard#non-interactive-setup). If you use
+`--secret-input-mode ref`, make the referenced environment variable available to
+the Gateway service as well as the onboarding process. See
+[Authentication](/gateway/authentication).
+
+Verify the result on the Gateway host with `openclaw models status` (add
+`--agent <agentId>` for a specific agent). Remote-client onboarding only configures
+the local client connection; it does not set up provider credentials on the server.
+Do not copy `auth-profiles.json` or replace a SQLite database to transfer a login.
 
 ## Outputs and internals
 
@@ -384,7 +453,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.workspace`
 - `agents.defaults.skipBootstrap` when `--skip-bootstrap` is passed
 - `agents.defaults.model` and provider config when the selected provider needs it
-- `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
+- `tools.profile` (local onboarding selects `"full"` when unset, including on a rerun; explicit profiles and other tool policies are preserved). Full tool selection is not Full Access execution permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
@@ -416,9 +485,9 @@ prompts to install the plugin (npm or local path) before channel configuration.
 
 ### Installed app recommendations
 
-After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Only recommended matches from official plugin catalogs are selected by default; optional matches and all ClawHub skills require an explicit selection.
 
-The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
+The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in Quick start, classic QuickStart, or non-macOS onboarding.
 
 ## Non-interactive setup
 
@@ -444,6 +513,24 @@ in [CLI automation](/start/wizard-cli-automation).
 - `wizard.status`
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
+
+When setup admission is busy, `wizard.start` and the model setup start/activation
+methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This
+means that the requested operation did not begin: clients can retire that attempt
+and allow an explicit retry after the competing setup finishes. A terminal wizard
+`error` also ends that operation, but does not imply that earlier writes were
+rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
+do not establish whether setup ran; clients must preserve that uncertainty rather
+than automatically retrying or claiming successful activation.
+
+If a Gateway restart loses the in-memory model setup wizard, the Control UI
+refreshes the saved model and provider state. A configured model is offered for
+explicit verification and continuation; if none is configured, provider choices
+become available again without waiting for the old wizard deadline. Failed
+refreshes retain the recovery guard and can be retried with **Check again**.
+Recovery never replays the previous sign-in or answer, treats a saved model as a
+successful verification, or requires deleting setup state. Model settings that
+support config hot reload apply without restarting the Gateway.
 
 ## Signal setup behavior
 

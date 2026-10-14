@@ -68,13 +68,12 @@ describe("discoverBuzzRooms", () => {
     relayMocks.subscribe.mockReset();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
   });
 
@@ -115,7 +114,7 @@ describe("discoverBuzzRooms", () => {
               ["p", publicKey, "", "member"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       )
@@ -137,7 +136,7 @@ describe("discoverBuzzRooms", () => {
               ["about", "Humans and agents"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       );
@@ -214,7 +213,7 @@ describe("discoverBuzzRooms", () => {
               ["p", publicKey, "", "bot"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       )
@@ -248,7 +247,7 @@ describe("discoverBuzzRooms", () => {
               ["archived", "true"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       );

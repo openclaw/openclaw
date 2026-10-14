@@ -1,20 +1,30 @@
+import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { SkillsSearchResult } from "../../packages/gateway-protocol/src/schema/skills-search.js";
 import {
+  ClawHubRequestError,
   createClawHubError,
   decodeClawHubResponseBody,
   fetchClawHubJson,
-  isClawHubTelemetryDisabled,
   parseClawHubJsonBody,
   readClawHubBytes,
-  requestClawHub,
-  resolveClawHubAuthToken,
+  readClawHubBooleanField,
+  readClawHubStringField,
+  readRequiredClawHubStringField,
+  readRequiredClawHubNumberField,
+  withClawHubResponse,
   resolveClawHubBaseUrl,
   resolveClawHubImageUrl,
-  type ClawHubFetch,
+  type ClawHubFetchOptions,
 } from "./clawhub-client.js";
+import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+// Full scanner evidence can exceed the metadata reader's 16 MiB cap.
+const SKILL_VERIFICATION_MAX_BYTES = 64 * 1024 * 1024;
 
 export const CLAWHUB_SKILLS_SH_TRUST_STATE = "not-scanned-by-clawhub" as const;
 export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
@@ -22,30 +32,7 @@ export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
 export const CLAWHUB_SKILLS_SH_REF_PREFIX = "skills-sh:" as const;
 export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 
-export type ClawHubSkillSearchResult = {
-  score: number;
-  slug: string;
-  /**
-   * Reference install must send back. Search returns the same slug for several publishers, so
-   * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
-   * source: rewriting an external reference into `@owner/slug` would install a different skill.
-   */
-  installRef: string;
-  /**
-   * Set only for sources ClawHub serves install-only, so clients install directly instead of
-   * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
-   * flow, which is what every released Gateway already implies by omitting this field.
-   */
-  installOnly?: true;
-  trustState?: ClawHubSkillsShTrustState;
-  // Search may return the same slug for multiple publishers; exact install refs need this handle.
-  ownerHandle?: string | null;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
+export type ClawHubSkillSearchResult = SchemaContract<SkillsSearchResult["results"][number]>;
 
 /** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
 const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";
@@ -58,42 +45,22 @@ const CLAWHUB_SUPPORTED_INSTALL_KINDS = new Set(["clawhub", "github", "skills-sh
  */
 type ClawHubSkillSearchWireEntry = Omit<
   ClawHubSkillSearchResult,
-  "installRef" | "installOnly" | "trustState"
+  "registry" | "installRef" | "installOnly" | "trustState"
 > & {
   source?: string | null;
   install?: { kind?: string | null; reference?: string | null } | null;
 };
 
-export type ClawHubSkillDetail = {
-  skill: {
-    slug: string;
-    displayName: string;
-    summary?: string;
-    icon?: string | null;
-    tags?: Record<string, string>;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-    createdAt: number;
-    updatedAt: number;
-  } | null;
-  latestVersion?: {
-    version: string;
-    createdAt: number;
-    changelog?: string;
-  } | null;
-  metadata?: {
-    os?: string[] | null;
-    systems?: string[] | null;
-  } | null;
-  owner?: {
-    handle?: string | null;
-    displayName?: string | null;
-    image?: string | null;
-    official?: boolean | null;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-  } | null;
+type ClawHubSkillTrendingWireEntry = Pick<
+  ClawHubSkillSearchWireEntry,
+  "slug" | "displayName" | "source" | "install" | "official"
+> & {
+  summary?: string | null;
+  publisher?: { handle?: string | null } | null;
+  metrics?: { updatedAt?: number | null };
 };
+
+export type ClawHubSkillDetail = SkillsDetailResult;
 
 export type ClawHubSkillInstallResolutionResponse =
   | {
@@ -179,6 +146,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   createdAt?: number | null;
   checkedAt?: number | null;
   skillUrl?: string | null;
+  overview?: string | null;
   securityAuditUrl?: string | null;
   security?: unknown;
   error?: {
@@ -199,39 +167,174 @@ function buildVersionOrTagSearch(params: {
 }): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
   const ownerHandle = normalizeOptionalString(params.ownerHandle);
-  if (version) {
-    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  const tag = normalizeOptionalString(params.tag);
-  if (tag) {
-    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  return ownerHandle ? { ownerHandle } : undefined;
+  const tag = version ? undefined : normalizeOptionalString(params.tag);
+  const selection = version ? { version } : tag ? { tag } : undefined;
+  return selection || ownerHandle
+    ? { ...selection, ...(ownerHandle ? { ownerHandle } : {}) }
+    : undefined;
 }
 
-export async function searchClawHubSkills(params: {
-  query: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-  limit?: number;
-}): Promise<ClawHubSkillSearchResult[]> {
-  const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/search",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
+export async function searchClawHubSkills(
+  params: ClawHubFetchOptions & {
+    query: string;
+    limit?: number;
+  },
+): Promise<ClawHubSkillSearchResult[]> {
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const query = params.query.trim();
+  const request = {
+    ...params,
+    baseUrl: registry,
+  };
+  let entries: ClawHubSkillSearchWireEntry[];
+  if (query) {
+    const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
+      ...request,
+      path: "/api/v1/search",
+      search: { q: query, limit: params.limit ? String(params.limit) : undefined },
+    });
+    entries = result.results ?? [];
+  } else {
+    const result = await fetchClawHubJson<{ items: ClawHubSkillTrendingWireEntry[] }>({
+      ...request,
+      path: "/api/v1/trending",
+      search: { kind: "skills", limit: String(Math.min(params.limit ?? 20, 100)) },
+    });
+    // Trending owns ordering and publisher identity; the plain skills list has no publisher.
+    // Both feeds enter the same source-qualified mapping before detail or install is offered.
+    entries = (result.items ?? []).map((entry) => ({
+      score: 0,
+      slug: entry.slug,
+      displayName: entry.displayName,
+      summary: entry.summary ?? undefined,
+      source: entry.source,
+      install: entry.install,
+      official: entry.official,
+      ownerHandle: entry.publisher?.handle,
+      updatedAt: entry.metrics?.updatedAt ?? undefined,
+    }));
+  }
+  return entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
+}
+
+export async function fetchClawHubSkillCatalog(
+  params: ClawHubFetchOptions & {
+    query?: string;
+    feed?: "catalog" | "trending";
+    officialOnly?: boolean;
+    cursor?: string;
+    limit?: number;
+  },
+): Promise<{ items: ClawHubSkillSearchResult[]; nextCursor?: string }> {
+  const query = params.query?.trim();
+  if (query && params.cursor) {
+    throw new Error("ClawHub skill search does not support a cursor.");
+  }
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const trending = !query && params.feed === "trending";
+  const result = await fetchClawHubJson<unknown>({
+    ...params,
+    baseUrl: registry,
+    path: query ? "/api/v1/packages/search" : trending ? "/api/v1/trending" : "/api/v1/packages",
     search: {
-      q: params.query.trim(),
-      limit: params.limit ? String(params.limit) : undefined,
+      ...(trending
+        ? { kind: "skills" }
+        : {
+            family: "skill",
+            ...(query ? { q: query } : { sort: "downloads" }),
+            isOfficial: params.officialOnly ? "true" : undefined,
+          }),
+      limit: String(Math.min(params.limit ?? 100, 100)),
+      cursor: params.cursor,
     },
   });
-  return (result.results ?? []).flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, params.baseUrl);
-    return mapped ? [mapped] : [];
+  const rows = isRecord(result) ? result[query ? "results" : "items"] : undefined;
+  if (!isRecord(result) || !Array.isArray(rows)) {
+    throw new Error("Malformed ClawHub skill catalog: expected a result array.");
+  }
+  const nextCursor = readClawHubStringField(result, "nextCursor", "skill catalog");
+  const entries = rows.map((row, index): ClawHubSkillSearchWireEntry => {
+    const context = `skill catalog item ${index}`;
+    if (!isRecord(row)) {
+      throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+    }
+    const value = query ? row.package : row;
+    if (!isRecord(value)) {
+      throw new Error(`Malformed ClawHub ${context}: expected a package object.`);
+    }
+    const slug = readRequiredClawHubStringField(value, trending ? "slug" : "name", context);
+    const displayName = readRequiredClawHubStringField(value, "displayName", context);
+    const official = readClawHubBooleanField(value, trending ? "official" : "isOfficial", context);
+    const summary = readClawHubStringField(value, "summary", context) ?? undefined;
+    const icon = readClawHubStringField(value, "icon", context);
+    const entry = { score: 0, slug, displayName, official, summary, icon };
+    if (trending) {
+      const publisher = value.publisher;
+      const metrics = value.metrics;
+      const install = value.install;
+      if (
+        (publisher !== null && publisher !== undefined && !isRecord(publisher)) ||
+        (metrics !== undefined && !isRecord(metrics)) ||
+        !isRecord(install)
+      ) {
+        throw new Error(`Malformed ClawHub ${context}: invalid trending identity or metrics.`);
+      }
+      return Object.assign(entry, {
+        source: readRequiredClawHubStringField(value, "source", context),
+        install: {
+          kind: readRequiredClawHubStringField(install, "kind", context),
+          reference: readRequiredClawHubStringField(install, "reference", context),
+        },
+        ownerHandle: publisher ? readClawHubStringField(publisher, "handle", context) : undefined,
+        updatedAt: metrics
+          ? readRequiredClawHubNumberField(metrics, "updatedAt", context)
+          : undefined,
+      });
+    }
+    if (value.family !== "skill") {
+      throw new Error(`Malformed ClawHub ${context}: expected skill family.`);
+    }
+    entry.score = query ? readRequiredClawHubNumberField(row, "score", context) : 0;
+    return Object.assign(entry, {
+      source: CLAWHUB_NATIVE_SOURCE_KIND,
+      ownerHandle: readClawHubStringField(value, "ownerHandle", context),
+      version: readClawHubStringField(value, "latestVersion", context) ?? undefined,
+      updatedAt: readRequiredClawHubNumberField(value, "updatedAt", context),
+    });
   });
+  const items = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
+  if (trending) {
+    // Canonical trending combines publisher and listing official status. Bulk discovery
+    // needs the listing flag, which only the package metadata endpoint exposes.
+    for (let offset = 0; offset < items.length; offset += 4) {
+      await Promise.all(
+        items.slice(offset, offset + 4).map(async (item) => {
+          if (item.installOnly) {
+            item.official = undefined;
+            return;
+          }
+          const detail = await fetchClawHubJson<unknown>({
+            ...params,
+            baseUrl: registry,
+            path: `/api/v1/packages/${encodeURIComponent(item.slug)}`,
+            search: { family: "skill", ownerHandle: item.ownerHandle ?? undefined },
+          });
+          if (!isRecord(detail) || !isRecord(detail.package)) {
+            throw new Error("Malformed ClawHub skill listing: expected a package object.");
+          }
+          // This route resolves packages before skills, even with family=skill.
+          const listing = detail.package;
+          item.official =
+            listing.family === "skill" &&
+            listing.name === item.slug &&
+            listing.ownerHandle === item.ownerHandle
+              ? readClawHubBooleanField(listing, "isOfficial", "skill listing")
+              : undefined;
+        }),
+      );
+    }
+  }
+  return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 /**
@@ -239,26 +342,26 @@ export async function searchClawHubSkills(params: {
  * unknown, or whose external reference is missing, is dropped rather than published under
  * `@owner/slug`: that spelling would point install at a different publisher's skill.
  */
-function toClawHubSkillSearchResult(
+function mapClawHubSkillSearchEntry(
   entry: ClawHubSkillSearchWireEntry,
-  baseUrl?: string,
-): ClawHubSkillSearchResult | undefined {
+  registry: string,
+): ClawHubSkillSearchResult | [] {
   const { install: _install, source: _source, ...rest } = entry;
-  const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
+  const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
   const source = normalizeOptionalString(entry.source);
   const installKind = normalizeOptionalString(entry.install?.kind);
   const reference = normalizeOptionalString(entry.install?.reference);
   // Source identifies the catalog row. Install kind only describes how ClawHub will deliver it:
   // native ClawHub rows may legitimately be GitHub-backed.
   if (installKind && !CLAWHUB_SUPPORTED_INSTALL_KINDS.has(installKind)) {
-    return undefined;
+    return [];
   }
   switch (source) {
     case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
       // An external row is only installable as itself. Without its own reference there is no
       // identity to install, so the row cannot be offered at all.
       if (!reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
-        return undefined;
+        return [];
       }
       return {
         ...base,
@@ -271,92 +374,234 @@ function toClawHubSkillSearchResult(
       // Native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`. Without
       // a publisher the bare slug answers 409 AMBIGUOUS_SKILL_SLUG for every action.
       const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : undefined;
+      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : [];
     }
     default:
-      return undefined;
+      return [];
   }
 }
 
-export async function fetchClawHubSkillDetail(params: {
-  slug: string;
-  ownerHandle?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillDetail> {
+type ClawHubSkillVersionDetail = {
+  version: {
+    version: string;
+    createdAt: number;
+    changelog?: string;
+    security?: {
+      status: string;
+      hasWarnings: boolean;
+      hasScanResult: boolean;
+      checkedAt?: number | null;
+      virustotalUrl?: string | null;
+      scanners?: { llm?: { summary?: string | null } | null };
+    } | null;
+  };
+};
+
+export async function fetchClawHubSkillDetail(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    version?: string;
+    /** Interactive detail reads include card and release scans; install resolution needs metadata only. */
+    includeInspection?: boolean;
+  },
+): Promise<ClawHubSkillDetail> {
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
   const detail = await fetchClawHubJson<ClawHubSkillDetail>({
-    baseUrl: params.baseUrl,
+    ...params,
+    baseUrl: registry,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+  if (detail.skill && detail.skill.slug !== params.slug) {
+    throw new Error("ClawHub returned details for a different skill.");
+  }
+  if (params.ownerHandle && detail.owner?.handle && detail.owner.handle !== params.ownerHandle) {
+    throw new Error("ClawHub returned details for a different publisher.");
+  }
+  if (!params.includeInspection && params.version === undefined) {
+    return {
+      ...detail,
+      skill: detail.skill
+        ? { ...detail.skill, icon: resolveClawHubImageUrl(detail.skill.icon, registry) }
+        : null,
+    };
+  }
+  const ownerHandle = params.ownerHandle ?? detail.owner?.handle ?? undefined;
+  const version = normalizeOptionalString(params.version) ?? detail.latestVersion?.version;
+  const request = { ...params, baseUrl: registry, ownerHandle, version };
+  const warnings: string[] = [];
+  // The version endpoint is the owner of release-specific security. Base metadata only
+  // describes latest, so it must never be relabeled as requirements for an older release.
+  const [release, card] = version
+    ? await Promise.allSettled([
+        fetchClawHubJson<ClawHubSkillVersionDetail>({
+          ...request,
+          path: `/api/v1/skills/${encodeURIComponent(params.slug)}/versions/${encodeURIComponent(version)}`,
+          search: ownerHandle ? { ownerHandle } : undefined,
+        }),
+        fetchClawHubSkillCard(request),
+      ])
+    : [];
+  if (release?.status === "rejected") {
+    warnings.push(`Selected release details unavailable: ${String(release.reason)}`);
+  }
+  const returnedVersion = release?.status === "fulfilled" ? release.value.version : undefined;
+  const selectedVersion = returnedVersion?.version === version ? returnedVersion : undefined;
+  const releaseMismatch = release?.status === "fulfilled" && selectedVersion === undefined;
+  if (releaseMismatch) {
+    warnings.push("ClawHub returned details for a different release.");
+  }
+  const releaseUnavailable =
+    release?.status === "rejected" &&
+    release.reason instanceof ClawHubRequestError &&
+    [404, 410].includes(release.reason.status);
+  const security = selectedVersion?.security;
+  const validSecurity =
+    security &&
+    typeof security.status === "string" &&
+    security.status.trim().length > 0 &&
+    typeof security.hasWarnings === "boolean" &&
+    typeof security.hasScanResult === "boolean";
+  const isLatest = version !== undefined && version === detail.latestVersion?.version;
+  const canUseLatest = isLatest && !releaseUnavailable && !releaseMismatch;
+  const displayRelease = selectedVersion ?? (canUseLatest ? detail.latestVersion : undefined);
   return {
     ...detail,
-    skill: detail.skill
+    registry,
+    source: "clawhub",
+    installRef: ownerHandle ? `@${ownerHandle}/${params.slug}` : params.slug,
+    selectedRelease: displayRelease
       ? {
-          ...detail.skill,
-          icon: resolveClawHubImageUrl(detail.skill.icon, params.baseUrl),
+          version: displayRelease.version,
+          createdAt: displayRelease.createdAt,
+          changelog: displayRelease.changelog,
+          ...(selectedVersion
+            ? {
+                tags: Object.entries(detail.skill?.tags ?? {})
+                  .filter(([, taggedVersion]) => taggedVersion === selectedVersion.version)
+                  .map(([tag]) => tag),
+              }
+            : {}),
         }
       : null,
+    // Neither listing visibility, successful card reads, nor scan verdicts assert that
+    // this exact release has a downloadable artifact. ClawHub's install resolver picks latest.
+    downloadability: !version
+      ? {
+          status: "unknown",
+          reason: "The listing has no hosted release; source-backed availability is not reported.",
+        }
+      : releaseUnavailable
+        ? { status: "unavailable", reason: "The selected release is not available from ClawHub." }
+        : {
+            status: "unknown",
+            reason:
+              release?.status === "rejected"
+                ? `Selected release details unavailable: ${String(release.reason)}`
+                : releaseMismatch
+                  ? "ClawHub returned details for a different release."
+                  : "ClawHub does not report downloadability for a selected skill release.",
+          },
+    card:
+      card?.status === "fulfilled"
+        ? { status: "available", content: card.value }
+        : {
+            status: "unavailable",
+            reason:
+              card?.status === "rejected"
+                ? String(card.reason)
+                : "No published release is available for a skill card.",
+          },
+    requirements:
+      canUseLatest && detail.metadata?.setup
+        ? {
+            status: "available",
+            setup: detail.metadata.setup,
+            os: detail.metadata.os,
+            systems: detail.metadata.systems,
+            scope: "registry-setup",
+            note: "Registry setup keys combine environment and configuration requirements; binary requirements are not reported.",
+          }
+        : {
+            status: "unavailable",
+            reason: isLatest
+              ? "ClawHub does not report setup requirements for this release."
+              : "ClawHub reports structured setup requirements only for the latest release.",
+          },
+    security: validSecurity
+      ? {
+          status: "available",
+          scanStatus: security.status,
+          hasWarnings: security.hasWarnings,
+          hasScanResult: security.hasScanResult,
+          checkedAt: typeof security.checkedAt === "number" ? security.checkedAt : null,
+          summary:
+            typeof security.scanners?.llm?.summary === "string"
+              ? security.scanners.llm.summary
+              : null,
+          virustotalUrl: typeof security.virustotalUrl === "string" ? security.virustotalUrl : null,
+        }
+      : {
+          status: "unavailable",
+          reason: "ClawHub has no security scan snapshot for this release.",
+        },
+    warnings,
+    skill: detail.skill
+      ? { ...detail.skill, icon: resolveClawHubImageUrl(detail.skill.icon, registry) }
+      : null,
+    owner: detail.owner
+      ? { ...detail.owner, image: resolveClawHubImageUrl(detail.owner.image, registry) }
+      : detail.owner,
   };
 }
 
-export async function fetchClawHubSkillInstallResolution(params: {
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-  forceInstall?: boolean;
-}): Promise<ClawHubSkillInstallResolutionResponse> {
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      ownerHandle: params.ownerHandle,
-      reference: params.requestedReference,
-      forceInstall: params.forceInstall ? "1" : undefined,
+export async function fetchClawHubSkillInstallResolution(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    forceInstall?: boolean;
+  },
+): Promise<ClawHubSkillInstallResolutionResponse> {
+  return await withClawHubResponse(
+    {
+      ...params,
+      path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
+      search: {
+        ownerHandle: params.ownerHandle,
+        reference: params.requestedReference,
+        forceInstall: params.forceInstall ? "1" : undefined,
+      },
     },
-  });
-  const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
-  if (!response.ok && !isStructuredBlock) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
-    response,
-    url,
-    params.timeoutMs,
+    async ({ response, url, hasToken }) => {
+      const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
+      if (!response.ok && !isStructuredBlock) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
+        response,
+        url,
+        params.timeoutMs,
+      );
+    },
   );
 }
 
-export async function fetchClawHubSkillVerification(params: {
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillVerificationResponse> {
+export async function fetchClawHubSkillVerification(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    version?: string;
+    tag?: string;
+    skipAuth?: boolean;
+  },
+): Promise<ClawHubSkillVerificationResponse> {
   return await fetchClawHubJson<ClawHubSkillVerificationResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
+    maxResponseBytes: SKILL_VERIFICATION_MAX_BYTES,
     search: {
       ...buildVersionOrTagSearch(params),
       reference: params.requestedReference,
@@ -364,37 +609,29 @@ export async function fetchClawHubSkillVerification(params: {
   });
 }
 
-export async function fetchClawHubSkillSecurityVerdicts(params: {
-  items: ClawHubSkillSecurityVerdictRequestItem[];
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillSecurityVerdictsResponse> {
+export async function fetchClawHubSkillSecurityVerdicts(
+  params: ClawHubFetchOptions & {
+    items: ClawHubSkillSecurityVerdictRequestItem[];
+    skipAuth?: boolean;
+  },
+): Promise<ClawHubSkillSecurityVerdictsResponse> {
   return await fetchClawHubJson<ClawHubSkillSecurityVerdictsResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: "/api/v1/skills/-/security-verdicts",
     method: "POST",
     json: { items: params.items },
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
-export async function fetchClawHubSkillCard(params: {
-  slug?: string;
-  ownerHandle?: string;
-  url?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<string> {
+export async function fetchClawHubSkillCard(
+  params: ClawHubFetchOptions & {
+    slug?: string;
+    ownerHandle?: string;
+    url?: string;
+    version?: string;
+    tag?: string;
+  },
+): Promise<string> {
   const cardUrl = normalizeOptionalString(params.url);
   const slug = normalizeOptionalString(params.slug);
   if (!cardUrl && !slug) {
@@ -406,65 +643,50 @@ export async function fetchClawHubSkillCard(params: {
     providedToken == null &&
     new URL(cardUrl, `${resolveClawHubBaseUrl(params.baseUrl)}/`).origin !==
       new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    url: cardUrl,
-    path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
-    token: providedToken,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: cardUrl ? undefined : buildVersionOrTagSearch(params),
-    skipAuth,
-  });
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubBytes({
-    response,
-    maxBytes: SKILL_CARD_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
-  });
-  return decodeClawHubResponseBody(bytes);
+  return await withClawHubResponse(
+    {
+      ...params,
+      url: cardUrl,
+      path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
+      token: providedToken,
+      search: cardUrl ? undefined : buildVersionOrTagSearch(params),
+      skipAuth,
+    },
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      const bytes = await readClawHubBytes({
+        response,
+        maxBytes: SKILL_CARD_MAX_BYTES,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
+      });
+      return decodeClawHubResponseBody(bytes);
+    },
+  );
 }
 
-export async function reportClawHubSkillInstallTelemetry(params: {
-  baseUrl?: string;
-  token?: string;
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  version?: string | null;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<void> {
-  const token = normalizeOptionalString(params.token) ?? (await resolveClawHubAuthToken());
-  if (!token || isClawHubTelemetryDisabled()) {
-    return;
-  }
-  const slug = params.slug.trim();
-  if (!slug) {
-    return;
-  }
-
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    path: "/api/cli/telemetry/install",
-    method: "POST",
-    token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    json: {
-      event: "install",
-      slug,
-      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
-      ...(params.trustState ? { trustState: params.trustState } : {}),
-      version: params.version ?? undefined,
-    },
+export async function reportClawHubSkillInstallTelemetry(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    trustState?: ClawHubSkillsShTrustState;
+    version?: string | null;
+  },
+): Promise<void> {
+  return await reportClawHubInstallTelemetry(params, () => {
+    const slug = params.slug.trim();
+    return slug
+      ? {
+          event: "install",
+          slug,
+          ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+          ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+          ...(params.trustState ? { trustState: params.trustState } : {}),
+          version: params.version ?? undefined,
+        }
+      : undefined;
   });
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
 }

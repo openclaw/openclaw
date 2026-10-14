@@ -73,8 +73,7 @@ himalaya flag add <id> --flag seen
 himalaya flag remove <id> --flag seen
 ```
 
-## Safety
+## Notes
 
-- Confirm before sending, deleting, or moving many messages.
 - Use `--account` when multiple accounts exist.
 - Quote exact message IDs in summaries.

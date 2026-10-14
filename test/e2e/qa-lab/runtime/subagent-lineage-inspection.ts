@@ -6,17 +6,19 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type {
   AuditRunInspectResult,
   ExecutionIdentityContextV1,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
@@ -32,7 +34,7 @@ const SCENARIO_ID = "subagent-lineage-inspection";
 const SUMMARY_FILE = `${SCENARIO_ID}-summary.json`;
 const PROOF_TIMEOUT_MS = 15 * 60_000;
 
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 
 type ProducerOptions = {
   artifactBase: string;
@@ -356,30 +358,24 @@ async function requireActivePlacement(gateway: Gateway, session: SessionRef) {
   });
 }
 
-async function waitForSubagentTasks(gateway: Gateway, children: readonly SessionRef[]) {
+async function waitForSubagentRuns(gateway: Gateway, children: readonly SessionRef[]) {
   return await waitUntil(
-    "worker lineage subagent tasks",
+    "worker lineage native subagent runs",
     async () => {
-      const payload = requireRecord(
-        await gateway.call("tasks.list", { agentId: "qa", limit: 100 }),
-        "tasks.list",
-      );
-      const rows = (Array.isArray(payload.tasks) ? payload.tasks : []).map((row, index) =>
-        requireRecord(row, `tasks.list row ${index}`),
-      );
+      const rows = readQaSubagentRuns(gateway.runtimeEnv);
       const matched = children.map((child) =>
         rows.find((row) => row.childSessionKey === child.key),
       );
-      const terminalFailure = matched.find(
-        (row) => row && row.status !== "running" && row.status !== "completed",
+      const failure = matched.find(
+        (row) => row?.execution.status === "terminal" && row.execution.outcome?.status !== "ok",
       );
-      if (terminalFailure) {
+      if (failure) {
         throw new Error(
-          `worker lineage subagent task failed with ${String(terminalFailure.status)}`,
+          `worker lineage child failed: ${JSON.stringify(failure.execution.outcome)}`,
         );
       }
-      return matched.every((row) => row?.status === "completed")
-        ? (matched as Record<string, unknown>[])
+      return matched.every((row) => row?.execution.status === "terminal")
+        ? matched.flatMap((row) => (row ? [row] : []))
         : undefined;
     },
     30_000,
@@ -411,12 +407,14 @@ async function assertModelIssuedSpawnCalls(mockBaseUrl: string, labels: readonly
 }
 
 async function startWorkerGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   executionIdentity: boolean;
   mockBaseUrl: string;
   options: ProducerOptions;
   workspaceDir: string;
 }) {
   return await startPairedNodeWorkerGateway({
+    owner: params.owner,
     providerBaseUrl: params.mockBaseUrl,
     executionIdentity: params.executionIdentity,
     repoRoot: params.options.repoRoot,
@@ -505,7 +503,7 @@ async function runNestedWorkerTopology(params: {
   } catch (error) {
     throw new Error("nested worker child session was not created", { cause: error });
   }
-  const tasks = await waitForSubagentTasks(params.gateway, [child, grandchild]);
+  const tasks = await waitForSubagentRuns(params.gateway, [child, grandchild]);
   const childRunId = requireString(tasks[0]?.runId, "worker child run id");
   const grandchildRunId = requireString(tasks[1]?.runId, "nested worker child run id");
   const childPlacement = await requireActivePlacement(params.gateway, child);
@@ -602,14 +600,7 @@ async function inspectEnabledTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),
@@ -676,14 +667,7 @@ async function inspectDefaultOffTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("default-off paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),
@@ -783,6 +767,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-i3-worker-lineage-"));
   let mock = await startQaMockOpenAiServer();
   const published = await createPublishedWireWorkspace(fixtureRoot);
+  let gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
   let workerNode: PairedNodeWorkerHost | undefined;
@@ -791,6 +776,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   let reclaimedPlacements = 0;
   try {
     gateway = await startWorkerGateway({
+      owner: gatewayOwner,
       executionIdentity: false,
       mockBaseUrl: mock.baseUrl,
       options,
@@ -832,8 +818,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     gateway = undefined;
     await mock.stop();
     mock = await startQaMockOpenAiServer();
+    gatewayOwner = createQaGatewayChild();
 
     gateway = await startWorkerGateway({
+      owner: gatewayOwner,
       executionIdentity: true,
       mockBaseUrl: mock.baseUrl,
       options,
@@ -888,9 +876,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       .stopAndWait({ timeoutMs: 2_000 })
       .catch((error: unknown) => cleanupErrors.push(error));
   }
-  if (gateway) {
-    await gateway.stop().catch((error: unknown) => cleanupErrors.push(error));
-  }
+  await stopQaGatewayFixture(gatewayOwner).catch((error: unknown) => cleanupErrors.push(error));
   await mock.stop().catch((error: unknown) => cleanupErrors.push(error));
   await closeWireServer(published.server).catch((error: unknown) => cleanupErrors.push(error));
   await fs

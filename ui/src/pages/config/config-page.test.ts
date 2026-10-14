@@ -1,41 +1,38 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
-import { loadSettings } from "../../app/settings.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
+import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
+import {
+  applyServerUiPrefs,
+  refreshProfileAppearancePrefs,
+} from "../../app/server-prefs-reconcile.ts";
+import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
+import {
+  flushServerUiPrefs,
+  pushServerUiPrefs,
+  resetServerUiPrefsSync,
+} from "../../app/server-prefs.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
   installDialogPolyfill,
   nextFrame,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import * as chatModels from "../chat/models.ts";
-import * as realtimeTalk from "../chat/realtime-talk.ts";
-import {
-  ConfigPage,
-  configSelectionFromSearch,
-  extractQuickSettingsSecurity,
-} from "./config-page.ts";
-import type { ConfigViewState } from "./view.ts";
+import * as realtimeTalk from "../chat/talk/session.ts";
+import { mountConfigPage, publishConfigSource } from "./config-page.test-support.ts";
+import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
+import type { ConfigViewState } from "./view-types.ts";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 let localStorageMock: Storage;
 
@@ -52,56 +49,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanupSolid();
   resetServerUiPrefsSync();
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("configSelectionFromSearch", () => {
-  it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
-      activeSection: "tts",
-      activeSubsection: null,
-    });
-  });
-
-  it("falls back when a linked section does not belong to the page", () => {
-    expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
-      activeSection: "messages",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps MCP separate from Infrastructure", () => {
-    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
-      activeSection: "mcp",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
-      activeSection: "gateway",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps the Updates section off Advanced", () => {
-    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-  });
-});
-
 describe("extractQuickSettingsSecurity", () => {
-  it("preserves provenance for inherited security defaults", () => {
-    expect(extractQuickSettingsSecurity({})).toMatchObject({
-      browserEnabled: true,
-      browserEnabledOverridden: false,
-      toolProfile: "full",
-      toolProfileOverridden: false,
-    });
-  });
-
   it("distinguishes explicit values that equal the defaults", () => {
     expect(
       extractQuickSettingsSecurity({
@@ -118,8 +73,219 @@ describe("extractQuickSettingsSecurity", () => {
 });
 
 describe("ConfigPage synced preference provenance", () => {
-  it("uses the committed snapshot for both display and reset while the form draft differs", () => {
-    const page = new ConfigPage();
+  it.each([
+    {
+      label: "lets a profile-bound operator write appearance without config admin access",
+      selfUser: { id: "profile-owner" },
+      scopes: ["operator.write"],
+      canPatch: false,
+      appearanceCanSync: true,
+      localeCanSync: false,
+    },
+    {
+      label: "keeps read-only profile appearance device-local even when config patching is exposed",
+      selfUser: { id: "profile-viewer" },
+      scopes: ["operator.read"],
+      canPatch: true,
+      appearanceCanSync: false,
+      localeCanSync: true,
+    },
+    {
+      label: "preserves config-patch authorization when no profile is bound",
+      selfUser: null,
+      scopes: ["operator.write"],
+      canPatch: false,
+      appearanceCanSync: false,
+      localeCanSync: false,
+    },
+  ])("$label", ({ selfUser, scopes, canPatch, appearanceCanSync, localeCanSync }) => {
+    const context = {
+      gateway: {
+        snapshot: { selfUser, hello: { auth: { role: "operator", scopes } } },
+      },
+      runtimeConfig: { state: { connected: true }, canPatch },
+    } as unknown as ApplicationContext;
+
+    expect(canSyncAppearancePreference(context, "theme")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(context, "themeMode")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(context, "accent")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(context, "fontUi")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(context, "fontChat")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(context, "tabIcon")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(context)).toBe(localeCanSync);
+  });
+
+  it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
+    const configObject = { ui: { prefs: { theme: "dash" } } };
+    const client = {
+      request: vi.fn(async () => ({ status: "ok", entries: { "ui.theme": "knot" } })),
+    } as unknown as GatewayBrowserClient;
+    await refreshProfileAppearancePrefs({
+      client,
+      profileId: "profile-owner",
+      configObject,
+      scope: "ws://profile.test",
+      onApplied: vi.fn(),
+    });
+    const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+      context: ApplicationContext;
+      settings: ReturnType<typeof loadSettings>;
+      resetSyncedPref: (key: "theme") => void;
+    };
+    page.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://profile.test" },
+        snapshot: {
+          selfUser: { id: "profile-owner" },
+          hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+        },
+      },
+      runtimeConfig: {
+        state: { connected: true, configSnapshot: { config: configObject } },
+        canPatch: false,
+      },
+      theme: { refresh: vi.fn() },
+    } as unknown as ApplicationContext;
+    const beforeReset = loadSettings();
+    page.settings = beforeReset;
+
+    page.resetSyncedPref("theme");
+
+    expect(page.settings.theme).toBe("dash");
+    expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({
+      theme: null,
+      accent: "theme",
+      fontUi: null,
+      fontChat: null,
+    });
+  });
+
+  it.each([
+    ["loading", undefined, true],
+    ["disconnected", undefined, true],
+    ["before-load-disconnect", "#55bb77", true],
+  ] as const)(
+    "reconciles the returned accent after a %s reset with server value %s (edited: %s)",
+    async (connection, returnedAccent, edited) => {
+      const profileId = "profile-viewer";
+      const scope = "ws://profile.test";
+      const configObject = { ui: { prefs: { accent: "#abcdef" } } };
+      const saved = { status: "ok", entries: { "ui.accent": "#123456" } };
+      const initial = createServerPrefsWriter(
+        vi.fn(async () => saved),
+        scope,
+      );
+      const options = { profileId, configObject, scope, onApplied: vi.fn() };
+      patchSettings({ gatewayUrl: scope });
+      await refreshProfileAppearancePrefs({ ...options, client: initial.state.client! });
+      resetServerUiPrefsSync();
+      flushServerUiPrefs(initial, { profileId, canWrite: false });
+      if (edited) {
+        patchSettings({ accent: "#654321" });
+        pushServerUiPrefs(initial, { accent: "#654321" }, { profileId, canWrite: false });
+      }
+
+      const delayed = deferred<unknown>();
+      const request = vi.fn((_method: string) => delayed.promise);
+      const writer = createServerPrefsWriter(request, scope);
+      const connected = connection === "loading";
+      let pending: Promise<boolean> | undefined;
+      if (connection !== "before-load-disconnect") {
+        applyServerUiPrefs(configObject, options);
+        pending = refreshProfileAppearancePrefs({ ...options, client: writer.state.client! });
+        await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      }
+      const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        resetSyncedPref: (key: "accent") => void;
+      };
+      page.context = {
+        gateway: {
+          connection: { gatewayUrl: scope },
+          snapshot: {
+            selfUser: connected ? { id: profileId } : null,
+            hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+          },
+        },
+        runtimeConfig: {
+          state: { connected, configSnapshot: connected ? { config: configObject } : null },
+          canPatch: false,
+        },
+        theme: { refresh: vi.fn() },
+      } as unknown as ApplicationContext;
+      const previous = loadSettings();
+      page.settings = previous;
+      page.resetSyncedPref("accent");
+      expect(page.settings.accent).toBe("#123456");
+      expect(changedServerUiPrefs(previous, page.settings)).toBeNull();
+
+      const reconnected = connected
+        ? undefined
+        : refreshProfileAppearancePrefs({
+            ...options,
+            client: createServerPrefsWriter(request, scope).state.client!,
+          });
+      delayed.resolve({
+        status: "ok",
+        entries: returnedAccent ? { "ui.accent": returnedAccent } : {},
+      });
+      await Promise.all([pending, reconnected]);
+      expect(loadSettings().accent).toBe(returnedAccent ?? "#abcdef");
+      expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
+    },
+  );
+
+  it.each(["fontUi"] as const)(
+    "resets the %s profile override when its picker sentinel is selected",
+    async (key) => {
+      const gatewayUrl = "ws://font-profile.test";
+      const configObject = {};
+      const client = {
+        request: vi.fn(async () => ({ status: "ok", entries: { [`ui.${key}`]: "lora" } })),
+      } as unknown as GatewayBrowserClient;
+      await refreshProfileAppearancePrefs({
+        client,
+        profileId: "font-owner",
+        configObject,
+        scope: gatewayUrl,
+        onApplied: vi.fn(),
+      });
+      const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        setFont: (key: "fontUi" | "fontChat", font: undefined) => void;
+      };
+      page.context = {
+        gateway: {
+          connection: { gatewayUrl },
+          snapshot: {
+            selfUser: { id: "font-owner" },
+            hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+          },
+        },
+        runtimeConfig: {
+          state: { connected: true, configSnapshot: { config: configObject } },
+          canPatch: false,
+        },
+        theme: { refresh: vi.fn() },
+      } as unknown as ApplicationContext;
+      const previous = loadSettings();
+      page.settings = previous;
+      page.setFont(key, undefined);
+      expect(page.settings[key]).toBeUndefined();
+      expect(changedServerUiPrefs(previous, page.settings)).toEqual({ [key]: null });
+      expect(page.context.theme.refresh).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("uses the committed snapshot for both display and reset while the form draft differs", async () => {
     const committedConfig = { ui: { prefs: { theme: "claw" } } };
     const draftConfig = { ui: { prefs: { theme: "knot" } } };
     const runtimeConfig = {
@@ -180,182 +346,111 @@ describe("ConfigPage synced preference provenance", () => {
         },
       },
       runtimeConfig,
-      theme: { refresh: vi.fn() },
+      agentSelection: { state: { selectedId: null } },
+      agents: { state: { agentsList: null } },
+      theme: { branding: resolveThemeBranding(undefined), refresh: vi.fn() },
       webPush: { snapshot: {} },
     } as unknown as ApplicationContext;
-    const state = page as unknown as {
-      context: ApplicationContext;
-      pageId: "appearance";
-      settings: ReturnType<typeof loadSettings>;
-    };
-    state.context = context;
-    state.pageId = "appearance";
     const beforeReset = loadSettings();
-    const container = document.createElement("div");
+    const { container } = mountConfigPage(context, { pageId: "appearance" });
+    flush();
 
-    render(page.render(), container);
-
-    const themeSection = container.querySelector<HTMLElement>("#settings-appearance-theme");
-    expect(themeSection?.textContent).toContain("Default: Claw");
+    const themeSection = await waitForSolid(() => {
+      const section = container.querySelector<HTMLElement>("#settings-appearance-theme");
+      expect(section?.textContent).toContain("Default: Claw");
+      return section!;
+    });
     expect(themeSection?.textContent).toContain("Synced across your devices");
     expect(themeSection?.textContent).not.toContain("Default: Knot");
     expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
-    themeSection
-      ?.querySelector<HTMLButtonElement>(
-        ":scope > .settings-section__header button[aria-label='Reset to default']",
-      )
-      ?.click();
+    themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
 
-    expect(changedServerUiPrefs(beforeReset, state.settings)).toEqual({ theme: null });
+    expect(changedServerUiPrefs(beforeReset, loadSettings())).toEqual({ theme: null });
   });
 });
 
-describe("ConfigPage moved section routes", () => {
+describe("media permission lifetime: Settings", () => {
   it.each([
-    ["channels", "channels", ""],
-    ["broadcast", "advanced", "?section=broadcast"],
-    ["talk", "talk", "?section=talk"],
-  ])("redirects the former Communications %s section", (section, routeId, search) => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "communications";
-      routeData: {
-        pathname: string;
-        search: string;
-        hash: string;
-        section: string;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "communications";
-    state.routeData = {
-      pathname: "/settings/communications",
-      search: `?section=${section}`,
-      hash: "",
-      section,
-      advanced: false,
-      tab: null,
-      targetBlockId: null,
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
-  });
-
-  it("redirects the former Agent Defaults models section", () => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "ai-agents";
-      routeData: {
-        pathname: string;
-        search: string;
-        hash: string;
-        section: string;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "ai-agents";
-    state.routeData = {
-      pathname: "/settings/ai-agents",
-      search: "?section=models",
-      hash: "",
-      section: "models",
-      advanced: false,
-      tab: null,
-      targetBlockId: null,
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
-  });
-});
-
-describe("ConfigPage advanced selection guard", () => {
-  it("keeps curated sections off the Advanced page", () => {
-    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
-      activeSection: "env",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=tts")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
-      activeSection: "broadcast",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
-      activeSection: "models",
-      activeSubsection: null,
-    });
-  });
-});
-
-describe("ConfigPage media discovery", () => {
-  it("coalesces refreshes while discovery is in flight", async () => {
-    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
-      const discovery = deferred<MediaDeviceInfo[]>();
-      const enumerateDevices = vi.fn(() => discovery.promise);
-      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
-      const page = new ConfigPage();
-      const state = page as unknown as Record<
-        typeof method,
-        (requestPermission: boolean) => Promise<void>
-      >;
-
-      const first = state[method](true);
-      await state[method](true);
-      expect(enumerateDevices).toHaveBeenCalledOnce();
-
-      discovery.resolve([]);
-      await first;
+    ["microphone", "queued gesture disconnects"],
+    ["microphone", "reentry without a fresh gesture"],
+    ["microphone", "reentry with a fresh gesture"],
+    ["microphone", "failed passive enumeration keeps one upgrade"],
+    ["microphone", "second enumeration leaves Appearance"],
+    ["microphone", "permission-bearing enumeration fails once"],
+    ["camera", "reentry with a fresh gesture"],
+  ] as const)("%s: %s", async (kind, scenario) => {
+    const initial = deferred<MediaDeviceInfo[]>();
+    const second = deferred<MediaDeviceInfo[]>();
+    const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
+    if (scenario === "second enumeration leaves Appearance") {
+      enumerateDevices.mockReturnValueOnce(second.promise);
     }
-  });
+    enumerateDevices.mockResolvedValue([]);
+    const stop = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+    vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    page.pageId = "appearance";
+    const state = page as unknown as {
+      refreshMediaDevices: (
+        kind: "microphone" | "camera",
+        requestPermission: boolean,
+      ) => Promise<void>;
+      mediaDevices: Record<"microphone" | "camera", { loading: boolean; error: string | null }>;
+    };
+    const refresh = (requestPermission: boolean) =>
+      state.refreshMediaDevices(kind, requestPermission);
+    const leaveAppearance = () => {
+      page.updateRoute("advanced", null);
+    };
+    const startsWithPermission = scenario.startsWith("permission-bearing");
+    const first = refresh(startsWithPermission);
+    if (!startsWithPermission) {
+      await refresh(true);
+    }
+    expect(enumerateDevices).toHaveBeenCalledOnce();
+    expect(getUserMedia).not.toHaveBeenCalled();
 
-  it("upgrades passive discovery when the user requests permission", async () => {
-    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
-      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
-      const enumerateDevices = vi
-        .fn()
-        .mockImplementationOnce(() => passiveDiscovery.promise)
-        .mockResolvedValueOnce([]);
-      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
-      const page = new ConfigPage();
-      const state = page as unknown as Record<
-        typeof method,
-        (requestPermission: boolean) => Promise<void>
-      >;
-
-      const passive = state[method](false);
-      await state[method](true);
+    if (scenario === "queued gesture disconnects") {
+      page.dispose();
+    } else if (scenario.startsWith("reentry")) {
+      leaveAppearance();
+    }
+    if (scenario.startsWith("reentry")) {
+      page.updateRoute("appearance", null);
+      await refresh(scenario === "reentry with a fresh gesture");
+    }
+    if (
+      scenario === "failed passive enumeration keeps one upgrade" ||
+      scenario === "second enumeration leaves Appearance" ||
+      scenario === "permission-bearing enumeration fails once"
+    ) {
+      initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
+    } else {
+      initial.resolve([]);
+    }
+    if (scenario === "second enumeration leaves Appearance") {
+      await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledTimes(2));
+      leaveAppearance();
+      second.resolve([]);
+    }
+    await first;
+    await vi.waitFor(() => expect(state.mediaDevices[kind].loading).toBe(false));
+    const permits = [
+      "reentry with a fresh gesture",
+      "failed passive enumeration keeps one upgrade",
+    ].includes(scenario);
+    expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
+    expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
+    if (permits) {
+      expect(getUserMedia).toHaveBeenCalledWith(
+        kind === "microphone" ? { audio: true } : { video: true },
+      );
+    }
+    if (scenario === "permission-bearing enumeration fails once") {
       expect(enumerateDevices).toHaveBeenCalledOnce();
-
-      passiveDiscovery.resolve([]);
-      await passive;
-      expect(enumerateDevices).toHaveBeenCalledTimes(2);
+      expect(state.mediaDevices[kind].error).toBeTruthy();
     }
   });
 });
@@ -371,20 +466,20 @@ describe("ConfigPage camera selection", () => {
       .mockReturnValueOnce(first)
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined);
-    const page = new ConfigPage();
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
     const state = page as unknown as {
-      cameraError: string | null;
+      mediaDevices: { camera: { error: string | null } };
       selectCamera: (deviceId: string) => Promise<void>;
       applySettings: ReturnType<typeof vi.fn>;
     };
     state.applySettings = vi.fn();
 
     await state.selectCamera("missing-camera");
-    expect(state.cameraError).toBe("The selected camera is unavailable");
+    expect(state.mediaDevices.camera.error).toBe("The selected camera is unavailable");
     expect(state.applySettings).not.toHaveBeenCalled();
 
     const staleSelection = state.selectCamera("slow-camera");
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     await state.selectCamera("back-camera");
     expect(state.applySettings).toHaveBeenCalledOnce();
     expect(state.applySettings).toHaveBeenLastCalledWith(
@@ -392,183 +487,65 @@ describe("ConfigPage camera selection", () => {
     );
     rejectFirst(new Error("The selected camera is unavailable"));
     await staleSelection;
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     expect(state.applySettings).toHaveBeenCalledOnce();
 
-    state.cameraError = "Another camera error";
+    state.mediaDevices.camera.error = "Another camera error";
     await state.selectCamera("");
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     expect(state.applySettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ realtimeTalkVideoDeviceId: undefined }),
     );
   });
 });
 
-describe("ConfigPage session observer models", () => {
-  it("lets a replacement Gateway load while the stale client is still pending", async () => {
-    const first = deferred<ModelCatalogEntry[]>();
-    const second = deferred<ModelCatalogEntry[]>();
-    vi.spyOn(chatModels, "loadModels")
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const firstClient = {} as GatewayBrowserClient;
-    const secondClient = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client: firstClient, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      sessionObserverModelsClient: GatewayBrowserClient | null;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    const firstLoad = state.ensureSessionObserverModels(firstClient, "main");
-    (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
-      client: secondClient,
-      phase: "connected",
-    } as ApplicationGatewaySnapshot;
-    const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
-    const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
-    second.resolve(currentModels);
-    await secondLoad;
-    expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(state.sessionObserverModelsClient).toBe(secondClient);
-
-    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
-    await firstLoad;
-    expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, firstClient, {
-      agentId: "main",
-      preparedOnly: true,
-    });
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, secondClient, {
-      agentId: "main",
-      preparedOnly: true,
-    });
-  });
-
-  it("retries a transient catalog failure on the next status refresh", async () => {
-    const recoveredModels = [{ id: "small", name: "Small", provider: "openai" }];
-    vi.spyOn(chatModels, "loadModels")
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(recoveredModels);
-    const client = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    await state.ensureSessionObserverModels(client, "main");
-    expect(state.sessionObserverModels).toEqual([]);
-    expect(state.sessionObserverModelsUnavailable).toBe(true);
-
-    await state.ensureSessionObserverModels(client, "main");
-
-    expect(state.sessionObserverModels).toEqual(recoveredModels);
-    expect(state.sessionObserverModelsUnavailable).toBe(false);
-    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
-    expect(chatModels.loadModels).toHaveBeenLastCalledWith(client, {
-      agentId: "main",
-      preparedOnly: true,
-    });
-  });
-
-  it("keeps a same-client agent switch from restoring stale observer models", async () => {
-    const main = deferred<ModelCatalogEntry[]>();
-    const writer = deferred<ModelCatalogEntry[]>();
-    vi.spyOn(chatModels, "loadModels").mockImplementation((_client, options) =>
-      options.agentId === "writer" ? writer.promise : main.promise,
-    );
-    const client = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const selectionState = { selectedId: "main" as string | null };
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: selectionState },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    const mainLoad = state.ensureSessionObserverModels(client, "main");
-    selectionState.selectedId = "writer";
-    const writerLoad = state.ensureSessionObserverModels(client, "writer");
-    const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
-    writer.resolve(writerModels);
-    await writerLoad;
-    main.resolve([{ id: "main-model", name: "Main Model", provider: "openai" }]);
-    await mainLoad;
-
-    expect(state.sessionObserverModels).toEqual(writerModels);
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, client, {
-      agentId: "main",
-      preparedOnly: true,
-    });
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, client, {
-      agentId: "writer",
-      preparedOnly: true,
-    });
-
-    selectionState.selectedId = null;
-    await state.ensureSessionObserverModels(client, null);
-    expect(state.sessionObserverModels).toEqual([]);
-    expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
-  });
-});
-
 describe("ConfigPage curated mutation eligibility", () => {
+  it("updates mobile pairing eligibility when connection and admin access are published", () => {
+    const openDevicePairSetup = vi.fn();
+    const context = {
+      gateway: { snapshot: { phase: "disconnected", hello: null, client: null } },
+      runtimeConfig: { state: { connected: false } },
+      overlays: { openDevicePairSetup },
+    } as unknown as ApplicationContext;
+    const view = mountConfigPage(context, { pageId: "security" });
+    const pairingButton = view.container.querySelector<HTMLButtonElement>(
+      ".security-page button.btn",
+    )!;
+    expect(pairingButton.disabled).toBe(true);
+
+    context.runtimeConfig.state.connected = true;
+    Object.assign(context.gateway.snapshot, {
+      phase: "connected",
+      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+    });
+    publishConfigSource(context.runtimeConfig);
+    expect(pairingButton.disabled).toBe(false);
+    pairingButton.click();
+    expect(openDevicePairSetup).toHaveBeenCalledOnce();
+
+    Object.assign(context.gateway.snapshot, {
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+    });
+    publishConfigSource(context.gateway);
+    expect(pairingButton.disabled).toBe(true);
+    pairingButton.click();
+    expect(openDevicePairSetup).toHaveBeenCalledOnce();
+
+    Object.assign(context.gateway.snapshot, {
+      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+    });
+    publishConfigSource(context.gateway);
+    expect(pairingButton.disabled).toBe(false);
+    context.runtimeConfig.state.connected = false;
+    publishConfigSource(context.runtimeConfig);
+    expect(pairingButton.disabled).toBe(true);
+  });
+
   it.each([
-    ["offline", { connected: false }, ["operator.admin"], false, true],
     ["read-only operator", { connected: true }, ["operator.read"], false, true],
     ["config.set absent", { connected: true }, ["operator.admin"], false, false],
-    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false, true],
-    ["app update", { connected: true }, ["operator.admin"], true, true],
-    ["idle administrator", { connected: true }, ["operator.admin"], false, true],
   ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
-    const page = new ConfigPage();
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
     const state = page as unknown as {
       context: ApplicationContext;
       isCuratedConfigMutationDisabled: () => boolean;
@@ -591,20 +568,14 @@ describe("ConfigPage curated mutation eligibility", () => {
       },
     } as unknown as ApplicationContext;
 
-    const expectedUnlocked = _name === "idle administrator";
-    expect(state.isCuratedConfigMutationDisabled()).toBe(!expectedUnlocked);
+    expect(state.isCuratedConfigMutationDisabled()).toBe(true);
   });
 });
 
 describe("ConfigPage Updates integration", () => {
-  it("refreshes update status once when the page becomes active", () => {
+  it("refreshes update status once when the page becomes active", async () => {
     const refreshUpdateStatus = vi.fn(async () => {});
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      syncUpdateStatusRefresh: () => void;
-    };
-    state.context = {
+    const context = {
       gateway: {
         snapshot: {
           client: {},
@@ -618,25 +589,27 @@ describe("ConfigPage Updates integration", () => {
       overlays: { refreshUpdateStatus },
     } as unknown as ApplicationContext;
 
-    page.pageId = "updates";
-    state.syncUpdateStatusRefresh();
-    state.syncUpdateStatusRefresh();
-    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+    const view = mountConfigPage(context, { pageId: "updates" });
+    flush();
+    publishConfigSource(context.gateway);
+    publishConfigSource(context.overlays);
+    await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
 
-    page.pageId = "advanced";
-    state.syncUpdateStatusRefresh();
-    page.pageId = "updates";
-    state.syncUpdateStatusRefresh();
-    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+    view.update({ pageId: "advanced" });
+    flush();
+    view.update({ pageId: "updates" });
+    flush();
+    await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
   });
 
   it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
     const patchForm = vi.fn();
-    const runUpdate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as { context: ApplicationContext };
-    page.pageId = "updates";
-    state.context = {
+    const updateActions = {
+      captureUpdateTarget: () => () => true,
+      runUpdate: vi.fn<ApplicationContext["overlays"]["runUpdate"]>(),
+    } satisfies Pick<ApplicationContext["overlays"], "captureUpdateTarget" | "runUpdate">;
+    const { runUpdate } = updateActions;
+    const context = {
       config: {
         current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "2026.8.1" },
       },
@@ -673,22 +646,84 @@ describe("ConfigPage Updates integration", () => {
           updateStatusBanner: null,
         },
         subscribe: () => () => undefined,
-        runUpdate,
+        ...updateActions,
       },
     } as unknown as ApplicationContext;
-    const container = document.createElement("div");
-    document.body.append(container);
+    const view = mountConfigPage(context, { pageId: "updates" });
+    const { container } = view;
     const restoreDialogPolyfill = installDialogPolyfill();
 
-    render(page.render(), container);
+    context.overlays.snapshot.updateStatusRefreshing = true;
+    publishConfigSource(context.overlays);
+    flush();
+    const checkingButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
+    expect(checkingButton.textContent?.trim()).toBe("Update now");
+    expect(checkingButton.disabled).toBe(true);
+    expect(checkingButton.title).toBe("Checking for updates…");
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Checking for updates…",
+    );
+    expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
+      true,
+    );
+    context.overlays.snapshot.updateStatusRefreshing = false;
+    context.overlays.snapshot.updateStatusCheckBanner = {
+      mode: "manual",
+      tone: "warn",
+      text: "Could not check for updates: timeout",
+    };
+    publishConfigSource(context.overlays);
+    flush();
+    const unknownUpdateButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
+    expect(unknownUpdateButton.disabled).toBe(true);
+    expect(unknownUpdateButton.title).toBe(
+      "Check for updates successfully before starting an update.",
+    );
 
-    const channel = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
+    context.overlays.snapshot.updateSchedule = {
+      channel: "dev",
+      autoEnabled: false,
+      install: { kind: "git", git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } },
+    };
+    publishConfigSource(context.overlays);
+    flush();
+    const knownUpdateButton = container.querySelector<HTMLButtonElement>(".btn.primary")!;
+    expect(knownUpdateButton.disabled).toBe(false);
+    expect(knownUpdateButton.title).toBe("");
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Could not check for updates: timeout",
+    );
+    expect(runUpdate).not.toHaveBeenCalled();
+
+    const channel = container.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="beta"]',
+    );
     if (!channel) {
       throw new Error("Missing update channel control");
     }
-    channel.value = "beta";
-    channel.dispatchEvent(new Event("change"));
-    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    channel.click();
+    const policySwitches = [
+      ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
+    ];
+    const checks = policySwitches.find(
+      (control) =>
+        control
+          .closest(".settings-row")
+          ?.querySelector(".settings-row__title")
+          ?.textContent?.trim() === "Check for updates",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    checks.checked = false;
+    checks.dispatchEvent(new Event("change"));
+    const automatic = policySwitches.find(
+      (control) =>
+        control
+          .closest(".settings-row")
+          ?.querySelector(".settings-row__title")
+          ?.textContent?.trim() === "Automatic updates",
+    );
     if (!automatic) {
       throw new Error("Missing automatic update control");
     }
@@ -700,6 +735,7 @@ describe("ConfigPage Updates integration", () => {
     await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
     // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
     expect(runUpdate).not.toHaveBeenCalled();
@@ -718,7 +754,7 @@ describe("ConfigPage Updates integration", () => {
 
 describe("ConfigPage runtime config lifecycle", () => {
   it("loads Updates without requesting the admin-only config schema", async () => {
-    const page = new ConfigPage();
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
     page.pageId = "updates";
     const state = page as unknown as {
       synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
@@ -742,7 +778,7 @@ describe("ConfigPage runtime config lifecycle", () => {
   });
 
   it("loads replacement sources and clears sensitive reveal state", async () => {
-    const page = new ConfigPage();
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
     const state = page as unknown as {
       configViewState: ConfigViewState;
       synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;

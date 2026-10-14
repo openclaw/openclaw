@@ -2,24 +2,35 @@ import { describe, expect, it } from "vitest";
 import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config.js";
 import {
   applyCodexSessionPermissionPolicy,
+  resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
 
 const pluginConfig: CodexPluginConfig = {};
+const defaultRoot = "/workspace";
 
 function appServer(): CodexAppServerRuntimeOptions {
   return {
     start: { transport: "stdio", command: "codex", args: ["app-server"], headers: {} },
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "danger-full-access",
   };
+}
+
+function applyPolicy(overrides: Partial<Parameters<typeof applyCodexSessionPermissionPolicy>[0]>) {
+  return applyCodexSessionPermissionPolicy({
+    appServer: appServer(),
+    sessionRoot: "/workspace/project",
+    defaultRoot,
+    pluginConfig,
+    canUseAutoReview: true,
+    ...overrides,
+  });
 }
 
 describe("Codex session permission policy", () => {
@@ -49,12 +60,8 @@ describe("Codex session permission policy", () => {
       approvalsReviewer: "user",
     },
   ])("maps $mode to one complete app-server tuple", (expected) => {
-    const resolved = applyCodexSessionPermissionPolicy({
-      appServer: appServer(),
+    const resolved = applyPolicy({
       permissionMode: expected.mode,
-      sessionRoot: "/workspace/project",
-      pluginConfig,
-      canUseAutoReview: true,
     });
 
     expect(resolved).toMatchObject({
@@ -67,23 +74,16 @@ describe("Codex session permission policy", () => {
 
   it("downgrades workspace review to the user when model-backed review is untrusted", () => {
     expect(
-      applyCodexSessionPermissionPolicy({
-        appServer: appServer(),
+      applyPolicy({
         permissionMode: "workspace",
-        sessionRoot: "/workspace/project",
-        pluginConfig,
         canUseAutoReview: false,
       }).approvalsReviewer,
     ).toBe("user");
   });
 
   it("atomically downgrades a disallowed full tuple to guardian requirements", () => {
-    const resolved = applyCodexSessionPermissionPolicy({
-      appServer: appServer(),
+    const resolved = applyPolicy({
       permissionMode: "full",
-      sessionRoot: "/workspace/project",
-      pluginConfig,
-      canUseAutoReview: true,
       requirementsToml: [
         'allowed_sandbox_modes = ["workspace-write"]',
         'allowed_approval_policies = ["on-request"]',
@@ -98,13 +98,72 @@ describe("Codex session permission policy", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "guarded" as const,
+      policies: ["untrusted"],
+      approvalsReviewer: "user",
+    },
+    {
+      mode: "workspace" as const,
+      policies: ["untrusted", "never"],
+      approvalsReviewer: "auto_review",
+    },
+  ])("preserves managed prompting approval for a $mode session", (expected) => {
+    const resolved = applyPolicy({
+      permissionMode: expected.mode,
+      requirementsToml: `allowed_approval_policies = [${expected.policies
+        .map((policy) => `"${policy}"`)
+        .join(", ")}]`,
+    });
+
+    expect(resolved).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "untrusted",
+      approvalsReviewer: expected.approvalsReviewer,
+    });
+  });
+
+  it.each([
+    {
+      mode: "read-only" as const,
+      allowedSandbox: "workspace-write",
+    },
+    {
+      mode: "read-only" as const,
+      allowedSandbox: "danger-full-access",
+    },
+    {
+      mode: "guarded" as const,
+      allowedSandbox: "danger-full-access",
+    },
+    {
+      mode: "workspace" as const,
+      allowedSandbox: "danger-full-access",
+    },
+  ])("never widens $mode access to the managed $allowedSandbox sandbox", (params) => {
+    expect(() =>
+      applyPolicy({
+        permissionMode: params.mode,
+        requirementsToml: `allowed_sandbox_modes = ["${params.allowedSandbox}"]`,
+      }),
+    ).toThrow(
+      `Codex session permission mode=${params.mode} cannot satisfy managed sandbox requirements`,
+    );
+  });
+
+  it("lets managed requirements further restrict a guarded session to read-only", () => {
+    expect(
+      applyPolicy({
+        permissionMode: "guarded",
+        requirementsToml: 'allowed_sandbox_modes = ["read-only"]',
+      }),
+    ).toMatchObject({ sandbox: "read-only", approvalsReviewer: "user" });
+  });
+
   it("lets a deny exec floor tighten a guarded tuple", () => {
-    const resolved = applyCodexSessionPermissionPolicy({
-      appServer: appServer(),
+    const resolved = applyPolicy({
       permissionMode: "guarded",
-      sessionRoot: "/workspace/project",
-      pluginConfig,
-      canUseAutoReview: true,
       execMode: "deny",
     });
 
@@ -115,14 +174,79 @@ describe("Codex session permission policy", () => {
     });
   });
 
+  it.each([
+    {
+      requested: "full" as const,
+      runtime: {
+        sandbox: "workspace-write" as const,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "auto_review" as const,
+      },
+      effective: "workspace",
+      execMode: "auto",
+    },
+    {
+      requested: "workspace" as const,
+      runtime: {
+        sandbox: "workspace-write" as const,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "user" as const,
+      },
+      effective: "guarded",
+      execMode: "ask",
+    },
+    {
+      requested: "read-only" as const,
+      runtime: {
+        sandbox: "danger-full-access" as const,
+        approvalPolicy: "never" as const,
+        approvalsReviewer: "user" as const,
+      },
+      effective: "read-only",
+      execMode: "deny",
+    },
+  ])(
+    "keeps dynamic authority at $effective when the requested $requested tuple changes",
+    ({ requested, runtime, effective, execMode }) => {
+      expect(
+        resolveCodexEffectiveSessionPermissionPolicy({
+          appServer: { ...appServer(), ...runtime },
+          permissionMode: requested,
+          sessionRoot: "/workspace/project",
+          defaultRoot,
+        }),
+      ).toEqual({ mode: effective, root: "/workspace/project", execMode });
+    },
+  );
+
+  it.each(["read-only", "guarded", "workspace"] as const)(
+    "keeps mandatory per-command approval when applying %s session permissions",
+    (permissionMode) => {
+      expect(
+        applyPolicy({
+          appServer: { ...appServer(), approvalPolicy: "untrusted" },
+          permissionMode,
+          execMode: "ask",
+        }),
+      ).toMatchObject({ approvalPolicy: "untrusted", approvalsReviewer: "user" });
+    },
+  );
+
+  it("fails closed when session requirements exclude mandatory per-command approval", () => {
+    expect(() =>
+      applyPolicy({
+        appServer: { ...appServer(), approvalPolicy: "untrusted" },
+        permissionMode: "guarded",
+        execMode: "ask",
+        requirementsToml: 'allowed_approval_policies = ["on-request"]',
+      }),
+    ).toThrow("tools.exec.ask=always requires Codex app-server per-command approvals");
+  });
+
   it("fails closed when requirements cannot provide mandatory user review", () => {
     expect(() =>
-      applyCodexSessionPermissionPolicy({
-        appServer: appServer(),
+      applyPolicy({
         permissionMode: "guarded",
-        sessionRoot: "/workspace/project",
-        pluginConfig,
-        canUseAutoReview: true,
         requirementsToml: [
           'allowed_sandbox_modes = ["workspace-write"]',
           'allowed_approval_policies = ["on-request"]',
@@ -137,6 +261,7 @@ describe("Codex session permission policy", () => {
       resolveCodexSessionPermissionCwd({
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         requestedCwd: "/workspace/project/packages/app",
         fallbackCwd: "/workspace",
       }),
@@ -145,9 +270,42 @@ describe("Codex session permission policy", () => {
       resolveCodexSessionPermissionCwd({
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         requestedCwd: "/workspace/other",
         fallbackCwd: "/workspace",
       }),
     ).toBe("/workspace/project");
+  });
+
+  it("uses the agent workspace for rootless policies and clamps requested cwd to it", () => {
+    const runtime = applyPolicy({
+      permissionMode: "workspace",
+      sessionRoot: undefined,
+    });
+
+    expect(runtime).toMatchObject({ sessionRoot: defaultRoot, sandbox: "workspace-write" });
+    expect(
+      resolveCodexEffectiveSessionPermissionPolicy({
+        appServer: runtime,
+        permissionMode: "workspace",
+        defaultRoot,
+      }),
+    ).toEqual({ mode: "workspace", root: defaultRoot, execMode: "auto" });
+    expect(
+      resolveCodexSessionPermissionCwd({
+        permissionMode: "workspace",
+        defaultRoot,
+        requestedCwd: "/workspace/packages/app",
+        fallbackCwd: "/outside",
+      }),
+    ).toBe("/workspace/packages/app");
+    expect(
+      resolveCodexSessionPermissionCwd({
+        permissionMode: "workspace",
+        defaultRoot,
+        requestedCwd: "/outside",
+        fallbackCwd: "/outside",
+      }),
+    ).toBe(defaultRoot);
   });
 });

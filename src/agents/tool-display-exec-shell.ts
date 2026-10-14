@@ -10,7 +10,6 @@ type PreambleResult = {
   chdirPath?: string;
 };
 
-/** Removes matching outer single or double quotes from a display token. */
 export function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -26,29 +25,40 @@ export function stripOuterQuotes(value: string | undefined): string | undefined 
   return trimmed;
 }
 
-/** Splits a command string into shell-ish words while respecting simple quotes and escapes. */
-export function splitShellWords(input: string | undefined, maxWords = 48): string[] {
-  if (!input) {
-    return [];
-  }
+export type ShellWords = {
+  words: string[];
+  hereInput?: "heredoc" | "here-string";
+  unsupported: boolean;
+};
 
-  const words: string[] = [];
+/** Separates command arguments from unquoted shell redirects before quote removal. */
+export function parseShellWords(input: string | undefined, maxWords = 48): ShellWords {
+  const source = input ?? "";
+  const result: ShellWords = { words: [], unsupported: false };
   let current = "";
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (const char of input) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
+  let quote: '"' | "'" | "ansi-c" | undefined;
+  let previousUnquotedDollar = false;
+  let started = false;
+  let protectedWord = false;
+  let redirectOperand = false;
+  const flush = () => {
+    if (started) {
+      if (!redirectOperand) {
+        result.words.push(current);
+      }
+      redirectOperand = false;
     }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
+    current = "";
+    started = false;
+    protectedWord = false;
+  };
 
-    if (quote) {
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source.charAt(index);
+    const next = source.charAt(index + 1);
+    const wasUnquotedDollar: boolean = previousUnquotedDollar;
+    previousUnquotedDollar = false;
+    if (quote === "'") {
       if (char === quote) {
         quote = undefined;
       } else {
@@ -56,34 +66,91 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
       }
       continue;
     }
-
+    if (char === "\\" && (!quote || quote === "ansi-c" || /[$`"\\\n]/u.test(next))) {
+      if (!next) {
+        result.unsupported = true;
+        break;
+      }
+      index += 1;
+      if (next !== "\n") {
+        current += next;
+        started = protectedWord = true;
+      } else {
+        previousUnquotedDollar = wasUnquotedDollar;
+      }
+      continue;
+    }
+    if (quote) {
+      if (char === (quote === "ansi-c" ? "'" : quote)) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
     if (char === '"' || char === "'") {
-      quote = char;
+      quote = char === "'" && wasUnquotedDollar ? "ansi-c" : char;
+      started = protectedWord = true;
       continue;
     }
-
-    if (/\s/.test(char)) {
-      if (!current) {
-        continue;
+    if (/\s/u.test(char)) {
+      flush();
+      if (result.words.length >= maxWords) {
+        return result;
       }
-      words.push(current);
-      if (words.length >= maxWords) {
-        return words;
-      }
-      current = "";
       continue;
     }
-
+    if (char === "#" && !started) {
+      break;
+    }
+    if (char === "<" || char === ">" || (char === "&" && next === ">")) {
+      if (next === "(") {
+        result.unsupported = true;
+      }
+      // Only unquoted adjacent digits or {name} belong to the redirect's fd prefix.
+      if (!protectedWord && /^(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/u.test(current)) {
+        current = "";
+        started = false;
+      }
+      flush();
+      let operator = char;
+      if (char === "&") {
+        operator += next;
+        index += 1;
+        if (source.charAt(index + 1) === ">") {
+          operator += ">";
+          index += 1;
+        }
+      } else if (
+        next === char ||
+        next === "&" ||
+        (char === "<" && next === ">") ||
+        (char === ">" && next === "|")
+      ) {
+        operator += next;
+        index += 1;
+        if (
+          operator === "<<" &&
+          (source.charAt(index + 1) === "-" || source.charAt(index + 1) === "<")
+        ) {
+          operator += source.charAt(++index);
+        }
+      }
+      if (operator.startsWith("<<")) {
+        result.hereInput = operator === "<<<" ? "here-string" : "heredoc";
+      }
+      redirectOperand = true;
+      continue;
+    }
     current += char;
+    started = true;
+    previousUnquotedDollar = char === "$";
   }
-
-  if (current) {
-    words.push(current);
-  }
-  return words;
+  flush();
+  result.unsupported ||= quote !== undefined || redirectOperand;
+  return result;
 }
 
-/** Returns a normalized basename for a command token. */
 export function binaryName(token: string | undefined): string | undefined {
   if (!token) {
     return undefined;
@@ -93,127 +160,79 @@ export function binaryName(token: string | undefined): string | undefined {
   return normalizeLowercaseStringOrEmpty(segment);
 }
 
-/** Reads the value for any matching short or long option name. */
-export function optionValue(words: string[], names: string[]): string | undefined {
-  const lookup = new Set(names);
-
-  for (let i = 0; i < words.length; i += 1) {
-    const token = words[i];
-    if (!token) {
-      continue;
+/** Parses option boundaries once; callers supply the command's value-taking options. */
+export function parseShellOptions(words: string[], from = 1, optionsWithValue: string[] = []) {
+  const positional: string[] = [];
+  const options = new Map<string, string | undefined>();
+  const takesValue = new Set(optionsWithValue);
+  const record = (name: string, value?: string) => {
+    if (!options.has(name)) {
+      options.set(name, value);
     }
-
-    if (lookup.has(token)) {
-      const value = words[i + 1];
-      if (value && !value.startsWith("-")) {
-        return value;
-      }
-      continue;
+  };
+  for (let index = from; index < words.length; index += 1) {
+    const token = words[index];
+    if (token === undefined) {
+      break;
     }
-
-    for (const name of names) {
-      if (name.startsWith("--") && token.startsWith(`${name}=`)) {
-        return token.slice(name.length + 1);
+    if (token === "--") {
+      positional.push(...words.slice(index + 1));
+      break;
+    }
+    if (takesValue.has(token)) {
+      record(token, words[++index]);
+    } else if (token.startsWith("--")) {
+      const equals = token.indexOf("=");
+      record(
+        equals < 0 ? token : token.slice(0, equals),
+        equals < 0 ? undefined : token.slice(equals + 1),
+      );
+    } else if (token.startsWith("-") && token.length > 1) {
+      for (let offset = 1; offset < token.length; offset += 1) {
+        const name = `-${token[offset]}`;
+        if (takesValue.has(name)) {
+          record(name, token.slice(offset + 1) || words[++index]);
+          break;
+        }
+        record(name);
       }
+    } else {
+      positional.push(token);
     }
   }
+  return { positional, options };
+}
 
+/** Reads the first occurrence of any matching short or long option. */
+export function optionValue(words: string[], names: string[]): string | undefined {
+  const { options } = parseShellOptions(words, 1, names);
+  for (const [name, value] of options) {
+    if (names.includes(name)) {
+      return value;
+    }
+  }
   return undefined;
 }
 
-/** Returns positional args after skipping options and configured option values. */
-export function positionalArgs(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string[] {
-  const args: string[] = [];
-  const takesValue = new Set(optionsWithValue);
-
-  for (let i = from; i < words.length; i += 1) {
-    const token = words[i];
-    if (!token) {
-      continue;
-    }
-
-    if (token === "--") {
-      for (let j = i + 1; j < words.length; j += 1) {
-        const candidate = words[j];
-        if (candidate) {
-          args.push(candidate);
-        }
-      }
-      break;
-    }
-
-    if (token.startsWith("--")) {
-      if (token.includes("=")) {
-        continue;
-      }
-      if (takesValue.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-
-    if (token.startsWith("-")) {
-      if (takesValue.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-
-    args.push(token);
-  }
-
-  return args;
-}
-
-/** Returns the first positional arg after skipping options and configured option values. */
-export function firstPositional(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string | undefined {
-  return positionalArgs(words, from, optionsWithValue)[0];
-}
-
-/** Removes leading `env` wrappers and VAR=value assignments from parsed words. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
     return words;
   }
 
-  let index = 0;
-  if (binaryName(words[0]) === "env") {
-    index = 1;
-    while (index < words.length) {
-      const token = words[index];
-      if (!token) {
-        break;
-      }
-      if (token.startsWith("-")) {
-        index += 1;
-        continue;
-      }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-        index += 1;
-        continue;
-      }
+  const isEnv = binaryName(words[0]) === "env";
+  let index = isEnv ? 1 : 0;
+  while (index < words.length) {
+    const token = words[index];
+    if (!token || (!(isEnv && token.startsWith("-")) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))) {
       break;
     }
-    return words.slice(index);
-  }
-
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words.at(index) ?? "")) {
     index += 1;
   }
   return words.slice(index);
 }
 
-/** Unwraps common `sh -c`/`bash -lc` command wrappers for display parsing. */
 export function unwrapShellWrapper(command: string): string {
-  const words = splitShellWords(command, 10);
+  const { words } = parseShellWords(command, 10);
   if (words.length < 3) {
     return command;
   }
@@ -243,7 +262,11 @@ type HeredocMarker = {
   operatorIndex: number;
 };
 
-function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+export function parseHeredocMarker(
+  command: string,
+  operatorIndex: number,
+  whitespace = /[ \t]/u,
+): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
     command[operatorIndex - 1] === "<" ||
@@ -255,39 +278,30 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 
   const stripLeadingTabs = command[operatorIndex + 2] === "-";
   let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
-  while (/[ \t]/u.test(command[index] ?? "")) {
+  while (whitespace.test(command[index] ?? "")) {
     index += 1;
   }
 
   let value = "";
   let quote: '"' | "'" | undefined;
   for (; index < command.length; index += 1) {
-    const char = command[index] ?? "";
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-        continue;
-      }
-      if (quote === '"' && char === "\\" && index + 1 < command.length) {
-        index += 1;
-        value += command[index] ?? "";
-        continue;
-      }
-      value += char;
+    let char = command[index] ?? "";
+    if (quote && char === quote) {
+      quote = undefined;
       continue;
     }
-
-    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
-      break;
+    if (!quote) {
+      if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
+        break;
+      }
+      if (char === "'" || char === '"') {
+        quote = char;
+        continue;
+      }
     }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "\\" && index + 1 < command.length) {
+    if (quote !== "'" && char === "\\" && index + 1 < command.length) {
       index += 1;
-      value += command[index] ?? "";
-      continue;
+      char = command[index] ?? "";
     }
     value += char;
   }
@@ -527,34 +541,19 @@ const SHELL_NAMED_COMPOUND_START_PATTERN =
   `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN})`;
 const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
 const SHELL_FUNCTION_BODY_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
-const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
-  "u",
-);
 const SHELL_FUNCTION_NAME_PATTERN = `[^\\s;&|()<>]+`;
-const SHELL_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
-  "u",
-);
-const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
-  "u",
-);
 const SHELL_SUBSTITUTION_COMMAND_START_PATTERN = String.raw`(?:\$\((?!\()|[<>]\()\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
-const SHELL_COMPOUND_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
-  "u",
-);
-const SHELL_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
-  "u",
-);
-const SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
-  "u",
+const SHELL_COMPOUND_PATTERNS = [
+  SHELL_COMMAND_START_PATTERN,
+  SHELL_SUBSTITUTION_COMMAND_START_PATTERN,
+].flatMap((start) =>
+  [
+    SHELL_COMPOUND_START_PATTERN,
+    `function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
+    `(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
+  ].map((body) => new RegExp(`${start}${body}`, "u")),
 );
 
-/** Returns whether unquoted shell syntax contains a compound-command introducer. */
 export function hasShellCompoundCommand(command: string): boolean {
   // Keep quoted and escaped fragments token-occupying so `"x"select` cannot become `select`.
   const syntaxChars = Array.from({ length: command.length }, () => "\0");
@@ -563,14 +562,7 @@ export function hasShellCompoundCommand(command: string): boolean {
     return true;
   });
   const syntax = syntaxChars.join("");
-  return (
-    SHELL_COMPOUND_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_COMPOUND_AT_SUBSTITUTION_START_RE.test(syntax) ||
-    SHELL_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax) ||
-    SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax)
-  );
+  return SHELL_COMPOUND_PATTERNS.some((pattern) => pattern.test(syntax));
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
@@ -594,29 +586,16 @@ export function splitTopLevelStages(command: string): string[] {
 /** Splits a command on top-level single pipes without splitting `||`. */
 export function splitTopLevelPipes(command: string): string[] {
   return splitTopLevel(command, (char, index) => {
-    if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
+    if (
+      char === "|" &&
+      command[index - 1] !== "|" &&
+      command[index - 1] !== ">" &&
+      command[index + 1] !== "|"
+    ) {
       return 1;
     }
     return 0;
   });
-}
-
-function parseChdirTarget(head: string): string | undefined {
-  const words = splitShellWords(head, 3);
-  const bin = binaryName(words[0]);
-  if (bin === "cd" || bin === "pushd") {
-    return words[1] || undefined;
-  }
-  return undefined;
-}
-
-function isChdirCommand(head: string): boolean {
-  const bin = binaryName(splitShellWords(head, 2)[0]);
-  return bin === "cd" || bin === "pushd" || bin === "popd";
-}
-
-function isPopdCommand(head: string): boolean {
-  return binaryName(splitShellWords(head, 2)[0]) === "popd";
 }
 
 /** Removes leading setup commands such as exports and cwd changes from display summaries. */
@@ -629,12 +608,8 @@ export function stripShellPreamble(command: string): PreambleResult {
     // Only scan top-level separators so quoted strings and nested shell fragments stay intact in
     // the command fragment that display code will summarize.
     scanTopLevelChars(rest, (char, idx) => {
-      if (char === "&" && rest[idx + 1] === "&") {
-        first = { index: idx, length: 2 };
-        return false;
-      }
-      if (char === "|" && rest[idx + 1] === "|") {
-        first = { index: idx, length: 2, isOr: true };
+      if ((char === "&" || char === "|") && rest[idx + 1] === char) {
+        first = { index: idx, length: 2, isOr: char === "|" };
         return false;
       }
       if (char === ";" || char === "\n") {
@@ -644,7 +619,10 @@ export function stripShellPreamble(command: string): PreambleResult {
       return undefined;
     });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
-    const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);
+    const { words } = parseShellWords(head, 3);
+    const bin = binaryName(words[0]);
+    const isChdir =
+      (first ? !first.isOr : i > 0) && (bin === "cd" || bin === "pushd" || bin === "popd");
     const isPreamble =
       head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
 
@@ -653,11 +631,7 @@ export function stripShellPreamble(command: string): PreambleResult {
     }
 
     if (isChdir) {
-      if (isPopdCommand(head)) {
-        chdirPath = undefined;
-      } else {
-        chdirPath = parseChdirTarget(head) ?? chdirPath;
-      }
+      chdirPath = bin === "popd" ? undefined : words[1] || chdirPath;
     }
 
     rest = first ? rest.slice(first.index + first.length).trimStart() : "";

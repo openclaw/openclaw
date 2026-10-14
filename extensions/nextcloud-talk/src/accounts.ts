@@ -1,26 +1,20 @@
-// Nextcloud Talk plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredAccountValue,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
 } from "openclaw/plugin-sdk/account-core";
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  mergeNextcloudTalkAccountConfig,
+  resolveDefaultNextcloudTalkAccountId,
+} from "../configured-state.js";
 import {
   resolveNextcloudTalkApiCredentialsResult,
   type NextcloudTalkCredentialUnavailableDiagnostic,
 } from "./api-credentials.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
-
-const debugAccounts = (...args: unknown[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_NEXTCLOUD_TALK_ACCOUNTS)) {
-    console.warn("[nextcloud-talk:accounts]", ...args);
-  }
-};
 
 export type ResolvedNextcloudTalkAccount = {
   accountId: string;
@@ -35,30 +29,8 @@ export type ResolvedNextcloudTalkAccount = {
   config: NextcloudTalkAccountConfig;
 };
 
-const {
-  listAccountIds: listNextcloudTalkAccountIdsInternal,
-  resolveDefaultAccountId: resolveDefaultNextcloudTalkAccountId,
-  resolveAccountConfig: mergeNextcloudTalkAccountConfig,
-} = createAccountListHelpers<NextcloudTalkAccountConfig>("nextcloud-talk", {
-  normalizeAccountId,
-  omitKeys: ["defaultAccount"],
-  hasImplicitDefaultAccount: (cfg) => {
-    const channel = cfg.channels?.["nextcloud-talk"];
-    return Boolean(
-      channel?.baseUrl?.trim() &&
-      (hasConfiguredAccountValue(channel.botSecret) ||
-        channel.botSecretFile?.trim() ||
-        process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim()),
-    );
-  },
-});
 export { resolveDefaultNextcloudTalkAccountId };
-
-export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
-  const ids = listNextcloudTalkAccountIdsInternal(cfg);
-  debugAccounts("listNextcloudTalkAccountIds", ids);
-  return ids;
-}
+export { listNextcloudTalkAccountIds } from "../configured-state.js";
 
 function resolveNextcloudTalkSecret(
   accountId: string,
@@ -120,28 +92,7 @@ export function resolveNextcloudTalkAccount(params: {
     const accountEnabled = merged.enabled !== false;
     const enabled = baseEnabled && accountEnabled;
     const secretResolution = resolveNextcloudTalkSecret(accountId, merged);
-    const apiCredentialResolution = resolveNextcloudTalkApiCredentialsResult({
-      apiUser: merged.apiUser,
-      apiPassword: merged.apiPassword,
-      apiPasswordFile: merged.apiPasswordFile,
-      configPath: `channels.nextcloud-talk.accounts.${accountId}.apiPasswordFile`,
-    });
-    const diagnostics = [
-      secretResolution.diagnostic,
-      apiCredentialResolution.status === "configured_unavailable"
-        ? apiCredentialResolution.diagnostic
-        : undefined,
-    ].filter((diagnostic): diagnostic is NextcloudTalkCredentialUnavailableDiagnostic =>
-      Boolean(diagnostic),
-    );
     const baseUrl = merged.baseUrl?.trim()?.replace(/\/$/, "") ?? "";
-
-    debugAccounts("resolve", {
-      accountId,
-      enabled,
-      secretSource: secretResolution.source,
-      baseUrl: baseUrl ? "[set]" : "[missing]",
-    });
 
     return {
       accountId,
@@ -151,8 +102,9 @@ export function resolveNextcloudTalkAccount(params: {
       secret: secretResolution.secret,
       secretSource: secretResolution.source,
       tokenStatus: secretResolution.status,
-      apiCredentialStatus: apiCredentialResolution.status,
-      ...(diagnostics.length > 0 ? { credentialDiagnostics: diagnostics } : {}),
+      ...(secretResolution.diagnostic
+        ? { credentialDiagnostics: [secretResolution.diagnostic] }
+        : {}),
       config: merged,
     } satisfies ResolvedNextcloudTalkAccount;
   };
@@ -164,4 +116,36 @@ export function resolveNextcloudTalkAccount(params: {
     hasCredential: (account) => account.tokenStatus !== "missing",
     resolveDefaultAccountId: () => resolveDefaultNextcloudTalkAccountId(params.cfg),
   });
+}
+
+export function inspectNextcloudTalkAccount(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+}) {
+  const account = resolveNextcloudTalkAccount(params);
+  const apiCredentialResolution = resolveNextcloudTalkApiCredentialsResult({
+    apiUser: account.config.apiUser,
+    apiPassword: account.config.apiPassword,
+    apiPasswordFile: account.config.apiPasswordFile,
+    configPath: `channels.nextcloud-talk.accounts.${account.accountId}.apiPasswordFile`,
+    mode: "inspect",
+  });
+  const credentialDiagnostics = [
+    ...(account.credentialDiagnostics ?? []),
+    ...(apiCredentialResolution.status === "configured_unavailable" &&
+    apiCredentialResolution.diagnostic
+      ? [apiCredentialResolution.diagnostic]
+      : []),
+  ];
+  return {
+    ...account,
+    configured: isNextcloudTalkAccountConfigured(account),
+    mode: "webhook" as const,
+    apiCredentialStatus: apiCredentialResolution.status,
+    ...(credentialDiagnostics.length > 0 ? { credentialDiagnostics } : {}),
+  };
+}
+
+export function isNextcloudTalkAccountConfigured(account: ResolvedNextcloudTalkAccount): boolean {
+  return Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim());
 }

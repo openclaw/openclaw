@@ -5,9 +5,12 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveActiveMemoryCleanupConfig } from "./config.js";
+import { readActiveMemoryConfig } from "./config.js";
 import {
   CACHE_SWEEP_INTERVAL_MS,
   DEFAULT_MAX_CACHE_ENTRIES,
@@ -25,12 +28,28 @@ type ActiveRecallRunEntry = {
 };
 const activeRecallRuns = new Map<string, ActiveRecallRunEntry>();
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
+type MemoryAudience = NonNullable<OpenClawPluginToolContext["memoryAudience"]>;
 
-function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
+export function buildMemoryAudienceCacheIdentity(audience: MemoryAudience | undefined): string {
+  if (!audience) {
+    return "none";
+  }
+  return JSON.stringify(
+    audience.kind === "owner-private"
+      ? [audience.kind, audience.agentId]
+      : [audience.kind, audience.agentId, audience.sessionKey, audience.sessionId],
+  );
+}
+
+export function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
 }
 
-function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
+export function isCircuitBreakerOpen(
+  key: string,
+  maxTimeouts: number,
+  cooldownMs: number,
+): boolean {
   const entry = timeoutCircuitBreaker.get(key);
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
@@ -43,29 +62,41 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string): void {
+export function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
+  const now = Date.now();
+  for (const [entryKey, entry] of timeoutCircuitBreaker) {
+    if (now - entry.lastTimeoutAt >= cooldownMs) {
+      timeoutCircuitBreaker.delete(entryKey);
+    }
+  }
   const entry = timeoutCircuitBreaker.get(key);
-  if (entry) {
-    entry.consecutiveTimeouts++;
-    entry.lastTimeoutAt = Date.now();
-  } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+  // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
+  timeoutCircuitBreaker.delete(key);
+  timeoutCircuitBreaker.set(key, {
+    consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
+    lastTimeoutAt: now,
+  });
+  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
+    const oldestKey = timeoutCircuitBreaker.keys().next().value;
+    if (oldestKey !== undefined) {
+      timeoutCircuitBreaker.delete(oldestKey);
+    }
   }
 }
 
-function resetCircuitBreaker(key: string): void {
+export function resetCircuitBreaker(key: string): void {
   timeoutCircuitBreaker.delete(key);
 }
 
-function scheduleMemorySearchCleanupAfterTimeout(
+export function scheduleMemorySearchCleanupAfterTimeout(
   api: OpenClawPluginApi,
   logPrefix: string,
   agentId: string,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const cfg = resolveActiveMemoryCleanupConfig(api);
+    const cfg = readActiveMemoryConfig(api);
     setTimeout(() => {
-      void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      void closeActiveMemorySearchManager({ cfg, agentId })
         .then(() => {
           api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
         })
@@ -80,7 +111,7 @@ function scheduleMemorySearchCleanupAfterTimeout(
   });
 }
 
-async function resolveActiveRecallForRun(
+export async function resolveActiveRecallForRun(
   runId: string,
   start: (onTimeoutCleanup: (cleanup: Promise<void>) => void) => Promise<ActiveRecallResult>,
 ): Promise<ActiveRecallResult> {
@@ -123,7 +154,7 @@ async function resolveActiveRecallForRun(
   return await entry.promise;
 }
 
-function forgetActiveRecallRun(runId: string | undefined): void {
+export function forgetActiveRecallRun(runId: string | undefined): void {
   if (runId) {
     for (const key of activeRecallRuns.keys()) {
       if (key === runId || key.startsWith(`${runId}:`)) {
@@ -133,12 +164,13 @@ function forgetActiveRecallRun(runId: string | undefined): void {
   }
 }
 
-function buildCacheKey(params: {
+export function buildCacheKey(params: {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
   query: string;
   authorityFingerprint: string;
+  memoryAudience?: MemoryAudience;
   memorySlot?: string;
   activeProjectKeys?: string[];
   modelProviderId?: string;
@@ -152,6 +184,7 @@ function buildCacheKey(params: {
       JSON.stringify({
         query: params.query,
         authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: buildMemoryAudienceCacheIdentity(params.memoryAudience),
         memorySlot: params.memorySlot,
         activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
         modelProviderId: params.modelProviderId,
@@ -164,24 +197,20 @@ function buildCacheKey(params: {
   return `${params.agentId}:${params.sessionKey ?? params.sessionId ?? "none"}:${hash}`;
 }
 
-function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
+export function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   const cached = activeRecallCache.get(cacheKey);
   if (!cached) {
     return undefined;
   }
   const now = asDateTimestampMs(Date.now());
-  if (
-    now === undefined ||
-    asDateTimestampMs(cached.expiresAt) === undefined ||
-    cached.expiresAt <= now
-  ) {
+  if (now === undefined || cached.expiresAt <= now) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
   return cached.result;
 }
 
-function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
+export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
   const rawNow = Date.now();
   const now = asDateTimestampMs(rawNow);
   if (
@@ -220,66 +249,34 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
     return;
   }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
+    if (cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }
 }
 
-function toSingleLineLogValue(value: unknown): string {
-  const raw =
-    typeof value === "string"
-      ? value
-      : typeof value === "number" ||
-          typeof value === "boolean" ||
-          typeof value === "bigint" ||
-          typeof value === "symbol"
-        ? String(value)
-        : value == null
-          ? ""
-          : JSON.stringify(value);
-  const singleLine = raw
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+export function toSingleLineLogValue(value: string): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
     ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;
 }
 
-function toSingleLineErrorMessage(error: unknown): string {
+export function toSingleLineErrorMessage(error: unknown): string {
   return toSingleLineLogValue(coerceErrorMessage(error));
 }
 
-function shouldCacheResult(result: ActiveRecallResult): boolean {
+export function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
 
-function resetActiveRecallStateForTests(): void {
+export function resetActiveRecallStateForTests(): void {
   activeRecallCache.clear();
   activeRecallRuns.clear();
   timeoutCircuitBreaker.clear();
   lastActiveRecallCacheSweepAt = 0;
 }
 
-function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
+export function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
   return timeoutCircuitBreaker.get(key);
 }
-
-export {
-  buildCacheKey,
-  buildCircuitBreakerKey,
-  getCachedResult,
-  getCircuitBreakerEntry,
-  isCircuitBreakerOpen,
-  forgetActiveRecallRun,
-  recordCircuitBreakerTimeout,
-  resetActiveRecallStateForTests,
-  resetCircuitBreaker,
-  resolveActiveRecallForRun,
-  scheduleMemorySearchCleanupAfterTimeout,
-  setCachedResult,
-  shouldCacheResult,
-  toSingleLineErrorMessage,
-  toSingleLineLogValue,
-};

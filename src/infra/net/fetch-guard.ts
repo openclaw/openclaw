@@ -1,19 +1,22 @@
 // Guarded fetch runtime enforces SSRF checks, DNS pinning, redirect policy, and
 // trusted proxy modes around provider/network requests.
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureEffectAuthority } from "../../shared/effect-authority.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { createAbortError } from "../abort-signal.js";
-import { toErrorObject } from "../errors.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
+import { cancelUnreadResponseBody } from "../http-body.js";
 import {
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
+import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -34,25 +37,13 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
-
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  if (fromParams !== undefined) {
-    return fromParams;
-  }
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  if (globalUndiciStreamTimeoutMs !== undefined) {
-    return globalUndiciStreamTimeoutMs;
-  }
-  return undefined;
-}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -67,6 +58,10 @@ export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /** Final synchronous check after transport preparation and before each request or redirect. */
+  beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -82,12 +77,16 @@ export type GuardedFetchOptions = {
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
+  /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
+  rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  /** Resolve a synchronous per-hop override so redirects can change proxy or direct routing. */
+  resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   retainAuthorizationRedirectHostnameAllowlist?: string[];
   mode?: GuardedFetchMode;
   pinDns?: boolean;
@@ -124,7 +123,6 @@ export class GuardedFetchRedirectError extends Error {
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
-  resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   /** Preserve ambient Undici env-proxy routing for each eligible URL while keeping strict checks otherwise. */
   useEnvProxyForEligibleUrls?: boolean;
 };
@@ -140,44 +138,6 @@ type GuardedFetchPresetOptions = Omit<
 
 const DEFAULT_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
-
-async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await run();
-  }
-  if (signal.aborted) {
-    throw signal.reason ?? createAbortError("Guarded fetch aborted during network preflight");
-  }
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const settle = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      complete();
-    };
-    const onAbort = () =>
-      settle(() =>
-        reject(
-          toErrorObject(
-            signal.reason ?? createAbortError("Guarded fetch aborted during network preflight"),
-            "Guarded fetch aborted during network preflight",
-          ),
-        ),
-      );
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    void run().then(
-      (value) => settle(() => resolve(value)),
-      (error: unknown) => settle(() => reject(toErrorObject(error, "Network preflight failed"))),
-    );
-  });
-}
 
 function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
   return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
@@ -217,7 +177,7 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
-function isManagedProxyActive(): boolean {
+export function isManagedProxyActive(): boolean {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
 }
 
@@ -263,13 +223,11 @@ function createPolicyDispatcherWithoutPinnedDns(
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  if (dispatcherPolicy.proxyTls) {
-    return createHttp1ProxyAgent(
-      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
-      timeoutMs,
-    );
-  }
-  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
+  const requestTls = dispatcherPolicy.proxyTls;
+  return createHttp1ProxyAgent(
+    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    timeoutMs,
+  );
 }
 
 async function assertExplicitProxyAllowed(
@@ -277,6 +235,7 @@ async function assertExplicitProxyAllowed(
   lookupFn: LookupFn | undefined,
   policy: SsrFPolicy | undefined,
   signal: AbortSignal | undefined,
+  trustedProxy: boolean,
 ): Promise<void> {
   // Explicit proxies are operator-configured, but the proxy host still needs
   // basic URL and private-network validation before target validation proceeds.
@@ -289,7 +248,10 @@ async function assertExplicitProxyAllowed(
   } catch {
     throw new Error("Invalid explicit proxy URL");
   }
-  if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
+  // SOCKS resolves target DNS remotely; only the existing trusted-proxy mode
+  // can delegate that check. Strict callers must retain local DNS pinning.
+  const trustedSocks = trustedProxy && ["socks:", "socks5:"].includes(parsedProxyUrl.protocol);
+  if (!["http:", "https:"].includes(parsedProxyUrl.protocol) && !trustedSocks) {
     throw new Error("Explicit proxy URL must use http or https");
   }
   const proxyPolicy: SsrFPolicy | undefined =
@@ -303,14 +265,11 @@ async function assertExplicitProxyAllowed(
           ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
         }
       : undefined;
-  await runAbortablePreflight(
-    async () =>
-      await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
-        lookupFn,
-        policy: proxyPolicy,
-      }),
+  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+    lookupFn,
+    policy: proxyPolicy,
     signal,
-  );
+  });
 }
 
 function isRedirectStatus(status: number): boolean {
@@ -328,48 +287,16 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
-export function retainSafeHeadersForCrossOriginRedirectHeaders(
-  headers?: HeadersInit,
-): Record<string, string> | undefined {
-  return retainSafeRedirectHeaders(headers);
-}
-
-async function captureGuardedFetchExchange(params: {
-  url: string;
-  method: string;
-  requestHeaders?: Headers | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  transport?: "http" | "sse";
-  capture: GuardedFetchOptions["capture"];
-  auditContext?: string;
-  capturedByGlobalFetchPatch?: boolean;
-}): Promise<void> {
+async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
-    return;
+    return { fetchImpl };
   }
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
-  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
-    return;
-  }
-  captureHttpExchange({
-    url: params.url,
-    method: params.method,
-    requestHeaders: params.requestHeaders,
-    requestBody: params.requestBody,
-    response: params.response,
-    transport: params.transport,
-    flowId: params.capture?.flowId,
-    meta: {
-      captureOrigin: "guarded-fetch",
-      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-      ...params.capture?.meta,
-      ...(params.capture?.sensitiveRequestHeaderNames
-        ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
-        : {}),
-    },
-  });
+  return {
+    fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
+    capture: prepareHttpCaptureForTransport(),
+  };
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -430,9 +357,11 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   return nextHeaders;
 }
 
-function rewriteRedirectInitForMethod(params: {
+function rewriteRedirectInit(params: {
   init?: RequestInit;
   status: number;
+  crossOrigin: boolean;
+  allowUnsafeReplay: boolean;
 }): RequestInit | undefined {
   const { init, status } = params;
   if (!init) {
@@ -445,40 +374,22 @@ function rewriteRedirectInitForMethod(params: {
       ? currentMethod !== "GET" && currentMethod !== "HEAD"
       : (status === 301 || status === 302) && currentMethod === "POST";
 
-  if (!shouldForceGet) {
+  const shouldDropUnsafeBody =
+    params.crossOrigin &&
+    !params.allowUnsafeReplay &&
+    currentMethod !== "GET" &&
+    currentMethod !== "HEAD";
+  if (!shouldForceGet && !shouldDropUnsafeBody) {
     return init;
   }
 
   return {
     ...init,
-    method: "GET",
+    ...(shouldForceGet ? { method: "GET" } : {}),
     body: undefined,
     headers: dropBodyHeaders(init.headers),
   };
 }
-
-function rewriteRedirectInitForCrossOrigin(params: {
-  init?: RequestInit;
-  allowUnsafeReplay: boolean;
-}): RequestInit | undefined {
-  const { init, allowUnsafeReplay } = params;
-  if (!init || allowUnsafeReplay) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  if (currentMethod === "GET" || currentMethod === "HEAD") {
-    return init;
-  }
-
-  return {
-    ...init,
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
-}
-
-export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
@@ -504,11 +415,28 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
-  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
+  const assertCurrent = captureGuardedFetchRequestAuthority();
+  const effect = captureEffectAuthority();
+  if (
+    params.allowCrossOriginUnsafeRedirectReplay === true &&
+    params.rejectCrossOriginUnsafeRedirectReplay === true
+  ) {
+    throw new TypeError("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+  }
+  const globalFetch = globalThis.fetch;
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
   const isUsingMockedFetch = isMockedFetch(defaultFetch);
+  const supportsDispatcherInit =
+    (params.fetchImpl !== undefined &&
+      !isAmbientGlobalFetch({ fetchImpl: params.fetchImpl, globalFetch })) ||
+    isUsingMockedFetch;
+  // Admission precedes DNS and transport awaits. Capture must not resolve a new
+  // session after a delayed request outlives its original capture generation.
+  // Bypass only our exact global wrapper so its owner cannot also record.
+  const captureAdmission = await prepareGuardedFetchCapture(params, defaultFetch);
 
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
@@ -516,9 +444,10 @@ async function fetchWithSsrFGuardInternal(
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
+  // Compose the caller signal before the deadline can mask init.signal.
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
-    signal: params.signal,
+    signal: params.signal ?? params.init?.signal ?? undefined,
     operation: "fetchWithSsrFGuard",
     url: params.url,
   });
@@ -559,21 +488,23 @@ async function fetchWithSsrFGuardInternal(
 
     let dispatcher: Dispatcher | null = null;
     let dispatcherLease: PinnedDispatcherLease | undefined;
-    let activeResponse: Response | undefined;
-    const releaseDispatcher = async () =>
+    let response: Response | undefined;
+    const requestController = new AbortController();
+    const releaseDispatcher = async () => {
+      // Release only this hop's transport, including capture tees, before returning its pool lease.
+      requestController.abort();
+      await cancelUnreadResponseBody(response);
       await (dispatcherLease ? dispatcherLease.release() : closeDispatcher(dispatcher));
+    };
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
     const resolvePinnedHostname = async () =>
-      await runAbortablePreflight(
-        async () =>
-          await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-            lookupFn: params.lookupFn,
-            policy: policyForUrl,
-          }),
+      await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        lookupFn: params.lookupFn,
+        policy: policyForUrl,
         signal,
-      );
+      });
     try {
       const usesTrustedExplicitProxyMode =
         mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&
@@ -583,7 +514,13 @@ async function fetchWithSsrFGuardInternal(
         dispatcherPolicy,
         usesTrustedExplicitProxyMode ? false : params.pinDns,
       );
-      await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy, signal);
+      await assertExplicitProxyAllowed(
+        dispatcherPolicy,
+        params.lookupFn,
+        params.policy,
+        signal,
+        usesTrustedExplicitProxyMode,
+      );
       const isStrictManagedProxyActive =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive();
       const shouldCheckManagedProxyBypass =
@@ -607,7 +544,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs = params.timeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -665,12 +602,12 @@ async function fetchWithSsrFGuardInternal(
             origin: parsedUrl.origin,
             addresses: [...pinned.addresses].toSorted(),
             timeoutMs: timeoutMs ?? null,
+            streamTimeoutMs: timeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
           });
           dispatcherLease = params.dispatcherPool.acquire({
             key,
-            groupKey: parsedUrl.origin,
             createDispatcher: () =>
               createPinnedDispatcher(
                 pinned,
@@ -679,11 +616,9 @@ async function fetchWithSsrFGuardInternal(
                 timeoutMs,
               ),
           });
-          if (!dispatcherLease) {
-            dispatcher = createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
-          } else {
-            dispatcher = dispatcherLease.dispatcher;
-          }
+          dispatcher = dispatcherLease
+            ? dispatcherLease.dispatcher
+            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
         } else {
           dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
         }
@@ -693,44 +628,56 @@ async function fetchWithSsrFGuardInternal(
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
-        ...(signal ? { signal } : {}),
+        signal: signal
+          ? AbortSignal.any([signal, requestController.signal])
+          : requestController.signal,
       };
 
-      const supportsDispatcherInit =
-        (params.fetchImpl !== undefined &&
-          !isAmbientGlobalFetch({
-            fetchImpl: params.fetchImpl,
-            globalFetch: globalThis.fetch,
-          })) ||
-        isUsingMockedFetch;
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
-      activeResponse = response;
-      const capturedByGlobalFetchPatch =
-        !shouldUseRuntimeFetch &&
-        isAmbientGlobalFetch({
-          fetchImpl: defaultFetch,
-          globalFetch: globalThis.fetch,
-        });
-
-      await captureGuardedFetchExchange({
+      const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
+        signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody:
-          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-        response,
-        transport: "http",
-        capture: params.capture,
-        auditContext: params.auditContext,
-        capturedByGlobalFetchPatch,
-      });
+        requestBody: currentInit?.body ?? null,
+        transport: "http" as const,
+        flowId: params.capture === false ? undefined : params.capture?.flowId,
+        meta: {
+          captureOrigin: "guarded-fetch",
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+          ...(params.capture === false ? {} : params.capture?.meta),
+          ...(params.capture && params.capture.sensitiveRequestHeaderNames
+            ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
+            : {}),
+        },
+      };
+      // Only transport rejection belongs here, not policy or capture failures.
+      let initiated = false;
+      try {
+        response = await effect.initiate(() => {
+          const beforeRequestResult: unknown = params.beforeRequest?.();
+          if (isPromiseLike(beforeRequestResult)) {
+            void Promise.resolve(beforeRequestResult).catch(() => undefined);
+            throw new TypeError("beforeRequest must be synchronous.");
+          }
+          assertCurrent?.();
+          initiated = true;
+          return shouldUseRuntimeFetch
+            ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+            : captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        });
+      } catch (error) {
+        if (initiated) {
+          void captureAdmission.capture?.({ ...captureParams, error });
+        }
+        throw error;
+      }
+      params.onResponse?.(response.status);
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;
@@ -748,12 +695,34 @@ async function fetchWithSsrFGuardInternal(
           nextUrl: nextParsedUrl,
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
-        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
-        if (nextParsedUrl.origin !== parsedUrl.origin) {
-          currentInit = rewriteRedirectInitForCrossOrigin({
-            init: currentInit,
-            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
-          });
+        const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
+        const methodRedirectInit = rewriteRedirectInit({
+          init: currentInit,
+          status: response.status,
+          crossOrigin: false,
+          allowUnsafeReplay: true,
+        });
+        if (crossOrigin) {
+          const redirectedMethod = methodRedirectInit?.method?.toUpperCase() ?? "GET";
+          const redirectedBody = methodRedirectInit?.body;
+          if (
+            params.rejectCrossOriginUnsafeRedirectReplay === true &&
+            redirectedMethod !== "GET" &&
+            redirectedMethod !== "HEAD" &&
+            redirectedBody != null
+          ) {
+            throw new Error(
+              `Refusing to follow cross-origin redirect for ${redirectedMethod} request body (${parsedUrl.origin} -> ${nextParsedUrl.origin})`,
+            );
+          }
+        }
+        currentInit = rewriteRedirectInit({
+          init: methodRedirectInit,
+          status: response.status,
+          crossOrigin,
+          allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+        });
+        if (crossOrigin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
           currentInit = restoreRedirectAuthorization({
             init: currentInit,
@@ -765,15 +734,20 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        await response.body?.cancel().catch(() => undefined);
-        activeResponse = undefined;
         await releaseDispatcher();
         currentUrl = nextUrl;
         continue;
       }
 
+      // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
+      // TODO: Remove this wrapper once Bun propagates post-header aborts through
+      // installed Undici response and clone body streams.
+      const returnedResponse =
+        process.versions.bun && !(response instanceof Response)
+          ? responseWithAbortSignal(response, init.signal ?? undefined)
+          : response;
       return {
-        response,
+        response: returnedResponse,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,
@@ -786,7 +760,6 @@ async function fetchWithSsrFGuardInternal(
           `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
-      await activeResponse?.body?.cancel().catch(() => undefined);
       await finishRequest(releaseDispatcher);
       throw err;
     }

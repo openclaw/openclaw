@@ -2,52 +2,46 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import { cancel, isCancel } from "@clack/prompts";
+import { cancel, type CANCEL_SYMBOL } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  ConnectErrorDetailCodes,
-  readConnectErrorDetailCode,
-} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { readSourceConfigBestEffort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks,
-  resolveLocalControlUiProbeLinks,
-} from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
-import {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
-import { detectBinary } from "../infra/detect-binary.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionDirs, moveToTrash, removeWorkspaceDirs } from "./cleanup-utils.js";
+import { moveToTrash, removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
+export {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
+export { detectBrowserOpenSupport, openUrl } from "../infra/browser-open.js";
+export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 
-export { detectBinary };
-export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
-export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
-
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
-  if (isCancel(value)) {
+export function guardCancel<T>(
+  value: T | typeof CANCEL_SYMBOL,
+  runtime: RuntimeEnv,
+  exitCode = 0,
+): T {
+  if (typeof value === "symbol") {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(exitCode);
     throw new Error("unreachable");
@@ -116,20 +110,7 @@ function summarizeGatewayConfig(config: OpenClawConfig): string | null {
 }
 
 function formatGatewayBind(value: string | undefined): string | undefined {
-  switch (value) {
-    case "lan":
-      return "LAN";
-    case "loopback":
-      return "loopback";
-    case "tailnet":
-      return "tailnet";
-    case "auto":
-      return "auto";
-    case "custom":
-      return "custom";
-    default:
-      return normalizeOptionalString(value);
-  }
+  return value === "lan" ? "LAN" : normalizeOptionalString(value);
 }
 
 /** Normalizes gateway token prompts while rejecting JS stringification sentinels. */
@@ -140,7 +121,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (trimmed === "undefined" || trimmed === "null") {
+  if (isInvalidGatewaySecret(trimmed)) {
     return "";
   }
   return trimmed;
@@ -173,7 +154,7 @@ export function applyWizardMetadata(
 ): OpenClawConfig {
   const commit =
     normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
-  return inheritLegacyDefaultAgentId(cfg, {
+  return {
     ...cfg,
     wizard: {
       ...cfg.wizard,
@@ -183,18 +164,22 @@ export function applyWizardMetadata(
       lastRunCommand: params.command,
       lastRunMode: params.mode,
     },
-  });
+  };
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
-export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  tlsEnabled: boolean;
+}): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
-  const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const sshTarget = resolveSshTargetHint();
+  const protocol = params.tlsEnabled ? "https" : "http";
+  const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
   return [
     "No GUI detected. Open from your computer:",
-    `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
+    `ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
     "Then open:",
     localUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
@@ -202,16 +187,7 @@ export function formatControlUiSshHint(params: { port: number; basePath?: string
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function resolveSshTargetHint(): string {
-  const user = process.env.USER || process.env.LOGNAME || "user";
-  const conn = process.env.SSH_CONNECTION?.trim().split(/\s+/);
-  const host = conn?.[2] ?? "<host>";
-  return `${user}@${host}`;
+  ].join("\n");
 }
 
 /** Ensures workspace bootstrap files and session transcript directories exist. */
@@ -222,15 +198,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
+    guard?: WorkspaceStateGuard;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
-    ensureBootstrapFiles: !options?.skipBootstrap,
-    skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
+    ensureBootstrapFiles: !options.skipBootstrap,
+    skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
+    guard: options.guard,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
+  options.guard?.assertHost?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
@@ -267,21 +246,22 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     }
   };
 
+  if (scope !== "config") {
+    await removeAgentSessions(
+      {
+        cfg: await readSourceConfigBestEffort(),
+        configPath: resolveConfigPath(),
+        stateDir: resolveStateDir(),
+      },
+      runtime,
+    );
+  }
   await trashRequiredPath(resolveConfigPath());
   if (scope === "config") {
     throwIfResetFailed(failures);
     return;
   }
   await trashRequiredPath(path.join(resolveConfigDir(), "credentials"));
-  const stateDir = resolveStateDir();
-  try {
-    const sessionDirs = await listAgentSessionDirs(stateDir);
-    for (const sessionDir of sessionDirs) {
-      await trashRequiredPath(sessionDir);
-    }
-  } catch {
-    failures.push(path.join(stateDir, "agents"));
-  }
   if (scope === "full") {
     failures.push(
       ...(await removeWorkspaceDirs([workspaceDir], runtime, {
@@ -303,6 +283,8 @@ function throwIfResetFailed(failures: string[]): void {
 type OnboardingGatewayProbeParams = {
   url: string;
   config?: OpenClawConfig;
+  originScopedDeviceAuth?: boolean;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -319,6 +301,8 @@ function runOnboardingGatewayProbe(
   return probeGateway({
     url,
     ...(params.config ? { config: params.config } : {}),
+    ...(params.originScopedDeviceAuth ? { originScopedDeviceAuth: true } : {}),
+    ...(params.configuredRemote ? { configuredRemote: true } : {}),
     timeoutMs,
     auth: {
       token: params.token,
@@ -353,21 +337,6 @@ export type GatewayConfiguredModelProbeResult =
   | { kind: "reachable-unverified"; detail?: string }
   | { kind: "unreachable"; detail?: string };
 
-const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
-  Object.values(ConnectErrorDetailCodes),
-);
-
-function didProbeReachGateway(probe: GatewayProbeResult): boolean {
-  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
-  const recognizedConnectError =
-    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
-  const serverVersion = probe.server?.version?.trim();
-  const serverConnectionId = probe.server?.connId?.trim();
-  // Opening a WebSocket proves only that something is listening. A Gateway is
-  // established by a hello-ok server identity or its typed connect rejection.
-  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
-}
-
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
   params: OnboardingGatewayProbeParams,
@@ -379,7 +348,7 @@ export async function probeGatewayConfiguredModel(
     return { kind: "unreachable", detail: summarizeError(err) };
   }
   const detail = probe.error ?? undefined;
-  if (!didProbeReachGateway(probe)) {
+  if (!probe.gatewayReached) {
     return { kind: "unreachable", ...(detail ? { detail } : {}) };
   }
   if (!probe.ok) {
@@ -392,11 +361,12 @@ export async function probeGatewayConfiguredModel(
   } | null;
   const configCandidate =
     snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  const invalidSnapshot: GatewayConfiguredModelProbeResult = {
+    kind: "reachable-unverified",
+    detail: "Gateway returned an invalid config snapshot",
+  };
   if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return invalidSnapshot;
   }
   try {
     const config = configCandidate as OpenClawConfig;
@@ -408,36 +378,29 @@ export async function probeGatewayConfiguredModel(
           detail: "Gateway default agent has no configured model",
         };
   } catch {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return invalidSnapshot;
   }
 }
 
 /** Polls gateway reachability until success or deadline. */
-export async function waitForGatewayReachable(params: {
-  url: string;
-  token?: string;
-  password?: string;
-  /** Total time to wait before giving up. */
-  deadlineMs?: number;
-  /** Per-probe timeout (each probe makes a full gateway health request). */
-  probeTimeoutMs?: number;
-  /** Delay between probes. */
-  pollMs?: number;
-}): Promise<{ ok: boolean; detail?: string }> {
-  const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
-  const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
+export async function waitForGatewayReachable(
+  params: Omit<OnboardingGatewayProbeParams, "timeoutMs"> & {
+    /** Total time to wait before giving up. */
+    deadlineMs?: number;
+    /** Per-probe timeout for the hello-only readiness check. */
+    probeTimeoutMs?: number;
+    /** Delay between probes. */
+    pollMs?: number;
+  },
+): Promise<{ ok: boolean; detail?: string }> {
+  const { deadlineMs = 15_000, pollMs = 400, probeTimeoutMs = 1500, ...probeParams } = params;
+  const pollDelayMs = resolveTimerTimeoutMs(pollMs, 400, 0);
   const startedAt = Date.now();
   let lastDetail: string | undefined;
 
   while (Date.now() - startedAt < deadlineMs) {
     const probe = await probeGatewayReachable({
-      url: params.url,
-      token: params.token,
-      password: params.password,
+      ...probeParams,
       timeoutMs: probeTimeoutMs,
     });
     if (probe.ok) {
@@ -448,7 +411,7 @@ export async function waitForGatewayReachable(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollMs, remainingMs));
+    await sleep(Math.min(pollDelayMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };

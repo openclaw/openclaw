@@ -8,12 +8,7 @@ import { resolveConfigDir } from "../utils.js";
 const PLUGIN_INSTALL_ROOT_CONTEXT_KEY = Symbol.for("openclaw.pluginInstallRootContext");
 
 /** Immutable roots that own installed plugin artifacts and their registry. */
-export type PluginInstallRoots = Readonly<{
-  extensionsDir: string;
-  gitDir: string;
-  npmDir: string;
-  stateDir: string;
-}>;
+export type PluginInstallRoots = ReturnType<typeof resolvePluginInstallRoots>;
 
 const pluginInstallRootContext = resolveGlobalSingleton<AsyncLocalStorage<PluginInstallRoots>>(
   PLUGIN_INSTALL_ROOT_CONTEXT_KEY,
@@ -24,7 +19,7 @@ const pluginInstallRootContext = resolveGlobalSingleton<AsyncLocalStorage<Plugin
 export function resolvePluginInstallRoots(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
-): PluginInstallRoots {
+) {
   const configDir = resolveConfigDir(env, homedir);
   return Object.freeze({
     extensionsDir: path.join(configDir, "extensions"),
@@ -40,6 +35,16 @@ export function resolveActivePluginInstallRoots(
   homedir: () => string = os.homedir,
 ): PluginInstallRoots {
   return pluginInstallRootContext.getStore() ?? resolvePluginInstallRoots(env, homedir);
+}
+
+/** Artifact paths do not need the state directory's legacy-location filesystem probes. */
+export function resolveActivePluginInstallDir(
+  kind: "extensions" | "git" | "npm",
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  const roots = pluginInstallRootContext.getStore();
+  return roots ? roots[`${kind}Dir`] : path.join(resolveConfigDir(env, homedir), kind);
 }
 
 /** Return whether the current run pinned operator-owned plugin install roots. */

@@ -17,19 +17,22 @@ export {
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
+  type OutboundDeliveryQueuedErrorDetails,
   type MissingScopeErrorDetails,
-  type SkillProposalRevisionChangedErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
   type ProjectCloneErrorDetails,
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SetupAdmissionBusyErrorDetails,
+  type GitHubPublicationSelectionRejectedErrorDetails,
+  type SessionWorkspaceRecoveryRequiredErrorDetails,
+  type TaskWorktreeSourceRequiredErrorDetails,
+  readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
-  buildSkillProposalRevisionChangedErrorDetails,
-  readSkillProposalRevisionChangedError,
 } from "../gateway-error-details.js";
 
 export const CronJobNotFoundErrorDetailsSchema = closedObject({
@@ -48,6 +51,10 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
+export const OutboundDeliveryQueuedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED),
+});
+
 export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED),
   limit: Type.Integer({ minimum: 1 }),
@@ -57,6 +64,15 @@ export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
 export const UnknownAgentIdErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.UNKNOWN_AGENT_ID),
   agentId: NonEmptyString,
+});
+
+export const SetupAdmissionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY),
+});
+
+export const GitHubPublicationSelectionRejectedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED),
+  idempotencyKey: NonEmptyString,
 });
 
 export const WizardNotFoundErrorDetailsSchema = closedObject({
@@ -70,12 +86,22 @@ export const ProjectCloneErrorDetailsSchema = closedObject({
   }),
 });
 
-const RevisionHashSchema = Type.String({ pattern: "^[a-fA-F0-9]{64}$" });
+export const SessionWorkspaceRecoveryRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED),
+  cause: Type.Literal("device_offline"),
+  recoveryAction: Type.Literal("continue_on_gateway"),
+  sessionId: NonEmptyString,
+  source: closedObject({
+    generation: Type.Integer({ minimum: 0 }),
+    environmentId: NonEmptyString,
+    ownerEpoch: Type.Integer({ minimum: 1 }),
+  }),
+});
 
-export const SkillProposalRevisionChangedErrorDetailsSchema = closedObject({
-  code: Type.Literal(GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED),
-  expectedRevisionHash: RevisionHashSchema,
-  currentRevisionHash: RevisionHashSchema,
+/** Structured details emitted by method-level failures. */
+export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED),
+  cwd: NonEmptyString,
 });
 
 /** Structured details emitted by method-level failures. */
@@ -83,11 +109,16 @@ export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
-  SkillProposalRevisionChangedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  TaskWorktreeSourceRequiredErrorDetailsSchema,
+  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import {
   createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
@@ -24,11 +23,12 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
       },
     }),
     credentialOptions: {
-      sourceDescription: "Credential source for Telegram QA: env or convex (default: env)",
+      sourceDescription: "Credential source for Telegram QA (must be convex; default: convex)",
       roleDescription:
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
-    description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
+    credentialFileHelp: "Private qualification-mode descriptor (contains no credentials)",
+    description: "Run Telegram Test Server QA with a Convex-leased user or private production apps",
     listScenariosHelp: "Print available Telegram scenario ids and exit",
     outputDirHelp: "Telegram QA artifact directory",
     profileHelp: "Taxonomy profile for Telegram scenario selection (default: release)",

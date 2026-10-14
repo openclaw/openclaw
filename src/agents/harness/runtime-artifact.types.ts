@@ -1,4 +1,4 @@
-/** Exact local implementation owned by one plugin agent harness process. */
+/** Harness-owned binding to a local implementation or configured remote service. */
 export type AgentHarnessRuntimeArtifactBinding = Readonly<{
   id: string;
   fingerprint: string;

@@ -1,30 +1,32 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../../agents/agent-roster.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
+import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import {
+  isNativeCommandTurn,
+  resolveCommandTurnTargetSessionKey,
+} from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
-import {
-  loadSessionStoreEntry,
-  resolveSessionStorePathCore,
-} from "./dispatch-from-config.runtime.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
-
-function routeThreadIdsDiffer(
-  left: string | number | undefined,
-  right: string | number | undefined,
-): boolean {
-  if (left === undefined || right === undefined) {
-    return false;
-  }
-  return String(left) !== String(right);
-}
+import {
+  assertPreparedConversationBindingRoute,
+  readPreparedConversationBindingRouteCurrent,
+} from "./session-conversation-binding.js";
+import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
+import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
 export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   activeOperation?: ReplyOperation;
@@ -33,36 +35,24 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
 }): boolean {
   return (
     isSlackDirectRoutedThreadTurn(params.ctx) &&
-    routeThreadIdsDiffer(params.activeOperation?.routeThreadId, params.routeThreadId)
+    params.activeOperation?.routeThreadId !== undefined &&
+    params.routeThreadId !== undefined &&
+    String(params.activeOperation.routeThreadId) !== String(params.routeThreadId)
   );
 }
 
-export function resolveRoutedPolicyConversationType(
-  ctx: FinalizedMsgContext,
-): "direct" | "group" | undefined {
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== ctx.SessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
-}
-
-export function resolveSessionStoreLookup(
+export async function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
-): {
+  assertCurrent?: () => void,
+): Promise<{
+  agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
   store?: Record<string, SessionEntry>;
-} {
+}> {
+  assertCurrent?.();
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
@@ -70,48 +60,72 @@ export function resolveSessionStoreLookup(
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const target = { agentId, sessionKey, storePath };
   try {
-    const entry = loadSessionStoreEntry({
-      agentId,
-      storePath,
-      sessionKey,
-      readConsistency: "latest",
-      clone: false,
-    });
+    const entry = await readSessionEntryReadOnlyInWorker(
+      { ...target, readConsistency: "latest", clone: false },
+      assertCurrent,
+    );
+    assertCurrent?.();
     return {
-      sessionKey,
-      storePath,
+      ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
-    return {
-      sessionKey,
-      storePath,
-    };
+    assertCurrent?.();
+    return target;
   }
 }
 
-export function resolveBoundAcpDispatchSessionKey(params: {
+/** Legacy free-harness keys retain storage identity but use the inspected channel owner. */
+export function resolveBoundAcpDispatchRuntimeOwner(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-}): string | undefined {
-  const bindingContext = resolveConversationBindingContextFromMessage({
-    cfg: params.cfg,
-    ctx: params.ctx,
+  sessionKey?: string;
+}): string {
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    fallbackAgentId: params.ctx.AgentId,
   });
+  const configured = listAgentIds(params.cfg);
+  const rest = parseAgentSessionKey(params.sessionKey)?.rest.toLowerCase();
+  const route = readConversationBindingRouteFacts(params.ctx);
+  return !configured.includes(agentId) &&
+    rest?.startsWith("acp:") &&
+    !rest.startsWith("acp:binding:") &&
+    route?.kind === "agent" &&
+    route.targetSessionKey.trim() === params.sessionKey?.trim() &&
+    configured.includes(route.fallbackAgentId)
+    ? route.fallbackAgentId
+    : agentId;
+}
+
+export async function resolveBoundAcpDispatchSessionKey(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+}): Promise<string | undefined> {
+  if (resolveCommandTurnTargetSessionKey(params.ctx)) {
+    return undefined;
+  }
+  const preparedRoute = readConversationBindingRouteFacts(params.ctx);
+  const bindingContext =
+    preparedRoute?.conversation ??
+    resolveConversationBindingContextFromMessage({
+      cfg: params.cfg,
+      ctx: params.ctx,
+    });
   if (!bindingContext) {
     return undefined;
   }
 
-  const binding = getSessionBindingService().resolveByConversation({
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    ...(bindingContext.parentConversationId
-      ? { parentConversationId: bindingContext.parentConversationId }
-      : {}),
-  });
+  const readCurrentBinding = () =>
+    preparedRoute
+      ? readPreparedConversationBindingRouteCurrent(params.ctx)
+      : getSessionBindingService().resolveByConversationAsync(bindingContext);
+  const binding = await readCurrentBinding();
+  assertPreparedConversationBindingRoute(params.ctx, binding);
   const targetSessionKey = normalizeOptionalString(binding?.targetSessionKey);
   if (!binding || !targetSessionKey || !isAcpSessionKey(targetSessionKey)) {
     return undefined;
@@ -119,6 +133,117 @@ export function resolveBoundAcpDispatchSessionKey(params: {
   if (isPluginOwnedSessionBindingRecord(binding)) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
-  return targetSessionKey;
+  const { bindingId, boundAt, targetSessionKey: boundTargetSessionKey, targetKind } = binding;
+  const scope = { ...binding.conversation };
+  await getSessionBindingService().touchAsync(bindingId, undefined, scope);
+  const currentBinding = await readCurrentBinding();
+  assertPreparedConversationBindingRoute(params.ctx, currentBinding);
+  if (
+    currentBinding &&
+    (currentBinding.bindingId !== bindingId ||
+      currentBinding.boundAt !== boundAt ||
+      currentBinding.targetSessionKey !== boundTargetSessionKey ||
+      currentBinding.targetKind !== targetKind ||
+      currentBinding.conversation.channel !== scope.channel ||
+      currentBinding.conversation.accountId !== scope.accountId)
+  ) {
+    throw new DispatchSessionRefreshRequiredError(
+      new Error("conversation binding changed while recording activity"),
+    );
+  }
+  const currentTargetSessionKey = normalizeOptionalString(currentBinding?.targetSessionKey);
+  return currentBinding &&
+    currentTargetSessionKey &&
+    isAcpSessionKey(currentTargetSessionKey) &&
+    !isPluginOwnedSessionBindingRecord(currentBinding)
+    ? preparedRoute
+      ? normalizeOptionalString(params.ctx.SessionKey)
+      : currentTargetSessionKey
+    : undefined;
+}
+
+export async function resolveDispatchResetAdmission(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  hasPluginOwnedBinding: boolean;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<{
+  allowRestartTombstoneParentFork: boolean;
+  allowRestartTombstoneReset: boolean;
+  resetTriggered: boolean;
+}> {
+  const { ctx, entry } = params;
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
+  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
+  const nativeCommandTarget = isNativeCommandTurn(ctx.CommandTurn) ? commandTarget : undefined;
+  const actorType = classifySessionStateActor({
+    inputProvenance: ctx.InputProvenance,
+  }).actorType;
+  const mayReplaceRestartTombstoneFromParent = canReplaceRestartTombstoneFromParent({
+    actorType,
+    entry,
+    // Parent existence is the only remaining fact. Avoid its synchronous store
+    // lookup until the already-loaded child and inbound authority require it.
+    hasParentForkSource: true,
+    hasPluginOwnedBinding: params.hasPluginOwnedBinding,
+    inboundAccessAuthorized: ctx.InboundAccessAuthorized,
+    inboundEventKind: ctx.InboundEventKind,
+    nativeCommandTarget: commandTarget,
+    sessionKey: params.sessionKey,
+  });
+  let hasParentForkSource = false;
+  if (
+    mayReplaceRestartTombstoneFromParent &&
+    parentSessionKey &&
+    parentSessionKey !== params.sessionKey &&
+    params.storePath
+  ) {
+    try {
+      hasParentForkSource = Boolean(
+        (
+          await readSessionEntryReadOnlyInWorker({
+            agentId: params.agentId,
+            storePath: params.storePath,
+            sessionKey: parentSessionKey,
+            readConsistency: "latest",
+          })
+        )?.sessionId,
+      );
+    } catch {
+      hasParentForkSource = false;
+    }
+  }
+  const allowRestartTombstoneParentFork =
+    mayReplaceRestartTombstoneFromParent && hasParentForkSource;
+  let resetTriggered = false;
+  if (
+    !params.hasPluginOwnedBinding &&
+    entry?.pluginOwnerId === undefined &&
+    ctx.InboundAccessAuthorized === true &&
+    ctx.InboundEventKind !== "room_event" &&
+    (nativeCommandTarget === undefined || nativeCommandTarget === params.sessionKey) &&
+    actorType === "human"
+  ) {
+    const normalizedChatType = normalizeChatType(ctx.ChatType);
+    const isGroup =
+      (normalizedChatType != null && normalizedChatType !== "direct") ||
+      Boolean(resolveGroupSessionKey(ctx));
+    const { resetCommand } = await resolveAuthorizedSessionResetCommand({
+      agentId: params.agentId,
+      cfg: params.cfg,
+      commandAuthorized: ctx.CommandAuthorized,
+      ctx,
+      isGroup,
+    });
+    resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
+  }
+  return {
+    resetTriggered,
+    allowRestartTombstoneParentFork,
+    // Admission rereads lifecycle state after waits; carry authority, not the earlier tombstone state.
+    allowRestartTombstoneReset: resetTriggered,
+  };
 }

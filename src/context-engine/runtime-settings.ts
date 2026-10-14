@@ -10,14 +10,6 @@ import type {
 
 type OptionalString = string | null | undefined;
 
-const RUNTIME_REASON_CODES = new Set<ContextEngineRuntimeReasonCode>([
-  "provider_timeout",
-  "provider_unavailable",
-  "rate_limited",
-  "context_overflow",
-  "runtime_unavailable",
-  "unknown",
-]);
 const RUNTIME_REASON_PATTERNS: Array<[ContextEngineRuntimeReasonCode, RegExp]> = [
   ["provider_timeout", /timeout/iu],
   ["rate_limited", /rate|limit|429/iu],
@@ -31,10 +23,6 @@ function normalizeReasonCode(value: OptionalString): ContextEngineRuntimeReasonC
   if (!normalized) {
     return null;
   }
-  if (RUNTIME_REASON_CODES.has(normalized as ContextEngineRuntimeReasonCode)) {
-    return normalized as ContextEngineRuntimeReasonCode;
-  }
-
   return RUNTIME_REASON_PATTERNS.find(([, pattern]) => pattern.test(normalized))?.[0] ?? "unknown";
 }
 

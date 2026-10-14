@@ -41,11 +41,10 @@ UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
-SELF_UPDATE_WARNING_FIXED_VERSION="${OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION:-2026.5.25}"
 FRESHNESS_VERSION="${OPENCLAW_INSTALL_FRESHNESS_VERSION:-latest}"
 # npm min-release-age is days; 10000 keeps the control failure independent of normal release cadence.
 FRESHNESS_MIN_RELEASE_AGE="${OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE:-10000}"
-FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.14.1}"
+FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.19.0}"
 HEARTBEAT_INTERVAL="$(read_nonnegative_int_env OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL 60)"
 INSTALL_COMMAND_TIMEOUT="$(read_positive_int_env OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT 900)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -122,8 +121,12 @@ run_with_heartbeat() {
   "$@" &
   command_pid=$!
   (
+    # Join the timer when the command finishes; killing only this shell orphans sleep.
+    trap 'for timer_pid in $(jobs -pr); do kill "$timer_pid" >/dev/null 2>&1 || true; done; wait' EXIT
+    trap 'exit 0' TERM INT
     while true; do
-      sleep "$interval"
+      sleep "$interval" &
+      wait "$!"
       kill -0 "$command_pid" >/dev/null 2>&1 || exit 0
       local now
       local elapsed
@@ -152,75 +155,6 @@ is_self_swapped_package_process_exit() {
   [[ "$stderr" == *"[openclaw] Failed to start CLI:"* ]] &&
     [[ "$stderr" == *"ERR_MODULE_NOT_FOUND"* ]] &&
     [[ "$stderr" == *"/node_modules/openclaw/dist/"* ]]
-}
-
-is_version_before() {
-  local candidate="$1"
-  local floor="$2"
-  node - "$candidate" "$floor" <<'NODE'
-const [, , candidate, floor] = process.argv;
-function parse(version) {
-  const [core, prerelease = ""] = String(version).split("-", 2);
-  return {
-    core: core.split(".").map((part) => Number.parseInt(part, 10) || 0),
-    prerelease: prerelease ? prerelease.split(".") : [],
-  };
-}
-function comparePrerelease(left, right) {
-  if (left.length === 0 && right.length === 0) {
-    return 0;
-  }
-  if (left.length === 0) {
-    return 1;
-  }
-  if (right.length === 0) {
-    return -1;
-  }
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const l = left[index];
-    const r = right[index];
-    if (l === undefined) {
-      return -1;
-    }
-    if (r === undefined) {
-      return 1;
-    }
-    const ln = Number.parseInt(l, 10);
-    const rn = Number.parseInt(r, 10);
-    const lNumeric = String(ln) === l;
-    const rNumeric = String(rn) === r;
-    if (lNumeric && rNumeric && ln !== rn) {
-      return ln < rn ? -1 : 1;
-    }
-    if (lNumeric !== rNumeric) {
-      return lNumeric ? -1 : 1;
-    }
-    if (l !== r) {
-      return l < r ? -1 : 1;
-    }
-  }
-  return 0;
-}
-const left = parse(candidate);
-const right = parse(floor);
-for (let index = 0; index < Math.max(left.core.length, right.core.length); index += 1) {
-  const l = left.core[index] ?? 0;
-  const r = right.core[index] ?? 0;
-  if (l < r) {
-    process.exit(0);
-  }
-  if (l > r) {
-    process.exit(1);
-  }
-}
-const prereleaseOrder = comparePrerelease(left.prerelease, right.prerelease);
-process.exit(prereleaseOrder < 0 ? 0 : 1);
-NODE
-}
-
-allow_legacy_update_warning() {
-  [[ "${OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING:-0}" == "1" ]] && return 0
-  is_version_before "$UPDATE_BASELINE_VERSION" "$SELF_UPDATE_WARNING_FIXED_VERSION"
 }
 
 npm_install_global() {
@@ -306,30 +240,7 @@ run_install_smoke() {
     PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
   else
     LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" dist-tags.latest)"
-    VERSIONS_JSON="$(quiet_npm view "$PACKAGE_NAME" versions --json)"
-    PREVIOUS_VERSION="$(LATEST_VERSION="$LATEST_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node - <<'NODE'
-const latest = String(process.env.LATEST_VERSION || "");
-const raw = process.env.VERSIONS_JSON || "[]";
-let versions;
-try {
-  versions = JSON.parse(raw);
-} catch {
-  versions = raw ? [raw] : [];
-}
-if (!Array.isArray(versions)) {
-  versions = [versions];
-}
-if (versions.length === 0 || latest.length === 0) {
-  process.exit(1);
-}
-const latestIndex = versions.lastIndexOf(latest);
-if (latestIndex <= 0) {
-  process.stdout.write(latest);
-  process.exit(0);
-}
-process.stdout.write(String(versions[latestIndex - 1] ?? latest));
-NODE
-)"
+    PREVIOUS_VERSION="$(resolve_previous_npm_version "$PACKAGE_NAME" "$LATEST_VERSION")"
   fi
 
   echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
@@ -354,6 +265,54 @@ NODE
   echo "OK"
 }
 
+assert_update_smoke_offline() {
+  node - <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const fail = (detail) => { throw new Error(`update smoke requires an idle, service-free container: ${detail}`); };
+if (process.platform !== "linux") fail("Linux process inspection is required");
+for (const name of ["OPENCLAW_PROFILE", "OPENCLAW_SYSTEMD_UNIT", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "XDG_RUNTIME_DIR", "SYSTEMD_UNIT_PATH"]) {
+  if (process.env[name]) fail(`unexpected ${name}`);
+}
+for (const marker of ["/run/systemd/system", "/run/systemd/private", `/run/user/${process.getuid()}/systemd/private`]) {
+  try {
+    fs.lstatSync(marker);
+    fail(`service manager runtime exists at ${marker}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+const initArgs = fs.readFileSync("/proc/1/cmdline", "utf8").split("\0");
+if (process.ppid !== 1 || !initArgs.includes("/usr/local/bin/openclaw-install-smoke")) {
+  fail("the smoke runner must own the PID namespace");
+}
+for (const pid of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))) {
+  if (Number(pid) === 1 || Number(pid) === process.pid) continue;
+  try {
+    if (fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")) fail(`unexpected live process ${pid}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+for (const root of [path.join(os.homedir(), ".config/systemd"), path.join(os.homedir(), ".local/share/systemd"), "/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"]) {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { recursive: true, withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!/\.(service|socket|timer)$/.test(entry.name)) continue;
+    const file = path.join(entry.parentPath, entry.name);
+    if (/openclaw/i.test(entry.name) || /openclaw/i.test(fs.readFileSync(file, "utf8"))) fail(`service definition exists at ${file}`);
+  }
+}
+console.log("==> Verified idle container: no Gateway process or service definition");
+NODE
+}
+
 run_update_smoke() {
   if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
     echo "ERROR: OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION is required for update mode" >&2
@@ -376,25 +335,70 @@ run_update_smoke() {
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
-  echo "==> Run openclaw update from host-served tgz"
+  assert_update_smoke_offline
+  # The idle container owns no Gateway service; exercise the baseline updater
+  # before checking the candidate's already-current idle behavior independently.
+  run_update_candidate "$UPDATE_BASELINE_VERSION" applied --no-restart
+  echo "==> Verify candidate already-current no-op without a Gateway service"
+  run_update_candidate "$UPDATE_EXPECT_VERSION" already-current
+  assert_update_smoke_offline
+  verify_candidate_ai_runtime
+  echo "OK"
+}
+
+
+# Published 9.4 continues in its old process after a successful package swap.
+# Accept only the observed 9.4 -> 9.5 warning, after JSON and fresh CLI checks;
+# another executable on PATH or a fresh process warning is still real skew.
+verify_historical_self_update_warning() {
+  local stderr="$1" outcome="$2" updater_status="$3"
+  [[ "$PACKAGE_NAME" == "openclaw" && "$UPDATE_BASELINE_VERSION" == "2026.9.4" &&
+     "$UPDATE_EXPECT_VERSION" == "2026.9.5" &&
+     "$outcome" == "applied" && "$updater_status" == "0" ]] || return 1
+  local line warning_count=0
+  while IFS= read -r line; do
+    [[ "$line" == *"config was written by version"* ]] || continue
+    [[ "$line" == "Your OpenClaw config was written by version 2026.9.5, but this command is running 2026.9.4." ]] || return 1
+    warning_count=$((warning_count + 1))
+  done <<<"$stderr"
+  [[ "$warning_count" == "1" ]] || return 1
+
+  local cmd_path npm_root fresh_output fresh_version
+  cmd_path="$(bash --noprofile --norc -c 'hash -r; command -v "$1"' _ "$PACKAGE_NAME")" || return 1
+  npm_root="$(quiet_npm root -g)" || return 1
+  # Bind the fresh PATH entry to the global package actually updated, not a
+  # different installation that happens to print the expected version.
+  node - "$cmd_path" "$npm_root/$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION" <<'NODE' || return 1
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const [command, root, expected] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[manifest.name];
+assert.equal(manifest.version, expected);
+assert.equal(typeof bin, "string");
+assert.equal(fs.realpathSync(command), fs.realpathSync(path.join(root, bin)));
+NODE
+  fresh_output="$("$cmd_path" --version 2>&1)" || return 1
+  [[ "$fresh_output" != *"config was written by version"* ]] || return 1
+  fresh_version="$(extract_openclaw_semver "$fresh_output")" || return 1
+  [[ "$fresh_version" == "$UPDATE_EXPECT_VERSION" ]]
+}
+
+run_update_candidate() {
+  local UPDATE_BASELINE_VERSION="$1"
+  local expected_outcome="$2"
+  shift 2
+  echo "==> Run openclaw update from host-served tgz (from $UPDATE_BASELINE_VERSION)"
   local update_status
   local update_stderr_file
   local update_stderr
-  local update_env=(
-    env
-    npm_config_omit=optional
-    NPM_CONFIG_OMIT=optional
-    OPENCLAW_ALLOW_ROOT=1
-  )
-  if allow_legacy_update_warning; then
-    update_env+=(OPENCLAW_UPDATE_IN_PROGRESS=1)
-  fi
   update_stderr_file="$(mktemp)"
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
-      "${update_env[@]}" \
-      openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
+      env npm_config_omit=optional NPM_CONFIG_OMIT=optional OPENCLAW_ALLOW_ROOT=1 \
+      openclaw update --channel stable --tag "$UPDATE_TAG_URL" --yes --json "$@" 2>"$update_stderr_file"
   )"
   update_status=$?
   set -e
@@ -403,12 +407,6 @@ run_update_smoke() {
   printf "%s\n" "$UPDATE_JSON"
   if [[ -n "$update_stderr" ]]; then
     printf "%s\n" "$update_stderr" >&2
-  fi
-  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
-    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
-  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
-    echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
-    return 1
   fi
   if [[ "$update_status" -ne 0 ]]; then
     if is_self_swapped_package_process_exit "$update_stderr"; then
@@ -422,6 +420,7 @@ run_update_smoke() {
   UPDATE_JSON="$UPDATE_JSON" \
     UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    UPDATE_EXPECT_OUTCOME="$expected_outcome" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
 function parseFirstJsonObject(raw) {
@@ -462,8 +461,17 @@ const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
-if (payload.status !== "ok") {
-  throw new Error(`expected update status ok, got ${JSON.stringify(payload.status)}`);
+const expectedOutcome = process.env.UPDATE_EXPECT_OUTCOME || "applied";
+const allowLegacySameVersionApply =
+  process.env.OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY === "1";
+if (!["applied", "already-current"].includes(expectedOutcome)) {
+  throw new Error(`unknown expected update outcome ${expectedOutcome}`);
+}
+const noOp = expectedOutcome === "already-current";
+const legacySameVersionApply = noOp && allowLegacySameVersionApply && payload.status === "ok";
+const expectedStatus = noOp && !legacySameVersionApply ? "skipped" : "ok";
+if (payload.status !== expectedStatus) {
+  throw new Error(`expected update status ${expectedStatus}, got ${JSON.stringify(payload.status)}`);
 }
 if ((payload.before?.version ?? null) !== baselineVersion) {
   throw new Error(
@@ -475,19 +483,36 @@ if ((payload.after?.version ?? null) !== expectedVersion) {
     `expected after.version ${expectedVersion}, got ${JSON.stringify(payload.after?.version)}`,
   );
 }
-if (payload.reason != null) {
-  throw new Error(`expected no failure reason, got ${JSON.stringify(payload.reason)}`);
+if (noOp && !legacySameVersionApply ? payload.reason !== "already-current" : payload.reason != null) {
+  throw new Error(`unexpected update reason ${JSON.stringify(payload.reason)}`);
 }
 const steps = Array.isArray(payload.steps) ? payload.steps : [];
-const updateStep = steps.find((step) => step?.name === "global update");
+// Published drivers use the display label; current candidates use the stable step ID.
+const updateStep = steps.find((step) =>
+  step?.name === "package-install" || step?.name === "global update",
+);
 if (!updateStep) {
-  throw new Error("missing global update step in update JSON");
+  throw new Error("missing package install step in update JSON");
 }
 if (Number(updateStep.exitCode ?? 1) !== 0) {
-  throw new Error(`global update step failed: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step failed: ${JSON.stringify(updateStep)}`);
 }
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
-  throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+}
+if (noOp && !legacySameVersionApply) {
+  if (baselineVersion !== expectedVersion || typeof payload.before?.buildId !== "string" ||
+      !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
+    throw new Error("already-current update changed or omitted installed build identity");
+  }
+  if (steps.length !== 1) {
+    throw new Error("already-current update performed unexpected activation or maintenance steps");
+  }
+  console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
+  process.exit(0);
+}
+if (legacySameVersionApply && baselineVersion !== expectedVersion) {
+  throw new Error("legacy same-version update changed the installed version");
 }
 const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
 // Every baseline that passes verify_installed_cli implements this contract;
@@ -508,9 +533,15 @@ NODE
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
-  verify_candidate_ai_runtime
 
-  echo "OK"
+  if [[ "$update_stderr" == *"config was written by version"* ]]; then
+    if verify_historical_self_update_warning "$update_stderr" "$expected_outcome" "$update_status"; then
+      echo "WARN: published 2026.9.4 updater emitted its old-process warning; fresh PATH and global install verified as 2026.9.5" >&2
+    else
+      echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
+      return 1
+    fi
+  fi
 }
 
 run_npm_global_smoke() {

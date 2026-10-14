@@ -1,41 +1,97 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
+import { readChatWorkContext } from "../../../../src/chat/work-context.js";
+import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  ChatQueueItem,
+  HumanMention,
+} from "./chat-types.ts";
+import { isChatGoalDraftMode } from "./goal-draft.ts";
+import { readHumanMentions } from "./human-mentions.ts";
+import { isChatReplyTarget } from "./reply-target.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatMessageMetadataEnglish();
 
 export const MAX_STORED_SESSIONS = 20;
 export const MAX_STORED_QUEUE_ITEMS = 50;
 // Shipped v1 state could hold one full queue under each of 20 alias keys.
 // Alias consolidation may exceed today's admission cap, but must retain every
 // existing input while the canonical queue drains back below 50.
-export const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
+const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
+export type StoredComposerState = {
+  version: 4;
+  gatewayOwner: string;
+  sessions: Record<string, StoredComposerSession>;
+  recovery: Record<string, StoredComposerRecovery>;
+  legacyReceipts?: Partial<Record<"1" | "2" | "3", string>>;
+  recoveryBlocked?: true;
+};
+
+export type StoredComposerRecovery = {
+  sourceVersion: 1 | 2 | 3 | 4;
+  sourceScopeKey: string;
+  session: StoredComposerSession;
+};
+
 export type StoredComposerSession = {
+  awaitingDefaults?: true;
   draft?: string;
+  draftMentions?: readonly HumanMention[];
+  goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   draftRevision?: number;
   queue?: ChatQueueItem[];
   updatedAt: number;
 };
 
-function normalizeOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
+  return (
+    left.id === right.id &&
+    left.storageScope === right.storageScope &&
+    left.asyncQuestionItemId === right.asyncQuestionItemId &&
+    left.text === right.text &&
+    left.workContextUnavailable === right.workContextUnavailable &&
+    JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
+    JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
+    left.sendRunId === right.sendRunId &&
+    left.sendAttempts === right.sendAttempts &&
+    left.sendState === right.sendState &&
+    left.agentId === right.agentId &&
+    left.sessionKey === right.sessionKey &&
+    left.orderKey === right.orderKey &&
+    left.attachmentPayload?.key === right.attachmentPayload?.key
+  );
 }
 
-function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!isRecord(value)) {
+function normalizeChatAttachment(entry: unknown): ChatAttachment | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  if (entry.origin === "paste" || entry.origin === "file") {
+    restored.origin = entry.origin;
+  }
+  const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
+  if (selectionAnnotation) {
+    restored.selectionAnnotation = selectionAnnotation;
+  }
   const fileName = normalizeOptionalString(entry.fileName);
   if (fileName) {
     restored.fileName = fileName;
@@ -50,18 +106,20 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!isRecord(value)) {
+export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
-  const createdAt =
-    typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
-      ? entry.createdAt
-      : Date.now();
-  if (!id || (!text.trim() && !Array.isArray(entry.attachments))) {
+  const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
+  if (
+    !id ||
+    (!text.trim() &&
+      !Array.isArray(entry.attachments) &&
+      entry.attachmentPayload === undefined &&
+      entry.attachmentStorageError === undefined)
+  ) {
     return null;
   }
   const attachments = Array.isArray(entry.attachments)
@@ -70,6 +128,78 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const storageScope = normalizeOptionalString(entry.storageScope);
+  if (storageScope) {
+    item.storageScope = storageScope;
+  }
+  const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
+  if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
+    item.asyncQuestionItemId = asyncQuestionItemId;
+  }
+  if (entry.workContext !== undefined) {
+    item.workContext = readChatWorkContext(entry.workContext);
+    if (!item.workContext) {
+      item.workContextUnavailable = true;
+    }
+  }
+  const mentions = readHumanMentions(text, entry.mentions);
+  if (mentions) {
+    item.mentions = mentions;
+  }
+  if (entry.attachmentPayload !== undefined) {
+    const payload = entry.attachmentPayload;
+    if (
+      isRecord(payload) &&
+      typeof payload.key === "string" &&
+      typeof payload.recoveryScope === "string" &&
+      typeof payload.tabId === "string"
+    ) {
+      item.attachmentPayload = {
+        key: payload.key,
+        recoveryScope: payload.recoveryScope,
+        tabId: payload.tabId,
+      };
+    } else {
+      item.attachmentStorageError = "missing";
+    }
+  }
+  if (
+    entry.attachmentStorageError === "missing" ||
+    entry.attachmentStorageError === "unavailable" ||
+    entry.attachmentStorageError === "capacity"
+  ) {
+    item.attachmentStorageError = entry.attachmentStorageError;
+  }
+  if (Array.isArray(entry.attachments) && attachments.length !== entry.attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+  if (item.attachmentPayload && !attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+
+  if (entry.intent !== undefined) {
+    const intent = entry.intent;
+    // Never restore a structured admission as ordinary text after losing its intent.
+    if (
+      !isRecord(intent) ||
+      Object.keys(intent).length !== 3 ||
+      intent.kind !== "session-goal-start" ||
+      intent.version !== 1 ||
+      typeof intent.issuedAtMs !== "number" ||
+      !Number.isSafeInteger(intent.issuedAtMs) ||
+      intent.issuedAtMs <= 0
+    ) {
+      return null;
+    }
+    item.intent = { kind: intent.kind, version: intent.version, issuedAtMs: intent.issuedAtMs };
+    if (entry.expectedLeafEntryId === null || typeof entry.expectedLeafEntryId === "string") {
+      item.expectedLeafEntryId = entry.expectedLeafEntryId;
+    }
+  }
+  const sessionId = normalizeOptionalString(entry.sessionId);
+  if (sessionId) {
+    item.sessionId = sessionId;
+  }
   if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
     item.orderKey = entry.orderKey;
   }
@@ -90,19 +220,23 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (attachments.length) {
     item.attachments = attachments;
   }
-  const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
-  if (refreshSessions !== undefined) {
-    item.refreshSessions = refreshSessions;
+  if (typeof entry.refreshSessions === "boolean") {
+    item.refreshSessions = entry.refreshSessions;
   }
   const replyToId = normalizeOptionalString(entry.replyToId);
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering") {
+  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "submitting") {
+    item.sendState = "waiting-idle";
+  } else if (entry.sendState === "sending") {
+    item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -111,45 +245,62 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendState = "failed";
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
-  const sendError = normalizeOptionalString(entry.sendError);
-  if (sendError) {
-    item.sendError = sendError;
-  }
-  const sendRunId = normalizeOptionalString(entry.sendRunId);
-  if (sendRunId) {
-    item.sendRunId = sendRunId;
+  // Keep this before sendAttempts: queue admission compares canonical JSON bytes.
+  for (const key of ["sendError", "sendRunId"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
-  const localCommandArgs = normalizeOptionalString(entry.localCommandArgs);
-  if (localCommandArgs) {
-    item.localCommandArgs = localCommandArgs;
-  }
-  const localCommandName = normalizeOptionalString(entry.localCommandName);
-  if (localCommandName) {
-    item.localCommandName = localCommandName;
-  }
-  const sessionKey = normalizeOptionalString(entry.sessionKey);
-  if (sessionKey) {
-    item.sessionKey = sessionKey;
+  for (const key of ["localCommandArgs", "localCommandName", "sessionKey"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
   }
+  if (
+    entry.mentions !== undefined &&
+    (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
+  ) {
+    // A reconnect must not send a different recipient selection after losing its binding.
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.mentions.restoreFailed");
+  }
+  if (entry.workContextUnavailable === true || item.workContextUnavailable) {
+    item.workContextUnavailable = true;
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.messages.attachedContext.restoreFailed");
+  }
   return item;
 }
 
-export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!isRecord(value)) {
+export function normalizeStoredSession(entry: unknown): StoredComposerSession | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
+  const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
+  if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
+    return null;
+  }
+  const goalMode = entry.goalMode;
+  if (entry.replyTarget !== undefined && !isChatReplyTarget(entry.replyTarget)) {
+    return null;
+  }
+  const replyTarget = entry.replyTarget;
+  // Reject oversize input as a whole; migration keeps its source bytes intact.
+  if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
+    return null;
+  }
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
-        .slice(0, MAX_RETAINED_QUEUE_ITEMS)
         .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
@@ -162,10 +313,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     : undefined;
   const removedIds = new Set(removedQueueItemIds ?? []);
   const queue = normalizedQueue?.filter((item) => !removedIds.has(item.id));
-  const updatedAt =
-    typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-      ? entry.updatedAt
-      : Date.now();
+  const updatedAt = asFiniteNumber(entry.updatedAt) ?? Date.now();
   const storedDraftRevision =
     typeof entry.draftRevision === "number" && Number.isSafeInteger(entry.draftRevision)
       ? entry.draftRevision
@@ -173,11 +321,21 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   // Legacy rows did not version drafts, so their row timestamp is the best
   // available ordering signal. Queue-only rows must not claim draft ownership.
   const draftRevision = storedDraftRevision ?? (draft ? updatedAt : undefined);
-  if (!draft && draftRevision === undefined && (!queue || queue.length === 0)) {
+  if (
+    !draft &&
+    !goalMode &&
+    !replyTarget &&
+    draftRevision === undefined &&
+    (!queue || queue.length === 0)
+  ) {
     return null;
   }
   return {
+    ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
+    ...(draftMentions ? { draftMentions } : {}),
+    ...(goalMode ? { goalMode } : {}),
+    ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

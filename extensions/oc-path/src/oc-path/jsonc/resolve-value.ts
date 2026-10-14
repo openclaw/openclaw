@@ -1,13 +1,12 @@
-// OC Path module implements resolve value behavior.
 import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 
 type JsoncValueOcPathMatch =
-  | { readonly kind: "value"; readonly node: JsoncValue; readonly path: readonly string[] }
+  | { readonly kind: "value"; readonly node: JsoncValue; readonly path: (string | number)[] }
   | {
       readonly kind: "object-entry";
       readonly node: JsoncEntry;
-      readonly path: readonly string[];
+      readonly path: (string | number)[];
     };
 
 export function resolveJsoncValueOcPath(
@@ -16,25 +15,26 @@ export function resolveJsoncValueOcPath(
 ): JsoncValueOcPathMatch | null {
   let current: JsoncValue = root;
   let lastEntry: JsoncEntry | null = null;
-  const walked: string[] = [];
+  // jsonc-parser edits distinguish object keys from array indices.
+  const walked: (string | number)[] = [];
 
   for (let seg of segments) {
     if (seg.length === 0) {
       return null;
     }
     if (isPositionalSeg(seg)) {
-      const concrete = positionalForJsonc(current, seg);
+      const concrete = resolveJsoncPositionalSegment(current, seg);
       if (concrete !== null) {
         seg = concrete;
       }
     }
-    walked.push(seg);
     if (current.kind === "object") {
       const entry = current.entries.find((e) => e.key === seg);
       if (entry === undefined) {
         return null;
       }
       lastEntry = entry;
+      walked.push(seg);
       current = entry.value;
       continue;
     }
@@ -44,6 +44,7 @@ export function resolveJsoncValueOcPath(
         return null;
       }
       lastEntry = null;
+      walked.push(idx);
       const item = current.items[idx];
       if (item === undefined) {
         return null;
@@ -60,7 +61,7 @@ export function resolveJsoncValueOcPath(
   return { kind: "value", node: current, path: walked };
 }
 
-function positionalForJsonc(node: JsoncValue, seg: string): string | null {
+export function resolveJsoncPositionalSegment(node: JsoncValue, seg: string): string | null {
   if (node.kind === "object") {
     const keys = node.entries.map((e) => e.key);
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });

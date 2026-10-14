@@ -1,6 +1,11 @@
-// Pure grouping helpers for the sessions table "Group by" modes.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
+import { moveArrayEntry } from "../array-order.ts";
+import { pathDisplayName } from "../path-display.ts";
+import { resolveSessionDisplayKind } from "../session-display.ts";
+import { foldWorktreeCheckoutPath, sessionActorGroupId } from "./catalog-project-grouping.ts";
+import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
@@ -27,21 +32,37 @@ export type SessionRowGroup = {
 
 export type SidebarSessionSection<Row> = {
   id:
+    | `agent:${string}`
     | "pinned"
     | "ungrouped"
     | "groups"
     | "work"
     | `category:${string}`
     | `person:${string}`
+    | `project:${string}`
     | `catalog:${string}`;
   category?: string;
-  personOwner?: { type: string; id: string; label?: string; avatarUrl?: string };
+  personOwner?: NonNullable<GatewaySessionRow["owner"]>["actor"] & { id: string };
+  /** Repo/workspace section (project grouping); `path` disambiguates same-named repos. */
+  project?: { name: string; path: string };
   /** Built-in smart group-conversation section (kind "group" rows). */
   groups?: boolean;
   /** Built-in smart coding section (worktree/exec-node/ACP sessions). */
   work?: boolean;
   rows: Row[];
 };
+
+export function collectKnownSessionGroups(
+  catalog: readonly string[],
+  rows: readonly GatewaySessionRow[],
+): string[] {
+  const catalogSet = new Set(catalog);
+  const discovered = rows
+    .map((row) => normalizeOptionalString(row.category))
+    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+    .toSorted((a, b) => a.localeCompare(b));
+  return [...catalog, ...new Set(discovered)];
+}
 
 const DEFAULT_SESSION_SECTION_ORDER = ["ungrouped", "groups", "work"] as const;
 
@@ -50,11 +71,9 @@ export function normalizeSessionSectionOrder(
   knownGroups: readonly string[],
   knownCatalogIds: readonly string[] = [],
 ): string[] {
-  const groups = [...new Set(knownGroups.map((name) => name.trim()).filter(Boolean))];
+  const groups = normalizeUniqueTrimmedStringList(knownGroups);
   const knownGroupSet = new Set(groups);
-  const catalogIds = [
-    ...new Set(knownCatalogIds.map((catalogId) => catalogId.trim()).filter(Boolean)),
-  ];
+  const catalogIds = normalizeUniqueTrimmedStringList(knownCatalogIds);
   const knownCatalogIdSet = new Set(catalogIds);
   const order = (normalizeSessionSectionOrderTokens(stored) ?? []).filter((token) => {
     if (token.startsWith("category:")) {
@@ -97,58 +116,48 @@ export function normalizeSessionSectionOrder(
   return order;
 }
 
-export function moveSessionSection(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveSessionOrderEntry(order, source, target, position);
-}
+export const moveSessionSection = moveArrayEntry<string>;
 
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
 
-function dateBucketId(updatedAt: number | null | undefined, now: number): string {
-  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
-    return UNGROUPED_ID;
-  }
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const dayMs = 24 * 60 * 60 * 1000;
-  if (updatedAt >= startOfToday.getTime()) {
-    return "today";
-  }
-  if (updatedAt >= startOfToday.getTime() - dayMs) {
-    return "yesterday";
-  }
-  if (updatedAt >= startOfToday.getTime() - 6 * dayMs) {
-    return "week";
-  }
-  return "older";
+function createDateGroupResolver(now: number): (row: GatewaySessionRow) => string {
+  const today = new Date(now);
+  // Calendar midnights can be 23 or 25 hours apart across daylight-saving changes.
+  const startOfDay = (daysAgo: number) =>
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo).getTime();
+  const startOfToday = startOfDay(0);
+  const startOfYesterday = startOfDay(1);
+  const startOfWeek = startOfDay(6);
+  return ({ updatedAt }) => {
+    if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
+      return UNGROUPED_ID;
+    }
+    if (updatedAt >= startOfToday) {
+      return "today";
+    }
+    if (updatedAt >= startOfYesterday) {
+      return "yesterday";
+    }
+    return updatedAt >= startOfWeek ? "week" : "older";
+  };
 }
 
-function sessionRowChannel(row: GatewaySessionRow): string {
-  return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
-}
-
-function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, now: number): string {
+function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): string {
   switch (mode) {
     case "category":
       return row.category?.trim() ?? UNGROUPED_ID;
     case "person":
-      return row.owner?.actor.id?.trim() || UNGROUPED_ID;
+      return sessionActorGroupId(row.owner?.actor);
     case "channel":
-      return sessionRowChannel(row);
+      return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
     case "kind":
-      return row.kind;
+      return resolveSessionDisplayKind(row);
     case "agent":
       // parseSessionKeyParts only matches channel-style keys; plain agent
       // sessions like "agent:main:main" need the agent:<id>:<rest> parser.
       return parseAgentSessionKey(row.key)?.agentId ?? UNGROUPED_ID;
-    case "date":
-      return dateBucketId(row.updatedAt, now);
     default:
       return UNGROUPED_ID;
   }
@@ -166,31 +175,34 @@ export function groupSessionRows(params: {
   now?: number;
 }): SessionRowGroup[] {
   const now = params.now ?? Date.now();
+  const groupId =
+    params.mode === "date"
+      ? createDateGroupResolver(now)
+      : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
   const byId = new Map<string, GatewaySessionRow[]>();
   for (const row of params.rows) {
-    const id = resolveSessionGroupId(row, params.mode, now);
-    const bucket = byId.get(id);
-    if (bucket) {
-      bucket.push(row);
-    } else {
-      byId.set(id, [row]);
-    }
+    const id = groupId(row);
+    const bucket = byId.get(id) ?? [];
+    bucket.push(row);
+    byId.set(id, bucket);
   }
   const ids = orderedGroupIds(params.mode, byId, params.knownCategories ?? []);
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
 }
 
 /** How the sidebar buckets non-pinned rows before its built-in smart zones. */
-export type SidebarSessionsGrouping = "category" | "person" | "none";
+export type SidebarSessionsGrouping = "category" | "person" | "project" | "none";
 
 export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsGrouping {
-  return raw === "none" || raw === "person" ? raw : "category";
+  return raw === "none" || raw === "person" || raw === "project" ? raw : "category";
 }
 
 type SidebarGroupableRow = {
   pinned?: boolean;
   category?: string | null;
-  owner?: { actor: { type: string; id?: string; label?: string; avatarUrl?: string } };
+  owner?: GatewaySessionRow["owner"];
+  /** Resolved repo/workspace of the session's checkout (project grouping). */
+  workContext?: { path: string };
   /** Session kind from the gateway row; "group" rows form the Groups zone. */
   kind?: string;
   /** Session bound to a managed worktree or exec node (Coding zone). */
@@ -217,11 +229,14 @@ export function categoryClearReturnsToGroups(
  * new ones alphabetical), other sessions ("ungrouped"),
  * group conversations, then coding (worktree/exec-node/ACP). An explicit user
  * category wins over the smart group/coding classification so manual curation
- * sticks. `grouping: "none"` only disables categories; the kind-based Groups
- * and Coding zones always split so chat threads stay readable. The coding
- * section is always emitted (even empty) so its ordered position remains a
- * stable sibling of any catalog sections. Groups also stays visible while a
- * categorized group row can deterministically return there.
+ * sticks. `grouping: "none"` is a flat list: every non-pinned row lands in
+ * "ungrouped" with no smart zones. `grouping: "project"` buckets rows by their
+ * resolved work checkout (alphabetical, ahead of the stored zones) and leaves
+ * checkout-less rows in their smart zones, mirroring how "person" treats
+ * ownerless rows. The coding section is always emitted (even empty) so its
+ * ordered position remains a stable sibling of any catalog sections. Groups
+ * also stays visible while a categorized group row can deterministically
+ * return there.
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
@@ -238,49 +253,25 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const threads: Row[] = [];
   const groups: Row[] = [];
   const coding: Row[] = [];
-  const categories = new Map<string, Row[]>();
-  const people = new Map<string, SidebarSessionSection<Row>>();
-  if (grouping === "category") {
-    for (const name of options.knownGroups ?? []) {
-      const trimmed = name.trim();
-      if (trimmed && !categories.has(trimmed)) {
-        categories.set(trimmed, []);
-      }
-    }
+  const grouped = new Map<string, SidebarSessionSection<Row>>();
+  const knownGroups =
+    grouping === "category" ? normalizeUniqueTrimmedStringList(options.knownGroups) : [];
+  for (const category of knownGroups) {
+    grouped.set(`category:${category}`, { id: `category:${category}`, category, rows: [] });
   }
   for (const row of rows) {
     if (row.pinned === true) {
       pinned.push(row);
       continue;
     }
-    const owner = grouping === "person" ? row.owner?.actor : undefined;
-    const ownerId = owner?.id?.trim();
-    if (owner && ownerId) {
-      const personSection = people.get(ownerId);
-      if (personSection) {
-        personSection.rows.push(row);
-      } else {
-        people.set(ownerId, {
-          id: `person:${ownerId}`,
-          personOwner: {
-            type: owner.type,
-            id: ownerId,
-            ...(owner.label ? { label: owner.label } : {}),
-            ...(owner.avatarUrl ? { avatarUrl: owner.avatarUrl } : {}),
-          },
-          rows: [row],
-        });
-      }
+    if (grouping === "none") {
+      threads.push(row);
       continue;
     }
-    const category = grouping === "category" ? row.category?.trim() : undefined;
-    if (category) {
-      const categoryRows = categories.get(category);
-      if (categoryRows) {
-        categoryRows.push(row);
-      } else {
-        categories.set(category, [row]);
-      }
+    const group = sidebarRowGroup(row, grouping, grouped);
+    if (group) {
+      group.rows.push(row);
+      grouped.set(group.id, group);
       continue;
     }
     if (row.kind === "group") {
@@ -298,48 +289,37 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   if (pinned.length > 0) {
     sections.push({ id: "pinned", rows: pinned });
   }
-  sections.push(
-    ...[...people.values()].toSorted((left, right) => {
-      const leftOwner = left.personOwner!;
-      const rightOwner = right.personOwner!;
-      const leftRank =
-        leftOwner.id === options.selfOwnerId ? 0 : leftOwner.type === "agent" ? 2 : 1;
-      const rightRank =
-        rightOwner.id === options.selfOwnerId ? 0 : rightOwner.type === "agent" ? 2 : 1;
-      return (
-        leftRank - rightRank ||
-        (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
-        leftOwner.id.localeCompare(rightOwner.id)
-      );
-    }),
-  );
-  const knownGroups = [
-    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
-  ];
-  const orderedCategories = [
-    ...knownGroups.filter((name) => categories.has(name)),
-    ...[...categories.keys()]
-      .filter((name) => !knownGroups.includes(name))
-      .toSorted((a, b) => a.localeCompare(b)),
-  ];
-  const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
-    id: `category:${category}`,
-    category,
-    rows: categories.get(category) ?? [],
-  }));
+  const orderedCategories =
+    grouping === "category"
+      ? [
+          ...knownGroups,
+          ...[...grouped.values()]
+            .slice(knownGroups.length)
+            .map((section) => section.category!)
+            .toSorted((a, b) => a.localeCompare(b)),
+        ]
+      : [];
+  const orderedSections = orderedCategories.map((category) => grouped.get(`category:${category}`)!);
+  if (grouping !== "category") {
+    // Derived groups sort ahead of persisted zones; each group's first row owns its metadata.
+    sections.push(
+      ...[...grouped.values()].toSorted((left, right) =>
+        compareSidebarGroups(left, right, options.selfOwnerId),
+      ),
+    );
+  }
   orderedSections.push({ id: "ungrouped", rows: threads });
   const hasGroupsReturnTarget = rows.some((row) => categoryClearReturnsToGroups(row, grouping));
   if (groups.length > 0 || hasGroupsReturnTarget) {
     orderedSections.push({ id: "groups", groups: true, rows: groups });
   }
   orderedSections.push({ id: "work", work: true, rows: coding });
-  const catalogIds = [
-    ...new Set((options.catalogIds ?? []).map((catalogId) => catalogId.trim()).filter(Boolean)),
-  ];
+  const catalogIds = normalizeUniqueTrimmedStringList(options.catalogIds);
   orderedSections.push(
-    ...catalogIds.map(
-      (catalogId): SidebarSessionSection<Row> => ({ id: `catalog:${catalogId}`, rows: [] }),
-    ),
+    ...catalogIds.map((catalogId): SidebarSessionSection<Row> => ({
+      id: `catalog:${catalogId}`,
+      rows: [],
+    })),
   );
   if (options.sectionOrder) {
     const sectionsById = new Map(orderedSections.map((section) => [section.id, section]));
@@ -361,6 +341,68 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   return sections;
 }
 
+function sidebarRowGroup<Row extends SidebarGroupableRow>(
+  row: Row,
+  grouping: SidebarSessionsGrouping,
+  groups: ReadonlyMap<string, SidebarSessionSection<Row>>,
+): SidebarSessionSection<Row> | undefined {
+  if (grouping === "project" && row.workContext) {
+    // Worktree checkouts share their origin repo with the harness catalogs.
+    const path = foldWorktreeCheckoutPath(row.workContext.path);
+    if (path) {
+      return (
+        groups.get(`project:${path}`) ?? {
+          id: `project:${path}`,
+          project: { name: pathDisplayName(path), path },
+          rows: [],
+        }
+      );
+    }
+  }
+  const owner = grouping === "person" ? row.owner?.actor : undefined;
+  const ownerId = owner?.identity?.id;
+  const ownerKey = sessionActorGroupId(owner);
+  if (owner && ownerId && ownerKey) {
+    return (
+      groups.get(`person:${ownerKey}`) ?? {
+        id: `person:${ownerKey}`,
+        personOwner: { ...owner, id: ownerId },
+        rows: [],
+      }
+    );
+  }
+  const category = grouping === "category" ? row.category?.trim() : undefined;
+  return category
+    ? (groups.get(`category:${category}`) ?? { id: `category:${category}`, category, rows: [] })
+    : undefined;
+}
+
+function compareSidebarGroups(
+  left: SidebarSessionSection<unknown>,
+  right: SidebarSessionSection<unknown>,
+  selfOwnerId?: string | null,
+): number {
+  if (left.project && right.project) {
+    return (
+      left.project.name.localeCompare(right.project.name) ||
+      left.project.path.localeCompare(right.project.path)
+    );
+  }
+  const rank = (owner: NonNullable<typeof left.personOwner>) =>
+    owner.identity?.type === "agent"
+      ? 2
+      : owner.identity?.type === "profile" && owner.id === selfOwnerId
+        ? 0
+        : 1;
+  const leftOwner = left.personOwner!;
+  const rightOwner = right.personOwner!;
+  return (
+    rank(leftOwner) - rank(rightOwner) ||
+    (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
+    leftOwner.id.localeCompare(rightOwner.id)
+  );
+}
+
 function orderedGroupIds(
   mode: SessionsGroupBy,
   byId: ReadonlyMap<string, GatewaySessionRow[]>,
@@ -370,7 +412,7 @@ function orderedGroupIds(
     return DATE_BUCKET_ORDER.filter((id) => byId.has(id));
   }
   if (mode === "category") {
-    const known = [...new Set(knownCategories.map((name) => name.trim()).filter(Boolean))];
+    const known = normalizeUniqueTrimmedStringList(knownCategories);
     const extras = [...byId.keys()]
       .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
       .toSorted((a, b) => a.localeCompare(b));

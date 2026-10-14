@@ -1,12 +1,14 @@
 // Tests compact command context-budget resolution separately from command lifecycle behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Budget presentation uses fixed compaction effects without running an agent or writing storage.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),
@@ -14,7 +16,13 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
-  isCurrentSessionEntry: vi.fn(() => true),
+  prepareCurrentSessionEntry: vi.fn(
+    async ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
+    }),
+  ),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
@@ -24,7 +32,7 @@ const {
   compactEmbeddedAgentSession,
   formatContextUsageShort,
   incrementCompactionCount,
-  isCurrentSessionEntry,
+  prepareCurrentSessionEntry,
 } = await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
@@ -64,7 +72,11 @@ describe("handleCompactCommand context budget", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-    vi.mocked(isCurrentSessionEntry).mockReturnValue(true);
+    vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
+    }));
     resolveAgentDirMock.mockImplementation(
       (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
     );

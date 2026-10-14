@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 // Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
 import type { RuntimeEnv } from "../runtime.js";
@@ -40,10 +41,6 @@ export type OnboardEnsureWorkspaceOptions = {
 export type OnboardGatewayHealthCall = {
   password?: string;
   token?: string;
-};
-
-export type OnboardHealthCommandCall = OnboardGatewayHealthCall & {
-  config?: OpenClawConfig;
 };
 
 export function createThrowingRuntime(): NonInteractiveRuntime {
@@ -122,21 +119,20 @@ export function createOnboardTestConfigStore() {
   function readSnapshot(): ConfigFileSnapshot {
     const config = configStore.get(resolveConfigPath()) ?? {};
     const exists = configStore.has(resolveConfigPath());
-    return {
+    return createConfigFileSnapshot({
       path: resolveConfigPath(),
       exists,
       raw: exists ? `${JSON.stringify(config, null, 2)}\n` : null,
       parsed: config,
+      sourceConfigBeforeMigrations: config,
       sourceConfig: config,
-      resolved: config,
       valid: true,
       runtimeConfig: config,
-      config,
       ...(exists ? { hash: "test-config-hash" } : {}),
       issues: [],
       warnings: [],
       legacyIssues: [],
-    };
+    });
   }
 
   return { configStore, resolveConfigPath, readConfig, readSnapshot };
@@ -251,22 +247,26 @@ export function createOnboardGatewayTimeoutCapture() {
   };
 }
 
-export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
-  const roster = listAgentEntries(params.config);
-  const existing = roster.find((entry) => entry.default === true) ?? roster[0];
-  if (existing) {
+export async function mockOnboardingAgent(params: {
+  config: OpenClawConfig;
+  baseConfig?: OpenClawConfig;
+  workspace: string;
+}) {
+  if (listAgentEntries(params.config).length > 0) {
     return {
       config: params.config,
-      agentId: existing.id,
+      configBase: params.baseConfig ?? params.config,
+      agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
     };
   }
   return {
+    configBase: params.baseConfig ?? params.config,
     config: {
       ...params.config,
       agents: {
         ...params.config.agents,
-        entries: { main: { name: "main", workspace: params.workspace, default: true } },
+        entries: { main: { name: "main", workspace: params.workspace } },
       },
     },
     agentId: "main",

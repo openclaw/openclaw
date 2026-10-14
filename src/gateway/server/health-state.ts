@@ -1,4 +1,3 @@
-// Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
@@ -6,16 +5,19 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
-import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { GatewayClient } from "../server-methods/types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
@@ -49,9 +51,11 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
 };
 
 export function buildGatewaySnapshot(opts: {
+  client: GatewayClient | null;
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
+  sessionRowProjection?: SessionRowProjection;
 }): Snapshot {
   const cfg = getRuntimeConfig();
   const selection = resolveGatewayAgentSelectionState(cfg);
@@ -60,18 +64,22 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = listSystemPresence();
+  const presence = createPresenceRecipientProjection({
+    cfg,
+    presence: listSystemPresence({ includeConnectionId: opts.client?.connId }),
+    projection: opts.sessionRowProjection,
+  })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const includeUpdateDetails = opts?.includeUpdateDetails === true;
+  const includeUpdateDetails = opts.includeUpdateDetails === true;
   const updateAvailable =
     projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
   const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
   const appliedConfigHash = getRuntimeConfigAppliedHash();
-  // Health is async; the caller replaces this with the collected snapshot.
-  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
+    suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
-    health: emptyHealth,
+    // Health is async; the caller replaces this with the collected snapshot.
+    health: {},
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
     appliedConfigHash: appliedConfigHash
@@ -89,7 +97,7 @@ export function buildGatewaySnapshot(opts: {
     updateAvailable,
     updateSchedule,
   };
-  if (opts?.includeSensitive === true) {
+  if (opts.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
     snapshot.configPath = createConfigIO().configPath;
@@ -126,6 +134,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -144,21 +153,29 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const generation = state.nextGeneration + 1;
   state.nextGeneration = generation;
   const promise = (async () => {
+    const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
     try {
       runtimeSnapshot = opts?.getRuntimeSnapshot?.();
     } catch {
       runtimeSnapshot = undefined;
     }
-    const eventLoop = opts?.getEventLoopHealth?.();
     const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
     const snap = await collectGatewayHealthSnapshot({
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
-      ...(eventLoop ? { eventLoop } : {}),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+      ...(opts?.getSessionRowProjection
+        ? { sessionRowProjection: opts.getSessionRowProjection() }
+        : {}),
     });
+    // Channel collection can outlive several sampling windows. Read diagnostics
+    // only when this new snapshot is ready to return, cache, or broadcast.
+    const eventLoop = opts?.getEventLoopHealth?.();
+    if (eventLoop) {
+      snap.eventLoop = eventLoop;
+    }
     if (
       strength === "probe" &&
       state.inFlight.passive &&

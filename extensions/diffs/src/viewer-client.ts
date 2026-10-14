@@ -1,4 +1,3 @@
-// Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
@@ -242,7 +241,7 @@ function createToolbar(): HTMLElement {
   return toolbar;
 }
 
-function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined> {
+function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined, undefined> {
   return {
     theme: payload.options.theme,
     themeType: viewerState.theme,
@@ -313,13 +312,16 @@ export async function hydrateViewer(): Promise<void> {
   for (const { host, payload } of cards) {
     try {
       const diff = new FileDiff(createRenderOptions(payload));
-      diff.hydrate({
+      const hydration = {
         fileContainer: host,
         prerenderedHTML: payload.prerenderedHTML,
         fileDiff: payload.fileDiff,
-        oldFile: payload.oldFile,
-        newFile: payload.newFile,
-      });
+      };
+      diff.hydrate(
+        payload.oldFile && payload.newFile
+          ? { ...hydration, oldFile: payload.oldFile, newFile: payload.newFile }
+          : hydration,
+      );
       const controller = { payload, diff };
       applyState(controller);
       controllers.push(controller);

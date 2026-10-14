@@ -6,7 +6,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import {
   isRuntimeToolAllowed,
   isToolAllowedByPolicies,
@@ -31,40 +35,59 @@ function expandProgressCardPolicyNames(
     : undefined;
 }
 
-/**
- * Registration helpers for optional OpenClaw-owned tools.
- *
- * This keeps model/runtime gating separate from tool construction so callers can
- * assemble candidate tools first, then filter by config and execution contract.
- */
-/** Drops disabled optional tools while preserving candidate order. */
-export function collectPresentOpenClawTools(
-  candidates: readonly (AnyAgentTool | null | undefined)[],
-): AnyAgentTool[] {
-  return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
+/** Wraps the nodes tool with a workspace-only output-path guard when policy requires it. */
+export function applyNodesToolWorkspaceGuard(
+  nodesToolBase: AnyAgentTool,
+  options: {
+    fsPolicy?: ToolFsPolicy;
+    sandboxContainerWorkdir?: string;
+    sandboxRoot?: string;
+    workspaceDir: string;
+  },
+): AnyAgentTool {
+  if (options.fsPolicy?.workspaceOnly !== true) {
+    return nodesToolBase;
+  }
+  return wrapToolWorkspaceRootGuardWithOptions(
+    nodesToolBase,
+    options.sandboxRoot ?? options.fsPolicy.root ?? options.workspaceDir,
+    {
+      containerWorkdir: options.sandboxContainerWorkdir,
+      normalizeGuardedPathParams: true,
+      pathParamKeys: ["outPath"],
+    },
+  );
 }
 
-/** Decides whether progress_card should be included in the assembled OpenClaw tool set. */
-export function shouldIncludeProgressCardToolForOpenClawTools(params: {
+type ProgressCardToolRegistrationParams = {
   agentId?: string;
+  sandboxAgentId?: string;
   agentSessionKey?: string;
   config?: OpenClawConfig;
   modelId?: string;
   modelProvider?: string;
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];
-}): boolean {
+};
+
+export function prepareProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+) {
+  return withPreparedSessionCapabilityRead(() =>
+    shouldIncludeProgressCardToolForOpenClawTools(params),
+  );
+}
+
+export function shouldIncludeProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+): boolean {
   // `tools.updatePlan` is the shipped kill switch for the replacement progress_card tool.
   if (params.config?.tools?.updatePlan === false) {
     return false;
   }
-  const deny = uniqueStrings([
-    ...(params.config?.tools?.deny ?? []),
-    ...(params.pluginToolDenylist ?? []),
-  ]);
   if (
     !isToolAllowedByPolicyName("progress_card", {
-      deny: expandShippedCoreToolPolicyNames(deny),
+      deny: expandShippedCoreToolPolicyNames(params.pluginToolDenylist),
     }) ||
     !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
   ) {
@@ -73,7 +96,7 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
+    agentId: params.sandboxAgentId ?? params.agentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
@@ -94,16 +117,26 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
       effective.globalProviderPolicy,
       effective.agentPolicy,
       effective.agentProviderPolicy,
+      resolveRequesterToolPolicies({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+        senderPolicyMode: "never",
+      }).subagentPolicy,
     ].map(expandProgressCardPolicyNames),
   );
 }
 
-/** Includes ask_user only on a primary session and when normal deny policy permits it. */
-export function shouldIncludeAskUserToolForOpenClawTools(params: {
+type PrimarySessionToolRegistrationParams = {
   config?: OpenClawConfig;
   agentSessionKey?: string;
   pluginToolDenylist?: string[];
-}): boolean {
+};
+
+export function shouldIncludePrimarySessionToolForOpenClawTools(
+  toolName: "ask_user" | "secrets",
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
   const sessionKey = params.agentSessionKey?.trim();
   if (!sessionKey) {
     return false;
@@ -112,5 +145,5 @@ export function shouldIncludeAskUserToolForOpenClawTools(params: {
     ...(params.config?.tools?.deny ?? []),
     ...(params.pluginToolDenylist ?? []),
   ]);
-  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName("ask_user", { deny });
+  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
 }
