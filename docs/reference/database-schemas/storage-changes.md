@@ -948,7 +948,10 @@ so replacement workers inherit the completed process-wide selection.
 Failed replies and cancelled tasks retire their exact worker without stopping
 unrelated reads. Whole-cache close drains accepted resources, including any remaining
 avatar settlement reads, before retiring the shared pool. A failed resource drain
-retains that pool for canonical cleanup retry. Path-specific close drains only
+retains that pool for canonical cleanup retry. Native handles stay open, so the
+close releases its read seal; each retry seals reads again before draining.
+A failed native retirement keeps the seal, and so does a replacement file
+published at that path before the retry. Path-specific close drains only
 operations admitted for that database.
 A best-effort quarantine read preserves the domain result, but unconfirmed
 quarantine reader cleanup also requires worker retirement before source release.

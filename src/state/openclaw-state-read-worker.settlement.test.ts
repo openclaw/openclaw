@@ -134,7 +134,8 @@ it.each([false, true])(
       await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
       expect(publish).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
-      expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
+      // Failed drainage leaves the database live, so reads resume until the retry seals again.
+      captureOpenClawStateWorkerContext(options);
     }
     const retry = queueTask();
     const retryCloseStarted = createDeferredCore();
