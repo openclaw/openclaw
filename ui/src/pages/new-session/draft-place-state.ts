@@ -246,6 +246,7 @@ export class DraftPlaceState {
   get checkoutVisible(): boolean {
     return (
       !this.deviceFolder &&
+      !this.hostedEnvironment &&
       !this.freshWorkspace &&
       (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
       (this.worktreeAvailable() || this.worktree || Boolean(this.browser.projectId))
