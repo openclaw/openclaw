@@ -797,66 +797,78 @@ export async function runStalePullRequests({
   let closed = 0;
   let lastNumber = checkpoint;
   let exhausted = false;
-  /** @type {Error | undefined} */
-  let unfinished;
-  for (const item of slice.selected) {
-    try {
-      let decision = evaluatePullRequest(
-        await snapshotOf(github, checksGithub, io, item.number),
-        now(),
-      );
-      if (
-        !dryRun &&
-        decision.action !== "preserve" &&
-        (decision.action !== "close" || closed < maxClosures)
-      ) {
-        decision = await mutate(
-          github,
-          checksGithub,
-          mutationGithub,
-          expectedAppId,
-          io,
-          decision,
-          now,
+  let failedTarget;
+  /** @type {Error[]} */
+  const failures = [];
+  try {
+    for (const item of slice.selected) {
+      failedTarget = item.number;
+      try {
+        let decision = evaluatePullRequest(
+          await snapshotOf(github, checksGithub, io, item.number),
+          now(),
         );
-        if (decision.action === "close") {
-          closed++;
+        if (
+          !dryRun &&
+          decision.action !== "preserve" &&
+          (decision.action !== "close" || closed < maxClosures)
+        ) {
+          decision = await mutate(
+            github,
+            checksGithub,
+            mutationGithub,
+            expectedAppId,
+            io,
+            decision,
+            now,
+          );
+          if (decision.action === "close") {
+            closed++;
+          }
+        } else if (!dryRun && decision.action === "close") {
+          // Do not advance over eligible closures that the per-run cap left untouched.
+          break;
         }
-      } else if (!dryRun && decision.action === "close") {
-        // Do not advance over eligible closures that the per-run cap left untouched.
-        break;
-      }
-      decisions.push(decision);
-      lastNumber = item.number;
-      core.info(JSON.stringify(decision));
-    } catch (error) {
-      if (error.code === "STALE_PR_MUTATION") {
-        unfinished = error;
-        closed += Number(error.progress.closed);
-        decisions.push({
-          ...error.progress,
-          action: "preserve",
-          reason: "mutation-verification-incomplete",
-        });
-        core.error?.(error.message);
-        break;
-      }
-      if (error.code !== "STALE_PR_BUDGET") {
+        decisions.push(decision);
+        lastNumber = item.number;
+        core.info(JSON.stringify(decision));
+      } catch (error) {
+        if (error.code === "STALE_PR_BUDGET") {
+          core.warning?.(error.message);
+          exhausted = true;
+          break;
+        }
+        if (error.code === "STALE_PR_MUTATION") {
+          closed += Number(error.progress.closed);
+          decisions.push({
+            ...error.progress,
+            action: "preserve",
+            reason: "mutation-verification-incomplete",
+          });
+        }
         throw error;
       }
-      core.warning?.(error.message);
-      exhausted = true;
-      break;
     }
+    failedTarget = undefined;
+  } catch (error) {
+    failures.push(error);
   }
+  // All exits retain prior effects. Observation failures must not skip the
+  // checkpoint/summary, and persistence failures must not hide confirmed closes.
   const next =
-    !unfinished && !exhausted && decisions.length === slice.selected.length
+    failures.length === 0 && !exhausted && decisions.length === slice.selected.length
       ? slice.next
       : lastNumber;
-  if (!exact && !dryRun && cursorPath) {
-    await mkdir(dirname(cursorPath), { recursive: true });
-    await writeFile(cursorPath, JSON.stringify({ lastNumber: next }) + "\n");
-    core.setOutput?.("checkpoint-written", "true");
+  let checkpointWritten = false;
+  if (!exact && !dryRun && cursorPath && (failures.length === 0 || lastNumber !== checkpoint)) {
+    try {
+      await mkdir(dirname(cursorPath), { recursive: true });
+      await writeFile(cursorPath, JSON.stringify({ lastNumber: next }) + "\n");
+      checkpointWritten = true;
+      core.setOutput?.("checkpoint-written", "true");
+    } catch (error) {
+      failures.push(error);
+    }
   }
   const summary = {
     dryRun,
@@ -871,18 +883,33 @@ export async function runStalePullRequests({
     remainingClosures: Math.max(0, maxClosures - closed),
     checkpoint,
     next,
+    checkpointWritten,
     exhausted,
-    unfinished: Boolean(unfinished),
+    unfinished: failures.length > 0,
+    failedTarget,
+    failures: failures.map((error) => error.message),
   };
   core.info(`Stale PR scan ${JSON.stringify(summary)}`);
-  if (core.summary) {
-    await core.summary
-      .addHeading("Barnacle stale PR lifecycle")
-      .addCodeBlock(JSON.stringify({ ...summary, decisions }, null, 2), "json")
-      .write();
+  try {
+    if (core.summary) {
+      await core.summary
+        .addHeading("Barnacle stale PR lifecycle")
+        .addCodeBlock(JSON.stringify({ ...summary, decisions }, null, 2), "json")
+        .write();
+    }
+  } catch (error) {
+    failures.push(error);
   }
-  if (unfinished) {
-    throw unfinished;
+  for (const error of failures) {
+    core.error?.(error.message);
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, failures.map((error) => error.message).join("; "), {
+      cause: failures[0],
+    });
+  }
+  if (failures.length === 1) {
+    throw failures[0];
   }
   return { ...summary, decisions };
 }

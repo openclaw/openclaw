@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -200,6 +200,33 @@ function harness(seed = snapshot(), onComment) {
     now: () => NOW,
   };
   return { state, writes, pages, options };
+}
+
+function batchHarness(...members) {
+  let active = members[0];
+  const github = { rest: {}, graphql: (...args) => active.options.github.graphql(...args) };
+  for (const [group, methods] of Object.entries(active.options.github.rest)) {
+    github.rest[group] = {};
+    for (const method of Object.keys(methods)) {
+      github.rest[group][method] = async (params) => {
+        if (group === "pulls" && method === "get") {
+          active = members.find((member) => member.state.pr.number === params.pull_number);
+        }
+        return active.options.github.rest[group][method](params);
+      };
+    }
+  }
+  github.rest.pulls.list = async () => ({
+    data: members.map((member) => structuredClone(member.state.pr)),
+  });
+  return {
+    ...members[0].options,
+    github,
+    checksGithub: github,
+    mutationGithub: github,
+    targets: [],
+    dryRun: false,
+  };
 }
 
 describe("Barnacle PR inactivity", () => {
@@ -998,6 +1025,151 @@ describe("Barnacle PR inactivity", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  for (const stage of [
+    "first-read",
+    "comment-readback",
+    "close-readback",
+    "later-read",
+    "later-pre-mutation-read",
+    "later-evaluation",
+  ])
+    it(`finalizes known effects after ${stage} failure`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "stale-pr-test-"));
+      try {
+        const first = harness(snapshot(10));
+        const second = harness(snapshot(11));
+        const failure = new Error(`injected ${stage}`);
+        if (stage === "first-read")
+          first.options.github.rest.pulls.get = async () => {
+            throw failure;
+          };
+        if (stage === "comment-readback")
+          first.options.github.rest.issues.getComment = async () => {
+            throw failure;
+          };
+        if (stage === "close-readback")
+          first.options.github.rest.issues.get = async () => {
+            throw failure;
+          };
+        if (stage === "later-read")
+          second.options.github.rest.pulls.get = async () => {
+            throw failure;
+          };
+        if (stage === "later-pre-mutation-read") {
+          const read = second.options.github.rest.pulls.get;
+          let reads = 0;
+          second.options.github.rest.pulls.get = async (...args) => {
+            if (++reads === 2) throw failure;
+            return read(...args);
+          };
+        }
+        if (stage === "later-evaluation") {
+          second.options.github.rest.pulls.get = async () => ({
+            data: { ...structuredClone(second.state.pr), labels: [null] },
+          });
+        }
+        const logs = [];
+        const outputs = [];
+        const cursorPath = join(dir, "cursor");
+        await assert.rejects(
+          runStalePullRequests({
+            ...batchHarness(first, second),
+            cursorPath,
+            core: { info: (line) => logs.push(line), setOutput: (...args) => outputs.push(args) },
+          }),
+          stage === "later-evaluation" ? TypeError : new RegExp(`injected ${stage}`),
+        );
+        const summary = JSON.parse(
+          logs.find((line) => line.startsWith("Stale PR scan ")).slice(14),
+        );
+        assert.equal(
+          summary.closed,
+          stage === "close-readback" || stage.startsWith("later") ? 1 : 0,
+        );
+        assert.equal(summary.unfinished, true);
+        assert.equal(summary.failedTarget, stage.startsWith("later") ? 11 : 10);
+        assert.equal(summary.next, stage.startsWith("later") ? 10 : null);
+        assert.deepEqual(second.writes, []);
+        assert.deepEqual(
+          first.writes,
+          stage === "first-read"
+            ? []
+            : stage === "comment-readback"
+              ? ["close-comment"]
+              : ["close-comment", "close"],
+        );
+        if (stage.startsWith("later")) {
+          assert.deepEqual(JSON.parse(await readFile(cursorPath, "utf8")), { lastNumber: 10 });
+          assert.deepEqual(outputs, [["checkpoint-written", "true"]]);
+        } else {
+          assert.deepEqual(outputs, []);
+          await assert.rejects(readFile(cursorPath), { code: "ENOENT" });
+        }
+        if (["comment-readback", "close-readback"].includes(stage)) {
+          assert.ok(summary.failures[0].includes('"commentId":200'));
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+  for (const alsoReadFailure of [false, true])
+    it(`reports confirmed closes when checkpoint persistence fails${alsoReadFailure ? " after a read error" : ""}`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "stale-pr-test-"));
+      try {
+        const cursorPath = join(dir, "cursor");
+        const first = harness(snapshot(10));
+        const second = harness(snapshot(11));
+        const close = first.options.github.rest.pulls.update;
+        first.options.github.rest.pulls.update = async (params) => {
+          const response = await close(params);
+          await mkdir(cursorPath);
+          return response;
+        };
+        const original = new Error("later target unavailable");
+        if (alsoReadFailure)
+          second.options.github.rest.pulls.get = async () => {
+            throw original;
+          };
+        const logs = [];
+        const outputs = [];
+        const options = batchHarness(first, second);
+        let caught;
+        try {
+          await runStalePullRequests({
+            ...options,
+            detailLimit: alsoReadFailure ? 2 : 1,
+            cursorPath,
+            core: { info: (line) => logs.push(line), setOutput: (...args) => outputs.push(args) },
+          });
+        } catch (error) {
+          caught = error;
+        }
+        assert.ok(caught);
+        if (alsoReadFailure) {
+          assert.ok(caught instanceof AggregateError);
+          assert.equal(caught.cause, original);
+          assert.equal(caught.errors[0], original);
+          assert.equal(caught.errors[1].code, "EISDIR");
+        } else {
+          assert.equal(caught.code, "EISDIR");
+        }
+        const summary = JSON.parse(
+          logs.find((line) => line.startsWith("Stale PR scan ")).slice(14),
+        );
+        assert.equal(summary.closed, 1);
+        assert.equal(summary.next, 10);
+        assert.equal(summary.unfinished, true);
+        assert.equal(summary.checkpointWritten, false);
+        assert.equal(summary.failures.length, alsoReadFailure ? 2 : 1);
+        assert.deepEqual(outputs, []);
+        assert.deepEqual(first.writes, ["close-comment", "close"]);
+        assert.deepEqual(second.writes, []);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
 
   it("honors an explicit zero closure cap", async () => {
     const h = harness();
