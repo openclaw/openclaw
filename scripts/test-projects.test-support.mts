@@ -3801,13 +3801,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
-    [
-      dockerBuild,
-      dockerE2e,
-      pluginPrerelease,
-      "mcp-code-mode-gateway-client",
-      "session-log-mentions",
-    ],
+    [dockerBuild, dockerE2e, pluginPrerelease, "mcp-code-mode-gateway-client"],
   ],
   [
     /^scripts\/e2e\/agent-bundle-mcp-tools-docker\.sh$/u,
@@ -4007,7 +4001,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       ].join(""),
       "u",
     ),
-    ["mcp-code-mode-gateway-client", "session-log-mentions"],
+    ["mcp-code-mode-gateway-client"],
   ],
   [
     /^scripts\/e2e\/(?:mcp-channels|cron-cli|cron-mcp-cleanup)-docker\.sh$/u,

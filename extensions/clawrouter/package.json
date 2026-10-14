@@ -18,7 +18,7 @@
       "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter",
       "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter --copy",
       "buildOutputs": [
-        "openclaw.plugin.json"
+        "dist/openclaw.plugin.json"
       ]
     }
   },

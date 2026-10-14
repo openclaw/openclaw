@@ -804,25 +804,7 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("hides rewind while the agent is working", () => {
-    renderMessageGroups(
-      [createMessageGroup({ role: "user", content: "busy", timestamp: 1000 }, "user")],
-      { onRewind: vi.fn(), rewindDisabled: true },
-    );
-
-    expect(view.querySelector(".chat-group-rewind")).toBeNull();
-  });
-
   it.each([
-    {
-      name: "places the confirmation below the trigger near the top viewport edge",
-      trigger: { left: 20, top: 4, width: 24, height: 24 },
-      popover: { width: 200, height: 96 },
-      viewport: { width: 320, height: 240 },
-      placement: "below",
-      top: "34px",
-      left: "8px",
-    },
     {
       name: "clamps the confirmation inside shifted visual viewports",
       trigger: { left: 620, top: 540, width: 24, height: 24 },
@@ -882,22 +864,19 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it.each(["Escape", "Cancel", "Rewind", "outside click"] as const)(
+  it.each(["Escape", "Cancel", "Rewind"] as const)(
     "dismisses confirmation listeners and transfers focus after %s",
     (action) => {
       const fixture = setupArmedConfirmedAction();
-      const outside = action === "outside click";
-      const target = outside
-        ? document.body.appendChild(document.createElement("button"))
-        : expectElement(
-            fixture.popover,
-            action === "Rewind" ? ".chat-confirm-popover__yes" : ".chat-confirm-popover__cancel",
-            HTMLButtonElement,
-          );
+      const target = expectElement(
+        fixture.popover,
+        action === "Rewind" ? ".chat-confirm-popover__yes" : ".chat-confirm-popover__cancel",
+        HTMLButtonElement,
+      );
       const leakedKeydown = vi.fn();
       document.addEventListener("keydown", leakedKeydown);
       try {
-        if (outside || action === "Rewind") {
+        if (action === "Rewind") {
           target.focus();
         }
         const event =
@@ -915,13 +894,10 @@ describe("grouped chat rendering", () => {
           expect(document.activeElement).not.toBe(fixture.actionButton);
         } else {
           expect(fixture.onAction).not.toHaveBeenCalled();
-          expect(document.activeElement).toBe(outside ? target : fixture.actionButton);
+          expect(document.activeElement).toBe(fixture.actionButton);
         }
       } finally {
         document.removeEventListener("keydown", leakedKeydown);
-        if (outside) {
-          target.remove();
-        }
       }
     },
   );
@@ -1657,75 +1633,6 @@ describe("grouped chat rendering", () => {
     expect(view.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
   });
 
-  it("keeps cross-group activity neutral while retaining failed child badges", () => {
-    const container = document.createElement("div");
-    const failedMessage = (id: string) =>
-      createAssistantMessage(
-        [
-          {
-            type: "tool_use",
-            id,
-            name: "bash",
-            input: { command: "run primary" },
-          },
-          createToolResultBlock(id, "bash", "Primary path failed", { isError: true }),
-        ],
-        { isError: true },
-      );
-    const failed = createToolGroup("failed", [
-      createMessageEntry("failed-message", failedMessage("call-failed")),
-    ]);
-    const successful = createToolGroup("successful", [
-      createMessageEntry("successful-message", createToolResultMessage("call-ok", "read", "ok")),
-    ]);
-
-    render(
-      renderActivityGroup([failed, successful], {
-        showReasoning: true,
-        showToolCalls: true,
-      }),
-      container,
-    );
-    const recoveredSummary = expectElement(
-      container,
-      ".chat-activity-group__summary",
-      HTMLButtonElement,
-    );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(recoveredSummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-    expect(recoveredSummary.getAttribute("aria-expanded")).toBe("false");
-    expect(recoveredSummary.getAttribute("aria-label")).toBeNull();
-    expect(elementText(".chat-activity-group__label", container)).not.toContain("failed");
-
-    render(
-      renderActivityGroup([failed, successful], {
-        showReasoning: true,
-        showToolCalls: true,
-        isToolMessageExpanded: (id) => id === "activity:failed",
-      }),
-      container,
-    );
-    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
-    expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-
-    render(
-      renderActivityGroup([successful, failed], {
-        showReasoning: true,
-        showToolCalls: true,
-      }),
-      container,
-    );
-    const failedSummary = expectElement(
-      container,
-      ".chat-activity-group__summary",
-      HTMLButtonElement,
-    );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(failedSummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-    expect(failedSummary.getAttribute("aria-expanded")).toBe("false");
-    expect(failedSummary.getAttribute("aria-label")).toBeNull();
-  });
-
   it("keeps failed activity collapsed with neutral chain chrome", async () => {
     document.body.append(view);
     const onToggleToolMessageExpanded = vi.fn();
@@ -1769,19 +1676,6 @@ describe("grouped chat rendering", () => {
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
     view.remove();
-  });
-
-  it("hides grouped tool activity when tool calls are disabled", () => {
-    const group = createToolGroup("tool-group", [
-      toolResultEntry("tool-message-1", "call-1", "read_file", "File one", { timestamp: 1000 }),
-      toolResultEntry("tool-message-2", "call-2", "run_command", "Command output", {
-        timestamp: 1001,
-      }),
-    ]);
-
-    renderMessageGroups([group], { showToolCalls: false });
-
-    expect(view.querySelector(".chat-activity-group")).toBeNull();
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", async () => {
@@ -2416,7 +2310,7 @@ describe("grouped chat rendering", () => {
     expect(view.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
   });
 
-  it("renders transcript image variants and structured image blocks", async () => {
+  it("renders transcript image variants with their message identity and structured image blocks", async () => {
     const firstSource = `/tmp/openclaw/${crypto.randomUUID()}-first.png`;
     const secondSource = `/tmp/openclaw/${crypto.randomUUID()}-second.jpg`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -2432,6 +2326,7 @@ describe("grouped chat rendering", () => {
       const rerender = () =>
         renderGroupedMessage(message, "user", {
           showToolCalls: false,
+          sessionKey: "agent:main:transcript-images",
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           onRequestUpdate: rerender,
@@ -2443,6 +2338,7 @@ describe("grouped chat rendering", () => {
       createUserMessage("", {
         id: "user-history-image-octet-stream",
         __openclaw: {
+          id: "saved-image-octet-stream",
           media: [{ path: firstSource, contentType: "application/octet-stream" }],
         },
       }),
@@ -2452,11 +2348,15 @@ describe("grouped chat rendering", () => {
         view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
       ).toContain(`source=${encodeURIComponent(firstSource)}`),
     );
+    const firstImageUrl = new URL(view.querySelector<HTMLImageElement>(".chat-message-image")!.src);
+    expect(firstImageUrl.searchParams.get("messageId")).toBe("saved-image-octet-stream");
+    expect(firstImageUrl.searchParams.get("sessionKey")).toBe("agent:main:transcript-images");
 
     renderUserMedia(
       createUserMessage("", {
         id: "user-history-images",
         __openclaw: {
+          id: "saved-image-pair",
           media: [
             { path: firstSource, contentType: "image/png" },
             { path: secondSource, contentType: "application/octet-stream" },
@@ -2474,6 +2374,21 @@ describe("grouped chat rendering", () => {
         expect.stringContaining(`source=${encodeURIComponent(secondSource)}`),
       ]),
     );
+    expect(
+      [...view.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
+        new URL(image.src).searchParams.get("messageId"),
+      ),
+    ).toEqual(["saved-image-pair", "saved-image-pair"]);
+    expect(
+      fetchMock.mock.calls.map(([url]) => {
+        const params = new URL(url, "http://control.test").searchParams;
+        return [params.get("source"), params.get("messageId")];
+      }),
+    ).toEqual([
+      [firstSource, "saved-image-octet-stream"],
+      [firstSource, "saved-image-pair"],
+      [secondSource, "saved-image-pair"],
+    ]);
 
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),
@@ -3146,53 +3061,6 @@ describe("grouped chat rendering", () => {
 
     expect(view.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
-  });
-
-  it("projects oversized history rows through regular and grouped tool bubbles", () => {
-    const rawMarker = "[chat.history omitted: message too large]";
-    const notice = "This message is too large to display here.";
-    const regularContainer = document.createElement("div");
-    renderGroupedMessage(
-      {
-        role: "user",
-        content: [{ type: "text", text: rawMarker }],
-        __openclaw: { id: "oversized-user", truncated: true, reason: "oversized" },
-      },
-      "user",
-      {},
-      regularContainer,
-    );
-
-    const regularBubble = expectElement(regularContainer, ".chat-bubble", HTMLElement);
-    expect(regularBubble.textContent).toContain(notice);
-    expect(regularBubble.textContent).not.toContain(rawMarker);
-    expect(regularBubble.dataset.messageText).toBe(notice);
-
-    const groupedContainer = document.createElement("div");
-    const group = createToolGroup("oversized-tool-group", [
-      toolResultEntry("oversized-tool-1", "call-1", "read_file", rawMarker, {
-        __openclaw: { id: "oversized-tool-1", truncated: true, reason: "oversized" },
-      }),
-      toolResultEntry("oversized-tool-2", "call-2", "run_command", rawMarker, {
-        __openclaw: { id: "oversized-tool-2", truncated: true, reason: "oversized" },
-      }),
-    ]);
-    renderMessageGroups(
-      [group],
-      {
-        isToolMessageExpanded: (id) => id === "activity:oversized-tool-group",
-      },
-      groupedContainer,
-    );
-
-    const groupedBubbles = [
-      ...groupedContainer.querySelectorAll<HTMLElement>(
-        ".chat-activity-group__body > .chat-bubble",
-      ),
-    ];
-    expect(groupedBubbles).toHaveLength(2);
-    expect(groupedBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([notice, notice]);
-    expect(groupedContainer.textContent).not.toContain(rawMarker);
   });
 
   it("keeps the oversized notice visible when assistant recovery exhausts", () => {

@@ -30,15 +30,18 @@ export function createSessionActorResidency() {
       state.transcript.contextMetadata = state.hot.transcript.projection?.contextMetadata;
       state.transcript.payloads = new Map();
       // A sole resident is exempt from the byte cap; measure it when another key competes.
-      const bytes = residents.size === 0 ? undefined : serialize(state).byteLength;
       if (residents.size === 1) {
-        for (const resident of residents.values()) {
+        for (const [residentKey, resident] of residents) {
           if (resident.bytes === undefined) {
             resident.bytes = serialize(resident.state).byteLength;
             residentBytes += resident.bytes;
           }
+          if (resident.bytes > MAX_RESIDENT_BYTES) {
+            drop(residentKey);
+          }
         }
       }
+      const bytes = residents.size === 0 ? undefined : serialize(state).byteLength;
       residents.set(key, { state, bytes });
       residentBytes += bytes ?? 0;
       // Keep one oversized working set until another key displaces it; dropping it

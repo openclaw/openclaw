@@ -6,7 +6,7 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import "../components/app-topbar.ts";
+import "../components/app-topbar-solid.tsx";
 import "../components/assistant-panel.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";

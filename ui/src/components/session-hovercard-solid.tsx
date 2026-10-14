@@ -8,6 +8,7 @@ import type {
 } from "../../../src/gateway/control-ui-contract.js";
 import { t } from "../i18n/index.ts";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
+import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
@@ -17,7 +18,6 @@ import {
   type SessionHovercardContextInput,
 } from "./session-hovercard-context-solid.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
-import { sessionOwnerInitials } from "./session-owner-chip.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";

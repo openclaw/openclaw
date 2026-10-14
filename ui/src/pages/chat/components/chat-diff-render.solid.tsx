@@ -34,6 +34,7 @@ export function DiffStatChips(props: { stat: DiffStat & { modified?: number } })
 export function HighlightedDiff(props: {
   lines: readonly DiffLine[];
   file: DiffFilePaths;
+  rows?: readonly SessionSplitDiffRow[];
   children: (
     renderLine: (line: DiffLine) => JSX.Element,
     rows: readonly SessionSplitDiffRow[],
@@ -42,7 +43,7 @@ export function HighlightedDiff(props: {
   const [highlighted, setHighlighted] = createSignal<ReadonlyMap<DiffLine, DiffHighlightToken[]>>(
     new Map(),
   );
-  const rows = createMemo(() => pairSessionDiffLines(props.lines));
+  const rows = createMemo(() => props.rows ?? pairSessionDiffLines(props.lines));
   const changes = createMemo(() => diffLineChangeRanges(rows()));
   const rendered = createMemo(() => {
     const result = new Map(highlighted());
@@ -127,10 +128,11 @@ export function DiffBlock(props: {
   outcome?: ToolCardOutcome;
   renderSkip?: (line: DiffLine) => JSX.Element;
   file?: DiffFilePaths;
+  rows?: readonly SessionSplitDiffRow[];
 }) {
   const hasLineNumbers = () => props.lines.some((line) => line.lineNo !== undefined);
   return (
-    <HighlightedDiff lines={props.lines} file={props.file ?? { path: "" }}>
+    <HighlightedDiff lines={props.lines} file={props.file ?? { path: "" }} rows={props.rows}>
       {(renderLine) => (
         <div
           class="chat-diff code-highlight"

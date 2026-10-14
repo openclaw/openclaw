@@ -44,7 +44,7 @@ const log = createSubsystemLogger("model-auth");
 
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-/** @deprecated Use resolveModelAuthModeAsync. Retained until an announced stable removal window. */
+/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,

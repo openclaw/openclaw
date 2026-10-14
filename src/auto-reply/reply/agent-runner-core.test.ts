@@ -72,6 +72,42 @@ it("renders restart recovery ownership changes as session guidance", async () =>
   }
 });
 
+it.each([false, true])(
+  "keeps setup failures retryable only before durable acceptance (%s)",
+  async (accepted) => {
+    const replyOperation = createReplyOperation({
+      sessionKey: `agent:main:input-acceptance-${accepted}`,
+      sessionId: `input-acceptance-${accepted}`,
+      turnKind: "visible",
+      resetTriggered: false,
+    });
+    const failure = new Error("ENOSPC: turn preparation failed");
+    try {
+      const reply = handleReplyAgentRunError(failure, {
+        resolveVisibleReplyDelivery: async () => false,
+        isHeartbeat: false,
+        replyExpectation: "required",
+        userTurnAccepted: accepted,
+        isRestartRecoveryArmed: async () => false,
+        replyOperation,
+        resolvedVerboseLevel: "off",
+        returnWithQueuedFollowupDrain: (value) => value,
+        sessionCtx: {},
+      });
+      if (accepted) {
+        await expect(reply).resolves.toMatchObject({
+          isError: true,
+          text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
+        });
+      } else {
+        await expect(reply).rejects.toBe(failure);
+      }
+    } finally {
+      replyOperation.complete();
+    }
+  },
+);
+
 describe("resolveReplyRunDeliveryContext", () => {
   it.each([
     { name: "string message topic", messageThreadId: "99", threadId: "99" },

@@ -83,6 +83,13 @@ FIFO ordering and rereading the current rows. Fresh admission waits outside
 host is busy. Authority refusals and uncertain rollback outcomes are not retried;
 required update and recovery records retain their existing durability.
 
+Channel-identity writes use the same one-second admission budget at transaction
+entry and commit, with at most three attempts. Entry admission waits before
+`BEGIN`; a commit timeout rolls back before retrying with fresh authority and
+current rows. Exhaustion names the failed operation and directs the operator to
+`openclaw gateway status --deep` before retrying. Final commit authorization stays
+inside the transaction until the remaining authority owners can transfer their checks.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
@@ -169,6 +176,12 @@ Closing a connection clears its prepared statements and row caches. Confirmed cl
 retains the physical database's completed validation facts for later opens in the
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
+
+Shared-state commands load their registered domain directly. The remaining command
+runtime loads only when an operation needs it, so workers serving registered
+operations alone do not retain unrelated command modules. Preparation still
+finishes before synchronous database execution; writer admission and receipts
+stay with their existing owners.
 
 The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.

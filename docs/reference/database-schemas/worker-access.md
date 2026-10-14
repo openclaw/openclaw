@@ -238,6 +238,11 @@ Exec allowlist usage writes retain receipt and supersession tracking without
 publishing a pending denial: recording last-used metadata cannot revoke another
 command's authorization. Policy edits and durable allow-always grants still
 publish pending denials; unknown outcomes still invalidate the policy view.
+GitHub publication lifecycle bindings are immutable. Request inserts and status
+updates do not revoke an existing binding while their bookkeeping is pending.
+Deletion still denies use before dispatch; unknown outcomes and replaced bindings
+remain fenced until owner recovery.
+
 Personal credential and GitHub publication owners are concrete examples:
 [`user-model-account-authority.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/user-model-account-authority.ts)
 and [`github-publication-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/github-publication-receipts.ts).
@@ -641,8 +646,11 @@ from the index-facts postimage. The publication worker owns vector extension loa
 and retirement, while the retrieval worker owns read-only capability probing.
 These paths add no schema, retention, or update contract.
 
-Scheduled cron runs reuse the job and receipt loaded by their queue transaction
-when claiming and activating work. The scheduler claims and activates due runs
+Scheduled cron runs reuse the job loaded by their queue transaction when claiming
+and activating work. One conflict-safe receipt insert claims both the request ID
+and the active job slot through their unique indexes; only rejected requests read
+an existing receipt to report duplicates and repair consumed scheduled slots.
+The scheduler claims and activates due runs
 in one worker command using its loaded job postimages. Fresh claims persist the
 running state directly; capacity-limited runs retain their queued state and FIFO
 order. Activation commits ownership and start time together. Job mutations return
@@ -4833,13 +4841,15 @@ candidates invalidate the retained selection. Conflicting selections return
 for fresh planning; unrelated writes invalidate age hints without cancelling the
 plan. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
-operation and native close release those readers. Planning preserves age facts and
-the preservation-required rollback before retrying with current protection facts.
-Automatic maintenance prepares subagent protection through its existing
+operation and native close release those readers. No-op plans carry their current
+age and count facts through settlement. Automatic maintenance prepares protection
+once before candidate selection, without a preliminary scan under writer admission.
+It prepares subagent protection through its existing
 read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
-Gateway main thread; no-op planning still avoids that preparation entirely.
+Gateway main thread. Exhaustive protected-only results suppress further passes
+until eligibility, policy, or the existing age deadline changes.
 Committed registry publications update the retained capture before the final host
 maintenance grant, without another candidate read or worker-side registry digest.
 Protection published after that grant is ordered after the admitted maintenance

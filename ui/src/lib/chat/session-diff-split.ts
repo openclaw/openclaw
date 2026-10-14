@@ -9,6 +9,14 @@ export type DiffChangeRange = { from: number; to: number };
 // Presentation is optional: oversized runs retain positional pairing, and long
 // or token-dense lines retain their whole-line color without inline decoration.
 const MAX_PAIR_CELLS = 4096;
+const PAIR_WORK_BUDGET = 262144;
+
+/** Shared by all files/hunks displayed together; never stored across renders. */
+export function createDiffPairingBudget() {
+  return { remaining: PAIR_WORK_BUDGET };
+}
+
+type DiffPairingBudget = ReturnType<typeof createDiffPairingBudget>;
 const MAX_LINE_CHARS = 2048;
 const MAX_INLINE_CELLS = 65536;
 const INLINE_CELL_BUDGET = 262144;
@@ -23,10 +31,23 @@ function bigrams(text: string): Map<string, number> {
   return counts;
 }
 
-function alignChanges(deletions: DiffLine[], additions: DiffLine[]): SessionSplitDiffRow[] {
+function alignChanges(
+  deletions: DiffLine[],
+  additions: DiffLine[],
+  budget: DiffPairingBudget,
+): SessionSplitDiffRow[] {
   const rows: SessionSplitDiffRow[] = [];
+  const cells = deletions.length * additions.length;
+  const oldChars = deletions.reduce((sum, line) => sum + line.text.length, 0);
+  const newChars = additions.reduce((sum, line) => sum + line.text.length, 0);
+  // Each old character can produce at most one gram visited for each addition.
+  // Include gram construction and matrix work, before allocating either. This
+  // conservative estimate also bounds repetitive/whitespace-heavy input.
+  const work = cells + oldChars * additions.length + oldChars + newChars;
   if (
-    deletions.length * additions.length > MAX_PAIR_CELLS ||
+    !cells ||
+    cells > MAX_PAIR_CELLS ||
+    work > budget.remaining ||
     [...deletions, ...additions].some((line) => line.text.length > MAX_LINE_CHARS)
   ) {
     for (let i = 0; i < Math.max(deletions.length, additions.length); i++) {
@@ -34,6 +55,7 @@ function alignChanges(deletions: DiffLine[], additions: DiffLine[]): SessionSpli
     }
     return rows;
   }
+  budget.remaining -= work;
   const oldGrams = deletions.map((line) => bigrams(line.text));
   const newGrams = additions.map((line) => bigrams(line.text));
   const weights = (grams: Map<string, number>) => [...grams.values()].reduce((a, b) => a + b, 0);
@@ -85,7 +107,10 @@ function alignChanges(deletions: DiffLine[], additions: DiffLine[]): SessionSpli
 }
 
 /** Align adjacent changes by similarity without reordering either source side. */
-export function pairSessionDiffLines(lines: readonly DiffLine[]): SessionSplitDiffRow[] {
+export function pairSessionDiffLines(
+  lines: readonly DiffLine[],
+  budget = createDiffPairingBudget(),
+): SessionSplitDiffRow[] {
   const rows: SessionSplitDiffRow[] = [];
   for (let index = 0; index < lines.length;) {
     const line = lines[index]!;
@@ -107,7 +132,7 @@ export function pairSessionDiffLines(lines: readonly DiffLine[]): SessionSplitDi
       }
       index++;
     }
-    rows.push(...alignChanges(deletions, additions));
+    rows.push(...alignChanges(deletions, additions, budget));
   }
   return rows;
 }

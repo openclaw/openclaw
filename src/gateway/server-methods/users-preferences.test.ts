@@ -221,7 +221,7 @@ test("users.prefs refuses a pending write when the participant is revoked before
   });
 });
 
-test.each(["current", "scope", "source", "identity", "error-response", "staff"] as const)(
+test.each(["current", "read", "scope", "source", "identity", "error-response", "staff"] as const)(
   "users.self keeps its original %s authority through the handler's identity sync",
   async (change) => {
     const state = await createOpenClawTestState({
@@ -237,7 +237,9 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       releaseProfiles = (await prepareUserProfileCatalog()).release;
       const client = createOperatorWsClient({
         connId: "self-reader",
-        scopes: [change === "staff" ? "operator.read" : "operator.sessions.read"],
+        scopes: [
+          change === "staff" || change === "read" ? "operator.read" : "operator.sessions.read",
+        ],
       });
       client.authenticatedUserId = "self-reader@github";
       const attach = (profile: typeof owner) => {
@@ -303,7 +305,7 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
         expect(respond).not.toHaveBeenCalled();
       } else {
         expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-        if (change === "current" || change === "staff") {
+        if (change === "current" || change === "read" || change === "staff") {
           expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
             profile: expect.objectContaining({ id: owner.id }),
           });
@@ -394,41 +396,146 @@ test("users.prefs.get retains its original scope across the preference read", as
   }
 });
 
-test("users.prefs remains self-scoped across durable identities", async () => {
+test("users.prefs dispatch saves guest choices only to the authenticated durable profile", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "users-prefs-rpc-" });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const ada = ensureProfileForEmail("ada@example.test");
     const grace = ensureProfileForEmail("grace@example.test");
-    const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
+    const clients = [ada, grace].map((profile) => {
+      const client = createOperatorWsClient({
+        connId: profile.id,
+        scopes: ["operator.sessions.read", "operator.sessions.write"],
+      });
+      client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: null,
+        avatarRevision: "",
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      prepareGatewayRecipientProfile(client);
+      return client;
+    });
+    const adaClient = clients[0]!;
+    const graceClient = clients[1]!;
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => ({}),
+      getClientConnIds: (filter) =>
+        new Set(
+          clients.filter((client) => !filter || filter(client)).map((client) => client.connId),
+        ),
+      broadcastToConnIds: vi.fn(),
+    });
+    const request = async (
+      method: string,
+      params: Record<string, unknown> = {},
+      client = adaClient,
+    ) => {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: { type: "req", id: method, method, params },
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: usersHandlers,
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      return respond.mock.calls[0];
+    };
+    const key = "new-session.v1:main";
+    const choice = { folder: "/projects/openclaw", worktree: true };
+    using prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+    expect(await request("users.prefs.set", { entries: { [key]: choice } })).toEqual([
+      true,
+      { status: "ok" },
+      undefined,
+    ]);
+    expect(await request("users.prefs.get")).toEqual([
+      true,
+      { status: "ok", entries: { [key]: choice } },
+      undefined,
+    ]);
+    expect(await request("users.prefs.get", {}, graceClient)).toEqual([
+      true,
+      { status: "ok", entries: {} },
+      undefined,
+    ]);
     expect(
-      await invokePreferenceMethod(
-        "users.prefs.set",
-        { entries: { "new-session.v1:main": { folder: "/ada" } } },
-        ada.id,
-      ),
-    ).toEqual({ ok: true, payload: { status: "ok" }, error: undefined });
-    expect(await invokePreferenceMethod("users.prefs.get", {}, ada.id)).toMatchObject({
-      ok: true,
-      payload: {
-        status: "ok",
-        entries: { "new-session.v1:main": { folder: "/ada" } },
-      },
-    });
-    expect(await invokePreferenceMethod("users.prefs.get", {}, grace.id)).toMatchObject({
-      ok: true,
-      payload: { status: "ok", entries: {} },
-    });
+      await request("users.prefs.set", {
+        entries: { [key]: { folder: "/stale" } },
+        expectedEntries: { [key]: null },
+      }),
+    ).toEqual([true, { status: "conflict" }, undefined]);
+    expect(
+      await request("users.prefs.set", {
+        entries: { [key]: { ...choice, worktreeName: "focused-fix" } },
+        expectedEntries: { [key]: choice },
+      }),
+    ).toEqual([true, { status: "ok" }, undefined]);
     expect(prepare).not.toHaveBeenCalled();
     prepare.mockRestore();
-    linkEmail("ada@example.test", grace.id);
-    expect(await invokePreferenceMethod("users.prefs.get", {}, grace.id)).toMatchObject({
-      ok: true,
-      payload: {
-        status: "ok",
-        entries: { "new-session.v1:main": { folder: "/ada" } },
-      },
+
+    expect(
+      await request("users.prefs.set", {
+        profileId: grace.id,
+        entries: { [key]: { folder: "/other" } },
+      }),
+    ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    expect(
+      await request("users.prefs.set", {
+        entries: { "ui.background": null, [key]: null },
+      }),
+    ).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("required profile scope") },
+    ]);
+    for (const [method, scope] of [
+      ["themes.set", "operator.write"],
+      ["users.setRole", "operator.admin"],
+    ] as const) {
+      expect(await request(method)).toMatchObject([
+        false,
+        undefined,
+        { message: `missing scope: ${scope}` },
+      ]);
+    }
+    expect(await request("users.prefs.get", {}, graceClient)).toEqual([
+      true,
+      { status: "ok", entries: {} },
+      undefined,
+    ]);
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let reachedCommit = false;
+    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+    admission.mockImplementation((admit, attachment) =>
+      createAdmission((workerRequest, grant) => {
+        if (workerRequest.stage === "commit") {
+          reachedCommit = true;
+          adaClient.connect.scopes = [];
+        }
+        admit(workerRequest, grant);
+      }, attachment),
+    );
+    expect(
+      await request("users.prefs.set", { entries: { [key]: { folder: "/revoked" } } }),
+    ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    expect(reachedCommit).toBe(true);
+    expect(await preferences.getCanonicalUserPreferences(ada.id)).toMatchObject({
+      entries: { [key]: { ...choice, worktreeName: "focused-fix" } },
     });
+    admission.mockRestore();
+    linkEmail("ada@example.test", grace.id);
+    expect(await request("users.prefs.get", {}, graceClient)).toEqual([
+      true,
+      { status: "ok", entries: { [key]: { ...choice, worktreeName: "focused-fix" } } },
+      undefined,
+    ]);
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });

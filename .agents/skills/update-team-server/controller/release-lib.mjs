@@ -544,21 +544,32 @@ function syncPath(pathname) {
 }
 
 function releaseFootprint(root) {
-  const footprint = { bytes: 0, entries: 0 };
-  const pending = [root];
-  const device = lstatSync(root).dev;
-  while (pending.length) {
-    const pathname = pending.pop(), entry = lstatSync(pathname);
-    if (entry.dev !== device) reject("release capacity inventory crosses filesystems");
-    footprint.bytes += Math.max(entry.size, entry.blocks * 512);
-    footprint.entries++;
-    if (entry.isDirectory()) {
-      for (const name of readdirSync(pathname)) pending.push(join(pathname, name));
-    } else if (!entry.isFile() && !entry.isSymbolicLink()) {
-      reject("release capacity inventory contains an unsupported entry");
-    }
+  // Keep the large metadata walk outside V8: its optimized lstatSync loop has crashed.
+  // Count every hardlink and sparse file's copy cost, rather than du's shared blocks.
+  const result = spawnSync("python3", ["-c", `
+import os, stat, sys
+pending = [sys.argv[1]]
+device = os.lstat(pending[0]).st_dev
+size = entries = 0
+while pending:
+    path = pending.pop()
+    entry = os.lstat(path)
+    if entry.st_dev != device:
+        sys.exit("release capacity inventory crosses filesystems")
+    size += max(entry.st_size, entry.st_blocks * 512)
+    entries += 1
+    if stat.S_ISDIR(entry.st_mode):
+        with os.scandir(path) as children:
+            pending.extend(child.path for child in children)
+    elif not (stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode)):
+        sys.exit("release capacity inventory contains an unsupported entry")
+print(size, entries)
+`, root], { encoding: "utf8" });
+  if (result.status !== 0) {
+    reject(`cannot measure release capacity: ${result.error?.message ?? result.stderr.trim()}`);
   }
-  return footprint;
+  const [bytes, entries] = result.stdout.trim().split(/\s+/).map(value => integer(value, "release footprint"));
+  return { bytes, entries };
 }
 
 function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runtimeHome) {

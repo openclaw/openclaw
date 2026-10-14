@@ -1,4 +1,4 @@
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
@@ -27,7 +27,8 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
     initialize(database: OpenClawStateDatabase) {
       const db = database.db;
       if (isPostgresSqlConnection(db)) {
-        requireNativeDatabaseFile("postgres", "repair");
+        assertSupportedStateSchemaVersion(db, database.path);
+        return getPostgresPhysicalFacts(db);
       }
       admitSqliteSchema(db);
       return runSqliteReadOperationSync(db, () => {
@@ -64,7 +65,9 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       }
       const db = database.db;
       if (isPostgresSqlConnection(db)) {
-        requireNativeDatabaseFile("postgres", "repair");
+        assertSupportedStateSchemaVersion(db, database.path);
+        database.schemaFacts = getPostgresPhysicalFacts(db);
+        return operation(database);
       }
       let admitted = false;
       try {

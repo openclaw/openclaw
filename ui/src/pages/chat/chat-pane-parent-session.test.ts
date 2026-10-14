@@ -145,6 +145,7 @@ describe("mounted pane parent session", () => {
       const pane = mount(child.key);
       await refreshPane(pane);
       await parentRequested.promise;
+      await vi.dynamicImportSettled();
       if (recovering) {
         oldParent.reject(new Error("Temporary descriptor outage"));
         await vi.dynamicImportSettled();

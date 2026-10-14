@@ -103,6 +103,20 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+Queued requester finals also retain their original completion source alongside the
+final-delivery intent. Command admission snapshots the source, session lifecycle,
+and route before execution; a refreshed cache cannot lend a successor’s source to
+a finishing run. An identified send on that captured route records a durable
+receipt before queue acknowledgement, including when terminal cleanup has already
+retired the active recovery claim. Every logical final and every physical payload
+in its batch must have successful identified delivery evidence. Reported recipients
+and threads, including nested aggregate receipt parts, must match the captured route;
+omitted provider metadata retains the existing channel contract.
+Later cleanup cannot replace that receipt with an earlier capture, and a newer
+requester or different route cannot borrow it. Empty, unsent, suppressed, or
+uncertain results do not establish delivery. Existing missing-receipt records are
+not retroactively treated as delivered.
+
 An interrupted admitted completion keeps its complete recovery claim even when
 the saved run status is failed, timed out, or killed. The next visible message or queued
 follow-up resumes that recovery before taking foreground ownership or entering
@@ -768,6 +782,13 @@ new key or rotates its session ID. Claim validation and cleanup read only those
 candidate sessions, so stale recovery claims do not load unrelated saved prompts
 while interactive session changes wait. Claim authority, retry budgets, stored
 data, and upgrade behavior are unchanged.
+
+The Control UI shows a neutral system notice: “Gateway restarted. Resuming your
+interrupted request.” Expected restart interruptions do not create a terminal
+reply-failure card or ask you to send the request again. A restart refusal during
+an active turn retains its recovery claim, even if the admission fence closes
+before the shutdown owner cancels that turn. Genuine provider failures, explicit
+Stop actions, and exhausted recovery remain separate outcomes.
 
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking

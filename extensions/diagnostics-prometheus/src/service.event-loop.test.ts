@@ -269,7 +269,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      const firstWindow = {
+        type: "gateway.event_loop.sample",
+        intervalMs: 2_000,
+        delayMaxMs: 1_250,
+      } as const;
+      // Scrapes cannot publish a producer's window before diagnostics delivers it.
+      const beforeDelivery = await scrape();
+      expect(beforeDelivery).not.toContain("openclaw_gateway_event_loop_");
+      expect(await scrape()).toBe(beforeDelivery);
+      metrics.record(firstWindow);
       metrics.record({
         type: "diagnostic.gc",
         kind: "scavenge",
@@ -277,8 +286,9 @@ describe("diagnostics-prometheus runtime metrics", () => {
         durationMs: 1_250,
       });
       const first = await scrape();
-      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
-      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1\n");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.25\n");
+      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2\n");
       expect(first).toContain(
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
       );
@@ -312,9 +322,18 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
         'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
       ]) {
-        expect(second).toContain(expected);
+        expect(second).toContain(`${expected}\n`);
       }
       expect(await scrape()).toBe(second);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 });
+      const third = await scrape();
+      expect(third).toContain(
+        'openclaw_gateway_event_loop_delay_max_seconds_bucket{le="0.005"} 1\n',
+      );
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 3\n");
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.27\n");
+      expect(third).toContain("openclaw_gateway_event_loop_observed_seconds_total 11\n");
+      expect(await scrape()).toBe(third);
       metrics.record({
         type: "diagnostic.gc",
         kind: "mark_sweep_compact",

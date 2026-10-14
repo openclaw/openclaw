@@ -64,6 +64,11 @@ export function normalizeSqlIdentifier(identifier: string): string {
   return identifier.toLowerCase();
 }
 
+/** SQLite folds only ASCII letters when comparing identifiers. */
+export function foldSqliteIdentifierCase(identifier: string): string {
+  return identifier.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 export function normalizeSchemaSql(sql: string | null): string | null {
   if (sql === null) {
     return null;

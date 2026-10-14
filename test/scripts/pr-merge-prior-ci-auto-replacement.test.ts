@@ -513,7 +513,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
       if (!replace) {
         expect(f.state().mainAdvances).toHaveLength(1);
-        expect(recovered.output).toContain("Requalifying prior-CI admission after main");
+        expect(recovered.output).toContain("Admin authority round 2:");
       }
       expect(f.state().restMergePayload).toMatchObject({
         sha: replacement,

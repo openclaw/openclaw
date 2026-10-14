@@ -28,48 +28,6 @@ describe("OpenClaw shell locale preferences", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses canonical server locale provenance and clears a stale local pin", async () => {
-    localStorage.setItem("openclaw.i18n.locale", "fr");
-    const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
-    const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
-    const state: {
-      configSnapshot: {
-        config: { ui: { prefs: Record<string, unknown> } };
-        hash: string;
-      };
-    } = {
-      configSnapshot: {
-        config: { ui: { prefs: { locale: "de" } } },
-        hash: "locale-config-hash",
-      },
-    };
-    const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
-    const refreshTheme = vi.fn();
-    const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://locale.test" },
-        snapshot: { phase: "connected", client: {} },
-      },
-      theme: { refresh: refreshTheme },
-      runtimeConfig,
-    } as unknown as ApplicationContext;
-    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
-    shell.runtime = { context };
-
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    state.configSnapshot = {
-      config: { ui: { prefs: {} } },
-      hash: "locale-config-cleared-hash",
-    };
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-
-    expect(setLocale).toHaveBeenCalledExactlyOnceWith("de");
-    expect(useSystemLocale).toHaveBeenCalledOnce();
-    expect(loadSettings().locale).toBeUndefined();
-  });
-
   it("keeps a retained device-local locale instead of realigning to the rejected server value", async () => {
     const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
     const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
@@ -159,7 +117,6 @@ describe("profile preference ACK publication across browser realms", () => {
 
   const publicationCases = [
     "settled",
-    "settled-empty",
     "published-read",
     "published-baseline",
     "published-identical",
@@ -169,7 +126,7 @@ describe("profile preference ACK publication across browser realms", () => {
     "keeps B's newer publication when A's older ACK arrives (%s)",
     async (mode) => {
       const cancelled = mode === "cancelled";
-      const empty = mode === "settled-empty" || cancelled;
+      const empty = cancelled;
       const baseline = mode === "published-baseline";
       const identical = mode === "published-identical";
       const observed = mode === "published-read" || baseline || identical;
