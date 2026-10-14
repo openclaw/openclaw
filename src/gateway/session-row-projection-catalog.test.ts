@@ -47,11 +47,20 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     expect(read).not.toHaveBeenCalled();
     expect(refreshed).not.toHaveBeenCalled();
     const first = createDeferredCore();
+    const reading = createDeferredCore<typeof next>();
+    read.mockReturnValueOnce(reading.promise);
+    catalog.invalidate();
+    const inFlight = catalog.refresh();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
     next = new Map([
       ["main", undefined],
       ["other", other],
     ]);
+    reading.resolve(next);
+    await inFlight;
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    read.mockClear();
     await catalog.refresh();
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();

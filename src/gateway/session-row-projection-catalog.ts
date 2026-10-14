@@ -25,8 +25,6 @@ function changedModelAgents(previous: Inputs["modelCatalog"], next: Inputs["mode
       return undefined;
     }
     if (
-      !isDeepStrictEqual(catalog.entries, replacement.entries) ||
-      !isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants) ||
       !isDeepStrictEqual(
         readPreparedGatewaySessionRowPolicy(catalog),
         readPreparedGatewaySessionRowPolicy(replacement),
@@ -101,7 +99,8 @@ export function createSessionRowProjectionCatalog(params: {
       }
       const work = (async () => {
         const next = await params.getModelCatalog?.();
-        if (disposed) {
+        // Replacement can begin while the catalog read yields.
+        if (disposed || (replacement && modelCatalog !== undefined)) {
           return;
         }
         // A concurrent catalog change is adopted by the next publication.

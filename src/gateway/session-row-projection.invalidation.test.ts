@@ -6,6 +6,7 @@ import {
   prepareRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as agentIdentity from "../agents/identity.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import {
   createConfigResolutionFacts,
@@ -33,7 +34,9 @@ import {
   recordAgentRunModel,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   activateSecretsRuntimeSnapshotState,
@@ -77,31 +80,56 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
         { sessionId: `plugin-reload-${index}`, updatedAt: index + 1, visibility: "shared" },
       );
     }
-    const view = (model: string) =>
-      new Map([
+    const instances: PluginInstance[] = [];
+    const view = (model: string, sourceDigest = "original-code") => {
+      const owner = new PluginInstance("model-owner");
+      owner.sourceDigest = sourceDigest;
+      instances.push(owner);
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.providers.push({
+        pluginId: "model-owner",
+        source: "/tmp/model-owner/index.js",
+        provider: owner.wrap({
+          id: "example",
+          label: "Example",
+          auth: [],
+          aliases: ["example-alias"],
+          hookAliases: ["example-hook"],
+          resolveThinkingProfile: () => null,
+        }),
+      });
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "synthetic-hooks", hooks: ["before_prompt_build"] },
+          {
+            id: "model-owner",
+            origin: "global",
+            providers: ["example"],
+            modelIdNormalization: {
+              providers: { example: { aliases: { "list-alias": model } } },
+            },
+          },
+        ],
+      });
+      const entries = [
+        { provider: "example", id: "original", name: "Original" },
+        { provider: "example", id: "replacement", name: "Replacement" },
+      ];
+      const prepared: ModelCatalogSnapshot = { entries, routeVariants: entries };
+      prepareModelCatalogThinkingPolicies({ catalog: prepared, metadataSnapshot, pluginRegistry });
+      return new Map([
         [
           "main",
           createPreparedGatewayModelCatalog({
             config: cfg,
-            entries: [
-              { provider: "example", id: "original", name: "Original" },
-              { provider: "example", id: "replacement", name: "Replacement" },
-            ],
-            pluginRegistry: createEmptyPluginRegistry(),
-            metadataSnapshot: createPluginMetadataSnapshotFixture({
-              plugins: [
-                { id: "synthetic-hooks", hooks: ["before_prompt_build"] },
-                {
-                  id: "model-owner",
-                  modelIdNormalization: {
-                    providers: { example: { aliases: { "list-alias": model } } },
-                  },
-                },
-              ],
-            }),
+            entries: prepared.entries,
+            routeVariants: prepared.routeVariants,
+            pluginRegistry,
+            metadataSnapshot,
           }),
         ],
       ]);
+    };
     let catalog = view("original");
     const release = projectionWork.retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
@@ -135,17 +163,25 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
         expect(sequences()).toEqual(materialized);
         expect(projection.dirtyRowCount).toBe(0);
       }
+      // Captured code changes still invalidate policy even with the same registration shape.
+      catalog = view("original", "changed-code");
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+      await projection.ensureMaterialized();
+      expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
+      expect(sequences()).not.toEqual(materialized);
+      const beforeNormalization = sequences();
       // A manifest policy edit still changes rows even when catalog entries stay identical.
-      catalog = view("replacement");
+      catalog = view("replacement", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
       expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("replacement"));
-      expect(sequences()).not.toEqual(materialized);
+      expect(sequences()).not.toEqual(beforeNormalization);
     } finally {
       await projection.ensureMaterialized();
       projection.dispose();
       release();
       resetConfigRuntimeState();
+      await Promise.all(instances.map((instance) => instance.dispose()));
     }
   });
 });

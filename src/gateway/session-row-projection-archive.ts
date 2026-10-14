@@ -98,13 +98,25 @@ export function createSessionRowProjectionArchive(params: {
       return undefined;
     },
     invalidateRows(
-      change: Extract<SessionRowChange, { all: true }>,
+      change: Extract<SessionRowChange, { all: true }> & { runtimeOwnershipChanged?: true },
       candidates: Iterable<records.Row>,
     ) {
       const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       for (const row of candidates) {
         if (change.factsInvalidated) {
           params.invalidateFacts(row);
+        }
+        if (change.runtimeOwnershipChanged) {
+          // Completed policy changes expire native ownership; queued work keeps accepted facts.
+          records.invalidateDatabaseFacts(
+            row,
+            row.retainedDatabaseFacts && {
+              ...row.retainedDatabaseFacts,
+              runtimeOwnership: undefined,
+              runtimeOwnershipDependencies: undefined,
+              runtimeOwnershipRetryPending: undefined,
+            },
+          );
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {

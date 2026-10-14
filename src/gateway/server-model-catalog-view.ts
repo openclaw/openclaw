@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
@@ -19,10 +24,35 @@ function captureSessionRowPolicy(params: {
   config?: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   pluginRegistry: SessionRowPolicyRegistry;
+  entries: PreparedGatewayModelCatalog["entries"];
+  routeVariants?: PreparedGatewayModelCatalog["routeVariants"];
 }) {
   const { metadataSnapshot: metadata, pluginRegistry } = params;
-  const { entries, ...pluginPolicy } = params.config?.plugins ?? {};
+  const { entries: pluginEntries, ...pluginPolicy } = params.config?.plugins ?? {};
   const index = new Map(metadata.index.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  const codePolicy = (pluginId: string, value: object) => {
+    const owner = getPluginValueInstance(value);
+    // Managed wrappers change on reload; their captured code and plugin config own policy.
+    return owner &&
+      (owner.sourceDigest !== undefined || metadata.byPluginId.get(pluginId)?.origin === "bundled")
+      ? { sourceDigest: owner.sourceDigest }
+      : { unmanaged: value };
+  };
+  // Prepared thinking callbacks have the same code/config lifetime as their registrations.
+  const catalogFacts = (
+    entries:
+      | readonly (PreparedGatewayModelCatalog["entries"][number] & ThinkingCatalogPolicyCarrier)[]
+      | undefined,
+  ) =>
+    entries?.map((entry) => {
+      const { [PREPARED_THINKING_POLICY]: thinking, ...data } = entry;
+      return {
+        data,
+        thinking:
+          thinking &&
+          codePolicy(getPluginValueInstance(thinking.resolve)?.pluginId ?? "", thinking.resolve),
+      };
+    });
   const registeredOwners = new Set(
     [
       ...pluginRegistry.providers,
@@ -32,10 +62,61 @@ function captureSessionRowPolicy(params: {
     ].map((registration) => registration.pluginId),
   );
   return {
-    providers: pluginRegistry.providers,
-    agentHarnesses: pluginRegistry.agentHarnesses,
-    cliBackends: pluginRegistry.cliBackends,
-    sessionExtensions: pluginRegistry.sessionExtensions,
+    entries: catalogFacts(params.entries),
+    routeVariants: catalogFacts(params.routeVariants),
+    providers: pluginRegistry.providers.map(({ pluginId, source, rootDir, provider }) => ({
+      pluginId,
+      source,
+      rootDir,
+      code: codePolicy(pluginId, provider),
+      id: provider.id,
+      // Managed array wrappers compare by generation even when their elements match.
+      aliases: provider.aliases ? [...provider.aliases] : undefined,
+      hookAliases: provider.hookAliases ? [...provider.hookAliases] : undefined,
+      thinking: Boolean(provider.resolveThinkingProfile),
+      normalization: Boolean(provider.normalizeModelId),
+      fastMode: Boolean(provider.resolveFastModeSupport),
+      serviceTiers: Boolean(provider.resolveServiceTiers),
+    })),
+    agentHarnesses: pluginRegistry.agentHarnesses.map(({ pluginId, source, rootDir, harness }) => ({
+      pluginId,
+      source,
+      rootDir,
+      code: codePolicy(pluginId, harness),
+      id: harness.id,
+      autoSelection: harness.autoSelection
+        ? { providerIds: [...harness.autoSelection.providerIds] }
+        : undefined,
+      cloudPlacement: harness.cloudPlacement && {
+        mode: harness.cloudPlacement.mode,
+        devicePlacement: harness.cloudPlacement.devicePlacement && {
+          requiredNodeCommands: [...harness.cloudPlacement.devicePlacement.requiredNodeCommands],
+          consumesWorkerSlot: harness.cloudPlacement.devicePlacement.consumesWorkerSlot,
+        },
+      },
+      workspaceEnvironment: harness.workspaceEnvironment && { ...harness.workspaceEnvironment },
+      supports: Boolean(harness.supports),
+      ownership: Boolean(harness.resolveSessionRuntimeOwnership),
+      asyncOwnership: Boolean(harness.resolveSessionRuntimeOwnershipAsync),
+    })),
+    cliBackends: pluginRegistry.cliBackends.map(({ pluginId, source, rootDir, backend }) => ({
+      pluginId,
+      source,
+      rootDir,
+      code: codePolicy(pluginId, backend),
+      id: backend.id,
+      modelProvider: backend.modelProvider,
+    })),
+    sessionExtensions: pluginRegistry.sessionExtensions.map(
+      ({ pluginId, source, rootDir, extension }) => ({
+        pluginId,
+        source,
+        rootDir,
+        code: codePolicy(pluginId, extension),
+        namespace: extension.namespace,
+        project: Boolean(extension.project),
+      }),
+    ),
     providerOwners: metadata.owners.providers,
     normalization: metadata.owners.modelIdNormalizationPolicies,
     pluginPolicy,
@@ -51,11 +132,27 @@ function captureSessionRowPolicy(params: {
           plugin.modelCatalog?.providers ||
           plugin.modelIdNormalization,
       )
-      .map((plugin) => ({
-        plugin,
-        installed: index.get(plugin.id),
-        config: entries?.[plugin.id],
-      })),
+      .map((plugin) => {
+        const installed = index.get(plugin.id);
+        return {
+          plugin,
+          installed: installed && {
+            pluginId: installed.pluginId,
+            origin: installed.origin,
+            enabled: installed.enabled,
+            enabledByDefault: installed.enabledByDefault,
+            enabledByDefaultOnPlatforms: installed.enabledByDefaultOnPlatforms,
+            contributions: installed.contributions,
+            source: installed.source,
+            rootDir: installed.rootDir,
+            manifestHash: installed.manifestHash,
+            packageHash: installed.packageJson?.hash,
+            packageVersion: installed.packageVersion,
+            installRecordHash: installed.installRecordHash,
+          },
+          config: pluginEntries?.[plugin.id],
+        };
+      }),
   };
 }
 

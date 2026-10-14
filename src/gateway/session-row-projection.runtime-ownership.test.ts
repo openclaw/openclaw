@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentHarnessPreflightError } from "../agents/harness/errors.js";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -15,15 +19,111 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 
 // Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("rereads native model ownership after its harness plugin config changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:harness:row-native:config";
+    const bindings = createPluginStateKeyedStoreV2<string>(
+      "row-native",
+      { namespace: "config-bindings", maxEntries: 10 },
+      { assertCurrent() {} },
+    );
+    await bindings.register(key, "present");
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: "native-config",
+        updatedAt: 1,
+        agentHarnessId: "row-native",
+        modelSelectionLocked: true,
+      },
+    );
+    const config = (model: string): OpenClawConfig => ({
+      agents: { entries: { main: {} }, defaults: { model: "example/fallback" } },
+      plugins: { entries: { "row-native": { enabled: true, config: { model } } } },
+    });
+    let cfg = config("original-native");
+    setRuntimeConfigSnapshot(cfg);
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "row-native",
+      source: "test",
+      harness: {
+        id: "row-native",
+        label: "Native config fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Presentation must not run a model");
+        },
+        resolveSessionRuntimeOwnershipAsync: async (params) => {
+          await bindings.lookup(params.sessionKey!);
+          return {
+            model: "native",
+            auth: "native",
+            modelRef: {
+              provider: "example",
+              model: String(cfg.plugins!.entries!["row-native"]!.config!.model),
+            },
+          };
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "row-native", activation: { onAgentHarnesses: ["row-native"] } }],
+    });
+    const view = () =>
+      new Map([
+        [
+          "main",
+          createPreparedGatewayModelCatalog({
+            config: cfg,
+            entries: [{ provider: "example", id: "fallback", name: "Fallback" }],
+            pluginRegistry: registry,
+            metadataSnapshot,
+          }),
+        ],
+      ]);
+    let catalog = view();
+    const release = retainSessionListForegroundWork();
+    let projection: SessionRowProjection | undefined;
+    try {
+      projection = await createSessionRowProjection({
+        cfg,
+        getConfig: () => cfg,
+        getModelCatalog: async () => catalog,
+      });
+      expect((await listProjectedSessions({ projection, opts: {} })).sessions[0]?.model).toBe(
+        "original-native",
+      );
+      cfg = config("replacement-native");
+      setRuntimeConfigSnapshot(cfg);
+      catalog = view();
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+      await projection.ensureMaterialized();
+      expect((await listProjectedSessions({ projection, opts: {} })).sessions[0]?.model).toBe(
+        "replacement-native",
+      );
+    } finally {
+      projection?.dispose();
+      release();
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+      resetConfigRuntimeState();
+    }
+  });
 });
 
 it.for(["once", "continued", "failure"] as const)(
