@@ -10,7 +10,7 @@ import {
 /** A failed row must not release single-flight custody of its still-running siblings. */
 export async function settleTalkCatalogTasks<const T extends readonly Promise<unknown>[]>(
   tasks: T,
-) {
+): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
   try {
     return await Promise.all(tasks);
   } finally {
