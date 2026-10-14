@@ -9,6 +9,7 @@ import {
   handleChatScroll,
   handleChatScrollTakeover,
   lockChatScroll,
+  saveChatSessionScrollPosition,
   scheduleCommittedChatScroll,
 } from "../scroll.ts";
 import {
@@ -52,6 +53,52 @@ function createPolicyTranscript(paneId: string) {
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("records a changed end edge without an extra pane render", async () => {
+    const paneId = "offset-end-edge";
+    saveChatSessionScrollPosition(paneId, `agent:main:${paneId}`, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    transcriptDomState.measuredRowHeight = 1000;
+    const requestUpdate = vi.fn();
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate,
+        updateComplete: Promise.resolve(true),
+      },
+      () => paneId,
+      { canFollowEnd: () => false },
+    );
+    const rows: TestContentRow[] = [
+      { kind: "content", key: "long-run", content: html`<div>Long transcript run</div>` },
+    ];
+    const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
+    try {
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 400 },
+        scrollHeight: { configurable: true, value: 1000 },
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 400);
+      }
+      container.scrollTop = 300;
+      container.dispatchEvent(new Event("scroll"));
+      renderRows(rows);
+      expect(session["endAnchor"].atEnd).toBe(false);
+      const geometry = vi.spyOn(session["virtualizer"].options, "onChange");
+      requestUpdate.mockClear();
+
+      container.scrollTop = 600;
+      container.dispatchEvent(new Event("scroll"));
+      expect(session["endAnchor"].atEnd).toBe(true);
+      expect(requestUpdate).toHaveBeenCalledTimes(geometry.mock.calls.length);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it.each([
     { name: "suspended following", suspended: true, steps: [[1200, 600, true]] },

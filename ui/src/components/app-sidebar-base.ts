@@ -1,9 +1,5 @@
 import type { ReactiveController } from "lit";
-import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  parseSidebarEntry,
-  type NavigationRouteId,
-} from "../app-navigation.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
@@ -152,12 +148,6 @@ export abstract class AppSidebarBase {
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
   contextualSidebar: ContextualSidebar | undefined;
-  get sidebarReferencedSessionKeys(): readonly string[] {
-    return this.sidebarEntries.flatMap((value) => {
-      const entry = parseSidebarEntry(value);
-      return entry?.type === "session" ? [entry.key] : [];
-    });
-  }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;

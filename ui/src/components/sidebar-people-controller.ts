@@ -6,7 +6,7 @@ import { createPresenceActivityController } from "../lit/presence-activity-contr
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { sidebarPresenceActivityViewers, sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import { PersonActivityDataController } from "./person-activity-data.ts";
+import { registerPersonActivityData } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
 export type SidebarPeopleStatusFilter = "all" | "running";
@@ -56,18 +56,20 @@ export class SidebarPeopleController implements ReactiveController {
     this.activityExpiry = createPresenceActivityController(host, () =>
       host.connected ? sidebarPresenceActivityViewers(host) : [],
     );
-    new SubscriptionsController(host).effect(
-      () => host.sessionDataContext?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          if (event.event === "presence") {
-            this.activityExpiry.sync();
-          }
-        }),
-    );
-    host.addController(
-      new PersonActivityDataController(host, () => host.sessionDataContext, host.sessionData),
-    );
+    new SubscriptionsController(host)
+      .effect(
+        () => host.sessionDataContext,
+        (context) => registerPersonActivityData(context, host.sessionData),
+      )
+      .effect(
+        () => host.sessionDataContext?.gateway,
+        (gateway) =>
+          gateway.subscribeEvents((event) => {
+            if (event.event === "presence") {
+              this.activityExpiry.sync();
+            }
+          }),
+      );
   }
 
   hostConnected(): void {

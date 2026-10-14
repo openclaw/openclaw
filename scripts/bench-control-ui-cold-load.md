@@ -46,7 +46,12 @@ bundle while production sources are edited.
 settles. The stream mixes full presence snapshots, session patches for displayed,
 held-but-hidden, and outside-window rows, open-session messages and assistant
 streaming, changing catalog hosts, and unrelated cron/run-state activity. The live
-phase runs after tracing and CPU sampling stop. Its `run-N.live.json` records Lit
+phase runs after tracing and CPU sampling stop. The selected session starts with an
+active canonical run; live messages and deltas advance its history receipt before
+publishing the event, so later history reads retain the same messages and stream. Capture ends after all frames
+arrive and the planned 20-second stream plus 750 ms have elapsed; busy sessions
+need not become idle. `plannedWindowMs` and the observed `elapsedMs` distinguish
+the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records Lit
 updates and bounded `requestUpdate` scheduling stacks per event label, plus DOM
 snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
 shows the synthetic final state. Row attachment and viewport visibility distinguish
@@ -61,6 +66,18 @@ tap immediately, and restores the owner wrappers at the end of the live phase.
 A missing Solid owner fails the capture instead of reporting zero work. Lit tags
 retain their original per-tag `performUpdate` counters; zero Lit updates for a
 ported Solid tag are a measurement gap, not a performance improvement.
+
+`solidChat` counts every page/pane owner request, owner publication, actual
+projection `render` read, pane prepare/commit, and page after-commit call separately.
+Each projection pass retains the pending producer stacks and request IDs, including
+requests coalesced by the owner. IDs remain attached to their publication batch,
+so a request that drives an early projection and a later queued publication is
+visible on both passes. Unattributed passes and remaining pending producers are
+explicit. Existing lifecycle hook notifications distinguish owner facts from
+element invalidation/commit notifications; their combined count is not a DOM
+commit count. The probe preserves and restores the hook's complete descriptor,
+including the existing test adapter's accessor, along with all owner methods.
+These are projection/lifecycle counts, not all fine-grained Solid binding work.
 
 Live updates are attributed to the most recently delivered event label. Paced
 refreshes and clock-driven presence updates may finish during a later event's

@@ -2,7 +2,6 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-l
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries } from "../app/user-profile.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
 export type PersonActivityData = Readonly<
@@ -13,34 +12,13 @@ type PersonPresenceData = Pick<PersonActivityData, "presencePayload">;
 const sources = new WeakMap<ApplicationContext, PersonPresenceData>();
 
 /** Late-open cards read the current owner's snapshot, not the initial hello. */
-export class PersonActivityDataController implements SolidController {
-  private source: ApplicationContext | undefined;
-  constructor(
-    private readonly host: SolidControllerHost & { readonly isConnected: boolean },
-    private readonly context: () => ApplicationContext | undefined,
-    private readonly data: PersonPresenceData,
-  ) {}
-
-  hostUpdated() {
-    if (!this.host.isConnected) {
-      return;
+export function registerPersonActivityData(context: ApplicationContext, data: PersonPresenceData) {
+  sources.set(context, data);
+  return () => {
+    if (sources.get(context) === data) {
+      sources.delete(context);
     }
-    const context = this.context();
-    if (this.source !== context) {
-      this.hostDisconnected();
-      this.source = context;
-    }
-    if (context) {
-      sources.set(context, this.data);
-    }
-  }
-
-  hostDisconnected() {
-    if (this.source && sources.get(this.source) === this.data) {
-      sources.delete(this.source);
-    }
-    this.source = undefined;
-  }
+  };
 }
 
 export function observePersonActivityData(context: ApplicationContext, changed: () => void) {

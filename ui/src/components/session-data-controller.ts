@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
@@ -11,6 +12,7 @@ import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { SolidController } from "../lit/solid-controller-host.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
@@ -50,9 +52,10 @@ import {
   scheduleFilteredSidebarSessions,
   sidebarSessionListQuery,
   subscribeFilteredSidebarSessions,
+  subscribeSidebarAgentSessionCaches,
+  subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
-import { createSessionDataSubscriptions } from "./session-data-controller-subscriptions.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 import { SessionLineageController } from "./session-lineage-controller.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
@@ -90,7 +93,10 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
-  private readonly subscriptions: ReturnType<typeof createSessionDataSubscriptions>;
+  private readonly subscriptions: SubscriptionsController;
+  private readonly renderSubscription: SubscriptionsController;
+  private invalidateRender: (() => void) | undefined;
+  private presentationScope: readonly unknown[];
   readonly sessionCatalogLive = new SessionCatalogLiveState();
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
@@ -104,7 +110,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
-  private sessionCatalogInputs: readonly unknown[] = [];
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
   private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
@@ -128,10 +133,67 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
-    this.subscriptions = createSessionDataSubscriptions(host, this, {
-      gateway: (gateway) => this.synchronizeGateway(gateway),
-      sessions: (sessions) => this.synchronizeSessions(sessions),
+    this.presentationScope = this.readPresentationScope();
+    const subscriptionHost = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => {
+        if (host.navigationVisible && host.shouldPublishSessionData()) {
+          host.requestUpdate();
+        }
+      },
+      get updateComplete() {
+        return host.updateComplete;
+      },
+    };
+    // State is synchronous; the existing shared frame compares only presentation.
+    this.renderSubscription = new SubscriptionsController(subscriptionHost).watch(
+      () => this,
+      (_, notify) => {
+        this.invalidateRender = notify;
+        return () => {
+          this.invalidateRender = undefined;
+        };
+      },
+      undefined,
+      () => undefined,
+    );
+    this.subscriptions = new SubscriptionsController({
+      ...subscriptionHost,
+      requestUpdate: () => this.requestSessionDataUpdate(),
     });
+    this.subscriptions
+      .effect(
+        () =>
+          this.host.sidebarAgentsMode === "roster" && this.context
+            ? rosterActivityStore(this.context)
+            : undefined,
+        (roster) => roster.subscribe(this.requestSessionDataUpdate),
+      )
+      .watchStore(
+        () => this.context?.gateway,
+        (gateway) => this.synchronizeGateway(gateway),
+      )
+      .watchStore(
+        () => this.context?.sessions,
+        (sessions) => this.synchronizeSessions(sessions),
+      )
+      .effect(
+        () => this.context?.sessions,
+        (sessions) => sessions.subscribeCreated((key) => host.promoteCreatedSession(key)),
+      )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => subscribeSessionDataGatewayEvents(gateway, this),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => subscribeSidebarAgentSessionCaches(agents, this, notify),
+      )
+      .watchStore(
+        () => this.context?.agentSelection,
+        () => this.synchronizeSessionScope(),
+      );
   }
 
   get context(): ApplicationContext | undefined {
@@ -159,7 +221,11 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionCatalogIdsWithoutVisibleRows = (): readonly string[] =>
     this.host.sessionCatalogIdsWithoutVisibleRows();
 
-  readonly requestSessionDataUpdate = () => this.subscriptions.requestUpdate();
+  readonly requestSessionDataUpdate = () => {
+    if (this.host.navigationVisible) {
+      this.invalidateRender?.();
+    }
+  };
 
   publishPresence(payload: unknown): void {
     const presence = readPresenceEntries(payload);
@@ -175,7 +241,8 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.host, agentId);
 
   hostConnected(): void {
-    this.subscriptions.connect();
+    this.renderSubscription.hostConnected();
+    this.subscriptions.hostConnected();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
       this.handleCatalogSessionContinued as EventListener,
       this.handleSessionCatalogPageActivation,
@@ -183,8 +250,24 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   hostUpdate(): void {
-    this.subscriptions.update();
+    this.subscriptions.hostUpdate();
     this.lineage.synchronize();
+    const scope = this.readPresentationScope();
+    if (scope.some((value, index) => value !== this.presentationScope[index])) {
+      this.presentationScope = scope;
+      // Explicit scope changes render current facts; ordinary commits cannot consume pending data.
+      this.host.shouldPublishSessionData();
+    }
+  }
+
+  private readPresentationScope(): readonly unknown[] {
+    return [
+      this.host.navigationVisible,
+      this.host.navigationView,
+      this.host.contextualSidebar,
+      this.host.sidebarAgentsMode,
+      this.host.connected,
+    ];
   }
 
   hostUpdated(): void {
@@ -200,24 +283,24 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   hostDisconnected(): void {
-    this.subscriptions.disconnect(() => {
-      this.ownerCounts.dispose();
-      this.resetChildSessionState();
-      this.retireFilteredSessions();
-      this.stopCatalogBrowserEvents?.();
-      this.stopCatalogBrowserEvents = null;
-      this.host.dismissTransientMenus();
-      this.invalidateSessionMutations();
-      this.gatewaySource = null;
-      this.gatewayClient = null;
-      this.gatewayConnected = false;
-      this.gatewayAvailable = false;
-      this.agentSelectionSource = undefined;
-      this.agentSelectionIntentRevision = undefined;
-      retireSessionCatalogData(this);
-      this.scroll.dispose();
-      this.lineage.disconnect();
-    });
+    this.renderSubscription.hostDisconnected();
+    this.ownerCounts.dispose();
+    this.resetChildSessionState();
+    this.retireFilteredSessions();
+    this.stopCatalogBrowserEvents?.();
+    this.stopCatalogBrowserEvents = null;
+    this.host.dismissTransientMenus();
+    this.invalidateSessionMutations();
+    this.gatewaySource = null;
+    this.gatewayClient = null;
+    this.gatewayConnected = false;
+    this.gatewayAvailable = false;
+    this.agentSelectionSource = undefined;
+    this.agentSelectionIntentRevision = undefined;
+    retireSessionCatalogData(this);
+    this.scroll.dispose();
+    this.lineage.disconnect();
+    this.subscriptions.hostDisconnected();
   }
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {
@@ -355,18 +438,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   private readonly updateSessions = (sessions: SessionCapability) => {
     const snapshot = sessions.state;
-    const catalogInputs = [
-      snapshot.groups,
-      snapshot.groupSettings,
-      snapshot.sectionOrder,
-      snapshot.error,
-      sessions.eventSubscriptionError,
-      sessions.groupsStatus(),
-    ];
-    if (catalogInputs.some((value, index) => value !== this.sessionCatalogInputs[index])) {
-      this.sessionCatalogInputs = catalogInputs;
-      this.requestSessionDataUpdate();
-    }
     if (sessions.presentation.resultCached) {
       return;
     }
@@ -384,14 +455,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       return;
     }
     const presentation = sessions.presentation;
-    if (
-      this.sessionsResult === presentation.result &&
-      this.sessionsAgentId === presentation.agentId &&
-      this.sessionsLoading === snapshot.loading &&
-      this.sessionsStartupPending === (snapshot.startupPending === true)
-    ) {
-      return;
-    }
     if (!sessions.presentation.result && this.sessionsResult) {
       this.clearSessionCache();
     }

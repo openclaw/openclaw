@@ -41,13 +41,18 @@ import {
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
+  readonly navigationVisible: boolean;
+  readonly navigationView: "sessions" | "online" | "pages";
+  readonly contextualSidebar?: ContextualSidebar;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  shouldPublishSessionData(): boolean;
   readonly activeRouteId?: string;
   readonly sessionCatalogRowsVisible: boolean;
-  readonly sidebarReferencedSessionKeys: readonly string[];
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
   readonly sessionDataContext: ApplicationContext | undefined;

@@ -9,7 +9,7 @@ import {
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import { createContext, createGatewayHarness } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { observePersonActivityData, PersonActivityDataController } from "./person-activity-data.ts";
+import { observePersonActivityData, registerPersonActivityData } from "./person-activity-data.ts";
 
 function fixture() {
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
@@ -43,18 +43,7 @@ it("keeps live and late-open cards current without a sidebar rendering publicati
   const context = f.context;
   const initial = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
   const data = { presencePayload: initial };
-  const publisher = new PersonActivityDataController(
-    {
-      isConnected: true,
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    },
-    () => context,
-    data,
-  );
-  publisher.hostUpdated();
+  const stopPublishing = registerPersonActivityData(context, data);
   const changed = vi.fn();
   const first = observePersonActivityData(context, changed);
   expect(first.data?.presencePayload).toBe(initial);
@@ -67,7 +56,12 @@ it("keeps live and late-open cards current without a sidebar rendering publicati
   expect(reopened.data?.presencePayload).toBe(next);
   first.dispose();
   reopened.dispose();
-  publisher.hostDisconnected();
+  const stopReplacement = registerPersonActivityData(context, { presencePayload: initial });
+  stopPublishing();
+  const replacement = observePersonActivityData(context, () => undefined);
+  expect(replacement.data?.presencePayload).toBe(initial);
+  replacement.dispose();
+  stopReplacement();
   f.activity.dispose();
   context.sessions.dispose();
 });

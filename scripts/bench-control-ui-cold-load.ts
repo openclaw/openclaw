@@ -77,6 +77,7 @@ const fixture = createControlUiTeamScaleFixture({
   baseUrl: server.baseUrl,
   sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
   sandboxPort: address.port,
+  liveRun: values["live-events"],
 });
 let browser: Browser | undefined;
 const results = [];
@@ -108,7 +109,7 @@ try {
     ) {
       harnessWarnings.push(error.message);
     } else {
-      errors.push(error.message);
+      errors.push(error.stack ?? error.message);
     }
   });
   await page.route("**/control-ui-config.json", (route) =>
@@ -144,7 +145,7 @@ try {
     },
   );
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n(${installColdLoadProbes.toString()})(${JSON.stringify({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents })}); })();`,
+    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n(${installColdLoadProbes.toString()})(${JSON.stringify({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}); })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -197,8 +198,21 @@ try {
     }
   }
   await page.goto(url);
-  await page.locator("#sidebar-session-owner-title").click();
-  await page.locator('.sidebar-session-owner-filter [role="option"][data-value="all"]').click();
+  try {
+    await page.locator("#sidebar-session-owner-title").click();
+    await page.locator('.sidebar-session-owner-filter [role="option"][data-value="all"]').click();
+  } catch (error) {
+    await writeFile(
+      path.join(artifactDir, "setup-failure.json"),
+      JSON.stringify({
+        errors,
+        sidebar: await page.locator("openclaw-app-sidebar").textContent(),
+        diagnostics: await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read()),
+      }),
+    );
+    await page.screenshot({ path: path.join(artifactDir, "setup-failure.png") });
+    throw error;
+  }
   if (sidebarView === "online") {
     await page.locator('[data-navigation-view="online"]').click();
   }
@@ -337,14 +351,16 @@ try {
         fixture.liveEvents.length,
         { timeout: 35_000 },
       );
-      await page.waitForFunction(() => {
-        const state = Reflect.get(window, "__coldLoad").read();
-        return !state.pending && !state.queued && state.idleMs > 750;
-      });
+      const plannedWindowMs = fixture.liveEvents.at(-1)!.atMs + 750;
+      await page.waitForFunction(
+        (windowMs) => Reflect.get(window, "__coldLoad").readLive().elapsedMs >= windowMs,
+        plannedWindowMs,
+      );
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
       const after = await readLivePresentation();
       live = {
         ...(await page.evaluate(() => Reflect.get(window, "__coldLoad").readLive())),
+        plannedWindowMs,
         presentation: { before, after },
       };
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.live.png`) });

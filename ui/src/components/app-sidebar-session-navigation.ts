@@ -39,7 +39,7 @@ import {
   projectUnpinnedSessionRows,
   prunePersonalSidebarSessionEntry,
 } from "./app-sidebar-personal-navigation.ts";
-import { sameSidebarPresence, sidebarPresenceScope } from "./app-sidebar-presence.ts";
+import { sidebarPresenceScope, sidebarPresencePresentation } from "./app-sidebar-presence.ts";
 import {
   adoptedCatalogSessionKeys,
   type SidebarSessionCatalog,
@@ -66,6 +66,7 @@ import {
   SidebarSessionProjection,
   type SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
 import {
   visibleSidebarSessionCatalogs,
   sidebarCatalogLiveRows,
@@ -106,8 +107,89 @@ import {
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
+  // Record frame admission only; owner.updated can precede child DOM bindings.
+  private publishedSessionPresentation = "";
+  private admittedPresencePresentation = "";
+
+  shouldPublishSessionData(): boolean {
+    if (this.sidebarSnapshot) {
+      return true;
+    }
+    const data = this.sessionData;
+    const sessionsVisible = this.navigationView === "sessions" && !this.contextualSidebar;
+    const chip = this.activeChipAgent();
+    const replacement =
+      sessionsVisible && this.context?.plugins.selectedReplacement("session-list");
+    const rows = sessionsVisible
+      ? this.selectedAgentSessionRows(this.getSessionNavigationState())
+      : [];
+    const sections = sessionsVisible ? this.zonedVisibleSections(rows).sections : [];
+    const roster =
+      sessionsVisible && this.sidebarAgentsMode === "roster" ? this.rosterSessionSource : null;
+    const rosterSnapshot =
+      sessionsVisible && this.sidebarAgentsMode === "roster" && this.context
+        ? rosterActivityStore(this.context).snapshot
+        : null;
+    const presentation = JSON.stringify([
+      this.navigationView,
+      this.connected,
+      this.context?.gateway.snapshot.hello,
+      this.context?.agents.state.agentsList,
+      this.sidebarAgentsMode === "chip" ? chip.identity : null,
+      this.sidebarMenus.agentMenuPosition !== null
+        ? chip.agents.map(({ id }) => chip.identities.get(normalizeAgentId(id)))
+        : null,
+      this.context?.plugins.registryStatus,
+      this.pluginNavigation().map(({ key, value }) => [key, value]),
+      Boolean(replacement),
+      replacement ? this.context?.sessions.state.result?.sessions : null,
+      this.context?.sessions.groupsStatus(),
+      this.context?.sessions.state.error,
+      this.context?.sessions.eventSubscriptionError,
+      this.context?.sessions.state.groupSettings,
+      rosterSnapshot && [
+        rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+          id,
+          name,
+          avatar,
+          textAvatar,
+        ]),
+        rosterSnapshot.loading,
+        rosterSnapshot.error,
+        rosterSnapshot.subscriptionError,
+      ],
+      this.ownerOptions,
+      this.sessionOwnershipVisibility,
+      data.sessionsLoading,
+      data.sessionsStartupPending,
+      data.sessionsResult?.hasMore,
+      data.sessionMutationError,
+      data.sessionCatalogRefreshStatus,
+      [...data.loadingMoreSessionCatalogIds],
+      [...data.childSessionErrorsByParent],
+      this.sessionCatalogRowsVisible ? this.sidebarSessionCatalogs() : null,
+      [data.ownerCounts.counts && [...data.ownerCounts.counts], data.ownerCounts.error],
+      this.admittedPresencePresentation,
+      sessionsVisible
+        ? [
+            this.visibleSessionTreeInOrder().map(({ children: _children, ...row }) => row),
+            sections.map(({ rows, ...header }) => [header, summarizeTeamSessionSlots(rows, true)]),
+          ]
+        : null,
+      (this.sidebarAgentsMode === "chip" ? [this.expandedAgentId()] : (roster?.agentIds ?? [])).map(
+        (id) => this.mainSessionRow(id),
+      ),
+    ]);
+    if (presentation === this.publishedSessionPresentation) {
+      return false;
+    }
+    this.publishedSessionPresentation = presentation;
+    return true;
+  }
+
   rosterCollapsedAgentIds: ReadonlySet<string> | null = null;
   private readonly rosterSourceMemo = new SidebarProjectionMemo<
     NonNullable<SidebarProjectionHost["rosterSessionSource"]>
@@ -154,7 +236,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   readonly sessionData = new SessionDataController(this);
 
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean {
-    return sameSidebarPresence(previous, next, sidebarPresenceScope(this));
+    const scope = sidebarPresenceScope(this);
+    this.admittedPresencePresentation = sidebarPresencePresentation(next, scope);
+    return (
+      previous === next ||
+      sidebarPresencePresentation(previous, scope) === this.admittedPresencePresentation
+    );
   }
 
   readonly navigationCatalog = new SidebarNavigationCatalog(this, () => this.context);
@@ -459,6 +546,21 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     return personalSidebarVisibleRows(this, rows, this.zonedVisibleSections(rows).visibleRows);
+  }
+
+  protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
+    const rows: SidebarRecentSession[] = [];
+    const append = (session: SidebarRecentSession) => {
+      rows.push(session);
+      if (this.isSessionChildrenExpanded(session)) {
+        visibleSessionChildren({
+          session,
+          fullyShown: this.isSessionChildrenFullyShown(session.key),
+        }).forEach(append);
+      }
+    };
+    this.visibleSessionRowsInOrder().forEach(append);
+    return rows;
   }
 
   selectedVisibleSessions(): SidebarRecentSession[] {

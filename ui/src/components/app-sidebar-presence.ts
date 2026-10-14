@@ -68,7 +68,10 @@ function person(user: AuthenticatedUser) {
   return [user.id, user.identity?.type, user.identity?.id, user.name, user.email, user.avatarUrl];
 }
 
-function presentation(payload: PresencePayload | undefined, scope: SidebarPresenceScope) {
+export function sidebarPresencePresentation(
+  payload: PresencePayload | undefined,
+  scope: SidebarPresenceScope,
+) {
   const self = resolveCurrentSelfUser({
     snapshotUser: scope.selfUser,
     presenceEntries: payload?.presence,
@@ -87,14 +90,6 @@ function presentation(payload: PresencePayload | undefined, scope: SidebarPresen
         : [];
     }),
   ]);
-}
-
-export function sameSidebarPresence(
-  previous: PresencePayload | undefined,
-  next: PresencePayload | undefined,
-  scope: SidebarPresenceScope,
-): boolean {
-  return previous === next || presentation(previous, scope) === presentation(next, scope);
 }
 
 export function sidebarPresenceActivityViewers(
