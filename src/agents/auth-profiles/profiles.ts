@@ -20,7 +20,7 @@ import {
   removeOAuthRefreshGenerationPeers,
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
-import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -228,6 +228,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
   agentDir?: string;
   profileIds?: readonly string[];
 }): Promise<AuthProfileStore | null> {
+  await prepareSharedAuthStoreOwnership(getScopedAuthProfileEnv());
   const owners = providerAuthStoreOwners(params.agentDir);
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const targets = await Promise.all(
@@ -573,6 +574,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
     );
   }
+  await prepareSharedAuthStoreOwnership(getScopedAuthProfileEnv());
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const owners =
       params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);

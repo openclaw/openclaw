@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { UsageOverviewOptions, UsageOverviewSession } from "../shared/usage-types.js";
 import { getAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -46,12 +47,12 @@ type UsageCostRefreshState = {
   pendingSessionFiles: Map<string, { firstAt: number; lastAt: number } | null>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
-  joinOnRead: boolean;
-  flushRequested: boolean;
+  dirtySessionFiles: Set<string>;
+  readingSessionFiles: Map<string, Deferred>;
+  runningSessionFiles: Set<string> | "all";
   agentBusy: boolean;
   idleAt: number;
   resume?: () => void;
-  completion?: Promise<void>;
 };
 
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
@@ -71,17 +72,38 @@ function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
 }
 
-async function flushPendingUsageCostRefresh(prepared: PreparedUsageCostWorker): Promise<void> {
+async function flushPendingUsageCostRefresh(
+  prepared: PreparedUsageCostWorker,
+  sessionFiles?: string[],
+): Promise<void> {
   const key = prepared.location.databasePath;
   const pending: Promise<void>[] = [];
   for (const refreshes of usageCostRefreshes.values()) {
     const state = refreshes.get(key);
-    // Startup and repair backfills keep serving their last completed projection.
-    if (state?.joinOnRead && state.completion) {
-      state.flushRequested = true;
-      state.resume?.();
-      pending.push(state.completion);
+    if (!state) {
+      continue;
     }
+    // Aggregate reads flush dirty publications; keyed reads need only their sessions.
+    for (const file of sessionFiles ?? state.dirtySessionFiles) {
+      if (
+        !state.fullRefreshRequested &&
+        state.runningSessionFiles !== "all" &&
+        !state.runningSessionFiles.has(file) &&
+        !state.pendingSessionFiles.has(file)
+      ) {
+        continue;
+      }
+      let completion = state.readingSessionFiles.get(file);
+      if (!completion) {
+        completion = createDeferredCore();
+        state.readingSessionFiles.set(file, completion);
+      }
+      if (state.runningSessionFiles === "all" || !state.runningSessionFiles.has(file)) {
+        state.pendingSessionFiles.set(file, null);
+      }
+      pending.push(completion.promise);
+    }
+    state.resume?.();
   }
   await Promise.all(pending);
 }
@@ -248,7 +270,10 @@ async function loadCapturedSessionCostSummariesFromCache(
   prepared: PreparedUsageCostWorker,
 ): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" | "overview" }>> {
   const { databasePath, storePath } = prepared.location;
-  await flushPendingUsageCostRefresh(prepared);
+  await flushPendingUsageCostRefresh(
+    prepared,
+    params.sessions.map((session) => session.sessionFile),
+  );
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
@@ -342,8 +367,9 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     pendingSessionFiles: new Map(),
     pendingRebuildRows: new Map(),
     storePath: params.storePath,
-    joinOnRead: params.coalesce === true && params.sessionFiles !== undefined,
-    flushRequested: false,
+    dirtySessionFiles: new Set(),
+    readingSessionFiles: new Map(),
+    runningSessionFiles: new Set(),
     agentBusy: false,
     idleAt: Date.now(),
   };
@@ -351,7 +377,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
   usageCostRefreshes.set(scopeSignal, refreshes);
   // Register the initial timer and every retry now, not after a timer fires.
   refreshes.set(queueKey, state);
-  state.completion = trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
+  void trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
 }
 
 function mergeUsageCostRefreshRequest(
@@ -369,9 +395,11 @@ function mergeUsageCostRefreshRequest(
     state.fullRefreshRequested = true;
     return;
   }
-  state.joinOnRead ||= params.coalesce === true;
   const now = Date.now();
   for (const sessionFile of params.sessionFiles) {
+    if (params.coalesce) {
+      state.dirtySessionFiles.add(sessionFile);
+    }
     const pending = state.pendingSessionFiles.get(sessionFile);
     state.pendingSessionFiles.set(
       sessionFile,
@@ -383,16 +411,21 @@ function mergeUsageCostRefreshRequest(
 }
 
 function usageCostRefreshDelay(state: UsageCostRefreshState, now: number, file?: string): number {
-  if (state.flushRequested || state.fullRefreshRequested) {
+  if (
+    (file === undefined && (state.readingSessionFiles.size > 0 || state.fullRefreshRequested)) ||
+    (file !== undefined && state.readingSessionFiles.has(file))
+  ) {
     return 0;
   }
-  if (state.joinOnRead && state.agentBusy) {
-    return Infinity;
-  }
   const delays =
-    file === undefined ? state.pendingSessionFiles.values() : [state.pendingSessionFiles.get(file)];
+    file === undefined
+      ? state.pendingSessionFiles.entries()
+      : [[file, state.pendingSessionFiles.get(file)] as const];
   let delay = Infinity;
-  for (const pending of delays) {
+  for (const [pendingFile, pending] of delays) {
+    if (state.agentBusy && state.dirtySessionFiles.has(pendingFile)) {
+      continue;
+    }
     if (!pending) {
       return 0;
     }
@@ -465,14 +498,21 @@ async function runQueuedUsageCostRefresh(
       let partialBatch = false;
       try {
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-          const fullRefreshRequested = state.fullRefreshRequested;
+          const priorityFiles = [...state.readingSessionFiles.keys()];
+          const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
           partialBatch = !fullRefreshRequested;
           const sessionFiles: string[] = [];
           if (fullRefreshRequested) {
-            // Full discovery supersedes queued locators, including deleted instances.
-            state.pendingSessionFiles.clear();
-          } else {
+            // Keep dirty publications explicit: discovery may leave them beyond its batch.
             for (const file of state.pendingSessionFiles.keys()) {
+              if (!state.dirtySessionFiles.has(file)) {
+                state.pendingSessionFiles.delete(file);
+              }
+            }
+          } else {
+            for (const file of priorityFiles.length
+              ? priorityFiles
+              : state.pendingSessionFiles.keys()) {
               if (usageCostRefreshDelay(state, Date.now(), file) > 0) {
                 continue;
               }
@@ -489,7 +529,10 @@ async function runQueuedUsageCostRefresh(
                 const row = state.pendingRebuildRows.get(file);
                 return row ? [row] : [];
               });
-          state.fullRefreshRequested = false;
+          if (fullRefreshRequested) {
+            state.fullRefreshRequested = false;
+          }
+          state.runningSessionFiles = fullRefreshRequested ? "all" : new Set(sessionFiles);
           const remainingRollupIds = new Set<string>();
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
@@ -533,6 +576,15 @@ async function runQueuedUsageCostRefresh(
               state.pendingRebuildRows.delete(row.key);
             }
           }
+          for (const file of sessionFiles) {
+            // A publication during the scan needs another pass before this read is exact.
+            if (!state.pendingSessionFiles.has(file)) {
+              state.dirtySessionFiles.delete(file);
+              state.readingSessionFiles.get(file)?.resolve();
+              state.readingSessionFiles.delete(file);
+            }
+          }
+          state.runningSessionFiles = new Set();
           busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }
       } catch (error) {
@@ -548,10 +600,18 @@ async function runQueuedUsageCostRefresh(
         // persistent failures wait for the next publication instead of spinning.
         recoveredPartialFailure = true;
         state.fullRefreshRequested = true;
+        for (const file of state.readingSessionFiles.keys()) {
+          state.pendingSessionFiles.set(file, null);
+        }
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
     offActivity();
+    for (const completion of state.readingSessionFiles.values()) {
+      completion.reject(
+        new Error("Usage refresh ended before the requested session was refreshed"),
+      );
+    }
     // Remove synchronously with completion; a late request must enqueue a new owner.
     refreshes.delete(state.queueKey);
     if (refreshes.size === 0) {

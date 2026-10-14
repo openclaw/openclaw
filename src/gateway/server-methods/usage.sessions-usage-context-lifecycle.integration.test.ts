@@ -30,7 +30,10 @@ it.for([
 ] as const)(
   "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
-    const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
+    const state = await createOpenClawTestState({
+      label: "usage-context-lifecycle",
+      prepareProfileCatalog: true,
+    });
     const release = createDeferred();
     const targetReadStarted = createDeferred();
     const summaryLoaded =

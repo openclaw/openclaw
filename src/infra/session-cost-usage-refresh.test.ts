@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { describePendingFakeTimers } from "../../test/helpers/fake-timer-diagnostics.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -56,6 +57,7 @@ describe("session cost usage refresh", () => {
             config,
             agentId: params.agentId,
             sessions: [{ sessionFile }],
+            requestRefresh: false,
           });
           return fullRefresh.promise;
         }
@@ -93,7 +95,6 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(4_999);
         expect(refresh).toHaveBeenCalledTimes(10);
         await vi.advanceTimersByTimeAsync(1);
-        await queuedSubset;
         // Schedule the next batch outside the timer tick, regardless of filesystem timing.
         fullRefresh.resolve("refreshed");
         await fullRefresh.promise;
@@ -106,6 +107,7 @@ describe("session cost usage refresh", () => {
         expect(refresh).toHaveBeenCalledTimes(12);
         await vi.advanceTimersByTimeAsync(1);
         expect(refresh).toHaveBeenCalledTimes(13);
+        await queuedSubset;
         expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         expect(
           await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
@@ -116,10 +118,10 @@ describe("session cost usage refresh", () => {
         try {
           // Complete queued work even if an assertion failed before the final retry.
           refresh.mockResolvedValue("refreshed");
-          await queuedSubset;
           fullRefresh.resolve("refreshed");
           await fullRefresh.promise;
           await vi.runOnlyPendingTimersAsync();
+          await queuedSubset;
           expect(
             await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
           ).toMatchObject({
@@ -240,6 +242,39 @@ describe("session cost usage refresh", () => {
     });
   });
 
+  it("does not flush unrelated dirty sessions for a keyed read", async ({ signal }) => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      try {
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        await withinTest(
+          loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile: sessionFiles[1] }],
+            requestRefresh: false,
+          }),
+          signal,
+        );
+        expect(refresh).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(refresh.mock.calls[0]?.[0].sessionFiles).toEqual([sessionFiles[0]]);
+      } finally {
+        await scope.drain();
+      }
+    });
+  });
+
   it("wakes a busy retry when an overlapping turn becomes idle", async () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {
       const scope = new AsyncWorkScope();
@@ -310,6 +345,110 @@ describe("session cost usage refresh", () => {
       }
     });
   });
+
+  it.for([false, true])(
+    "returns exact session usage before bulk backfill finishes (dirty publication: %s)",
+    async (coalesce, { signal }) => {
+      const root = tempDirs.make("openclaw-usage-priority-");
+      const agentId = "priority-test";
+      const storePath = path.join(root, "agents", agentId, "sessions");
+      const sessionFile = path.join(storePath, "selected.jsonl");
+      const line = (id: string) =>
+        `${JSON.stringify({
+          type: "message",
+          id,
+          timestamp: "2026-09-18T00:00:00Z",
+          message: {
+            role: "assistant",
+            provider: "test",
+            model: "test",
+            usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+          },
+        })}\n`;
+      await fs.mkdir(storePath, { recursive: true });
+      await fs.writeFile(sessionFile, line("first"));
+      const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
+        "./session-cost-usage-aggregation.js",
+      );
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+        await actual.refreshCostUsageCacheForAgent({
+          config,
+          agentId,
+          sessionFiles: [sessionFile],
+        });
+        await fs.appendFile(sessionFile, line("second"));
+        const scope = new AsyncWorkScope();
+        const firstBatchEntered = createDeferredCore();
+        const releaseFirstBatch = createDeferredCore<"refreshed">();
+        const releaseBulk = createDeferredCore<"refreshed">();
+        let appended = false;
+        let bulkFinished = false;
+        const dirty = () =>
+          scope.run(() =>
+            requestCostUsageCacheRefresh({
+              config,
+              agentId,
+              storePath,
+              sessionFiles: [sessionFile],
+              coalesce: true,
+            }),
+          );
+        vi.mocked(refreshCostUsageCacheForAgent).mockImplementation(async (params) => {
+          if (!params.sessionFiles) {
+            params.onRemaining?.(
+              Array.from({ length: 121 }, (_, index) => {
+                const file = path.join(storePath, `bulk-${index}.jsonl`);
+                return { sessionFile: file, rollupId: file };
+              }),
+            );
+            firstBatchEntered.resolve();
+            return releaseFirstBatch.promise;
+          }
+          if (params.sessionFiles.includes(sessionFile)) {
+            const result = await actual.refreshCostUsageCacheForAgent(params);
+            if (!appended) {
+              appended = true;
+              await fs.appendFile(sessionFile, line("during-refresh"));
+              dirty();
+            }
+            return result;
+          }
+          await releaseBulk.promise;
+          bulkFinished = true;
+          return "refreshed";
+        });
+        let reading: ReturnType<typeof loadSessionCostSummariesFromCache> | undefined;
+        try {
+          scope.run(() => requestCostUsageCacheRefresh({ config, agentId, storePath }));
+          await withinTest(firstBatchEntered.promise, signal);
+          if (coalesce) {
+            dirty();
+          }
+          reading = loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          });
+          releaseFirstBatch.resolve("refreshed");
+          const result = await withinTest(reading, signal);
+          expect(result.summaries[0]).toMatchObject({
+            input: 21,
+            output: 9,
+            totalTokens: 30,
+            totalCost: 3,
+          });
+          expect(bulkFinished).toBe(false);
+        } finally {
+          scope.beginClose();
+          releaseFirstBatch.resolve("refreshed");
+          releaseBulk.resolve("refreshed");
+          await Promise.allSettled([reading, scope.drain()]);
+          vi.mocked(refreshCostUsageCacheForAgent).mockReset();
+        }
+      });
+    },
+  );
 
   it("bounds pending backfill batches and preserves queued rebuilds across a busy retry", async () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {

@@ -49,29 +49,26 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
   if (!owner) {
     return null;
   }
-  const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
+  const { callGateway } = await import("../gateway/call.js");
+  const { isGatewayProtocolResponseError } = await import("../gateway/client.js");
   const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
     const deadline = Date.now() + 600_000;
-    const controller =
-      method === "plugins.reload" && params.waitForDrain === true
-        ? new AbortController()
-        : undefined;
+    const waitForDrain = method === "plugins.reload" && params.waitForDrain === true;
+    const controller = new AbortController();
     const finished = createDeferredCore();
-    const releaseExitGate = controller
-      ? registerSignalExitGate(finished.promise, () => controller.abort())
-      : undefined;
+    const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
     try {
       for (;;) {
         try {
-          controller?.signal.throwIfAborted();
+          controller.signal.throwIfAborted();
           return await callGateway<T>({
             method,
             params,
             localPortOverride: owner.port,
             ignoreEnvUrlOverride: true,
             requiredMethods: [...new Set([method, "plugins.reload"])],
-            timeoutMs: controller ? null : Math.max(1, deadline - Date.now()),
-            ...(controller ? { signal: controller.signal } : {}),
+            timeoutMs: waitForDrain ? null : Math.max(1, deadline - Date.now()),
+            signal: controller.signal,
             scopes: ["operator.admin"],
             clientName: GATEWAY_CLIENT_NAMES.CLI,
             mode: GATEWAY_CLIENT_MODES.CLI,
@@ -79,7 +76,7 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
         } catch (error) {
           // Release the rejected RPC so reload can drain it; never replay an uncertain effect.
           if (
-            !isGatewayClientRequestError(error) ||
+            !isGatewayProtocolResponseError(error) ||
             error.gatewayCode !== "UNAVAILABLE" ||
             !error.retryable ||
             !isRecord(error.details) ||
@@ -90,7 +87,7 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
           ) {
             throw error;
           }
-          await sleepWithAbort(error.retryAfterMs, controller?.signal);
+          await sleepWithAbort(error.retryAfterMs, controller.signal);
           if (Date.now() >= deadline) {
             throw error;
           }
@@ -98,7 +95,7 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
       }
     } finally {
       finished.resolve();
-      releaseExitGate?.();
+      releaseExitGate();
     }
   };
   return async <T>(

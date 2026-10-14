@@ -304,6 +304,7 @@ describe("sessions.changed coalescing", () => {
   it.each(["before", "during"])(
     "publishes a 20-session burst when its producer drains %s preparation",
     async (when) => {
+      vi.useRealTimers();
       mocks.warn.mockClear();
       const context = createContext();
       const cfg = context.getRuntimeConfig();
@@ -351,9 +352,7 @@ describe("sessions.changed coalescing", () => {
         }
         await producer.drain();
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         expect(mocks.warn).not.toHaveBeenCalled();
         expect(preparationBindings).toEqual(new Set(["publisher"]));
         expect(
@@ -368,9 +367,7 @@ describe("sessions.changed coalescing", () => {
         );
       } finally {
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         placement.dispose();
         projection.dispose();
       }

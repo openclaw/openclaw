@@ -10,7 +10,7 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
   warningStarts: "2026-10-11",
   removalGate: "next-plugin-sdk-major",
   replacement:
-    "Await the Async-suffixed auth-store, AuthStorage, profile-upsert, provider-availability, profile-metadata, model-auth, model-header, provider-selection, and TTS methods. For secret-read preparation, use loadAuthProfileStoreForRuntimeAsync from agent-runtime with readOnly: true and allowKeychainPrompt: false. Replace saveAuthProfileStore with the owner-backed updateAuthProfileStoreWithLock from provider-auth. New SDK displays should use resolveProviderAuthProfileMetadataAsync from provider-auth-runtime; resolveAuthStorePathForDisplay remains supported until removal in a later stable release after deprecation ships and its async path replacement is core-internal. Implement isConfiguredAsync for media, speech, and realtime providers, and resolveConfigAsync for realtime voice providers. Released synchronous methods retain their signatures, immediate results, and completion timing until removal in a later stable release after deprecation ships.",
+    "Await the Async-suffixed auth-store, snapshot-publication, AuthStorage, profile-upsert, provider-availability, profile-metadata, model-auth, model-header, provider-selection, and TTS methods. For secret-read preparation, use loadAuthProfileStoreForRuntimeAsync from agent-runtime with readOnly: true and allowKeychainPrompt: false. Replace saveAuthProfileStore with the owner-backed updateAuthProfileStoreWithLock from provider-auth. New SDK displays should use resolveProviderAuthProfileMetadataAsync from provider-auth-runtime; resolveAuthStorePathForDisplay remains supported until removal in a later stable release after deprecation ships and its async path replacement is core-internal. Implement isConfiguredAsync for media, speech, and realtime providers, and resolveConfigAsync for realtime voice providers. Released synchronous methods retain their signatures, immediate results, and completion timing until removal in a later stable release after deprecation ships.",
   docsPath:
     "/plugins/sdk-migration/how-to-migrate#await-auth-profile-and-provider-availability-operations",
   surfaces: [
@@ -26,6 +26,7 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "openclaw/plugin-sdk/agent-runtime ensureAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreWithoutExternalProfiles",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreForRuntime",
+    "openclaw/plugin-sdk/agent-runtime replaceRuntimeAuthProfileStoreSnapshots",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreForSecretsRuntime",
     "openclaw/plugin-sdk/agent-runtime saveAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime resolveAuthStorePathForDisplay",
@@ -75,5 +76,5 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "src/plugins/compat/registry.test.ts",
   ],
   releaseNote:
-    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported through the next Plugin SDK major. Stored data, schemas, and update behavior are unchanged.",
+    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported until a later stable release. Stored data, schemas, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

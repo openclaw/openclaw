@@ -26,6 +26,8 @@ export type SessionTranscriptProjectionFacts = {
 export type SessionTranscriptProjectionReceipt = {
   path: string;
   sessionId: string;
+  /** The same complete actor snapshot validated this entry. */
+  entrySessionKey?: string;
   writeToken: string;
   writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
   facts: SessionTranscriptProjectionFacts;

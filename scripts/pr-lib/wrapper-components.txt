@@ -764,6 +764,7 @@ src/daemon/constants.ts
 src/daemon/runtime-binary.ts
 src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
+src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
@@ -1316,6 +1317,7 @@ src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
 src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
+src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
@@ -1332,11 +1334,13 @@ src/plugins/compat/memory-session-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/session-transcript-view-record.ts
 src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/transcript-stats-record.ts
 src/plugins/compat/watched-sessions.ts
+src/plugins/compat/web-search-provider-list-record.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
@@ -1479,6 +1483,7 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
+src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
@@ -1701,15 +1706,18 @@ src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
+src/state/agent-deletion-journal-publication.ts
 src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
 src/state/agent-provenance.kernel.ts
+src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts
 src/state/agent-provenance.ts
 src/state/config-machine-state-async.ts
+src/state/config-machine-state-row.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/creator-namespace-migration.ts
@@ -2065,6 +2073,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor-replica-receipts.ts
 src/config/sessions/session-actor-bounded-history.ts
 src/config/sessions/session-actor-transcript-anchors.ts
 src/config/sessions/session-actor-transcript-replica.ts
@@ -2322,7 +2331,6 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
-src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts

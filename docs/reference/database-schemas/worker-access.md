@@ -272,6 +272,15 @@ shutdown, and restart catch-up, and
 [`manager-session-sync-ops.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/memory-core/src/memory/manager-session-sync-ops.ts)
 for scheduling ownership.
 
+Usage rollup refreshes share one queue per database and scope. Session usage reads
+promote only their requested sessions and wait for those refreshes to commit,
+including appends published while a refresh is running. Aggregate cache reads
+flush pending dirty-session publications. Neither waits for unrelated startup or
+repair backfill to finish: exact reads run before the next bounded bulk batch.
+An already-running batch finishes before priority work starts. Background scope
+drain still owns the complete backfill, and a failed or cancelled refresh rejects
+its pending exact reads instead of returning stale totals.
+
 ## Transactions and query shape
 
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
@@ -462,6 +471,10 @@ participant records, including contribution counts and recency. The participant 
 updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
+Canonical repairs publish merged participant records through this same actor owner
+before projecting the repaired entry, including copies from another store. The next
+participant or membership-facts read sees the committed merge, and a later contribution
+builds on its count. Rolled-back repairs retain the previous participant facts.
 This changes no schema, retention, stored format, or update behavior.
 
 Collaboration writes reuse the captured agent executor without opening a Gateway
@@ -690,9 +703,25 @@ registry reads and write receipts. Committed replacement/removal invalidates the
 old generation before the next effect; unknown settlement clears the facts.
 Worktree cleanup consumes its already-loaded lease census. Removal locks and
 process-exit lease cleanup retain their synchronous lock-primitive boundary.
-Released synchronous auth/ModelRegistry adapters and destructive lifecycle or
-descendant-deletion guards remain explicit migration debt; this cutover does not
-change those public contracts, schemas, retention, or update behavior.
+Released synchronous auth/ModelRegistry adapters and descendant-deletion guards
+remain explicit migration debt. Agent deletion cleanup instead prepares its
+journal through the shared-state worker and checks the live lease owner and
+committed journal receipts immediately before the effect. Journal rollback does
+not publish a replacement, and unknown settlement invalidates prepared authority.
+The deletion transaction validates the captured install; supported Claw install
+writers refuse a pending deletion. Raw out-of-owner SQL during a live Gateway is
+outside the single-owner contract. These changes preserve public contracts,
+schemas, retention, and update behavior.
+
+Machine-state consumers prepare config, cron partitions, auth-store ownership,
+and onboarding outcomes through the shared-state worker.
+Auth-store ownership and batched plugin metadata reads use the read-only worker,
+including retained artifact-preserving snapshots, without admitting a writer.
+Gateway profile policy and display readers consume the admitted profile catalog;
+committed profile writes update that catalog before their callers resume. Agent lifecycle readers
+likewise seed facts in the worker and apply provenance and deletion-journal
+receipts. Canonical validation predicates consume admitted receipts; only schema
+admission and worker opens load a missing persisted receipt.
 
 The Gateway process is the single owner of OpenClaw databases and their state.
 Reader workers, writer workers, and main-thread projections share that ownership;
@@ -5194,6 +5223,12 @@ larger events need follow-up slice queries. The cursor and follow-up reads retai
 one SQLite snapshot across transport acknowledgments.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
+The initial canonical lookup supplies session identity without an unchanged-entry
+write. Terminal accounting uses the entry owner's fixed compaction operation,
+which increments the current writer-owned row without a detached preparation
+snapshot. It preserves intervening metadata and participant updates and refuses
+accounting for a replaced session, lifecycle revision, or writer. Already-completed
+compaction accounting does not repeat work-start eligibility checks.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
 reader retain raw event order, read fences, and byte limits. The host captures the
 physical store before discovery yields and keeps its read custody through cold

@@ -13,7 +13,10 @@ import {
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
@@ -33,6 +36,7 @@ import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -265,7 +269,14 @@ export function executeSharedStateCommand(
   if (command.type === "agentProvenance.record") {
     ensureAgentProvenanceSchema(writeOptions);
     return runOpenClawStateWriteTransaction(
-      ({ db }) => recordAgentProvenanceInDatabase(db, command.input),
+      ({ db }) => {
+        const { receipt } = agentProvenancePublication.capture(db, () =>
+          recordAgentProvenanceInDatabase(db, command.input),
+        );
+        deferSqliteWorkerCommitReceipt(db, {
+          provenanceAuthority: agentProvenancePublication.bound(receipt),
+        });
+      },
       writeOptions,
       { operationLabel: "agent-provenance.record" },
     );

@@ -54,6 +54,7 @@ import {
   drainSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../../../test-utils/session-state-cleanup.js";
+import { useUserProfileCatalogForTest } from "../../../test-utils/user-profile-catalog.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
@@ -140,6 +141,7 @@ async function invokeCreate(options: GatewayRequestHandlerOptions) {
 }
 
 describe("voice creation authority", () => {
+  const prepareProfiles = useUserProfileCatalogForTest();
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-voice-authority-");
   afterEach(async () => {
     for (const authorization of authorizations.splice(0)) {
@@ -205,6 +207,7 @@ describe("voice creation authority", () => {
     ownedVoiceSessionKey = sessionKey;
     tempDir = tempDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    await prepareProfiles();
     setRuntimeConfigSnapshot({});
     const seedEntry = { sessionId, updatedAt: Date.now() };
     await applySessionEntryOperation(

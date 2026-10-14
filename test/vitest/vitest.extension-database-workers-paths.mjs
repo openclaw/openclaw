@@ -61,9 +61,11 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/migrate-hermes/secrets.test.ts",
   "extensions/migrate-hermes/files-and-skills.test.ts",
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
+  "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/embedding-provider.test.ts",
+  "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
