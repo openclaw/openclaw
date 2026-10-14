@@ -12,7 +12,7 @@ import {
 const DEFAULT_SCHEDULE: AdvisorSchedule = { everyToolCalls: 10, everyMinutes: 20 };
 const ADVICE_TTL_MS = 24 * 60 * 60 * 1000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
-type AdmittedRun = { agentId: string; sessionKey: string; startedAt: number };
+type AdmittedRun = { agentId: string; sessionKey: string; startedAt: number | null };
 
 function resolveSchedule(config: Record<string, unknown> | undefined): AdvisorSchedule {
   const read = (key: keyof AdvisorSchedule) => {
@@ -127,52 +127,73 @@ export default definePluginEntry({
       },
     });
 
-    api.on("llm_input", (_event, ctx) => {
-      if (
-        ctx.sessionKey &&
-        ctx.agentId &&
-        ctx.runId &&
-        (ctx.trigger === undefined || ctx.trigger === "user" || ctx.trigger === "manual") &&
-        !api.runContext.getRunContext({ runId: ctx.runId, namespace: RUN_CONTEXT_NAMESPACE })
-      ) {
-        // Hooks can run in a workspace registration distinct from the Gateway service.
-        // The host-owned run context carries admission to the service's event subscriber.
-        api.runContext.setRunContext({
-          runId: ctx.runId,
-          namespace: RUN_CONTEXT_NAMESPACE,
-          value: { agentId: ctx.agentId, sessionKey: ctx.sessionKey, startedAt: Date.now() },
-        });
-      }
-    });
+    api.on(
+      "before_agent_reply",
+      (_event, ctx) => {
+        if (
+          ctx.sessionKey &&
+          ctx.agentId &&
+          ctx.runId &&
+          ctx.trigger === "user" &&
+          !api.runContext.getRunContext({ runId: ctx.runId, namespace: RUN_CONTEXT_NAMESPACE })
+        ) {
+          // Hooks can run in a workspace registration distinct from the Gateway service.
+          // The host-owned run context carries admission to the service's event subscriber.
+          api.runContext.setRunContext({
+            runId: ctx.runId,
+            namespace: RUN_CONTEXT_NAMESPACE,
+            value: { agentId: ctx.agentId, sessionKey: ctx.sessionKey, startedAt: null },
+          });
+        }
+      },
+      { eligibleTriggers: ["user"] },
+    );
     // Tool starts include stalled/backgrounded calls. Terminal lifecycle handlers can
     // still read run context; the host clears it only after those handlers settle.
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
       description: "Counts tool starts and closes admitted runs for the review trigger.",
       streams: ["tool", "lifecycle"],
+      phases: ["start", "end", "error"],
       handle: (event, ctx) => {
+        const phase = event.data.phase;
+        if (
+          !(
+            (event.stream === "tool" && phase === "start") ||
+            (event.stream === "lifecycle" &&
+              (phase === "start" || phase === "end" || phase === "error"))
+          )
+        ) {
+          return;
+        }
         const run = ctx.getRunContext<AdmittedRun>(RUN_CONTEXT_NAMESPACE);
         if (!run) {
           return;
         }
-        controller.runStarted({
-          sessionKey: run.sessionKey,
-          agentId: run.agentId,
-          runId: event.runId,
-          startedAt: run.startedAt,
-        });
-        if (event.stream === "tool" && event.data.phase === "start") {
-          controller.toolStarted({ sessionKey: run.sessionKey, runId: event.runId });
-        } else if (
-          event.stream === "lifecycle" &&
-          (event.data.phase === "end" || event.data.phase === "error")
-        ) {
-          controller.turnEnded({
+        if (event.stream === "lifecycle" && phase === "start") {
+          if (run.startedAt !== null) {
+            return;
+          }
+          run.startedAt =
+            typeof event.data.startedAt === "number" ? event.data.startedAt : event.ts;
+          ctx.setRunContext(RUN_CONTEXT_NAMESPACE, run);
+          controller.runStarted({
             sessionKey: run.sessionKey,
             agentId: run.agentId,
             runId: event.runId,
-            durationMs: event.ts - run.startedAt,
+            startedAt: run.startedAt,
           });
+        } else if (run.startedAt !== null) {
+          if (event.stream === "tool") {
+            controller.toolStarted({ sessionKey: run.sessionKey, runId: event.runId });
+          } else {
+            controller.turnEnded({
+              sessionKey: run.sessionKey,
+              agentId: run.agentId,
+              runId: event.runId,
+              durationMs: event.ts - run.startedAt,
+            });
+          }
         }
       },
     });

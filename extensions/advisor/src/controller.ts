@@ -149,7 +149,7 @@ export function createAdvisorController(deps: AdvisorDeps) {
     },
     toolStarted(params: { sessionKey: string; runId: string }): void {
       const state = sessions.get(params.sessionKey);
-      // Tool events carry no trigger; only runs admitted at llm_input count.
+      // Tool events carry no trigger; only admitted runs with a lifecycle start count.
       if (state?.run?.id !== params.runId) {
         return;
       }

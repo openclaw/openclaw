@@ -15,6 +15,7 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import * as controllerModule from "./src/controller.js";
 import { VERIFY_MESSAGE } from "./src/review.js";
 
 const manifest = JSON.parse(
@@ -59,11 +60,15 @@ type AgentEventSubscription = Parameters<OpenClawPluginApi["registerAgentEventSu
 
 function setup(pluginConfig: Record<string, unknown>) {
   let currentPluginConfig = pluginConfig;
-  const handlers: Partial<Record<"llm_input" | "agent_end", CapturedHook>> = {};
+  const handlers: Partial<Record<"before_agent_reply", CapturedHook>> = {};
+  const hookOptions: Record<string, unknown> = {};
   let toolEvents: AgentEventSubscription | undefined;
   const services: OpenClawPluginServiceV2[] = [];
   const lifecycles: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][] = [];
   const runContexts = new Map<string, PluginJsonValue>();
+  const getRunContext = vi.fn<OpenClawPluginApi["getRunContext"]>(({ runId, namespace }) =>
+    runContexts.get(`${runId}:${namespace}`),
+  );
   const eventContext = (runId: string): Parameters<AgentEventSubscription["handle"]>[1] => ({
     // SAFETY: Mirrors the host owner (host-hook-runtime.ts); run-context reads are caller-typed by namespace.
     getRunContext: ((namespace: string) =>
@@ -135,7 +140,7 @@ function setup(pluginConfig: Record<string, unknown>) {
       }
       return true;
     },
-    getRunContext: ({ runId, namespace }) => runContexts.get(`${runId}:${namespace}`),
+    getRunContext,
     on: () => {},
     registerAgentEventSubscription: (subscription) => {
       toolEvents = subscription;
@@ -151,8 +156,9 @@ function setup(pluginConfig: Record<string, unknown>) {
         logger: api.logger,
         setRunContext: api.setRunContext,
         getRunContext: api.getRunContext,
-        on: (name, handler) => {
+        on: (name, handler, options) => {
           Object.assign(handlers, { [name]: handler });
+          hookOptions[name] = options;
         },
         registerService: () => {},
         registerRuntimeLifecycle: () => {},
@@ -173,8 +179,29 @@ function setup(pluginConfig: Record<string, unknown>) {
     sessionKey: "agent:main:main",
     agentId: "main",
     runId: "run-1",
-    trigger: "user",
+    trigger: "user" as string | undefined,
   };
+  const admitRun = (overrides: Partial<typeof context> = {}) =>
+    handlers.before_agent_reply?.(
+      { cleanedBody: "Fix the README typo" },
+      { ...context, sessionId: "session-1", ...overrides },
+    );
+  const emitEvent = (
+    stream: "tool" | "lifecycle",
+    phase: string,
+    overrides: Partial<typeof context> & { ts?: number; startedAt?: number } = {},
+  ) =>
+    toolEvents?.handle(
+      {
+        runId: overrides.runId ?? context.runId,
+        sessionKey: overrides.sessionKey ?? context.sessionKey,
+        seq: 1,
+        ts: overrides.ts ?? Date.now(),
+        stream,
+        data: { phase, startedAt: overrides.startedAt },
+      },
+      eventContext(overrides.runId ?? context.runId),
+    );
   return {
     setPluginConfig: (config: Record<string, unknown>) => {
       currentPluginConfig = config;
@@ -185,25 +212,22 @@ function setup(pluginConfig: Record<string, unknown>) {
     info,
     warn,
     handlers,
+    hookOptions,
+    getRunContext,
+    runContexts,
+    subscription: toolEvents,
+    admitRun,
+    emitEvent,
     services,
     lifecycles,
     finished: finished.next,
     nextFork: started.next,
     startService: () => services[0]!.start(serviceContext),
     stopService: () => services[0]!.stop?.(serviceContext),
-    startRun: (overrides: Partial<typeof context> = {}) =>
-      handlers.llm_input?.(
-        {
-          runId: overrides.runId ?? context.runId,
-          sessionId: "session-1",
-          provider: "openai",
-          model: "example",
-          prompt: "Fix the README typo",
-          historyMessages: [],
-          imagesCount: 0,
-        },
-        { ...context, ...overrides },
-      ),
+    startRun: async (overrides: Partial<typeof context> = {}) => {
+      await admitRun(overrides);
+      await emitEvent("lifecycle", "start", { ...overrides, startedAt: Date.now() });
+    },
     toolStarted: (overrides: Partial<typeof context> & { omitSessionKey?: boolean } = {}) =>
       toolEvents?.handle(
         {
@@ -248,6 +272,120 @@ function setup(pluginConfig: Record<string, unknown>) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("advisor", () => {
+  it("admits user-triggered runs without claiming the reply", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    expect(Object.keys(run.handlers)).toEqual(["before_agent_reply"]);
+    expect(run.hookOptions.before_agent_reply).toEqual({ eligibleTriggers: ["user"] });
+    expect(await run.admitRun()).toBeUndefined();
+    expect(run.runContexts.get("run-1:advisor:admitted-run")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      startedAt: null,
+    });
+  });
+
+  it.each([
+    "heartbeat",
+    "cron",
+    "manual",
+    "memory",
+    "overflow",
+    "side_question",
+    "btw",
+    undefined,
+    "unknown",
+  ])("does not admit %s runs", async (trigger) => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    expect(await run.admitRun({ trigger })).toBeUndefined();
+    expect(run.runContexts.size).toBe(0);
+    await run.emitEvent("lifecycle", "start");
+    await run.toolStarted();
+    await run.endRun();
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
+  it("filters ignored event phases before reading context or touching the controller", async () => {
+    const factory = vi.spyOn(controllerModule, "createAdvisorController");
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    const controller = factory.mock.results[0]!.value;
+    const runStarted = vi.spyOn(controller, "runStarted");
+    const toolStarted = vi.spyOn(controller, "toolStarted");
+    const turnEnded = vi.spyOn(controller, "turnEnded");
+    await run.startService();
+    await run.startRun();
+    run.getRunContext.mockClear();
+    runStarted.mockClear();
+    for (const phase of ["result", "update", "end", "error", ""]) {
+      await run.emitEvent("tool", phase);
+    }
+    for (const phase of ["model", "update", ""]) {
+      await run.emitEvent("lifecycle", phase);
+    }
+    expect(run.getRunContext).not.toHaveBeenCalled();
+    expect(runStarted).not.toHaveBeenCalled();
+    expect(toolStarted).not.toHaveBeenCalled();
+    expect(turnEnded).not.toHaveBeenCalled();
+    expect(run.subscription).toMatchObject({
+      streams: ["tool", "lifecycle"],
+      phases: ["start", "end", "error"],
+    });
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
+  it.each(["end", "error"])(
+    "counts elapsed time from lifecycle start through %s",
+    async (phase) => {
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const run = setup({ everyToolCalls: 0, everyMinutes: 1 });
+      run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+      await run.startService();
+      await run.admitRun();
+      now = 50_000;
+      await run.emitEvent("lifecycle", "start", { startedAt: 40_000 });
+      expect(run.runContexts.get("run-1:advisor:admitted-run")).toMatchObject({
+        startedAt: 40_000,
+      });
+      now = 70_000;
+      await run.toolStarted();
+      await run.wakeScheduler();
+      expect(run.forkSession).not.toHaveBeenCalled();
+      await run.emitEvent("lifecycle", phase, { ts: 99_999 });
+      await run.wakeScheduler();
+      expect(run.forkSession).not.toHaveBeenCalled();
+      now = 100_000;
+      await run.startRun({ runId: "run-2" });
+      await run.endRun(1, { runId: "run-2" });
+      await run.wakeScheduler();
+      expect(run.forkSession).toHaveBeenCalledOnce();
+      await run.stopService();
+    },
+  );
+
+  it("waits for lifecycle start and uses its timestamp when startedAt is absent", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 1 });
+    run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+    await run.startService();
+    await run.admitRun();
+    await run.toolStarted();
+    await run.emitEvent("lifecycle", "end", { ts: Date.now() + 120_000 });
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emitEvent("lifecycle", "start", { ts: 100_000 });
+    expect(run.runContexts.get("run-1:advisor:admitted-run")).toMatchObject({
+      startedAt: 100_000,
+    });
+    await run.toolStarted();
+    await run.wakeScheduler();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.stopService();
+  });
+
   it.each([undefined, "", " \n\t ", manifest.uiHints.reviewInstructions.placeholder])(
     "preserves the evaluated default review prompt for guidance %j",
     async (reviewInstructions) => {
@@ -647,22 +785,17 @@ describe("advisor", () => {
     await run.stopService();
   });
 
-  it("ignores non-user runs and cancels on reset, disable, and service stop", async () => {
+  it("cancels on reset, disable, and service stop", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
-    for (const trigger of ["heartbeat", "cron", "memory", "overflow", "side_question", "btw"]) {
-      await run.startRun({ trigger });
-      await run.toolStarted();
-      await run.endRun(120_000, { trigger });
-    }
-    expect(run.forkSession).not.toHaveBeenCalled();
-    for (const cancel of [
+    for (const [index, cancel] of [
       () => run.lifecycles[0]!.cleanup?.({ reason: "reset", sessionKey: "agent:main:main" }),
       () => run.lifecycles[0]!.dispose?.(),
       () => run.stopService(),
-    ]) {
-      await run.startRun();
-      await run.toolStarted();
+    ].entries()) {
+      const runId = `run-${index + 1}`;
+      await run.startRun({ runId });
+      await run.toolStarted({ runId });
       const review = await run.dispatchReview();
       await cancel();
       expect(review.signal?.aborted).toBe(true);

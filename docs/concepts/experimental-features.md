@@ -265,7 +265,8 @@ you set the options below. Or use config:
   calls start in a conversation, including during a run and including commands
   still running in the background.
 - `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of accumulated agent run time, checked as tools start and when a run ends.
+  of accumulated agent run time from the lifecycle start event, checked as tools
+  start and when a run ends. Time before that start does not count.
 
 Reviews always use the session's own model; there is no separate model setting.
 
@@ -277,8 +278,10 @@ Behavior and limits:
 
 - Reviews run in the background without delaying the triggering hook. They
   never ask for approval or grant the agent new permissions.
-- Only user-directed runs count. Heartbeat, cron, memory-flush, overflow, and
-  side-question runs are ignored.
+- Only user-triggered runs count. Manual compaction, heartbeat, cron, memory-flush,
+  overflow, side-question, and missing or unrecognized triggers are ignored.
+  Admission uses the history-free `before_agent_reply` hook without claiming the
+  reply; tool and time accounting begins at the lifecycle start.
 - Each conversation has at most one review in flight. A failed review is logged
   and the next review waits a full interval. Session reset, plugin disable, and
   service stop cancel pending reviews.

@@ -36,13 +36,21 @@ button opens the plugin's settings page. Or use config:
 }
 ```
 
+Only user-triggered runs count. Advisor admits them through the history-free
+`before_agent_reply` hook without claiming the reply. Manual compaction,
+heartbeat, cron, memory-flush, overflow, side-question, and missing or
+unrecognized triggers do not count.
+
 `everyToolCalls` counts tool calls as they start, including commands that are
 still running in the background and calls from channel-originated user runs.
-`everyMinutes` counts accumulated agent run time, including model work before the
-first tool call, checked as tools start and when a run ends. Either trigger starts
-a review; `0` disables a trigger. Both counters restart when a review completes,
-including a failed review, so the next review waits a full interval.
-Heartbeat, cron, memory-flush, overflow, and side-question runs do not count.
+Accounting begins at the lifecycle start event, not at admission; events before
+that start do not count. `everyMinutes` counts accumulated agent run time from
+that start, including model work before the first tool call, checked as tools
+start and when a run ends. Either trigger starts a review; `0` disables a trigger.
+Both counters restart when a review completes, including a failed review, so the
+next review waits a full interval. The event subscription requests only tool
+starts and lifecycle starts, ends, and errors; ignored phases are also rejected
+before reading run context on hosts without subscription phase filtering.
 
 ### Review instructions
 
