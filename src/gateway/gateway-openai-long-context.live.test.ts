@@ -420,7 +420,9 @@ function assertReplayEgress(
   expect(transport.inputItemShape[0]).toBe("compaction");
   expect(transport.compactionInputIndexes).toEqual([0]);
   expect(transport.inputItems).toBe(transport.inputItemShape.length);
-  expect(transport.inputItemShape.at(-1)).toBe("message:user");
+  // cd9913f1b11 gives runtime facts the developer role; a79e29ec04f retains them
+  // as native operator updates. The user's prompt stays immediately before them.
+  expect(transport.inputItemShape.slice(-2)).toEqual(["message:user", "message:developer"]);
 }
 
 describeLive("Gateway OpenAI long-context compaction (live)", () => {
