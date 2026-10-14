@@ -783,6 +783,13 @@ candidate sessions, so stale recovery claims do not load unrelated saved prompts
 while interactive session changes wait. Claim authority, retry budgets, stored
 data, and upgrade behavior are unchanged.
 
+The Control UI shows a neutral system notice: “Gateway restarted. Resuming your
+interrupted request.” Expected restart interruptions do not create a terminal
+reply-failure card or ask you to send the request again. A restart refusal during
+an active turn retains its recovery claim, even if the admission fence closes
+before the shutdown owner cancels that turn. Genuine provider failures, explicit
+Stop actions, and exhausted recovery remain separate outcomes.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the

@@ -34,6 +34,144 @@ async function capture(
 }
 
 suite.define(() => {
+  it("preserves restart partials and a neutral durable recovery notice through reload", async () => {
+    await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
+      // Synthetic Gateway I/O: this proves the UI contract, not an actual Gateway restart.
+      const gateway = await installMockGateway(page, { sessionKey });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const prompt = "Review the remaining call sites and summarize the changes.";
+      await page.locator(".agent-chat__input textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+      const runId = send.params.idempotencyKey;
+      const successorRunId = "restart-recovery-successor";
+      const now = Date.now();
+      const historyMessages = [
+        {
+          role: "user",
+          content: prompt,
+          timestamp: now - 3,
+          __openclaw: { id: "restart-input", seq: 1, idempotencyKey: runId + ":user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: partial }],
+          stopReason: "aborted",
+          timestamp: now - 2,
+          __openclaw: { id: "restart-partial", seq: 2, runId },
+        },
+        {
+          role: "user",
+          content: "[System] Continue the interrupted turn.",
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          timestamp: now - 1,
+          __openclaw: {
+            id: "restart-recovery-input",
+            seq: 3,
+            idempotencyKey: successorRunId + ":user",
+          },
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "The review is complete. All remaining call sites are covered." },
+          ],
+          timestamp: now,
+          __openclaw: { id: "restart-final", seq: 4, runId: successorRunId },
+        },
+      ];
+      const thread = page.locator(".chat-thread");
+      const partialOutput = thread.getByRole("paragraph").filter({ hasText: partial });
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId,
+        state: "delta",
+        seq: 1,
+        message: { role: "assistant", content: [{ type: "text", text: partial }] },
+      });
+      await partialOutput.waitFor();
+      await gateway.setHistoryMessages(historyMessages.slice(0, 2));
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        runId,
+        clientRunId: runId,
+        message: historyMessages[1],
+        messageId: "restart-partial",
+        messageSeq: 2,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+      });
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId,
+        state: "aborted",
+        stopReason: "restart",
+        seq: 2,
+        message: historyMessages[1],
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      expect(await partialOutput.count()).toBe(1);
+      expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
+
+      // Recovery is admitted by the Gateway's durable system input, never a UI retry/send.
+      await gateway.setHistoryMessages(historyMessages.slice(0, 3));
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        runId: successorRunId,
+        clientRunId: successorRunId,
+        message: historyMessages[2],
+        messageId: "restart-recovery-input",
+        messageSeq: 3,
+        hasActiveRun: true,
+        activeRunIds: [successorRunId],
+      });
+      const notice = thread
+        .locator(".chat-notice")
+        .filter({ hasText: "System · restart recovery" });
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain(
+        "Gateway restarted. Resuming your interrupted request.",
+      );
+      expect(await notice.getAttribute("role")).toBeNull();
+      expect(await notice.locator("button").count()).toBe(0);
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId: successorRunId,
+        state: "delta",
+        seq: 1,
+        message: historyMessages[3],
+      });
+      await gateway.setHistoryMessages(historyMessages);
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId: successorRunId,
+        state: "final",
+        seq: 2,
+        message: historyMessages[3],
+      });
+      const answer = thread.getByRole("paragraph").filter({ hasText: "The review is complete." });
+      await answer.waitFor();
+      expect(await partialOutput.count()).toBe(1);
+      expect(await notice.count()).toBe(1);
+      expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await capture(page, "restart-recovery-after", [partialOutput, notice, answer]);
+
+      await gateway.setMethodResponse("chat.history", { messages: historyMessages });
+      await page.reload();
+      await answer.waitFor();
+      expect(await partialOutput.count()).toBe(1);
+      expect(await notice.count()).toBe(1);
+      expect(await notice.textContent()).toContain(
+        "Gateway restarted. Resuming your interrupted request.",
+      );
+      expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await capture(page, "restart-recovery-after-reload", [partialOutput, notice, answer]);
+    });
+  });
+
   it("keeps recovery in the claw row and retires it when the run resumes", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       await page.clock.install();
