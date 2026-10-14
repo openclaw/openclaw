@@ -202,29 +202,38 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each(["reclaimed"])("fences a published desktop immediately when its %s changes", async () => {
-    const f = fixture();
-    f.owner.browserAvailable = false;
-    f.owner.placement = activePlacement;
-    f.owner.sessionId = "session-id";
-    const source = f.desktopSource;
-    f.controller.sync(f.owner);
-    await settle();
-    expect(source()).toBe("worker-1");
-    f.owner.placement = { ...activePlacement, updatedAtMs: 99, lastTranscriptAckCursor: 10 };
-    expect(source()).toBe("worker-1");
-    const pending = createDeferred<unknown>();
-    f.request.mockImplementationOnce(async () => pending.promise);
-    f.owner.placement = { ...activePlacement, state: "reclaimed" };
-    // Rendering precedes the next sync() call; it must not reuse the old target.
-    expect(source()).toBeNull();
-    f.controller.sync(f.owner);
-    await settle();
-    expect(source()).toBeNull();
-    pending.resolve({ session: undefined });
-    await settle();
-    expect(source()).toBeNull();
-  });
+  it.each(["environment", "reclaimed", "session instance"])(
+    "fences a published desktop immediately when its %s changes",
+    async (change) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      f.owner.placement = activePlacement;
+      f.owner.sessionId = "session-id";
+      const source = f.desktopSource;
+      f.controller.sync(f.owner);
+      await settle();
+      expect(source()).toBe("worker-1");
+      f.owner.placement = { ...activePlacement, updatedAtMs: 99, lastTranscriptAckCursor: 10 };
+      expect(source()).toBe("worker-1");
+      const pending = createDeferred<unknown>();
+      f.request.mockImplementationOnce(async () => pending.promise);
+      if (change === "session instance") {
+        f.owner.sessionId = "replacement-session";
+      } else if (change === "reclaimed") {
+        f.owner.placement = { ...activePlacement, state: "reclaimed" };
+      } else {
+        f.owner.placement = { ...activePlacement, environmentId: "worker-2" };
+      }
+      // Rendering precedes the next sync() call; it must not reuse the old target.
+      expect(source()).toBeNull();
+      f.controller.sync(f.owner);
+      await settle();
+      expect(source()).toBeNull();
+      pending.resolve({ session: undefined });
+      await settle();
+      expect(source()).toBeNull();
+    },
+  );
 
   it.each(["sessions.describe"])(
     "keeps metadata-only placement updates out of discovery while %s is pending and after completion",

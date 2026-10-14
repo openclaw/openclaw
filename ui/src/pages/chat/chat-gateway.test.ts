@@ -1,6 +1,7 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -1598,6 +1599,34 @@ describe("loadChatHistory retry handling", () => {
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
     expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
+  });
+
+  it("shows a targeted message when chat history is unauthorized", async () => {
+    const scopeError = missingScopeErrorShape({
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
+    const state = createHistoryState(request, {
+      chatMessages: [textMessage("assistant", "old")],
+      chatThinkingLevel: "high",
+      chatVerboseLevel: "full",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toStrictEqual([]);
+    expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message:
+        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
+      retryable: false,
+    });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(state.chatLoading).toBe(false);
   });
 
   it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {

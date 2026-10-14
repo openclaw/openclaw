@@ -75,6 +75,15 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toBeUndefined();
   });
 
+  it("uses session-derived group policy when caller groupId disagrees", () => {
+    expect(
+      groupPolicy({
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
   it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
     expect(
       groupPolicy({
