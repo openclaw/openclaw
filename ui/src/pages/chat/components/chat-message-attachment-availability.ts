@@ -297,6 +297,7 @@ function assistantAttachmentCacheScope(source: string, options: ImageRenderOptio
     options.authToken?.trim() ?? "",
     options.sessionKey,
     options.agentId,
+    options.messageId,
     source,
   ]);
 }

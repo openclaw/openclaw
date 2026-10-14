@@ -2310,7 +2310,7 @@ describe("grouped chat rendering", () => {
     expect(view.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
   });
 
-  it("renders transcript image variants and structured image blocks", async () => {
+  it("renders transcript image variants with their message identity and structured image blocks", async () => {
     const firstSource = `/tmp/openclaw/${crypto.randomUUID()}-first.png`;
     const secondSource = `/tmp/openclaw/${crypto.randomUUID()}-second.jpg`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -2326,6 +2326,7 @@ describe("grouped chat rendering", () => {
       const rerender = () =>
         renderGroupedMessage(message, "user", {
           showToolCalls: false,
+          sessionKey: "agent:main:transcript-images",
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           onRequestUpdate: rerender,
@@ -2337,6 +2338,7 @@ describe("grouped chat rendering", () => {
       createUserMessage("", {
         id: "user-history-image-octet-stream",
         __openclaw: {
+          id: "saved-image-octet-stream",
           media: [{ path: firstSource, contentType: "application/octet-stream" }],
         },
       }),
@@ -2346,11 +2348,15 @@ describe("grouped chat rendering", () => {
         view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
       ).toContain(`source=${encodeURIComponent(firstSource)}`),
     );
+    const firstImageUrl = new URL(view.querySelector<HTMLImageElement>(".chat-message-image")!.src);
+    expect(firstImageUrl.searchParams.get("messageId")).toBe("saved-image-octet-stream");
+    expect(firstImageUrl.searchParams.get("sessionKey")).toBe("agent:main:transcript-images");
 
     renderUserMedia(
       createUserMessage("", {
         id: "user-history-images",
         __openclaw: {
+          id: "saved-image-pair",
           media: [
             { path: firstSource, contentType: "image/png" },
             { path: secondSource, contentType: "application/octet-stream" },
@@ -2368,6 +2374,21 @@ describe("grouped chat rendering", () => {
         expect.stringContaining(`source=${encodeURIComponent(secondSource)}`),
       ]),
     );
+    expect(
+      [...view.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
+        new URL(image.src).searchParams.get("messageId"),
+      ),
+    ).toEqual(["saved-image-pair", "saved-image-pair"]);
+    expect(
+      fetchMock.mock.calls.map(([url]) => {
+        const params = new URL(url, "http://control.test").searchParams;
+        return [params.get("source"), params.get("messageId")];
+      }),
+    ).toEqual([
+      [firstSource, "saved-image-octet-stream"],
+      [firstSource, "saved-image-pair"],
+      [secondSource, "saved-image-pair"],
+    ]);
 
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),
