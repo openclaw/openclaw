@@ -33,23 +33,32 @@ function sidebarAgentMenuRows(params: {
     return aPinned - bPinned;
   });
 }
-function AgentAvatar(props: { agent: GatewayAgentRow; params: SidebarAgentMenuSwitcherParams }) {
-  const identity = createMemo(
-    () => props.params.identities.get(normalizeAgentId(props.agent.id)) ?? null,
-  );
-  const avatarUrl = createMemo(() => resolveAgentAvatarUrl(props.agent, identity()));
+function renderAgentAvatar(
+  readAgent: () => GatewayAgentRow,
+  params: SidebarAgentMenuSwitcherParams,
+) {
+  const agentId = createMemo(() => normalizeAgentId(readAgent().id));
+  const identity = createMemo(() => params.identities.get(agentId()) ?? null);
+  const avatarUrl = createMemo(() => resolveAgentAvatarUrl(readAgent(), identity()));
   return (
     <AgentIdentityAvatar
       agent={{
-        id: props.agent.id,
-        avatar: avatarUrl() ? props.params.resolveAvatarUrl(avatarUrl()!) : null,
-        textAvatar: resolveAgentTextAvatar(props.agent, identity()),
+        get id() {
+          return readAgent().id;
+        },
+        get avatar() {
+          const url = avatarUrl();
+          return url ? params.resolveAvatarUrl(url) : null;
+        },
+        get textAvatar() {
+          return resolveAgentTextAvatar(readAgent(), identity());
+        },
       }}
       class="agent-select__avatar"
       onImageError={() => {
         const url = avatarUrl();
         if (url) {
-          props.params.avatarErrorHandler(url)();
+          params.avatarErrorHandler(url)();
         }
       }}
     />
@@ -69,7 +78,7 @@ function renderAgentGroupAvatar(
       <For each={visibleAgents()}>
         {(agent) => (
           <span class="sidebar-agent-menu__group-item">
-            <AgentAvatar agent={agent} params={params} />
+            {renderAgentAvatar(() => agent, params)}
           </span>
         )}
       </For>
@@ -98,9 +107,14 @@ function renderAgentRow(
   const unread = createMemo(() =>
     agentId() === params.activeId ? 0 : params.agentUnreadCount(agentId()),
   );
-  const description = () => (readDuplicateName() ? agentId() : undefined);
+  const option = createMemo(() => ({
+    value: agentId(),
+    label: label(),
+    agent: readAgent(),
+    description: readDuplicateName() ? agentId() : undefined,
+  }));
   const rowLabel = createMemo(() =>
-    [label(), description(), unread() > 0 ? t("sessionsView.unread") : null]
+    [label(), option().description, unread() > 0 ? t("sessionsView.unread") : null]
       .filter(Boolean)
       .join(" "),
   );
@@ -123,14 +137,14 @@ function renderAgentRow(
       <span class="sidebar-agent-menu__agent-row">
         <span class="sidebar-agent-menu__agent-avatar">
           {" "}
-          <AgentAvatar agent={readAgent()} params={params} />{" "}
+          {renderAgentAvatar(readAgent, params)}{" "}
         </span>
         <span class="agent-select__option-copy">
           <span class="agent-select__option-heading">
             <span class="agent-select__option-label">{label()}</span>
           </span>
-          {description() ? (
-            <span class="agent-select__option-description">{description()}</span>
+          {option().description ? (
+            <span class="agent-select__option-description">{option().description}</span>
           ) : undefined}
         </span>
         <span class="sidebar-agent-menu__agent-status">
