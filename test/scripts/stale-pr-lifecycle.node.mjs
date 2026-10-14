@@ -230,6 +230,29 @@ function batchHarness(...members) {
 }
 
 describe("Barnacle PR inactivity", () => {
+  // Keep these REST contract values independent of the production event set.
+  for (const event of [
+    "renamed",
+    "reopened",
+    "convert_to_draft",
+    "ready_for_review",
+    "review_requested",
+    "review_dismissed",
+    "assigned",
+    "unassigned",
+    "labeled",
+    "unlabeled",
+    "base_ref_changed",
+  ]) {
+    for (const actor of [human, bot]) {
+      it(`attributes REST ${event} activity to ${actor.type}`, () => {
+        const seed = snapshot();
+        seed.timeline = [{ id: 901, event, actor, created_at: RECENT }];
+        assert.equal(evaluatePullRequest(seed, NOW).action, actor === human ? "unmark" : "close");
+      });
+    }
+  }
+
   for (const [oldUser, oldApp, newUser, newApp] of [
     [257215752, 2729701, 264559031, 2971289],
     [264559031, 2971289, 257215752, 2729701],

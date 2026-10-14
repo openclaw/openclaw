@@ -24,10 +24,11 @@ const CI_GATES = new Set(["openclaw/ci-gate", "CI gate", "ci-gate"]);
 const PRODUCT_CHECKS = new Set(["checks-node-core", "check", "build-smoke", "build-artifacts"]);
 const ROLES = new Set(["admin", "maintain", "write"]);
 const ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+// REST timeline names: https://docs.github.com/en/rest/using-the-rest-api/issue-event-types.
 const ACTIVITY_EVENTS = new Set([
   "renamed",
   "reopened",
-  "converted_to_draft",
+  "convert_to_draft",
   "ready_for_review",
   "review_requested",
   "review_dismissed",
