@@ -1047,3 +1047,8 @@
     align-items: stretch;
   }
 }
+
+/* Inherited values stay editable while remaining distinct from authored overrides. */
+.cfg-default-control {
+  opacity: 0.55;
+}

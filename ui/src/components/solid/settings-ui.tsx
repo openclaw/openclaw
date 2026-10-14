@@ -282,6 +282,7 @@ export function SettingsToggleRow(
     title: JSX.Element;
     ariaLabel?: JSX.Element;
     description?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -292,7 +293,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         <ToggleControl
           {...props}
           label={props.ariaLabel}

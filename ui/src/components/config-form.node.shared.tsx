@@ -61,6 +61,7 @@ export function FieldRow(props: {
   showLabel: boolean;
   control: JSX.Element;
   stacked?: boolean;
+  usingDefault?: boolean;
   error?: JSX.Element;
   errorId?: string;
 }): JSX.Element {
@@ -100,7 +101,7 @@ export function FieldRow(props: {
         </div>
       )}
       {props.control != null && (
-        <div class="settings-row__control">
+        <div class={["settings-row__control", { "cfg-default-control": props.usingDefault }]}>
           {props.control}
           {props.errorId && (
             <span id={props.errorId} class="cfg-field__error" role="alert" hidden />
@@ -167,6 +168,7 @@ export function renderSchemaDefaultDescription(schema: JsonSchema, value: unknow
 export function SegmentedControl(props: {
   options: unknown[];
   resolvedValue: unknown;
+  usingDefault?: boolean;
   disabled: boolean;
   ariaLabel: string;
   descriptionId?: string;
@@ -182,6 +184,12 @@ export function SegmentedControl(props: {
       label: configEnumOptionLabel(option, props.options),
     }));
   });
+  const select = (index: string) => {
+    const option = props.options[Number(index)];
+    if (option !== undefined) {
+      return props.onSelect(option);
+    }
+  };
   return (
     <SettingsSegmented
       value={selectedIndex() < 0 ? "" : String(selectedIndex())}
@@ -189,12 +197,8 @@ export function SegmentedControl(props: {
       disabled={props.disabled}
       ariaLabel={props.ariaLabel}
       descriptionId={props.descriptionId}
-      onChange={(index: string) => {
-        const option = props.options[Number(index)];
-        if (option !== undefined) {
-          return props.onSelect(option);
-        }
-      }}
+      onChange={select}
+      onReselect={props.usingDefault && !props.disabled ? select : undefined}
     />
   );
 }

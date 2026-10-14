@@ -9,6 +9,7 @@ import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.t
 import {
   isAnySchema,
   isSecretRefObject,
+  resolveConfigFieldPresentation,
   type ConfigNodeRenderParams,
   type ConfigNodeRenderer,
 } from "./config-form.node.shared.ts";
@@ -181,6 +182,10 @@ function ResolvedNode(props: {
     getLocale();
     return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
+  const field = createMemo(() => {
+    getLocale();
+    return resolveConfigFieldPresentation(props.params);
+  });
   return (
     <Switch
       fallback={
@@ -194,12 +199,15 @@ function ResolvedNode(props: {
     >
       <Match when={props.node.kind === "options"}>
         <Show
-          when={(props.node.options?.length ?? 0) > 5 || props.node.nullable}
+          when={
+            (props.node.options?.length ?? 0) > 5 ||
+            props.node.nullable ||
+            (props.params.schema.default === undefined &&
+              hintForPath(props.params.path, props.params.hints)?.inheritedDefault === true)
+          }
           fallback={
             <FieldRow
-              label={meta().label}
-              help={meta().help}
-              showLabel={props.params.showLabel ?? true}
+              {...field()}
               defaultDescription={renderSchemaDefaultDescription(
                 props.params.schema,
                 props.params.value,
@@ -211,6 +219,9 @@ function ResolvedNode(props: {
                     props.params.value !== undefined
                       ? props.params.value
                       : props.params.schema.default
+                  }
+                  usingDefault={
+                    props.params.value === undefined && props.params.schema.default !== undefined
                   }
                   disabled={props.params.disabled}
                   ariaLabel={meta().label}
@@ -251,6 +262,10 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
     getLocale();
     return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
+  const field = createMemo(() => {
+    getLocale();
+    return resolveConfigFieldPresentation(props.params);
+  });
   const checked = () =>
     typeof props.params.value === "boolean"
       ? props.params.value
@@ -271,8 +286,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
               when={props.params.showLabel !== false}
               fallback={
                 <FieldRow
-                  label={meta().label}
-                  help={meta().help}
+                  {...field()}
                   showLabel={false}
                   control={
                     <SettingsToggle
@@ -296,6 +310,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
                     {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
                   </>
                 }
+                controlClass={field().usingDefault ? "cfg-default-control" : undefined}
                 checked={checked()}
                 disabled={props.params.disabled}
                 onChange={onChange}
@@ -304,9 +319,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           }
         >
           <FieldRow
-            label={meta().label}
-            help={meta().help}
-            showLabel={props.params.showLabel ?? true}
+            {...field()}
             control={
               <input
                 type="checkbox"
