@@ -31,7 +31,8 @@ async function readJson(url: string): Promise<Record<string, unknown>> {
 }
 
 describe("Gateway HTTP event-loop sampling", () => {
-  // Bun does not implement async_hooks before/after callbacks for the readiness continuation.
+  // Bun lacks async_hooks Promise before/after callbacks, so this synthetic clock jump
+  // produces neither attribution nor degradation (delayMaxMs stays 0).
   it.skipIf(process.versions.bun)(
     "retains a blocked request interval when readiness is read before the sampler resumes",
     async () => {
