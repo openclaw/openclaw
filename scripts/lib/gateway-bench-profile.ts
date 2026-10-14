@@ -235,3 +235,42 @@ export function readGatewayHeapProfile(profilePath: string) {
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
   };
 }
+
+/** Brackets completed operations; sampling and GC accounting run only in the owned child. */
+export async function measureGatewayAllocations(
+  child: ChildProcess,
+  profilePath: string,
+  operationCount: number,
+  workload: () => Promise<void>,
+) {
+  if (!Number.isSafeInteger(operationCount) || operationCount < 1) {
+    throw new Error("Allocation measurement needs a positive operation count");
+  }
+  const before = await readGatewayResources(child);
+  await controlGatewayProfile(child, "heap", "start", profilePath);
+  try {
+    await workload();
+  } finally {
+    await controlGatewayProfile(child, "heap", "stop", profilePath);
+  }
+  const after = await readGatewayResources(child);
+  const heap = readGatewayHeapProfile(profilePath);
+  if (!heap.diagnostics || heap.diagnostics.collectionErrors > 0) {
+    throw new Error("Allocation measurement has incomplete diagnostic accounting");
+  }
+  const gcMs = heap.diagnostics.gc.durationMs?.total ?? 0;
+  return {
+    scope: "main-isolate",
+    runtime: after.runtime,
+    operationCount,
+    ...heap,
+    estimatedAllocatedBytesPerOperation: heap.sampledAllocatedBytes / operationCount,
+    gcMs,
+    gcMsPerOperation: gcMs / operationCount,
+    gcCount: heap.diagnostics.gc.durationMs?.count ?? 0,
+    // Live heap and RSS deltas are context, never an allocation estimate.
+    heapUsedDeltaBytes: after.memory.heapUsed - before.memory.heapUsed,
+    rssDeltaBytes: after.memory.rss - before.memory.rss,
+    cpu: measureGatewayCpuUsage(before, after),
+  };
+}

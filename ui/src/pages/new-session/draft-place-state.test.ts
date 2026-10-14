@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayAgentRow } from "../../api/types.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
@@ -877,5 +878,82 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.cloudSelection.machineClass).toBe("fast");
     expect(state.worktree).toBe(true);
     expect(persistPreference).not.toHaveBeenCalled();
+  });
+});
+
+describe("device folder selection", () => {
+  const workerRuntime: NonNullable<GatewayAgentRow["agentRuntime"]> = {
+    id: "openclaw",
+    cloudPlacementExecutionMode: "worker-turn",
+    devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    source: "model",
+  };
+
+  function folderFixture() {
+    const f = createRepositoryFixture();
+    f.context.agents.state.agentsList!.agents[0]!.agentRuntime = workerRuntime;
+    return f;
+  }
+
+  it.each(["remote-exec", undefined] as const)(
+    "does not offer or select an existing folder for execution mode %s",
+    (mode) => {
+      const f = folderFixture();
+      f.context.agents.state.agentsList!.agents[0]!.agentRuntime = {
+        ...workerRuntime,
+        cloudPlacementExecutionMode: mode,
+      };
+      f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+      f.state.adoptAgentDefaults();
+      f.state.selectDevice("desktop");
+      expect(f.state.devicePlacement().ready).toBe(true);
+      expect(f.state.deviceFolderAvailable).toBe(false);
+      f.state.selectDeviceFolder();
+      expect(f.state.deviceFolder).toBeUndefined();
+    },
+  );
+
+  it("requires an explicit capable device and keeps its path out of Gateway discovery", () => {
+    const f = folderFixture();
+    f.state.adoptAgentDefaults();
+    f.state.selectDevice("desktop");
+    expect(f.state.deviceFolderAvailable).toBe(false);
+    f.state.selectDeviceFolder();
+    expect(f.state.deviceFolder).toBeUndefined();
+    f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+    expect(f.state.deviceFolderAvailable).toBe(true);
+    f.state.selectDeviceFolder();
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    f.request.mockClear();
+    f.persistPreference.mockClear();
+    f.state.setDeviceFolderPath("relative");
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    f.state.setDeviceFolderPath("/srv/existing project");
+    expect(f.state.folderSubmissionBlocked()).toBe(false);
+    expect(f.state.worktree).toBe(false);
+    expect(f.state.checkoutVisible).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.persistPreference).not.toHaveBeenCalled();
+    expect(
+      buildSelectedSessionCreateParams(f.state, { message: "hello", visibility: "normal" }),
+    ).toMatchObject({ deviceFolder: { deviceId: "desktop", path: "/srv/existing project" } });
+    f.state.selectDevice("", true);
+    expect(f.state.deviceFolderAvailable).toBe(false);
+    expect(f.state.deviceFolder).toBeUndefined();
+  });
+
+  it("blocks a selected device folder when current capability is withdrawn", () => {
+    const f = folderFixture();
+    f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+    f.state.adoptAgentDefaults();
+    f.state.selectDevice("desktop");
+    f.state.selectDeviceFolder();
+    f.state.setDeviceFolderPath("/srv/project");
+    f.gateway.environments![0]!.workerHost = { deviceFolders: false };
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });
+    f.state.selectNewWorkspace();
+    expect(f.state.deviceFolder).toBeUndefined();
+    expect(f.state.freshWorkspace).toBe(true);
   });
 });

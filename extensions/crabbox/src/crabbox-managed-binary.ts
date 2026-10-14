@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
-import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
 export const CRABBOX_MIN_VERSION = "0.73.0";
@@ -23,7 +24,7 @@ type CrabboxVersionProbe =
 
 export async function probeCrabboxVersion(
   binary: string,
-  runCommand: CrabboxCommandRunner = runCommandWithTimeout,
+  runCommand: CrabboxCommandRunner = runCrabboxProcess,
   signal?: AbortSignal,
 ): Promise<CrabboxVersionProbe> {
   signal?.throwIfAborted();
@@ -179,7 +180,7 @@ export async function findManagedCrabboxBinary(
 ): Promise<CrabboxBinary | undefined> {
   const runCommand =
     params.runCommand ??
-    ((argv, options) => runCommandWithTimeout(argv, { ...options, baseEnv: params.env }));
+    ((argv, options) => runCrabboxProcess(argv, { ...options, baseEnv: params.env }));
   const binary = resolveManagedCrabboxBinaryPath(params.env);
   if (await inspectInstallationDirectory(path.dirname(binary))) {
     return probeInstallation(binary, runCommand, params.signal);
@@ -369,7 +370,7 @@ export async function ensureManagedCrabboxBinary(
   const runCommand: CrabboxCommandRunner =
     params.runCommand ??
     ((argv, options) =>
-      runCommandWithTimeout(argv, { ...options, baseEnv: params.env, cwd: params.cwd }));
+      runCrabboxProcess(argv, { ...options, baseEnv: params.env, cwd: params.cwd }));
   const candidate = params.binary ?? "crabbox";
   const binary = resolveManagedCrabboxBinaryPath(params.env);
   if (path.resolve(params.cwd ?? ".", candidate) === binary) {

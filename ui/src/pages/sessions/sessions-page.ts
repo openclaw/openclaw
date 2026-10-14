@@ -10,6 +10,7 @@ import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SessionDetailsController } from "../../components/session-details-controller.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
+import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
@@ -45,10 +46,10 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import {
-  parseAgentSessionKey,
   isPinnableUiSessionRow,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiSessionRowAgentId,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
@@ -934,7 +935,10 @@ export class SessionsPageController {
       return;
     }
     await this.runSessionMutation(scope, async () => {
-      const agentId = parseAgentSessionKey(row.key)?.agentId;
+      const agentId = resolveUiSessionRowAgentId(
+        row,
+        this.sessionPathAgentId(row.key, scope.context),
+      );
       await requestCloudWorkerStop(
         scope.client,
         {
@@ -1360,6 +1364,27 @@ export class SessionsPageController {
           case "reset-appearance":
             void this.patchSession(row.key, { icon: null, color: null });
             break;
+          case "move-session": {
+            const scope = this.captureRequestScope();
+            if (!scope) {
+              this.state.error = t("sessionsView.actionRequiresConnection");
+              break;
+            }
+            void moveSessionFromMenu({
+              context: scope.context,
+              row,
+              fallbackAgentId: this.sessionPathAgentId(row.key, scope.context),
+              isCurrent: () => this.isRequestScopeCurrent(scope),
+              currentRow: () =>
+                this.state.result?.sessions.find(
+                  (candidate) => candidate.key === row.key && candidate.sessionId === row.sessionId,
+                ),
+              publishError: (error) => {
+                this.publishRequestError(scope, error);
+              },
+            });
+            break;
+          }
           case "fork":
             void this.forkSession(row.key, row.hasActiveRun === true);
             break;

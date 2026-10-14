@@ -6,6 +6,21 @@ read_when: "A cloud dispatch, move, stop, or publication failed and you need the
 
 Symptoms you may see when dispatching to or running on a cloud worker, and the check that resolves each one.
 
+Setup secrets require protected, destination-bound shared-store entries and
+Crabbox 0.77.0 or newer on an owned coordinator Linux lease. An old CLI needs an
+update; a missing runtime helper needs reinstalling the matching complete Crabbox
+release. A coordinator-login error needs `crabbox login --url <broker-url>` on the
+Gateway host. A proxy-unavailable error needs checking the Gateway's secret proxy
+prerequisites and restarting the Gateway after repair. None of these errors falls
+back to plaintext or direct secret egress.
+
+For an unmapped repository secret, add its name to the selected profile's
+`settings.setupSecrets`. For a missing/unbound store entry, save it as a protected
+secret and set its exact HTTPS destination with
+`openclaw secrets store set <NAME> --allow-host <host>`. If a profile still uses
+`setupEnv`, run `openclaw doctor --fix` and resolve its reported missing bindings
+or conflicting values before retrying. Existing leases remain releasable.
+
 ## Troubleshooting
 
 - **`Worker transcript commit failed; check Gateway logs.`** — the Gateway could not complete a transcript commit. Permanent failures, including malformed database admission receipts, end the turn; inspect the `worker transcript commit failed` warning for the underlying cause before retrying. Temporary admission failures, including a concurrent schema publication invalidating a receipt, reconnect and replay with fresh admission. A failure does not prove that nothing was persisted. Recovery from a dropped acknowledgment still replays the original commit identity to avoid duplicate messages.

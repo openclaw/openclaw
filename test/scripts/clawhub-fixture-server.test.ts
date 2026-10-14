@@ -438,6 +438,7 @@ ${runner.slice(boundary)}
         createdAt: 0,
       },
       overview: "No security concerns found in the fixture release.",
+      verdict: "clean",
       securityAuditUrl: securityUrl,
       trust: {
         scanStatus: "clean",

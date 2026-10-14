@@ -290,11 +290,9 @@ send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
 can narrow the five default tools; an empty array disables all tools.
 `guests.tools.deny` takes precedence. Neither setting can add stronger tools.
 
-Hidden helpers require a host that advertises enforcement of these restrictions.
-Older hosts keep the `read` and `ls` defaults, even when they report the same
-OpenClaw version. The X replies settings page shows upgrade guidance when helper
-support is missing. Explicitly selecting only helper tools on an older host
-disables all guest tools; it does not restore the default read tools.
+The bundled X plugin uses the current host's enforcement of these restrictions.
+Core authorizes hidden helpers and preserves the guest's restricted tool surface
+and repository root.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,

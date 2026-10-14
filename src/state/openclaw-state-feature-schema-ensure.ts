@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import {
   openOpenClawStateDatabase,
@@ -25,7 +25,7 @@ export function createOpenClawStateSchemaEnsurer(params: {
     tables: [params.table, ...(params.additionalTables ?? [])],
     indexes: params.indexes,
   });
-  const ensuredDatabases = new WeakSet<DatabaseSync>();
+  const ensuredDatabases = new WeakSet<EngineConnection>();
   return (options = {}) => {
     const database = openOpenClawStateDatabase(options);
     if (ensuredDatabases.has(database.db)) {

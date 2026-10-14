@@ -154,7 +154,10 @@ function readUnindexedLogicalParents(
         "active.event_seq",
         "previous.event_seq as parent_seq",
         eb.fn
-          .coalesce(transcriptEventResetNavigationSql("parent"), eb.val("null"))
+          .coalesce(
+            transcriptEventResetNavigationSql(projection.database.db, "parent"),
+            eb.val("null"),
+          )
           .as("parent_json"),
       ])
       .where("active.session_id", "=", projection.resolved.sessionId)

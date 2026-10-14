@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { jsonPathValue, jsonRemovePaths } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -140,6 +141,7 @@ export function prepareTranscriptPayloadForReuse(
 }
 
 function navigationProjection(
+  database: DatabaseSync,
   event: Expression<string | Uint8Array>,
   report: Expression<string>,
   originalEvent: Expression<string>,
@@ -151,17 +153,17 @@ function navigationProjection(
       OR coalesce(json_type(${event}, '$.message'), 'null') NOT IN ('object', 'null') THEN NULL
     ELSE json_object('version', 1,
       'report', json(${report}),
-      'navigation', json(${projectTranscriptPayloadNavigationSql(event)}),
-      'reset', json(${projectResetBoundaryNavigationSql(originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(event, sql.lit(1))}),
+      'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
+      'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
+      'model', json(${projectModelContextNavigationSql(database, event)}),
+      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
+      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
       'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
     END ELSE NULL END`;
 }
 
 type NavigationInput = { eventJson: string; reportJson: string };
-const navigationReader = createSqliteQueryCache((database) =>
+const navigationReader = createSqliteQueryCache((database: DatabaseSync) =>
   prepareSqliteQueryTakeFirstSync<NavigationInput, { navigation_json: string | null }>(
     database,
     (parameter) => {
@@ -206,6 +208,7 @@ const navigationReader = createSqliteQueryCache((database) =>
                 .selectFrom("source")
                 .select((eb) =>
                   navigationProjection(
+                    database,
                     eb.ref("source.event_projection"),
                     eb.ref("source.report_json"),
                     eb.ref("source.event_json"),
@@ -366,24 +369,29 @@ export function transcriptEventJsonSql(
 }
 
 export function transcriptEventNavigationSql(
+  database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("navigation", identity, alias);
+  return storedProjectionSql(database, "navigation", identity, alias);
 }
 
 export function transcriptEventRunIdSql(
+  database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string | null> {
-  return /* kysely-allow-raw: Read run provenance from the canonical bounded navigation projection. */ sql<
-    string | null
-  >`json_extract(${transcriptEventNavigationSql(alias)}, '$.message.__openclaw.runId')`;
+  return jsonPathValue(
+    database,
+    transcriptEventNavigationSql(database, alias),
+    sql.lit("$.message.__openclaw.runId"),
+  );
 }
 
 function storedProjectionSql(
+  database: DatabaseSync,
   field: "navigation" | "reset" | "model",
   fallback: Expression<string>,
   alias: TranscriptPayloadAlias,
@@ -393,20 +401,27 @@ function storedProjectionSql(
       `${alias}.navigation_json`,
     );
   return /* kysely-allow-raw: exceptional identity rows retain native projection; other rows use the recorded owner projection. */ sql<string>`CASE WHEN ${metadata} IS NULL THEN ${fallback}
-    ELSE json_extract(${metadata}, ${`$.${field}`}) END`;
+    ELSE ${jsonPathValue(database, metadata, sql.val(`$.${field}`), "json")} END`;
 }
 
 export function transcriptEventResetNavigationSql(
+  database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("reset", projectResetBoundaryNavigationSql(identity), alias);
+  return storedProjectionSql(
+    database,
+    "reset",
+    projectResetBoundaryNavigationSql(database, identity),
+    alias,
+  );
 }
 
 export function transcriptEventModelNavigationSql(
+  database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
   entryType?: Expression<unknown>,
 ): RawBuilder<string> {
@@ -414,11 +429,17 @@ export function transcriptEventModelNavigationSql(
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("model", projectModelContextNavigationSql(identity, entryType), alias);
+  return storedProjectionSql(
+    database,
+    "model",
+    projectModelContextNavigationSql(database, identity, entryType),
+    alias,
+  );
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */
 export function transcriptEventModelBytesSql(
+  database: DatabaseSync,
   omitCheckpoint: Expression<number>,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
@@ -431,13 +452,19 @@ export function transcriptEventModelBytesSql(
       `${alias}.event_json`,
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
-    THEN octet_length(${projectModelContextEventSql(identity, omitCheckpoint)})
-    ELSE json_extract(${metadata}, CASE WHEN ${omitCheckpoint} = 1
-      THEN '$.modelWithoutCheckpointBytes' ELSE '$.modelBytes' END) END`;
+    THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})
+    ELSE ${jsonPathValue(
+      database,
+      metadata,
+      sql`CASE WHEN ${omitCheckpoint} = 1
+      THEN '$.modelWithoutCheckpointBytes' ELSE '$.modelBytes' END`,
+      "number",
+    )} END`;
 }
 
 /** Suffix admission can retain opaque custom data without charging or decoding its body. */
 export function transcriptEventWithoutCustomDataBytesSql(
+  database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
@@ -449,8 +476,8 @@ export function transcriptEventWithoutCustomDataBytesSql(
       `${alias}.event_json`,
     );
   return /* kysely-allow-raw: preserve the native json_remove cost used by retained-custom suffix projection. */ sql<number>`CASE WHEN ${metadata} IS NULL
-    THEN octet_length(json_remove(${identity}, '$.data'))
-    ELSE json_extract(${metadata}, '$.withoutCustomDataBytes') END`;
+    THEN octet_length(${jsonRemovePaths(database, identity, [sql.lit("$.data")])})
+    ELSE ${jsonPathValue(database, metadata, sql.lit("$.withoutCustomDataBytes"), "number")} END`;
 }
 
 export function transcriptEventUtf8BytesSql(

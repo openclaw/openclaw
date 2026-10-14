@@ -83,7 +83,7 @@
       "clawhubSpec": "clawhub:@openclaw/facetime",
       "npmSpec": "@openclaw/facetime",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.9.4",
+      "minHostVersion": ">=2026.10.3",
       "allowInvalidConfigRecovery": true
     },
     "compat": {

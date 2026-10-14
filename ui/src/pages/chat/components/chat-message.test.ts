@@ -18,7 +18,7 @@ import { renderChatNotice } from "./chat-divider.ts";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
 import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import { renderStreamGroup } from "./chat-message-stream.ts";
+import { renderStreamGroup } from "./chat-message-stream.test-support.ts";
 import {
   createAssistantMessage,
   createCanvasPreview,

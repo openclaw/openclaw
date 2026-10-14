@@ -47,7 +47,7 @@ export function resolveVllmQwenThinkingFormatFromCompat(
 }
 
 export function isVllmNemotronThinkingModel(modelId: string): boolean {
-  return /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(modelId);
+  return /nemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(modelId);
 }
 
 export function resolveThinkingProfile(

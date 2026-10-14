@@ -37,6 +37,8 @@ export type ProviderAuthResult = {
    */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
+  /** Setup routes the selected agent's model through this runtime, without changing global defaults. */
+  agentRuntimeId?: string;
   notes?: string[];
   /**
    * Opt in to replace `agents.defaults.models` wholesale with the patch map.
