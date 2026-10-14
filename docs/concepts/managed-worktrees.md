@@ -713,6 +713,11 @@ repair cannot finish, maintenance logs a warning. Restore remote access and run
 the command again to resume from the remaining missing objects. Locally created
 objects unavailable from the remote still require recovery from another copy.
 
+Gateway Git inspections also use only locally available objects. In partial
+clones, missing objects can leave optional checkout, branch, or diff facts
+unavailable instead of downloading packs during a read. Explicit fetches,
+checkout preparation, and requested object repair retain their transfer behavior.
+
 UI preferences and other unrelated configuration writes do not interrupt cleanup.
 Changes to cleanup inputs, such as the worktree root or capacity, agent workspaces,
 session storage or ownership, and sandbox mode, cancel the current job before its
