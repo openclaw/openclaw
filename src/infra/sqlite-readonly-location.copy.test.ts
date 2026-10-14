@@ -420,6 +420,67 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
+  it("captures a restarted WAL while every attempt's commit rewrites its stale tail", () => {
+    const fixture = createFixture(Buffer.alloc(0));
+    const sqlite = requireNodeSqlite();
+    const writer = new sqlite.DatabaseSync(fixture.sourcePath);
+    let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess> | undefined;
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE entries (value TEXT);
+        CREATE TABLE payload (data BLOB);
+        INSERT INTO payload VALUES (zeroblob(${MIB}));
+        PRAGMA wal_checkpoint(PASSIVE);
+        INSERT INTO entries VALUES ('after-restart');
+      `);
+      // The Gateway's periodic PASSIVE checkpoint leaves this shape: a restarted
+      // generation at offset 0 followed by the previous generation's frames.
+      const walPath = `${fixture.sourcePath}-wal`;
+      const walBytes = fs.statSync(walPath).size;
+      expect(walBytes).toBeGreaterThan(MIB);
+      const insert = writer.prepare("INSERT INTO entries VALUES (?)");
+      let commits = 0;
+      let sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
+      afterPrivateCopy(fixture.stagingRoot, (target) => {
+        if (target.endsWith("-wal")) {
+          insert.run(`during-copy-${++commits}`);
+          sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
+        }
+      });
+
+      prepared = prepareSqliteReadOnlyLocationSyncInProcess(
+        fixture.sourcePath,
+        fixture.stagingRoot,
+      );
+      expect(commits).toBe(1);
+      expect(fs.statSync(walPath).size).toBe(walBytes);
+      expect(fs.statSync(`${prepared.location}-wal`).size).toBeLessThan(walBytes);
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+        expect(snapshot.prepare("SELECT value FROM entries").all()).toEqual([
+          { value: "after-restart" },
+        ]);
+        expect(snapshot.prepare("SELECT length(data) AS bytes FROM payload").get()).toEqual({
+          bytes: MIB,
+        });
+      } finally {
+        snapshot.close();
+      }
+      expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
+    } finally {
+      if (prepared) {
+        expect(prepared.cleanup()).toBe(true);
+      }
+      writer.close();
+      expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    }
+  });
+
   it("rejects a reset WAL paired with checkpoint-restored main bytes during native copying", async () => {
     const prepare = prepareSqliteReadOnlyCopyInProcess;
     const fixture = createFixture(Buffer.alloc(0));

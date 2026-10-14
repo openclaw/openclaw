@@ -16,6 +16,7 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { countActiveRunsForSessionFromRuns } from "./subagent-registry-queries.js";
 import {
   consumeFreshSubagentRuns,
   getSessionListLookup,
@@ -411,6 +412,23 @@ export async function prepareSubagentRunsSnapshotForRunIds(
       });
     },
   };
+}
+
+/** Admission needs current raw owners, not newly projected session-list rows. */
+export function countActiveSubagentRunsForSession(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  requesterSessionKey: string,
+  options?: { collect?: boolean; requesterAgentId?: string },
+): number {
+  const runs = new Map<string, SubagentRunReadRecord>(
+    shouldReadPersistedSubagentRuns()
+      ? loadPersistedSubagentRunsForRead(persistedSubagentSessionListRunsReadCache)
+      : undefined,
+  );
+  for (const [runId, entry] of inMemoryRuns) {
+    runs.set(runId, entry);
+  }
+  return countActiveRunsForSessionFromRuns(runs, requesterSessionKey, options);
 }
 
 export function getSubagentSessionListRunsSnapshotForRead(

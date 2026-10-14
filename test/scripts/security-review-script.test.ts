@@ -173,6 +173,25 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
 }
 
 describe("combined security review entry point", () => {
+  it("shares notice inventories between both guards without sharing approval authority", () => {
+    const result = evaluate();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined.at(-1)).toBe("success");
+    for (const inventory of ["comments", "labels"]) {
+      expect(
+        result.requests.filter(
+          (entry) =>
+            entry.method === "GET" &&
+            entry.path === `/repos/openclaw/openclaw/issues/7/${inventory}`,
+        ),
+      ).toHaveLength(1);
+    }
+    expect(
+      result.requests.filter((entry) => entry.method === "GET" && entry.path === rolePath.slice(4))
+        .length,
+    ).toBeGreaterThan(1);
+  });
+
   it.each([
     {
       name: "fetch deadline",

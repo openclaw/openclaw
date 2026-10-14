@@ -6552,6 +6552,9 @@ jobs:
       - name: Classify completed PR failures
         id: report
         env:
+          OPENCLAW_CI_JOB_RESULTS_JSON: ${{ toJSON(needs.*.result) }}
+          OPENCLAW_CI_PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          OPENCLAW_CI_SECURITY_FAST_RESULT: ${{ needs.security-fast.result }}
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}

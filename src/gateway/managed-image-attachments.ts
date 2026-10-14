@@ -998,6 +998,8 @@ export async function createManagedOutgoingMediaBlocks(params: {
   localRoots?: readonly string[] | "any";
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
+  /** Reports each complete source group, including warnings or a failure card. */
+  onPrepared?: (item: PreparedOutgoingMedia, blocks: readonly ManagedMediaBlock[]) => void;
   assertCurrent?: () => void;
   abortSignal?: AbortSignal;
 }): Promise<ManagedMediaBlock[]> {
@@ -1021,6 +1023,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
       );
     let resolvedLocalRoots: readonly string[] | undefined;
     for (const [index, item] of items.entries()) {
+      const groupStart = blocks.length;
       const mediaUrl = item.url;
       const trimmedMediaUrl = mediaUrl.trim();
       const dataUrlKind = /^data:(image|audio|video)\//iu.exec(trimmedMediaUrl)?.[1];
@@ -1275,11 +1278,13 @@ export async function createManagedOutgoingMediaBlocks(params: {
             }),
           );
           params.onPrepareError?.(sanitizedError);
+          params.onPrepared?.(item, blocks.slice(groupStart));
           continue;
         }
         await discardBlocks();
         throw sanitizedError;
       }
+      params.onPrepared?.(item, blocks.slice(groupStart));
     }
     return blocks;
   });

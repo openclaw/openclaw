@@ -8,7 +8,10 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
-import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
+import {
+  MAX_DIAGNOSTIC_WORKER_SLOTS,
+  normalizeDiagnosticWorkerScript,
+} from "./worker-diagnostic-script.js";
 import {
   recordWorkerMessage,
   observeWorkerMessage,
@@ -32,6 +35,7 @@ type WorkerSource = {
   internalMessages?: true;
   lifecycleMessages?: boolean;
   poolId?: number;
+  workerSlot?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -56,7 +60,7 @@ function workerScriptName(filename: string | URL, evalSource = false): string {
     return "other";
   }
   const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?ts$/u,
+    /\.[cm]?[jt]s$/u,
     ".js",
   );
   return normalizeDiagnosticWorkerScript(name);
@@ -69,7 +73,9 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   process.on("worker", trackWorker);
   return {
     // SAFETY: The optional callback starts unset and only receives the typed observer below.
-    gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
+    gcObserver: undefined as
+      | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
+      | undefined,
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -98,6 +104,16 @@ export function trackNativeWorkerForCpu(
   trackWorker(worker);
   const source = trackedWorkers.workers.get(worker)!;
   source.script = workerScriptName(filename, evalSource);
+  if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
+    // Reuse slots only after native exit; overflow keeps the script-level attribution.
+    const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
+    for (let slot = 1; slot <= MAX_DIAGNOSTIC_WORKER_SLOTS; slot++) {
+      if (!occupied.has(slot)) {
+        source.workerSlot = slot;
+        break;
+      }
+    }
+  }
   // Heartbeat verification shares SQLite's id/ok reply shape; its owner identifies the protocol.
   source.lifecycleMessages =
     source.script === "openclaw-state-lease-heartbeat.worker.js" ||
@@ -319,7 +335,7 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
 
 /** Heartbeat demand also applies to workers attaching after observer activation. */
 export function setTrackedWorkerGcObserver(
-  observer: ((samples: GcSample[], thread: string) => void) | undefined,
+  observer: ((samples: GcSample[], thread: string, workerSlot?: number) => void) | undefined,
 ): void {
   const wasEnabled = Boolean(trackedWorkers.gcObserver);
   trackedWorkers.gcObserver = observer;
@@ -363,7 +379,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     );
     // This private port is handed off by our isolate telemetry owner, not task input.
     if (record.gc) {
-      trackedWorkers.gcObserver?.(record.gc, source.script);
+      trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
     }
     if (!("heapUsed" in record)) {
       return;
@@ -431,6 +447,7 @@ export function sampleTrackedWorkerMemory() {
       memory.workerHeaps.push({
         script: source.script,
         threadId: worker.threadId,
+        workerSlot: source.workerSlot,
         ...source.heap.value,
         sampleAgeMs: Math.round(sampleAgeMs),
       });

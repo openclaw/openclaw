@@ -67,3 +67,56 @@ describe("provider references without runtime declarations", () => {
     },
   );
 });
+
+describe("provider ownership registry lifetime", () => {
+  it.each(["manifest", "snapshot"] as const)(
+    "shares immutable owner results and replaces them with the %s generation",
+    (source) => {
+      const makeSnapshot = (id: string) =>
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id,
+              providers: ["TARGET", "target"],
+              providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
+              modelCatalog: {
+                aliases: {
+                  "catalog-ref": { provider: "target" },
+                  "orphan-catalog": { provider: "absent" },
+                },
+              },
+            },
+            { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
+          ],
+        });
+      const first = makeSnapshot("first-owner");
+      const lookup = (snapshot: typeof first, provider: string) =>
+        resolveOwningPluginIdsForProviderRef({
+          provider,
+          ...(source === "manifest"
+            ? { manifestRegistry: snapshot.manifestRegistry }
+            : { metadataSnapshot: snapshot }),
+        });
+      for (const ref of ["target", "auth-ref", "catalog-ref", "cli-ref"]) {
+        const owners = lookup(first, ref);
+        expect(owners).toEqual([ref === "cli-ref" ? "cli-owner" : "first-owner"]);
+        expect(lookup(first, ` ${ref.toUpperCase()} `)).toBe(owners);
+        expect(Object.isFrozen(owners)).toBe(true);
+        expect(
+          resolveOwningPluginIdsForModelRef({
+            model: `${ref}/synthetic-model`,
+            manifestRegistry: first.manifestRegistry,
+          }),
+        ).toBe(owners);
+      }
+      for (const ref of ["orphan", "orphan-catalog", "missing"]) {
+        expect(lookup(first, ref)).toBeUndefined();
+      }
+      const replacement = makeSnapshot("replacement-owner");
+      expect(lookup(replacement, "target")).toEqual(["replacement-owner"]);
+      expect(lookup(first, "target")).toEqual(["first-owner"]);
+      const empty = createPluginMetadataSnapshotFixture({ plugins: [] });
+      expect(lookup(empty, "target")).toBeUndefined();
+    },
+  );
+});
