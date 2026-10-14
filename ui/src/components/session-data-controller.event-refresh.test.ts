@@ -699,9 +699,13 @@ describe("filtered sidebar session event refresh", () => {
   });
 
   it("retires an in-flight child snapshot when the status filter changes", async () => {
-    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    const { controller, host, list, selectStatusFilter } =
+      createFilteredSessionController("archived");
     controller.hostConnected();
     await controller.refreshSidebarSessions();
+    const parents = vi
+      .spyOn(host, "childSessionParents")
+      .mockReturnValue(new Set(["agent:main:parent"]));
     let resolveChildPage!: (value: Awaited<ReturnType<typeof list>>) => void;
     const childPage = new Promise<Awaited<ReturnType<typeof list>>>((resolve) => {
       resolveChildPage = resolve;
@@ -711,6 +715,7 @@ describe("filtered sidebar session event refresh", () => {
     const pendingChildren = controller.loadChildSessions("agent:main:parent");
     expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true);
 
+    parents.mockReturnValue(new Set());
     selectStatusFilter("all");
     resolveChildPage({
       ts: 2,

@@ -248,8 +248,9 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.host, agentId);
 
   hostConnected(): void {
-    this.renderSubscription.hostConnected();
+    // Bind current sources before frame admission can start discovery.
     this.subscriptions.hostConnected();
+    this.renderSubscription.hostConnected();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
       this.handleCatalogSessionContinued as EventListener,
       this.handleSessionCatalogPageActivation,

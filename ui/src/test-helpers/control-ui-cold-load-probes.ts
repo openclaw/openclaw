@@ -133,10 +133,10 @@ export function installColdLoadProbes(input: {
       return origin.frameId;
     },
     install() {
+      // oxlint-disable-next-line typescript/unbound-method -- Installed as a window method; forwards that receiver to the native frame owner.
       window.requestAnimationFrame = frameProbe.request;
     },
     restore() {
-      // oxlint-disable-next-line typescript/unbound-method -- Compare function identity so restoration cannot overwrite another instrumentation owner.
       if (window.requestAnimationFrame === frameProbe.request) {
         window.requestAnimationFrame = frameProbe.original;
       }
