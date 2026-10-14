@@ -1,19 +1,27 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import type { SqliteWorkerReply, SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import * as preferences from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
+import { linkEmail, mergeProfiles, setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -64,6 +72,114 @@ async function invokePreferenceMethod(
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+});
+
+test("users.prefs returns updated preferences when a write commits before read delivery", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "prefs-publication-",
+  });
+  try {
+    const profileId = ensureProfileForEmail("reader@example.test").id;
+    await preferences.setCanonicalUserPreferences(profileId, { "ui.accent": "#112233" });
+    const executeRead = stateRead.executeExistingOpenClawStateRead;
+    using read = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    read.mockImplementationOnce(async (readOptions, command, scope) => {
+      const reply = await executeRead(readOptions, command, scope);
+      await preferences.setCanonicalUserPreferences(profileId, { "ui.accent": "#aabbcc" });
+      return reply;
+    });
+
+    expect(
+      await invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, profileId),
+    ).toEqual({
+      ok: true,
+      payload: { status: "ok", entries: { "ui.accent": "#aabbcc" } },
+      error: undefined,
+    });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("users.prefs reads merged-profile accents while an unrelated writer reply is pending", async ({
+  signal,
+}) => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "prefs-reader-" });
+  try {
+    const source = ensureProfileForEmail("source@example.test").id;
+    const target = ensureProfileForEmail("target@example.test").id;
+    await preferences.setCanonicalUserPreferences(source, {
+      "ui.accent": "#a1b2c3",
+      other: "excluded",
+    });
+    mergeProfiles(source, target);
+    const context = captureOpenClawStateWorkerContext();
+    const readIdentity = () =>
+      executeOpenClawStateWorker(context, {
+        type: "deviceIdentity.read",
+        input: { identityKey: "preference-reader-test" },
+      });
+    await readIdentity();
+    const replyReady = createDeferredCore();
+    let publish: (() => void) | undefined;
+    let selected: { worker: Worker; id: number } | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted worker receiver.
+    const originalPost = Worker.prototype.postMessage;
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted worker receiver.
+    const originalEmit = Worker.prototype.emit;
+    const requests = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command: unknown = deserialize(request.input);
+        if (
+          isRecord(command) &&
+          command.type === "deviceIdentity.read" &&
+          isRecord(command.input) &&
+          command.input.identityKey === "preference-reader-test"
+        ) {
+          selected = { worker: this, id: request.id };
+        }
+      }
+      return originalPost.call(this, request, transferList);
+    });
+    const replies = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      reply: SqliteWorkerReply,
+    ) {
+      if (event === "message" && this === selected?.worker && reply.id === selected.id) {
+        publish = () => originalEmit.call(this, event, reply);
+        replyReady.resolve();
+        return true;
+      }
+      return originalEmit.call(this, event, reply);
+    });
+    const pendingWriter = readIdentity();
+    try {
+      await withinTest(replyReady.promise, signal);
+      expect(
+        await withinTest(
+          invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, source),
+          signal,
+        ),
+      ).toEqual({
+        ok: true,
+        payload: { status: "ok", entries: { "ui.accent": "#a1b2c3" } },
+        error: undefined,
+      });
+    } finally {
+      replies.mockRestore();
+      requests.mockRestore();
+      publish?.();
+      await pendingWriter;
+    }
+  } finally {
+    await state.cleanup();
+  }
 });
 
 async function withPreferenceToolTurn(

@@ -104,8 +104,9 @@ import type {
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { selectUserPreferenceValues } from "./user-preferences.store.js";
+import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
 export {
   prepareAcpSessionMetadataRead,
@@ -418,6 +419,24 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       values: selectUserPreferenceValues(db, command.profileIds, command.key),
+    };
+  }
+  if (command.type === "userPreferences.read") {
+    return {
+      type: command.type,
+      preferences: runSqliteDeferredTransactionSync(db, () => {
+        const profile = tableExists(db, "user_profiles")
+          ? selectResolvedUserProfileMetadataById(db, command.profileId)
+          : undefined;
+        return profile
+          ? {
+              profileId: profile.id,
+              entries: tableExists(db, "user_preferences")
+                ? readUserPreferences(db, profile.id, command.keys)
+                : {},
+            }
+          : undefined;
+      }),
     };
   }
   if (

@@ -27,6 +27,7 @@ import {
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
@@ -411,7 +412,7 @@ describe("SQLite exact transcript rewrite", () => {
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
         }, scope),
-      ).toThrow("changed before exact rewrite");
+      ).toThrow(SqliteTranscriptMutationConflictError);
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);

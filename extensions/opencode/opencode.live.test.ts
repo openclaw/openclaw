@@ -18,7 +18,7 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "ling-3.0-flash-fin-free";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "deepseek-v4-flash";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -96,7 +96,7 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
 }
 
 describeLive("opencode Zen live catalog drift", () => {
-  it("discovers active live ids from authoritative metadata without hardcoding the catalog", async () => {
+  it("discovers every listed live id except inactive metadata rows", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
     const discovered = await buildOpencodeZenLiveProviderConfig({
       apiKey: OPENCODE_API_KEY,
@@ -105,13 +105,15 @@ describeLive("opencode Zen live catalog drift", () => {
     const discoveredIds = discovered.models.map((model) => model.id).toSorted();
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
-    const trustedRows = listOpencodeZenModelCatalogEntries();
-    const activeIds = new Set(
-      trustedRows.filter((row) => !row.status).map((row) => row.id.toLowerCase()),
+    // Listed ids without public metadata stay visible; only inactive metadata rows hide them.
+    const inactiveIds = new Set(
+      listOpencodeZenModelCatalogEntries()
+        .filter((row) => row.status)
+        .map((row) => row.id.toLowerCase()),
     );
 
     expect(discoveredIds.length).toBeGreaterThan(0);
-    expect(discoveredIds).toEqual(liveIds.filter((id) => activeIds.has(id)));
+    expect(discoveredIds).toEqual(liveIds.filter((id) => !inactiveIds.has(id)));
   }, 30_000);
 });
 

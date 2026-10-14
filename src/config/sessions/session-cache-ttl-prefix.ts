@@ -19,7 +19,7 @@ export function readCacheTtlProjectionPrefix(
     | { activePosition: number; id: string; entry: Record<string, unknown>; beforeRawSeq?: number }
     | undefined,
 ): CacheTtlProjectionPrefix | undefined {
-  if (!anchor) {
+  if (!anchor || anchor.activePosition === 0) {
     return undefined;
   }
   const entryType =
