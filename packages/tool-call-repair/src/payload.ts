@@ -512,12 +512,9 @@ export function stripPlainTextToolCallBlocks(
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
   if (
-    !text ||
-    (!/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
-        text,
-      ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
   ) {
     return text;
   }

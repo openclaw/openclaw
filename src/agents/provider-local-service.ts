@@ -54,7 +54,7 @@ type ModelWithProviderLocalService = {
 
 type ManagedLocalService = {
   process?: ManagedLocalServiceProcess;
-  processStop?: { process: ManagedLocalServiceProcess; promise?: Promise<void> };
+  processStop?: Promise<void>;
   stopping?: { promise?: Promise<void> };
   starting?: Promise<void>;
   startupAbort?: AbortController;
@@ -215,16 +215,7 @@ async function acquireProviderLocalService(
       }
       await waitForAbort(managed.starting, signal);
       assertCurrentServiceAcquisition(key, managed, signal);
-      const ready =
-        !managed.processStop &&
-        ((managed.process && !hasLocalServiceProcessExited(managed.process.child)) ||
-          (await probeHealth(healthUrl, healthHeaders, signal)));
-      assertCurrentServiceAcquisition(key, managed, signal);
-      if (ready && !managed.processStop) {
-        return { release };
-      }
-      release();
-      return undefined;
+      return { release };
     } finally {
       target.onReadinessWait?.(false);
     }
@@ -541,40 +532,30 @@ function stopManagedService(
 
 async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
   throwIfAborted(signal);
-  if (!managed.processStop) {
-    const owned = managed.process;
-    managed.lastExit = undefined;
-    if (!owned) {
-      return;
-    }
-    managed.processStop = { process: owned };
+  const owned = managed.process;
+  managed.lastExit = undefined;
+  if (!owned) {
+    return;
   }
-  const stopping = managed.processStop;
-  let pending = stopping.promise;
-  if (!pending) {
+  if (!managed.processStop) {
     // Restart cancellation stops its waiter, not the process-tree cleanup owner.
-    pending = Promise.resolve()
-      .then(() => stopLocalServiceProcess(stopping.process))
+    managed.processStop = Promise.resolve()
+      .then(() => stopLocalServiceProcess(owned))
       .then(() => {
-        if (managed.process === stopping.process) {
-          managed.process = undefined;
-        }
-        if (managed.processStop === stopping) {
-          managed.processStop = undefined;
-        }
+        managed.process = undefined;
+        managed.processStop = undefined;
       })
       .catch((error: unknown) => {
-        stopping.promise = undefined;
+        managed.processStop = undefined;
         throw error;
       });
-    stopping.promise = pending;
   }
-  await waitForAbort(pending, signal);
+  await waitForAbort(managed.processStop, signal);
 }
 
 function forceStopManagedService(key: string, managed: ManagedLocalService) {
   clearIdleTimer(managed);
-  const owned = managed.processStop?.process ?? managed.process;
+  const owned = managed.process;
   managed.process = undefined;
   if (services.get(key) === managed) {
     services.delete(key);

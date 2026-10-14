@@ -140,6 +140,10 @@ diagnostics are enabled. It captures operational facts, not content.
 Child-process spawn samples use bounded command families and operation labels.
 Known owners distinguish agent exec launches (`agent.exec`), shell environment
 snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Additional owners distinguish CLI backends (`agent.cli`), isolated file reads
+(`agent.file-read`), service-manager commands (`service.manager`), native worktree
+writes (`worktree.filesystem`), retired checkout deletion (`worktree.cleanup`),
+and temporary pack cleanup (`worktree.maintenance`).
 Relays launched for agent exec retain `agent.exec` as their owner.
 Native PTY exec launches use the same counter after successful admission.
 Windows PTYs publish their PID asynchronously, so attribution waits for the first

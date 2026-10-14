@@ -221,7 +221,7 @@ test("users.prefs refuses a pending write when the participant is revoked before
   });
 });
 
-test.each(["current", "scope", "source", "identity", "error-response", "staff"] as const)(
+test.each(["current", "read", "scope", "source", "identity", "error-response", "staff"] as const)(
   "users.self keeps its original %s authority through the handler's identity sync",
   async (change) => {
     const state = await createOpenClawTestState({
@@ -237,7 +237,9 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       releaseProfiles = (await prepareUserProfileCatalog()).release;
       const client = createOperatorWsClient({
         connId: "self-reader",
-        scopes: [change === "staff" ? "operator.read" : "operator.sessions.read"],
+        scopes: [
+          change === "staff" || change === "read" ? "operator.read" : "operator.sessions.read",
+        ],
       });
       client.authenticatedUserId = "self-reader@github";
       const attach = (profile: typeof owner) => {
@@ -303,7 +305,7 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
         expect(respond).not.toHaveBeenCalled();
       } else {
         expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-        if (change === "current" || change === "staff") {
+        if (change === "current" || change === "read" || change === "staff") {
           expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
             profile: expect.objectContaining({ id: owner.id }),
           });

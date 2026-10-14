@@ -124,6 +124,7 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",

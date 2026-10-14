@@ -545,14 +545,29 @@ with the same family, time, and worker constraints; it still fails if over cap.
 The final 70/130 push/PR caps remain unchanged. Native compact admission allows 90 rows, while hosted admission allows 96. Native tooling bins retain separate
 two-worker child processes and a 300-second test budget. Rows containing the
 partitioned changed-Node planner proof use 150 seconds in both initial packing
-and measured rebalancing; both reserve 60 seconds for job setup. Hosted hourly tooling retains its existing
+and measured rebalancing; both reserve 60 seconds for job setup.
+
+Hourly hybrid main validation carries the complete tooling family, so its ordinary
+tooling rows use 420 test seconds plus 60 seconds of setup in both initial packing
+and measured rebalancing. Planner-proof rows keep 150 seconds; PR, push, release,
+and hosted plans keep their budgets and emit identical matrices. A 480-second row
+stays within the eight-minute objective and below main's existing 500-second
+parallel rows. On the October 14, 2026 inventory, main's first packing pass planned
+80 jobs and reached the 78-job compact cap (76 Node plus two dist rows) only after
+the Gateway-first rebuild and final pair merge, so any new group failed preflight.
+The denser tooling budget packs the first pass into 77 jobs (76 of 77 final Node
+rows) and leaves both fallbacks in reserve; planner probes fit one to three new
+25–280-second groups. Child processes, worker limits, runner classes, timeouts,
+timing weights, and the row-cap guard are unchanged. These are planning targets,
+not measured job-duration guarantees.
+
+Hosted hourly tooling retains its existing
 720-second total budget (660 seconds of tests plus setup) to keep the integration
 tier within the hourly row cap. It uses complete hosted file prices without native
 wall observations. GitHub and hybrid tooling use the same file packing for
 hosted retry budgets. A companion may fill an indivisible file's spare worker
 only when it adds no predicted wall time and stays within the existing 300-second
-whole-job budget. This keeps the hourly hybrid plan within 77 Node rows plus two
-dist rows without changing coverage, workers, timing weights, or caps.
+whole-job budget.
 
 The native compact allowance of 90 fits the partitioned planner proof inside the
 existing final PR limit; it does not increase the maximum Node matrix size.
