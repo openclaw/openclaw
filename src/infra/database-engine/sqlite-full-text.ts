@@ -1,0 +1,57 @@
+import type { DatabaseSync } from "node:sqlite";
+import { createFunctionModule, sql } from "kysely";
+import type { FullTextCapability, TextIndex, TextQuery } from "./text-contract.js";
+
+function literalQuery(query: TextQuery): string {
+  if (query.kind === "term" || query.kind === "phrase") {
+    const text =
+      query.kind === "term" ? query.text.replaceAll('"', "") : query.text.replaceAll('"', '""');
+    return `"${text}"${query.kind === "phrase" && query.prefix ? "*" : ""}`;
+  }
+  let separator = query.kind === "any" ? " OR " : " AND ";
+  if (query.kind === "all" && query.clauses.every((clause) => clause.kind === "phrase")) {
+    separator = " ";
+  }
+  return query.clauses
+    .map((clause) => (clause.kind === "any" ? `(${literalQuery(clause)})` : literalQuery(clause)))
+    .join(separator);
+}
+
+export function bindSqliteFullText(store: object, db?: DatabaseSync): FullTextCapability {
+  const relation = (index: TextIndex) => {
+    if (index.store !== store || (db && !db.isOpen)) {
+      throw new Error("Text index is not admitted to this open store");
+    }
+    return index.alias ?? index.table;
+  };
+  return {
+    match(index, query) {
+      const table = relation(index);
+      const value = literalQuery(query);
+      return index.matchField
+        ? sql<boolean>`${sql.ref(`${table}.${index.matchField}`)} match ${value}`
+        : sql<boolean>`${sql.raw(table)} MATCH ${value}${sql.raw(index.hiddenRank ? ` AND ${table}.rank MATCH 'bm25()'` : "")}`;
+    },
+    rank(index) {
+      const table = relation(index);
+      return {
+        value: sql<number>`${sql.raw(index.hiddenRank ? `${table}.rank` : `bm25(${table})`)}`,
+        order: "asc",
+        toRank: (raw) => (Number.isFinite(raw) ? -raw : 0),
+      };
+    },
+    snippet(index, field, maxTokens) {
+      const table = relation(index);
+      const column = index.fields.indexOf(field);
+      if (column < 0) {
+        throw new Error(`Text index has no field ${field}`);
+      }
+      return sql<string>`${sql.raw(`snippet(${table}, ${column}, '', '', ' … ', ${maxTokens})`)}`;
+    },
+    identity: (index) => sql<number>`${sql.raw(`${relation(index)}.rowid`)}`,
+    allocatedIdentity: (index) => {
+      relation(index);
+      return sql<number>`${createFunctionModule()<number>("last_insert_rowid", [])}`;
+    },
+  };
+}

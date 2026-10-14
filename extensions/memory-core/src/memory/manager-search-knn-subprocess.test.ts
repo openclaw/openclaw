@@ -18,11 +18,11 @@ import {
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { vectorKnnParentEntrypoint } from "./manager-search-knn-runtime.test-support.js";
-import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
+import { runVectorKnnInSubprocess } from "./manager-search-knn.test-support.js";
+import { vectorToBlob } from "./manager-search-knn.test-support.js";
 import { searchVector } from "./manager-search-vector.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
-import { vectorToBlob } from "./vector-blob.js";
 
 const fixtureChildUrl = new URL("./fixtures/manager-search-knn-child.fixture.mjs", import.meta.url);
 
@@ -31,9 +31,9 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: vi.fn(actual.spawn) };
 });
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-knn", async (importOriginal) => {
+vi.mock("../../../../src/infra/bun-sqlite-library.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-knn")>();
+    await importOriginal<typeof import("../../../../src/infra/bun-sqlite-library.js")>();
   return { ...actual, ensureSqliteLibrarySelected: vi.fn(actual.ensureSqliteLibrarySelected) };
 });
 
@@ -67,7 +67,6 @@ function useFixtureChild() {
 
 function request(limit: number): VectorKnnRequest {
   return {
-    vectorTable: "memory_index_chunks_vec",
     providerModels: ["test-model"],
     queryVec: [1, 0],
     limit,
@@ -454,6 +453,7 @@ describe("memory vector KNN subprocess boundary", () => {
 
   it.each([
     ["malformed", "malformed JSON"],
+    ["invalid-row", "returned an invalid result"],
     ["oversized", "stdout exceeded its limit"],
     ["oversized-stderr", "stderr exceeded its limit"],
     ["early-exit", "exited before returning a result (code 7, signal none): fixture KNN failure"],
@@ -475,11 +475,35 @@ describe("memory vector KNN subprocess boundary", () => {
     expect(fixture.children).toHaveLength(2);
   });
 
+  it("bounds NUL-dense native snippets before the subprocess output limit", async () => {
+    const fixture = await createFileBackedVectorDatabase();
+    try {
+      fixture.db.exec("BEGIN");
+      for (let index = 0; index < 200; index += 1) {
+        insertVectorRow(fixture.db, {
+          id: `nul-${index}`,
+          source: "memory",
+          vector: [1, 0],
+          text: "\0".repeat(3000),
+        });
+      }
+      fixture.db.exec("COMMIT");
+      const result = await runVectorKnnInSubprocess({
+        databasePath: fixture.databasePath,
+        request: request(200),
+      });
+      expect(result.fallbackScanRequired).toBe(false);
+      expect(result.rows).toHaveLength(200);
+      expect(result.rows.every((row) => row.text === "\0".repeat(700))).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("fails vector recall closed when the subprocess is unavailable", async () => {
     const runFallback = vi.fn(async () => []);
     await expect(
       searchVector({
-        vectorTable: "memory_index_chunks_vec",
         providerModel: "test-model",
         queryVec: [1, 0],
         limit: 1,

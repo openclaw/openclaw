@@ -1,15 +1,9 @@
 // Serial sqlite-vec queries stay OS-killable even while native SQLite is busy.
-import {
-  ensureSqliteLibrarySelected,
-  loadSqliteVecExtension,
-  openNodeSqliteDatabase,
-  supportsNodeSqliteExtensionLoading,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import {
-  runVectorKnnQuery,
-  type VectorKnnRequest,
-  type VectorKnnResponse,
-} from "./manager-search-knn.js";
+import { deserialize } from "node:v8";
+import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
+import { openNodeSqliteDatabase, supportsNodeSqliteExtensionLoading } from "../node-sqlite.js";
+import { loadSqliteVecExtension } from "./sqlite-vec.js";
+import { runSqliteVectorQuery, type VectorKnnResponse } from "./sqlite-vector.js";
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -18,7 +12,7 @@ export type VectorKnnChildInput = {
   databasePath: string;
   extensionPath?: string;
   sqliteLibraryPath?: string;
-  request: VectorKnnRequest;
+  request: string;
 };
 
 type VectorKnnChildResult =
@@ -36,8 +30,7 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
     input.databasePath.length > 0 &&
     (input.sqliteLibraryPath === undefined ||
       (typeof input.sqliteLibraryPath === "string" && input.sqliteLibraryPath.trim().length > 0)) &&
-    Boolean(input.request) &&
-    typeof input.request === "object"
+    typeof input.request === "string"
   );
 }
 
@@ -53,7 +46,7 @@ async function run(input: VectorKnnChildInput): Promise<VectorKnnResponse> {
     if (extensionLoadingSupported) {
       const loaded = await loadSqliteVecExtension({ db, extensionPath: input.extensionPath });
       if (loaded.ok) {
-        return runVectorKnnQuery(db, input.request);
+        return runSqliteVectorQuery(db, deserialize(Buffer.from(input.request, "base64")));
       }
     }
     return { rows: [], fallbackScanRequired: true };

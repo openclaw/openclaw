@@ -1,24 +1,38 @@
+import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "./error-utils.js";
-import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.js";
+import { formatErrorMessage } from "../../../packages/memory-host-sdk/src/host/error-utils.js";
 
-type SqliteVecModule = {
-  getLoadablePath: () => string;
+type PlatformVariant = { readonly pkg: string; readonly file: string };
+const PLATFORM_VARIANTS: Readonly<Record<string, PlatformVariant | undefined>> = {
+  "linux-x64": { pkg: "sqlite-vec-linux-x64", file: "vec0.so" },
+  "linux-arm64": { pkg: "sqlite-vec-linux-arm64", file: "vec0.so" },
+  "darwin-x64": { pkg: "sqlite-vec-darwin-x64", file: "vec0.dylib" },
+  "darwin-arm64": { pkg: "sqlite-vec-darwin-arm64", file: "vec0.dylib" },
+  "win32-x64": { pkg: "sqlite-vec-windows-x64", file: "vec0.dll" },
 };
+
+function resolveSqliteVecPlatformVariant(): { pkg: string; extensionPath: string } | undefined {
+  const entry = PLATFORM_VARIANTS[`${process.platform}-${process.arch}`];
+  if (!entry) {
+    return undefined;
+  }
+  try {
+    const requireForResolve = createRequire(import.meta.url);
+    const extensionPath = requireForResolve.resolve(`${entry.pkg}/${entry.file}`);
+    return { pkg: entry.pkg, extensionPath };
+  } catch {
+    return undefined;
+  }
+}
 
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
 const SQLITE_VEC_CONFIG_HINT =
   "Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path.";
 
-async function loadSqliteVecModule(): Promise<SqliteVecModule> {
-  return import(SQLITE_VEC_MODULE_ID) as Promise<SqliteVecModule>;
-}
-
 function isMissingSqliteVecPackageError(err: unknown): boolean {
   const message = formatErrorMessage(err);
-  const code =
-    err && typeof err === "object" && "code" in err ? (err as { code?: unknown }).code : undefined;
+  const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
   const missingSqliteVec = /Cannot find (?:package|module) ['"]sqlite-vec['"]/u.test(message);
   return (
     missingSqliteVec &&
@@ -28,9 +42,7 @@ function isMissingSqliteVecPackageError(err: unknown): boolean {
 
 function assertSqliteVecAvailable(db: DatabaseSync, source: string): void {
   try {
-    const row = db.prepare("SELECT vec_version() AS version").get() as
-      | { version?: unknown }
-      | undefined;
+    const row = db.prepare("SELECT vec_version() AS version").get();
     if (typeof row?.version !== "string" || row.version.trim().length === 0) {
       throw new Error("vec_version() did not return a version");
     }
@@ -66,7 +78,7 @@ export async function loadSqliteVecExtension(params: {
     }
 
     try {
-      const sqliteVec = await loadSqliteVecModule();
+      const sqliteVec: { getLoadablePath: () => string } = await import(SQLITE_VEC_MODULE_ID);
       const extensionPath = sqliteVec.getLoadablePath();
       loadSqliteVecExtensionFromPath(params.db, extensionPath);
       return { ok: true, extensionPath };

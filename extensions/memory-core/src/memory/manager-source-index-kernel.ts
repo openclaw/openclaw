@@ -1,10 +1,10 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import {
   encodeMemoryEmbedding,
   hashText,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
-import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,12 +16,12 @@ import {
   type IndexedMemoryChunk,
   type MemoryChunkWrite,
 } from "./manager-chunk-writer.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import {
   markMemoryVectorRebuildRequired,
   resolveMemoryVectorIndexState,
   VECTOR_REBUILD_META_KEY,
 } from "./manager-vector-rebuild-state.js";
-import { writeMemoryVectors } from "./manager-vector-write.js";
 
 const SOURCE_WRITE_BATCH_SIZE = 128;
 const MAX_VECTOR_POINT_DELETES = 32;
@@ -159,10 +159,13 @@ export function readMemorySourceHash(
 // The caller retains transaction admission and repeats file validation before
 // each BEGIN attempt. This kernel runs only inside that admitted native transaction.
 export class MemorySourceIndexKernel {
+  private readonly search: ReturnType<typeof admitMemoryVectorIndex>;
   constructor(
     private readonly database: DatabaseSync,
     private readonly state: SourceIndexState,
-  ) {}
+  ) {
+    this.search = admitMemoryVectorIndex(database);
+  }
 
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
     const { entry, source, model, now, vectorReady } = params;
@@ -199,7 +202,7 @@ export class MemorySourceIndexKernel {
     if (!delta && !reuse) {
       this.clear(entry.path, source);
     }
-    let findVector: StatementSync | undefined;
+    let findVector: ((id: string) => boolean) | undefined;
     let batch: MemoryChunkWrite[] = [];
     let removedIds: string[] = [];
     let hasEmbeddings = false;
@@ -220,10 +223,8 @@ export class MemorySourceIndexKernel {
         if (!reuse) {
           return row.embedding.length > 0;
         }
-        findVector ??= this.database.prepare(
-          `SELECT id FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
-        );
-        if (!findVector.get(row.id)) {
+        findVector ??= this.search.capability.prepareExists(this.search.index);
+        if (!findVector(row.id)) {
           return row.embedding.length > 0;
         }
         if (row.embedding.length === 0) {
@@ -247,7 +248,7 @@ export class MemorySourceIndexKernel {
         batch,
       );
       if (vectorReady) {
-        writeMemoryVectors(this.database, vectors);
+        this.search.capability.write(this.search.index, vectors);
       }
       batch = [];
     };
@@ -370,26 +371,15 @@ export class MemorySourceIndexKernel {
           // Dense complete replacements may scan once, restricted to stale IDs:
           // retained and newly written rows are already present in this source.
           // Session deltas always keep indexed scalar deletes, at every size.
-          const deletion = this.database.prepare(
-            `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
-              "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?" +
-              (ids === undefined ? "" : " AND id IN (SELECT value FROM json_each(?))") +
-              ")",
+          this.search.capability.remove(
+            this.search.index,
+            ids === undefined
+              ? sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source}`
+              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`,
           );
-          if (ids === undefined) {
-            deletion.run(pathname, source);
-          } else {
-            deletion.run(pathname, source, JSON.stringify(ids));
-          }
           return;
         }
-        // sqlite-vec only uses its primary-key lookup for scalar equality.
-        const deletion = this.database.prepare(
-          `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
-        );
-        for (const id of sparse) {
-          deletion.run(id);
-        }
+        this.search.capability.remove(this.search.index, sparse);
       });
     } catch {
       markMemoryVectorRebuildRequired(this.database);

@@ -3,6 +3,7 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { sql } from "kysely";
+import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -183,6 +184,19 @@ export function searchSessionTranscriptsReadOnlySync(
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
           const db = getNodeSqliteKysely<DB>(database.db);
+          const search = admitStoreSearch(database.db, {
+            text: {
+              transcript: {
+                table: "session_transcript_fts",
+                fields: ["text", "session_id", "message_id", "role", "timestamp"],
+              },
+            },
+          });
+          if (!search.fullText) {
+            throw new Error(search.diagnostics.join("; "));
+          }
+          const textIndex = search.text.transcript!;
+          const ranking = search.fullText.rank(textIndex);
           const selectedWindows = db
             .selectFrom("session_windows")
             .select(["session_id", "session_key"])
@@ -208,16 +222,16 @@ export function searchSessionTranscriptsReadOnlySync(
                 .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          const match =
-            /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-            sql<boolean>`session_transcript_fts MATCH ${sessionTranscriptSearchFtsQuery(query, params.match)}`;
+          const match = search.fullText.match(
+            textIndex,
+            sessionTranscriptSearchFtsQuery(query, params.match),
+          );
           /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
           const order =
             params.order === "recent"
               ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
-              : sql`rank asc, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
-          // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
-          // representation. session_key lives on the window row so key renames
+              : sql`rank ${sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
+          // session_key lives on the window row so key renames
           // never leave stale keys inside the index. Sessions flagged needs_rebuild
           // are excluded: their rows may still hold rewound-away branch text that
           // sessions_history no longer exposes, so they stay hidden until reconcile
@@ -227,12 +241,7 @@ export function searchSessionTranscriptsReadOnlySync(
             // Keep MATCH outermost; the narrow map rejects excluded content before hydration.
             .crossJoin("session_transcript_fts_rows as mapped")
             .crossJoin(selectedWindows.as("window"))
-            .where(
-              "mapped.id",
-              "=",
-              /* kysely-allow-raw: FTS5 implicit rowid stays inside SQLite, including 64-bit identities. */
-              sql<number>`session_transcript_fts.rowid`,
-            )
+            .where("mapped.id", "=", search.fullText.identity(textIndex))
             .whereRef("window.session_id", "=", "mapped.session_id")
             .where(match)
             // Depend on the scoped window so SQLite cannot read role before excluding sessions.
@@ -256,10 +265,8 @@ export function searchSessionTranscriptsReadOnlySync(
             )
             .select([
               "window.session_key",
-              /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
-              sql`session_transcript_fts.rowid`.as("fts_rowid"),
-              /* kysely-allow-raw: FTS5 ranking primitive. */
-              sql`bm25(session_transcript_fts)`.as("rank"),
+              search.fullText.identity(textIndex).as("fts_rowid"),
+              ranking.value.as("rank"),
             ])
             .orderBy(order)
             .limit(limit + 1);
@@ -272,8 +279,9 @@ export function searchSessionTranscriptsReadOnlySync(
               )
               .selectFrom("hits")
               .crossJoin("session_transcript_fts")
-              /* kysely-allow-raw: Bound FTS5 hydration only visits the retained candidate rowids. */
-              .where((eb) => eb(sql`session_transcript_fts.rowid`, "=", eb.ref("hits.fts_rowid")))
+              .where((eb) =>
+                eb(search.fullText!.identity(textIndex), "=", eb.ref("hits.fts_rowid")),
+              )
               .where(match)
               .select([
                 "hits.session_key",
@@ -282,8 +290,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 "role",
                 "timestamp",
                 "hits.rank as rank",
-                /* kysely-allow-raw: Materialization bounds snippet tokenization to limit + 1 rows. */
-                sql`snippet(session_transcript_fts, 0, '', '', ' … ', 48)`.as("snippet"),
+                search.fullText.snippet(textIndex, "text", 48).as("snippet"),
               ])
               .orderBy(order),
           ).rows;
@@ -308,7 +315,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 role: row.role,
                 timestamp: Number.isFinite(timestamp) ? timestamp : 0,
                 snippet: boundSessionTranscriptSearchSnippet(row.snippet),
-                score: Number.isFinite(rank) ? -rank : 0,
+                score: ranking.toRank(rank),
               },
             ];
           });

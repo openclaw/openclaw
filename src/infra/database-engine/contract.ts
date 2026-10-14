@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
 import type { SqlConnection } from "../sql-connection.js";
+import type { SearchSchema, SearchStore, StoreSearchCapabilities } from "./search.js";
 import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
 
 export type { EngineConnection } from "../sql-connection.js";
@@ -54,6 +55,8 @@ export interface DatabaseEngineAdapter<Connection extends SqlConnection = SqlCon
   kysely(connection: Connection): Kysely<unknown>;
   transactions: TransactionRecipes<Connection>;
   capabilities: { fullText: "fts5" | "tsvector" | null; vector: "sqlite-vec" | "pgvector" | null };
+  /** @experimental Bind engine search operations to an already admitted store. */
+  search?: (store: SearchStore, schema: SearchSchema) => StoreSearchCapabilities;
   schema: {
     bootstrap(store: AdmittedStore, connection: Connection): void;
     migrate(store: AdmittedStore, from: number, connection: Connection): void;

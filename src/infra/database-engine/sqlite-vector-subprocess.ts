@@ -1,21 +1,12 @@
-// Parent-side subprocess boundary for synchronous sqlite-vec KNN work.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
-import {
-  ensureSqliteLibrarySelected,
-  SQLITE_IDLE_HANDLE_TTL_MS,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "openclaw/plugin-sdk/process-runtime";
-import { vectorKnnProcessEntrypoint } from "./manager-search-knn-entrypoint.js";
-import type { VectorKnnChildInput } from "./manager-search-knn.child.js";
-import {
-  isVectorKnnRow,
-  type VectorKnnRequest,
-  type VectorKnnResponse,
-} from "./manager-search-knn.js";
+import { serialize } from "node:v8";
+import { createPermitPool } from "../../shared/permit-pool.js";
+import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
+import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../sqlite-handle-lifecycle.js";
+import type { VectorKnnChildInput } from "./sqlite-vector.child.js";
+import type { SqliteVectorPlan, VectorKnnResponse } from "./sqlite-vector.js";
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -75,7 +66,11 @@ function setChildReferenced(child: ChildProcessWithoutNullStreams, referenced: b
   }
 }
 
-function parseChildResult(output: Buffer, maxRows: number): VectorKnnResponse {
+function parseChildResult<Row>(
+  output: Buffer,
+  maxRows: number,
+  isRow: (value: unknown) => value is Row,
+): VectorKnnResponse<Row> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(output.toString("utf8"));
@@ -102,7 +97,7 @@ function parseChildResult(output: Buffer, maxRows: number): VectorKnnResponse {
     !("rows" in value) ||
     !Array.isArray(value.rows) ||
     value.rows.length > maxRows ||
-    !value.rows.every(isVectorKnnRow) ||
+    !value.rows.every(isRow) ||
     !("fallbackScanRequired" in value) ||
     typeof value.fallbackScanRequired !== "boolean"
   ) {
@@ -114,17 +109,18 @@ function parseChildResult(output: Buffer, maxRows: number): VectorKnnResponse {
   return { rows: value.rows, fallbackScanRequired: value.fallbackScanRequired };
 }
 
-type VectorKnnSubprocessParams = {
+type VectorKnnSubprocessParams<Row> = {
   databasePath: string;
   extensionPath?: string;
-  request: VectorKnnRequest;
+  request: SqliteVectorPlan;
+  isRow: (value: unknown) => value is Row;
   signal?: AbortSignal;
 };
 
 /** Run one file-backed KNN query in a bounded, OS-killable child process. */
-export async function runVectorKnnInSubprocess(
-  params: VectorKnnSubprocessParams,
-): Promise<VectorKnnResponse> {
+export async function runVectorKnnInSubprocess<Row>(
+  params: VectorKnnSubprocessParams<Row>,
+): Promise<VectorKnnResponse<Row>> {
   let entry = databaseAdmissions.get(params.databasePath);
   if (!entry) {
     entry = { admission: createPermitPool(1), users: 0 };
@@ -146,7 +142,9 @@ export async function runVectorKnnInSubprocess(
   }
 }
 
-async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<VectorKnnResponse> {
+async function runAdmittedVectorKnn<Row>(
+  params: VectorKnnSubprocessParams<Row>,
+): Promise<VectorKnnResponse<Row>> {
   if (params.signal?.aborted) {
     throw toAbortError(params.signal);
   }
@@ -155,7 +153,7 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
     databasePath: params.databasePath,
     extensionPath: params.extensionPath,
     ...(sqliteLibrary.source !== "runtime" ? { sqliteLibraryPath: sqliteLibrary.path } : {}),
-    request: params.request,
+    request: serialize(params.request).toString("base64"),
   };
   const inputPayload = Buffer.from(JSON.stringify(input), "utf8");
   if (inputPayload.byteLength > MAX_STDIN_BYTES) {
@@ -182,7 +180,7 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
     }
     let child;
     try {
-      const childUrl = resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint);
+      const childUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteVector);
       child = spawn(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
         env: buildChildEnv(),
         shell: false,
@@ -228,7 +226,7 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
   worker.idleTimer = undefined;
   child.stdout.removeAllListeners("data");
   setChildReferenced(child, true);
-  return await new Promise<VectorKnnResponse>((resolve, reject) => {
+  return await new Promise<VectorKnnResponse<Row>>((resolve, reject) => {
     const stderrChunks: Buffer[] = [];
     let closed = false;
     let callerSettled = false;
@@ -318,7 +316,11 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
               "protocol",
             );
           }
-          const result = parseChildResult(Buffer.concat(chunks), params.request.limit);
+          const result = parseChildResult(
+            Buffer.concat(chunks),
+            params.request.limit,
+            params.isRow,
+          );
           if (terminationReason) {
             return;
           }

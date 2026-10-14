@@ -1,4 +1,3 @@
-// Memory Host SDK module owns derived FTS schema and rebuild behavior.
 import type { DatabaseSync } from "node:sqlite";
 
 export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
