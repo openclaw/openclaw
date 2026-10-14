@@ -6,7 +6,7 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -269,18 +269,17 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
-  const next = isDeeplyFrozenPlainData(state) ? state : freezeJsonSnapshot(structuredClone(state));
-  if (cell.snapshot === next && cell.generation === generation) {
+  if (cell.snapshot === state && cell.generation === generation) {
     return touch(cell);
   }
   const previousTranscript = cell.transcript;
   discard(cell);
-  cell.snapshot = next;
-  cell.predicateColumns = next.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(next.entry))
+  cell.snapshot = state;
+  cell.predicateColumns = state.entry
+    ? deriveSessionPredicateColumns(JSON.stringify(state.entry))
     : undefined;
   cell.generation = generation;
-  cell.bytes = JSON.stringify(next).length * 2;
+  cell.bytes = JSON.stringify(state).length * 2;
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (

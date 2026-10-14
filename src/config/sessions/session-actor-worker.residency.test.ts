@@ -52,6 +52,7 @@ it("retains an oversized sole actor across commits and accounts its bytes when a
       throw new Error("Expected the oversized sole actor to commit without rehydration");
     }
     expect(committed.failure).toBeUndefined();
+    expect(f.reply()).toEqual({ kind: "committed" });
     expect(committed.receipt.afterVersion).toEqual({
       epoch: initial.version.epoch,
       sequence: initial.version.sequence + 1,

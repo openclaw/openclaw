@@ -80,15 +80,10 @@ public struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable
     }
 
     public func deliveredNotifications() async -> [NotificationSnapshot] {
-        await withCheckedContinuation { continuation in
-            self.center.getDeliveredNotifications { notifications in
-                continuation.resume(
-                    returning: notifications.map { notification in
-                        NotificationSnapshot(
-                            identifier: notification.request.identifier,
-                            userInfo: notification.request.content.userInfo)
-                    })
-            }
+        await self.center.deliveredNotifications().map { notification in
+            NotificationSnapshot(
+                identifier: notification.request.identifier,
+                userInfo: notification.request.content.userInfo)
         }
     }
 }

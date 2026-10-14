@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import { buildSessionSwarmSummary } from "../../../../../src/gateway/session-swarm-summary.js";
@@ -14,7 +14,9 @@ import {
 } from "../../../lib/sessions/session-capability.test-support.ts";
 import { SwarmRosterHydrator } from "../../../lib/sessions/swarm-roster.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
-import { renderChatSwarmProgress } from "./chat-swarm-progress.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatSwarmProgress, type ChatSwarmProgressProps } from "./chat-swarm-progress.solid.tsx";
 
 const parentSessionKey = "agent:main:parent";
 const parentRunId = "11111111-2222-4333-8444-555555555555";
@@ -63,14 +65,22 @@ function withSummary(sessions: readonly GatewaySessionRow[]): GatewaySessionRow[
   ];
 }
 
-function renderProgress(sessions: readonly GatewaySessionRow[]) {
+function mountProgress(props: ChatSwarmProgressProps) {
   const container = document.createElement("div");
   document.body.append(container);
-  render(
-    renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: withSummary(sessions) }),
+  const [current, setCurrent] = createSignal(props);
+  mountSolid(() => <ChatSwarmProgress {...current()} />, { container });
+  return {
     container,
-  );
-  return container;
+    update: (next: ChatSwarmProgressProps) => {
+      setCurrent(next);
+      flush();
+    },
+  };
+}
+
+function renderProgress(sessions: readonly GatewaySessionRow[]) {
+  return mountProgress({ sessionKey: parentSessionKey, sessions: withSummary(sessions) }).container;
 }
 
 afterEach(async () => {
@@ -181,8 +191,7 @@ describe("chat Swarm progress", () => {
     );
     const { gateway, emitEvent } = createGatewayHarness(client);
     const sessions = createTestSessionCapability(gateway);
-    const container = document.createElement("div");
-    document.body.append(container);
+    const { container, update } = mountProgress({ sessionKey: parentSessionKey, sessions: [] });
     const params = {
       sessions,
       parentKey: parentSessionKey,
@@ -194,13 +203,7 @@ describe("chat Swarm progress", () => {
       sourceEpoch: 1,
       currentRows: () => [child],
       onRows: (rows: GatewaySessionRow[]) =>
-        render(
-          renderChatSwarmProgress({
-            sessionKey: parentSessionKey,
-            sessions: withSummary(rows),
-          }),
-          container,
-        ),
+        update({ sessionKey: parentSessionKey, sessions: withSummary(rows) }),
     };
     try {
       hydrator.update(params);
@@ -264,10 +267,10 @@ describe("chat Swarm progress", () => {
           session({ key: `unsuccessful-${index}`, status, hasActiveRun: true }),
         ),
       ];
-      const container = renderProgress([
-        session({ key: "running", status: "running" }),
-        ...terminal,
-      ]);
+      const { container, update } = mountProgress({
+        sessionKey: parentSessionKey,
+        sessions: withSummary([session({ key: "running", status: "running" }), ...terminal]),
+      });
       const activeCounts = `1 running · 0 queued · ${statuses.length} failed or stopped`;
 
       expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(activeCounts);
@@ -280,13 +283,7 @@ describe("chat Swarm progress", () => {
         statuses.length,
       );
 
-      render(
-        renderChatSwarmProgress({
-          sessionKey: parentSessionKey,
-          sessions: withSummary(terminal),
-        }),
-        container,
-      );
+      update({ sessionKey: parentSessionKey, sessions: withSummary(terminal) });
       const finishedCounts = `${completed} completed · ${statuses.length} failed or stopped`;
       expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
       expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(finishedCounts);
@@ -307,12 +304,7 @@ describe("chat Swarm progress", () => {
           : row,
       );
     }
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: parentActive }),
-      container,
-    );
+    const { container } = mountProgress({ sessionKey: parentSessionKey, sessions: parentActive });
     expect(container.textContent).toContain("The parent is processing their results");
     expect(container.textContent).not.toContain("Check the conversation for the final response");
   });
@@ -372,20 +364,19 @@ describe("chat Swarm progress", () => {
       makeParent(raw, "research", 2),
       makeParent(`agent:main:${raw}`, "main", 3),
     ];
-    const container = document.createElement("div");
-    document.body.append(container);
+    const { container, update } = mountProgress({ sessionKey: raw, sessions });
     for (const target of [
       { sessionKey: raw, agentId: "main", count: 1 },
       { sessionKey: raw, agentId: "research", count: 2 },
       { sessionKey: `agent:main:${raw}`, agentId: "main", count: 3 },
     ]) {
-      render(renderChatSwarmProgress({ ...target, sessions }), container);
+      update({ ...target, sessions });
       expect(container.querySelector("summary")?.textContent).toContain(
         `${target.count} completed`,
       );
       expect(container.textContent).toContain("Child details are unavailable");
     }
-    render(renderChatSwarmProgress({ sessionKey: raw, sessions }), container);
+    update({ sessionKey: raw, sessions });
     expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   });
 });

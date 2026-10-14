@@ -1,15 +1,16 @@
-import { nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
-import { renderMessageImages } from "./chat-message-images.ts";
+import { MessageImages } from "./chat-message-images-solid.tsx";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 
-const panes: { container: HTMLElement; draw: () => void }[] = [];
+const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
 afterEach(() => {
   for (const pane of panes.splice(0)) {
-    render(nothing, pane.container);
+    pane.unmount();
     releaseChatMediaResourceSubscriber(pane.draw);
     pane.container.remove();
   }
@@ -51,16 +52,16 @@ it("does not let an aborted late renewal replace a newly mounted pane retry", as
   const mount = () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const draw = () =>
-      render(
-        renderMessageImages([{ url: source, width: 1200, height: 800 }], {
-          ...options,
-          onRequestUpdate: draw,
-        }),
-        container,
-      );
-    panes.push({ container, draw });
-    draw();
+    const [images, setImages] = createSignal([{ url: source, width: 1200, height: 800 }]);
+    const draw = () => {
+      setImages([{ url: source, width: 1200, height: 800 }]);
+      flush();
+    };
+    const { unmount } = mountSolid(
+      () => <MessageImages images={images()} options={{ ...options, onRequestUpdate: draw }} />,
+      { container },
+    );
+    panes.push({ container, draw, unmount });
     return { container, draw };
   };
   const first = mount();

@@ -260,6 +260,41 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
+  it("reads lazy partial text only until a visible partial has content", async () => {
+    const resolverError = new Error("provider failed after partials");
+    const textReads: string[] = [];
+    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+      _ctx,
+      options,
+    ) => {
+      let text = "";
+      for (let index = 0; index < 256; index++) {
+        await options?.onPartialReply?.({
+          get text() {
+            textReads.push(text);
+            return text;
+          },
+        });
+        text += "x";
+      }
+      throw resolverError;
+    };
+    const dispatchParams = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: { onPartialReply: vi.fn(async () => true) },
+    };
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+
+    expect(textReads).toEqual(["", "x"]);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Check the conversation before trying again"),
+      }),
+    );
+  });
+
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
     const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (

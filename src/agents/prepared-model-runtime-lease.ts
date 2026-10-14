@@ -218,6 +218,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       );
     }
 
+    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
+    const inventoryInput = context.getGatewayLifecycleActive()
+      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
+      : input;
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -234,8 +238,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       !configuredOwner.refreshError &&
       configuredOwner.snapshot.config === input.config &&
       ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
-        ownerKey({ ...input, runtimePluginSelections: undefined }) &&
-      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input)
+        ownerKey({ ...inventoryInput, runtimePluginSelections: undefined }) &&
+      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, inventoryInput)
     ) {
       owner = configuredOwner;
     }
@@ -304,7 +308,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         ...configuredOwner.input,
         loadRuntimePlugins: false,
         runtimePluginSelections: undefined,
-      }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
+      }) ===
+        ownerKey({
+          ...inventoryInput,
+          loadRuntimePlugins: false,
+          runtimePluginSelections: undefined,
+        })
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);

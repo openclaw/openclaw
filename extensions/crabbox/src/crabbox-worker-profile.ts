@@ -74,7 +74,7 @@ export const CRABBOX_OS_LABELS: Record<CrabboxOperatingSystem, string> = {
   macos: "macOS",
 };
 
-export function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
+function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
   if (value === undefined) {
     return "linux";
   }

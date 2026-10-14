@@ -157,6 +157,7 @@ it("preserves global session addition order across agents before overview pagina
       });
     }
     const loaded = await loadUsageSessionSummaries({
+      read: (load) => load(),
       entries: sessions,
       config,
       startMs,
