@@ -38,13 +38,13 @@ import {
 import { readUserGitHubConnectionAsync } from "../../../state/user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
-import { publishUserProfilesChange } from "../../../state/user-profile-list.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  publishUserProfilesChange,
+} from "../../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
-import {
-  ensureProfileForEmail,
-  hasMultipleSessionSharingIdentities,
-} from "../../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
   GatewayClient,
   type GatewayClientOptions,
@@ -473,7 +473,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(self.ok).toBe(true);
       expect(profileId).toBe("gateway-owner");
       expect(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
-      expect(hasMultipleSessionSharingIdentities()).toBe(false);
+      expect(hasMultipleResidentSessionSharingIdentities()).toBe(false);
       expect(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
         ok: true,
         payload: { personal: { state: "disconnected", account: null } },

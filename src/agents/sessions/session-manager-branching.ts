@@ -192,7 +192,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         };
         const { restoreSessionColdTranscript } =
           await import("../../config/sessions/session-cold-storage.js");
-        if ("db" in admission.database) {
+        if (!("withMetadata" in admission.database)) {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
         const reader = prepareSessionManagerHydration(persistenceTarget, {
@@ -275,7 +275,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           failure = { cause };
         }
         try {
-          if (!("db" in admission.database)) {
+          if ("withMetadata" in admission.database) {
             publishCommittedSessionIdentity(
               scope.agentId,
               admission.database.identity.incarnation,

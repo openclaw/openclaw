@@ -25,6 +25,7 @@ import {
   listAvailableManifestContractValues,
   loadManifestContractSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { resolveUserPath } from "../../utils.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -136,6 +137,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     return false;
   }
   if (provider?.isConfigured) {
+    warnPluginSdkDeprecation({
+      family: "provider-sync-configuration",
+      method: "media provider isConfigured",
+      replacement: "isConfiguredAsync",
+    });
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,

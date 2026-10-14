@@ -46,6 +46,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -53,12 +55,8 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
-    case "history-page":
-      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     default:
       return undefined;
   }
@@ -170,14 +168,14 @@ export function retainSessionHistoryWorkerDatabase(
           aborters: owned.aborters,
         },
         async (admit, requestLane) => {
-          // Reopened lanes check replacement before lending the next request a receipt.
-          const validation = captureOpenClawAgentDatabaseReadValidation(
-            database,
-            owned.nativeSequences.has(requestLane) ? "retained" : "admission",
-          );
           try {
-            const reply = await admit((requestSignal, remaining) =>
-              runWithSqliteDatabaseAdmissionTurn([database.path], () =>
+            const reply = await admit((requestSignal, remaining) => {
+              // A writer ahead of this read can renew the receipt during admission.
+              const validation = captureOpenClawAgentDatabaseReadValidation(
+                database,
+                owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+              );
+              return runWithSqliteDatabaseAdmissionTurn([database.path], () =>
                 requestLane.pool.run(
                   () => {
                     assertCurrent();
@@ -198,7 +196,9 @@ export function retainSessionHistoryWorkerDatabase(
                       validation: validation?.validation,
                       projectionReceipt: projectionReceipt && {
                         ...projectionReceipt,
-                        ...(input.kind === "history-page" ? { contextOnly: true } : {}),
+                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
+                          ? { contextOnly: true }
+                          : {}),
                       },
                     } satisfies SessionTranscriptWorkerRequest;
                   },
@@ -231,8 +231,8 @@ export function retainSessionHistoryWorkerDatabase(
                     },
                   },
                 ),
-              ),
-            );
+              );
+            });
             await retirement;
             const received =
               unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);

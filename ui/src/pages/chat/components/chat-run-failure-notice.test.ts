@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
-import { renderChatComposerNotices } from "../chat-view-notices.ts";
+import { renderChatComposerNotices } from "../chat-view-notices.tsx";
 import { renderChatNotice } from "./chat-divider.ts";
 
 let container: HTMLDivElement;
@@ -16,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  cleanupSolid();
   render(nothing, container);
   container.remove();
   // The bridge defers disposal one microtask to preserve synchronous reparenting.
@@ -68,16 +71,18 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   buttons.find((b) => b.textContent?.includes("Change model"))?.click();
   expect(onRetry).toHaveBeenCalledExactlyOnceWith("run-a");
   expect(onChangeModel).toHaveBeenCalledExactlyOnceWith("run-a");
-  render(
+  const matchingFailure = mountSolid(() =>
     renderChatComposerNotices({ messages: [message], runError: { runId: "run-a", summary } }),
-    container,
   );
-  expect(container.querySelector(".chat-error")).toBeNull();
-  render(
+  await waitForSolid(() =>
+    expect(matchingFailure.container.querySelector(".chat-error")).toBeNull(),
+  );
+  const otherFailure = mountSolid(() =>
     renderChatComposerNotices({ messages: [message], runError: { runId: "run-b", summary } }),
-    container,
   );
-  expect(container.querySelector(".chat-error")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(otherFailure.container.querySelector(".chat-error")).not.toBeNull(),
+  );
 });
 
 it("updates bridge text and callbacks without closing expanded details", async () => {

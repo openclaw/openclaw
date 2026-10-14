@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

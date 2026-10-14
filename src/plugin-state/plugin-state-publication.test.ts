@@ -41,6 +41,9 @@ function observe() {
   const changes: PluginStateChange[] = [];
   const current = new Map<string, SqliteCommittedFact<PluginStateRow>>();
   const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
+    if (change.kind === "pending" || change.kind === "settled") {
+      return;
+    }
     changes.push(change);
     if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {

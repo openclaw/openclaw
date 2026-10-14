@@ -67,6 +67,16 @@ supplied context is public. Unknown audience metadata must deny publication.
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.
 
+For mutable source policy, the intent may also supply
+`prepare: async () => assertCurrent`. The host invokes it once at run admission
+and retains the returned synchronous guard for child publication. The channel
+must reacquire current authorization and routing with bounded retries and return
+`null` if the prepared prompt's route, access tier, or public-context proof is no
+longer valid. This drops the turn without trying another model or publishing a
+generic model-failure reply. Throw operational failures instead; these stop model
+fallback but produce a retryable access-verification error. Preparation cannot
+renew an already admitted run; use-time checks and revocation remain mandatory.
+
 An exact host resolver-to-context handoff binds the intent to one admitted
 run. Only its fresh immediate isolated visible children can receive public
 grants, in their creation commits before launch. Private/draft, incognito, existing,

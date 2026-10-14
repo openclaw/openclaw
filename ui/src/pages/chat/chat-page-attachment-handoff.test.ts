@@ -4,15 +4,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 
-vi.mock("./chat-pane.ts", () => ({}));
+// mock-isolation: Fake panes own staged-attachment callbacks during MCP teardown; real tag registration would replace that lifecycle.
+vi.mock("./chat-pane.tsx", async () => {
+  const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
+  return { ChatPaneView: mockChatPagePane };
+});
 vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createChatPageSessions } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import { settleChatPage, createChatPageSessions } from "./chat-page.test-support.ts";
+import { ChatPage, chatPageState } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
 
@@ -85,9 +89,10 @@ describe("chat page staged attachment rebound", () => {
     const page = new ChatPage();
     configure(page);
     document.body.append(page);
-    (page as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    await settleChatPage(page);
+    (chatPageState(page) as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
     page.requestUpdate();
-    await page.updateComplete;
+    await settleChatPage(page);
 
     const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
     const discard = vi.fn();
@@ -102,13 +107,13 @@ describe("chat page staged attachment rebound", () => {
     closingPane.append(mcpApp);
 
     closingPane.onClosePane?.(closingPane.paneId);
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(discard).toHaveBeenCalledOnce();
     expect(closingPane.isConnected).toBe(true);
 
-    (page as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    (chatPageState(page) as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
     page.requestUpdate();
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(resume).toHaveBeenCalled();
 
     teardown.resolve();

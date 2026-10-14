@@ -17,8 +17,10 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureNativePluginUiProof,
+  captureNativeWorkspaceFailure,
   catalog,
   expectComposerFooterLayout,
+  installNativeWorkspaceLitErrorTrace,
   pluginId,
   pluginModule,
   waitForPendingPluginInitializer,
@@ -466,6 +468,7 @@ suite.define(() => {
           : undefined,
       },
       async ({ page }) => {
+        await installNativeWorkspaceLitErrorTrace(page);
         const sessionKey = "agent:main:main";
         const otherSessionKey = "agent:main:accessory-peer";
         const boardSnapshot = {
@@ -631,7 +634,12 @@ suite.define(() => {
         await selectView(page, "Workspace", "ui-fixture/default-workspace");
         await selectView(page, "Workspace", "");
         await selectView(page, "Workspace", "ui-fixture/workspace");
-        await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
+        try {
+          await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
+        } catch (failure) {
+          await captureNativeWorkspaceFailure(page).catch(() => {});
+          throw failure;
+        }
         await captureNativePluginUiProof(suite, page, "custom-workspace.png", { fullPage: true });
         await visitCustomizeUi(page);
         await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");

@@ -58,7 +58,7 @@ export function createSessionWorkerOperationContext(
         dispatch({ ...request, facts: { ...request.facts, publication } });
       });
     },
-    writeTransaction(operationLabel, owner, write) {
+    writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(
         (current) => {
           if (current.db !== native) {
@@ -68,7 +68,7 @@ export function createSessionWorkerOperationContext(
           return write(current);
         },
         options,
-        { operationLabel },
+        { operationLabel, diagnosticContext },
       );
     },
   };
@@ -123,12 +123,9 @@ export function commitSessionEntryPatch(
       | undefined;
     let result: SessionEntryPatchCommitted;
     const actorPatch = prepareSessionActorEntryPatch(database, input.sessionKey);
-    const predicate = readSessionEntryPatchPredicate(
-      database,
-      input.sessionKey,
-      input.shouldCommitIf,
-      actorPatch?.transcript,
-    );
+    const predicate = actorPatch
+      ? actorPatch.readPredicate(input.shouldCommitIf)
+      : readSessionEntryPatchPredicate(database, input.sessionKey, input.shouldCommitIf);
     if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
       result = { kind: "session-entry-patch", entry: null, applied: false };

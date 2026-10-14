@@ -253,6 +253,7 @@ export {
   rewriteTranscriptMessageAtAnchor,
   rewriteAssistantTranscriptMessageForRun,
   resolveTranscriptSessionKeyBySessionId,
+  resolveTranscriptSessionKeyBySessionIdAsync,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteSequence,

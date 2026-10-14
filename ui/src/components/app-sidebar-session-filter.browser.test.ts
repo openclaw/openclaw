@@ -271,7 +271,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(panel).toBeVisible();
     await Promise.all(panel.getAnimations().map((animation) => animation.finished));
     expect(panel.getAttribute("aria-modal")).toBe("true");
-    expect(sidebar.querySelector(".sidebar-session-sort-menu wa-popup")).toBeNull();
+    expect(panel.matches(":popover-open")).toBe(true);
     const sheet = panel.getBoundingClientRect();
     expect(sheet.left).toBe(0);
     expect(sheet.width).toBe(innerWidth);

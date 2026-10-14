@@ -9,7 +9,6 @@ import {
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
@@ -482,12 +481,7 @@ function findSessionRowById(
     assertCurrent: owner.assertCurrent,
     authorize: owner.assertCurrent,
   });
-  if (
-    memory &&
-    query.agentId &&
-    query.storePath &&
-    isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
-  ) {
+  if (memory && query.agentId && query.storePath) {
     const snapshot = memory.owner
       ?.listSessions(memory.authority)
       .find((current) => current.entry?.sessionId === query.sessionId);

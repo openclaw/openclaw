@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -121,7 +122,10 @@ function stageConversationRows(
     readFact: (key) => facts.get(key)!,
   });
   if (
-    !stageSqliteCommittedPublication(database.db, publicationState(receipt)) &&
+    !stageSqliteCommittedPublication(
+      sqlPublicationAnchor(database.db),
+      publicationState(receipt),
+    ) &&
     !database.db.isTransaction
   ) {
     publishSqliteCommittedState(publicationState(receipt));

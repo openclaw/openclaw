@@ -175,6 +175,7 @@ export type PluginAgentEventSubscriptionRegistration = {
   id: string;
   description?: string;
   streams?: AgentEventStream[];
+  phases?: string[];
   handle: (
     event: AgentEventPayload,
     ctx: {

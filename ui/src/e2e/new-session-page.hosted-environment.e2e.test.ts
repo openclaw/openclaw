@@ -86,12 +86,12 @@ suite.define(() => {
         application.theme.setMode("dark");
       });
       await openEnvironmentPicker(page);
-      const surface = page.locator("wa-popover.new-session-page__where-popover");
+      const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
       await option.waitFor();
       const frame = await takeControlUiScreenshotFrame(
         page,
-        surface.locator('wa-popup.popover > [part="popup"]'),
+        surface,
         [surface.getByRole("searchbox", { name: "Search environments" }), option],
         { animations: "disabled", viewport: { width: 1280, height: 900 } },
       );
@@ -166,8 +166,8 @@ suite.define(() => {
         application.theme.setMode("dark");
       });
       await openEnvironmentPicker(page);
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
-      const surface = picker.locator('wa-popup.popover > [part="popup"]');
+      const picker = page.locator(".oc-popover.new-session-page__where-popover");
+      const surface = picker;
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
       let frame = await takeControlUiScreenshotFrame(page, surface, [picker.getByRole("status")], {

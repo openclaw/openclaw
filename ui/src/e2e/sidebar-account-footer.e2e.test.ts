@@ -26,7 +26,7 @@ function buildInfo(branch: string): ControlUiBuildInfo {
 
 async function closeIdentityMenu(page: Page, sidebar: Locator) {
   await page.keyboard.press("Escape");
-  await expect.poll(() => sidebar.locator("wa-dropdown.sidebar-identity-menu").count()).toBe(0);
+  await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(0);
 }
 
 async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
@@ -34,13 +34,13 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   const parts = [identity.locator("openclaw-viewer-avatar"), identity];
   for (const part of parts) {
     await part.click();
-    await expect.poll(() => sidebar.locator("wa-dropdown.sidebar-identity-menu").count()).toBe(1);
+    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(1);
     await closeIdentityMenu(page, sidebar);
   }
 }
 
 async function assertIdentityMenuContract(menu: Locator) {
-  expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
+  expect(await menu.locator('[data-value="command:recent-activity"]').count()).toBe(0);
   expect(
     await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
   ).toBe(false);
@@ -53,7 +53,15 @@ async function expectRailConnectionStatus(footer: Locator, kind: string, label: 
   expect(await identity.getAttribute("aria-label")).toBe(
     `Identity and app menu for Riley: ${label}`,
   );
-  expect(await identity.getAttribute("title")).toBe(`Identity and app menu for Riley: ${label}`);
+  expect(
+    await identity.evaluate(
+      (element) =>
+        element.getAttribute("title") ||
+        element.ownerDocument
+          .getElementById(element.getAttribute("aria-describedby") ?? "")
+          ?.textContent?.trim(),
+    ),
+  ).toBe(`Identity and app menu for Riley: ${label}`);
   const lifecycle = footer.locator(":scope > [role=status]");
   expect(await lifecycle.count()).toBe(1);
   expect(await lifecycle.textContent()).toBe(label);
@@ -83,8 +91,8 @@ async function runAccountFooterProof(
 
     await identity.focus();
     await page.keyboard.press("Enter");
-    const menu = sidebar.locator("wa-dropdown.sidebar-identity-menu");
-    const menuSurface = menu.locator('[part="menu"]');
+    const menu = sidebar.locator(".sidebar-identity-menu");
+    const menuSurface = menu;
     await menu.waitFor();
     await assertIdentityMenuContract(menu);
 
@@ -127,7 +135,7 @@ async function runAccountFooterProof(
       [footer, menuSurface],
     );
 
-    const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settings = menu.locator('[data-value="command:settings"]');
     const settingsShortcut = settings.locator(".session-menu__shortcut");
     expect(
       await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
@@ -148,7 +156,7 @@ async function runAccountFooterProof(
       [footer, menuSurface, settings],
     );
 
-    const usage = menu.locator('wa-dropdown-item[value="command:usage"]');
+    const usage = menu.locator('[data-value="command:usage"]');
     await usage.focus();
     await captureUnionProof(
       suite,
@@ -163,9 +171,9 @@ async function runAccountFooterProof(
     await themeToggle.click();
     await expect.poll(() => themeToggle.getAttribute("aria-label")).not.toBe(themeLabel);
 
-    const help = menu.locator('wa-dropdown-item[value="command:help"]');
+    const help = menu.locator('[data-value="command:help"]');
     await help.hover();
-    const submenu = help.locator('[part="submenu"]');
+    const submenu = help.locator("..").locator('[role="menu"]');
     await submenu.waitFor({ state: "visible" });
     await captureUnionProof(
       suite,
@@ -241,7 +249,7 @@ suite.define(() => {
         );
       }
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar.locator('wa-dropdown-item[value="command:settings"]').click();
+      await sidebar.locator('[data-value="command:settings"]').click();
       const settingsStatus = page.locator(".settings-sidebar .gateway-status__label");
       await expect.poll(() => settingsStatus.textContent()).toBe("Suspended");
       await captureUnionProof(
@@ -274,7 +282,7 @@ suite.define(() => {
           exact: true,
         })
         .click();
-      const retry = sidebar.locator('wa-dropdown-item[value="command:retry-connect"]');
+      const retry = sidebar.locator('[data-value="command:retry-connect"]');
       await retry.waitFor();
       await retry.click();
       await expect

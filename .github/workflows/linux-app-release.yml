@@ -363,6 +363,7 @@ jobs:
           NO_STRIP: "true"
           LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
           set -euo pipefail
@@ -593,6 +594,7 @@ jobs:
         working-directory: apps/linux/src-tauri
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -682,6 +684,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"

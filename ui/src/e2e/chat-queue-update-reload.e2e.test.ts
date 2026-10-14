@@ -484,7 +484,7 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { name: "Settings", exact: true })
           .click();
         await page

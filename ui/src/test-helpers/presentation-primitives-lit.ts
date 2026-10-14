@@ -1,7 +1,8 @@
 import { html, render } from "lit";
 import { createComponent } from "solid-js";
-import { brandIcons } from "../components/brand-icons.ts";
 import { renderCopyButton } from "../components/copy-button.ts";
+import { brandIconData } from "../components/icon-data-brand.ts";
+import { renderIconRegistry } from "../components/icons-tools.ts";
 import { icons } from "../components/icons.ts";
 import { renderKbd } from "../components/kbd.ts";
 import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
@@ -34,6 +35,7 @@ import { finishFixture, group, recordAction, root } from "./presentation-primiti
 import { renderSettingsWorkspace } from "./settings-workspace-lit.ts";
 import kbdStyles from "../components/kbd.css?inline";
 
+const brandIcons = renderIconRegistry(brandIconData);
 const keyboardStyles = document.createElement("style");
 keyboardStyles.textContent = kbdStyles;
 document.head.append(keyboardStyles);

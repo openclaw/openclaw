@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { refreshAuthProfileFileState } from "../agents/auth-profiles/file-state.js";
-import { resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -84,7 +84,7 @@ it.each(["session admission", "foreign credentials"] as const)(
     const root = temporary.make("auth-empty-startup-observation-");
     const agentDir = path.join(root, "agents", "main", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    resolveSharedAuthStoreOwnership();
+    await prepareSharedAuthStoreOwnership();
     const prepared = prepareSecretsRuntimeFastPathSnapshot({
       config: { agents: { entries: { main: { agentDir } } }, plugins: { enabled: false } },
       agentDirs: [agentDir],
@@ -168,7 +168,7 @@ it.each(["native commit", "cold async read"] as const)(
         resolveAuthProfileDatabasePath(agentDir),
         JSON.stringify(store("owned")),
       ]);
-      resolveSharedAuthStoreOwnership();
+      await prepareSharedAuthStoreOwnership();
       setRuntimeAuthProfileStoreSnapshot(
         await loadAuthProfileStoreForRuntimeAsync(agentDir, {
           readOnly: true,

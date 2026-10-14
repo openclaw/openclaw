@@ -392,6 +392,110 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
+  it.each([{ phases: undefined }, { phases: [] }, { phases: [" start "] }])(
+    "filters event phases before cloning with phases=$phases",
+    async ({ phases }) => {
+      const handle = vi.fn();
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: "phase-filter" }),
+        register(api) {
+          api.agent.events.registerAgentEventSubscription({
+            id: "events",
+            streams: ["tool"],
+            phases,
+            handle,
+          });
+        },
+      });
+      const filtered = Boolean(phases?.length);
+      for (const phase of ["start", "update", "result", undefined, 1, null]) {
+        let payloadReads = 0;
+        const data = {
+          phase,
+          get result() {
+            payloadReads++;
+            return { text: "tool output" };
+          },
+        };
+        handle.mockClear();
+        dispatchPluginAgentEventSubscriptions({
+          registry: registry.registry,
+          event: { runId: "run-phase-filter", seq: 1, ts: 0, stream: "tool", data },
+          isLive: () => true,
+        });
+        const delivered = !filtered || phase === "start";
+        expect(handle).toHaveBeenCalledTimes(delivered ? 1 : 0);
+        expect(payloadReads).toBe(delivered ? 1 : 0);
+      }
+      await waitForPluginEventHandlers();
+    },
+  );
+
+  it.each(["end", "error"])(
+    "cleans up a filtered terminal %s event after pending handlers settle",
+    async (phase) => {
+      const pending = createDeferredCore();
+      const handle = vi.fn<
+        Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]
+      >(async (_event, ctx) => {
+        ctx.setRunContext("seen", { active: true });
+        await pending.promise;
+        ctx.setRunContext("late", { active: true });
+      });
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: "filtered-terminal" }),
+        register(api) {
+          api.agent.events.registerAgentEventSubscription({
+            id: "starts",
+            streams: ["tool", "lifecycle"],
+            phases: ["start"],
+            handle,
+          });
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+      emitAgentEvent({
+        runId: "run-filtered-terminal",
+        stream: "tool",
+        data: { phase: "start" },
+      });
+      emitAgentEvent({
+        runId: "run-filtered-terminal",
+        stream: "lifecycle",
+        data: { phase },
+      });
+      expect(handle).toHaveBeenCalledTimes(1);
+      expect(
+        getPluginRunContext({
+          pluginId: "filtered-terminal",
+          get: { runId: "run-filtered-terminal", namespace: "seen" },
+        }),
+      ).toEqual({ active: true });
+      expect(
+        setPluginRunContext({
+          pluginId: "filtered-terminal",
+          patch: { runId: "run-filtered-terminal", namespace: "closed", value: true },
+        }),
+      ).toBe(false);
+      pending.resolve();
+      await waitForPluginEventHandlers();
+      for (const namespace of ["seen", "late", "closed"]) {
+        expect(
+          getPluginRunContext({
+            pluginId: "filtered-terminal",
+            get: { runId: "run-filtered-terminal", namespace },
+          }),
+        ).toBeUndefined();
+      }
+    },
+  );
+
   it("preserves run context until async terminal event subscriptions settle", async () => {
     let releaseTerminalHandler: (() => void) | undefined;
     let terminalHandlerSawContext: unknown;

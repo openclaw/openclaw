@@ -305,7 +305,7 @@ export function createGitHubOAuthLifecycle(params: {
       await queueDeviceCleanup(requestId);
       return { status: "expired" };
     }
-    if (!authorizationStillOwned(params.getConfig(), record)) {
+    if (!(await authorizationStillOwnedAsync(params.getConfig, record))) {
       await queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }

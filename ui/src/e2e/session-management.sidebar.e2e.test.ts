@@ -555,7 +555,7 @@ suite.define(() => {
         .toBe(socketsBefore + 1);
       await page.locator(".sidebar-identity-card").click();
       const retryConnection = page.locator(
-        'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
+        '.sidebar-identity-menu [data-value="command:retry-connect"]',
       );
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
       await retryConnection.click();

@@ -64,8 +64,10 @@ export function SidebarCommunityInvite(props: { onDismiss: () => void; mode: "li
                 <a
                   class="invite__cta"
                   href={link.href}
-                  aria-label={t("communityInvite.joinPlatform", { platform: link.platform })}
-                  title={t("communityInvite.joinPlatform", { platform: link.platform })}
+                  aria-label={t(`communityInvite.${link.label}Platform`, {
+                    platform: link.platform,
+                  })}
+                  title={t(`communityInvite.${link.label}Platform`, { platform: link.platform })}
                   target={EXTERNAL_LINK_TARGET}
                   rel={buildExternalLinkRel()}
                 >
