@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   deleteConfigMachineState,
   importConfigMachineState,
@@ -124,10 +125,12 @@ it("keeps legacy hints synchronous and warns once while explicit awaited hints s
   vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  expect(await buildTtsSystemPromptHintAsync({})).toContain("Keep spoken text ≤123 chars");
-  expect(warning).not.toHaveBeenCalled();
-  expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
-  expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
+  await withPluginRuntimePluginScope({ pluginId: "tts-hint-compat-consumer" }, async () => {
+    expect(await buildTtsSystemPromptHintAsync({})).toContain("Keep spoken text ≤123 chars");
+    expect(warning).not.toHaveBeenCalled();
+    expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
+    expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
+  });
   expect(warning).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("buildTtsSystemPromptHintAsync"),
     { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
