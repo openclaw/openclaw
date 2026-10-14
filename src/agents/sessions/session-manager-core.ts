@@ -32,7 +32,6 @@ import {
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
-import { freezeTranscriptPayloads } from "./session-manager-snapshot.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -288,9 +287,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
-    if (target) {
-      this.fileEntries.forEach(freezeTranscriptPayloads);
-    }
     this.buildIndex();
     if (bounded) {
       this.boundedParentIds = new Map(bounded.parents);

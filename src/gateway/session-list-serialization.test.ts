@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   expandSessionRowFacts,
+  shareSessionRowFacts,
   SESSION_ROW_DETAIL_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -44,6 +45,54 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("packs equal fields by their recipient rows without changing the input or wire facts", () => {
+  const rows = [
+    {
+      key: "one",
+      kind: "direct" as const,
+      updatedAt: 1,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: undefined,
+    },
+    {
+      key: "two",
+      kind: "direct" as const,
+      updatedAt: 2,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: "Unique",
+    },
+    { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
+  ];
+  const original = structuredClone(rows);
+  const packed = shareSessionRowFacts(rows);
+  expect(packed).toEqual({
+    sessions: [
+      {
+        key: "one",
+        kind: "direct",
+        updatedAt: 1,
+        lastMessagePreview: undefined,
+        sharedFacts: [0, 1],
+      },
+      {
+        key: "two",
+        kind: "direct",
+        updatedAt: 2,
+        lastMessagePreview: "Unique",
+        sharedFacts: [0, 1],
+      },
+      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
+    ],
+    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
+  });
+  expect(rows).toEqual(original);
+  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+});
 
 it("keeps sidebar display facts while bounding the wire payload", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -125,6 +174,10 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       }
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
+      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(
+        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+      ).toBe(JSON.stringify(rows));
       expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
         Buffer.byteLength(JSON.stringify(compact)) * 0.5,
       );

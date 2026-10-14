@@ -1,8 +1,7 @@
-import { nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
@@ -29,12 +28,9 @@ describe.runIf(browserMode)("skill reader shell", () => {
       () => undefined,
     );
     connection.start();
-    render(
-      solidContent(
-        ConnectMachineDialog,
-        connection.view(true, () => undefined),
-      ),
-      container,
+    const canonicalView = mountSolid(
+      () => <ConnectMachineDialog {...connection.view(true, () => undefined)} />,
+      { container },
     );
     const canonical = await getRenderedModalDialog(container);
     await Promise.all(canonical.dialog.getAnimations().map((animation) => animation.finished));
@@ -55,7 +51,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const canonicalChrome = readChrome(
       container.querySelector<HTMLElement>(".exec-approval-card")!,
     );
-    render(nothing, container);
+    canonicalView.unmount();
     container.remove();
     container = document.createElement("openclaw-skills-page");
     document.body.append(container);

@@ -22,7 +22,6 @@ import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transc
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -349,14 +348,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
       // A native SDK append can publish a later view before the worker receipt arrives.
       return {
-        entry: freezeJsonSnapshot({
+        entry: {
           ...entry,
           id: committed.result?.adoptedMessageId ?? entry.id,
           parentId:
             committed.result?.effectiveParentId !== undefined
               ? committed.result.effectiveParentId
               : entry.parentId,
-        }),
+        },
         anchor: committed.result?.anchor,
         lifecycleRevision: committed.result?.lifecycleRevision,
         appended: committed.result?.appended ?? true,
@@ -493,7 +492,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
-    freezeJsonSnapshot(canonicalEntry);
     if (canonicalEntry.type === "message") {
       // Publish with the adopted view, before later native writes or worker replies can run.
       this.#lastMessageAppend = persistenceResult?.anchor

@@ -1157,6 +1157,20 @@ AFTER_CD
       ],
     },
     {
+      name: "defers plugin locale publication when authored input changes",
+      invalidationOwner: [CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "finalize"],
+      options: {
+        ...inheritedAutoMerge,
+        updateSource: "extensions/example/src/i18n/locales/translated.json",
+      },
+      expected: { generatedA: "stale-pr-a" },
+      head: { reference: "initialBranch", equals: true },
+      contains: [
+        ["mergeCalls", "--disable-auto"],
+        ["summary", staleInputs],
+      ],
+    },
+    {
       name: "publishes after unrelated source changes when input invalidation is disabled",
       options: { invalidationPaths: "", overlapPolicy: "fail", updateSource: true },
       expected: { branchExists: true, generatedA: "desired-a" },

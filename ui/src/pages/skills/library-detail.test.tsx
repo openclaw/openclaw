@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SkillsLibraryReadResult } from "../../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { renderLibraryPinRead } from "./library-detail.ts";
+import { LibraryPinRead } from "./library-detail.tsx";
 
 registerEnglishCatalog(registerSkillLibraryEnglish);
 
@@ -36,15 +37,13 @@ it("keeps a session pin read-only while switching its text and binary files", ()
   };
   const container = document.body.appendChild(document.createElement("div"));
   const close = vi.fn();
-  let file = "SKILL.md";
-  const redraw = () =>
-    render(renderLibraryPinRead({ read, file, onFile, onClose: close }), container);
-  const onFile = (next: string) => {
-    file = next;
-    redraw();
-  };
+  const [file, setFile] = createSignal("SKILL.md");
+  const view = mountSolid(
+    () => <LibraryPinRead read={read} file={file()} onFile={setFile} onClose={close} />,
+    { container },
+  );
   try {
-    redraw();
+    flush();
     const select = container.querySelector("select")!;
     const text = container.querySelector("textarea")!;
     expect(text.readOnly).toBe(true);
@@ -64,7 +63,7 @@ it("keeps a session pin read-only while switching its text and binary files", ()
     container.querySelector<HTMLButtonElement>(".exec-approval-header button")!.click();
     expect(close).toHaveBeenCalledOnce();
   } finally {
-    render(nothing, container);
+    view.unmount();
     container.remove();
   }
 });

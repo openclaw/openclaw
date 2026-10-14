@@ -73,12 +73,14 @@ export class PaletteSessionSettings {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
     }
-    // Web Awesome handles dropdown Escape at document level. Let the nested
-    // picker close before this settings dialog, without blocking that listener.
+    // The nested menu owns Escape and roving focus, including its trigger.
     if (
       event
         .composedPath()
-        .some((node) => node instanceof Element && node.matches("wa-dropdown[open]"))
+        .some(
+          (node) =>
+            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+        )
     ) {
       return;
     }
@@ -98,12 +100,6 @@ export class PaletteSessionSettings {
     if (
       !["ArrowDown", "ArrowUp"].includes(event.key) ||
       !(event.currentTarget instanceof HTMLElement)
-    ) {
-      return;
-    }
-    // The shared agent dropdown owns its own roving focus and keyboard semantics.
-    if (
-      event.composedPath().some((node) => node instanceof Element && node.tagName === "WA-DROPDOWN")
     ) {
       return;
     }

@@ -145,6 +145,14 @@ export function hasLongWindowRateLimitEvidence(message: string | undefined): boo
   );
 }
 
+/** Explicit shared token-bucket exhaustion, distinct from per-request throttling. */
+export function hasOrganizationTpmRateLimitEvidence(message: string | undefined): boolean {
+  const unit = message?.match(
+    /\brate limit reached\b[^\r\n]*?\bin organization\b[^:\r\n]*?\bon (tokens|requests) per min(?:ute)?\b/i,
+  )?.[1];
+  return unit?.toLowerCase() === "tokens";
+}
+
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
 export function classifyRateLimitWindow(
   message: string | undefined,

@@ -318,7 +318,7 @@ describe("memory-wiki plugin", () => {
     );
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toEqual(snapshot);
 
-    vi.spyOn(fs, "readFile").mockRejectedValueOnce(new Error("transient restore read failure"));
+    vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("transient restore read failure"));
     await expect(service?.start?.()).rejects.toThrow("transient restore read failure");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
