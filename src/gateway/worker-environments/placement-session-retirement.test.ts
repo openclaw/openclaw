@@ -160,7 +160,11 @@ describe("placement session retirement", () => {
     const placement = localPlacement("session-current");
     const harness = createHarness([placement]);
     const uninstall = harness.retirement.installMaintenancePreservation({
-      prepareMaintenancePlacements: async () => ({ placements: [], release: () => {} }),
+      prepareMaintenancePlacements: async () => ({
+        placements: [],
+        assertCurrent: () => {},
+        release: () => {},
+      }),
     });
     try {
       harness.resolveSessionEvidence.mockResolvedValue("current");
