@@ -575,6 +575,74 @@ describe("wizard setup ownership", () => {
     await cancelWizardSessions(tracker.wizardSessions);
   });
 
+  it("releases setup admission after the starting client stops polling", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    };
+    const minutes = (count: number) => count * 60 * 1000;
+    const startSetup = async () => {
+      const respond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({ params: { mode: "local" }, respond, context } as never);
+      return respond.mock.calls[0] ?? [];
+    };
+    try {
+      const [, abandoned] = await startSetup();
+      expect(abandoned).toMatchObject({ status: "running" });
+      const abandonedSession = expectDefined(
+        tracker.wizardSessions.get(abandoned.sessionId),
+        "abandoned setup session",
+      );
+
+      // A client that still polls keeps its session.
+      await vi.advanceTimersByTimeAsync(minutes(20));
+      await invokeWizard("wizard.next", { sessionId: abandoned.sessionId }, context);
+      await vi.advanceTimersByTimeAsync(minutes(20));
+      expect(abandonedSession.getStatus()).toBe("running");
+      expect(await startSetup()).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({ details: { code: "SETUP_ADMISSION_BUSY" } }),
+      ]);
+
+      // Then the client goes away for good.
+      await vi.advanceTimersByTimeAsync(minutes(5));
+      expect(abandonedSession.signal.aborted).toBe(true);
+      await whenAdmittedWizardSessionSettled(abandonedSession);
+      expect(abandonedSession.getStatus()).toBe("cancelled");
+      const [replacementOk, replacement] = await startSetup();
+      expect(replacementOk).toBe(true);
+      expect(replacement).toMatchObject({ status: "running" });
+
+      // A returning client learns that its session expired.
+      const lateRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.next"],
+        "wizard.next test invariant",
+      )({
+        params: { sessionId: abandoned.sessionId, answer: { stepId: "late", value: "token" } },
+        respond: lateRespond,
+        context,
+      } as never);
+      expect(lateRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ details: { code: "WIZARD_NOT_FOUND" } }),
+      );
+      expect(tracker.wizardSessions.has(replacement.sessionId)).toBe(true);
+    } finally {
+      await cancelWizardSessions(tracker.wizardSessions);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["wizard.status", "done"],
     ["wizard.status", "error"],

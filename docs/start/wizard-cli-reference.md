@@ -523,6 +523,15 @@ rolled back. Generic request failures, timeouts, disconnects, and a missing wiza
 do not establish whether setup ran; clients must preserve that uncertainty rather
 than automatically retrying or claiming successful activation.
 
+A `wizard.start` session with no client activity for 25 minutes expires and
+releases setup admission, so a closed Control UI tab or a disconnected client
+does not block setup until the Gateway restarts. Each `wizard.next` call
+restarts that window, and so does the step a waiting `wizard.next` receives.
+Expiry closes the wizard's input as closing the Control UI setup window does, so
+a configuration write already in progress still finishes. Later calls for an
+expired session return `WIZARD_NOT_FOUND`, which the Control UI shows as an
+expired session.
+
 If a Gateway restart loses the in-memory model setup wizard, the Control UI
 refreshes the saved model and provider state. A configured model is offered for
 explicit verification and continuation; if none is configured, provider choices

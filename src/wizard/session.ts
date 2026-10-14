@@ -229,6 +229,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
 export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly renewsOnClientActivity: boolean;
   private readonly runnerPromise: Promise<void>;
   private currentStep: WizardStep | null = null;
   private progressSteps: WizardStep[] = [];
@@ -238,6 +239,7 @@ export class WizardSession {
   private inputClosedError: Error | undefined;
   private preparationCancellationLocked = false;
   private expiryPending = false;
+  private idleExpired = false;
   private settled = false;
   private pendingExternalUrl: string | undefined;
   private devicePresentation: Pick<WizardStep, "title" | "deviceCode" | "message"> = {};
@@ -263,20 +265,56 @@ export class WizardSession {
       signal: AbortSignal,
       session: WizardSession,
     ) => Promise<void>,
-    options?: { timeoutMs?: number },
+    /** timeoutMs is a fixed deadline; idleTimeoutMs restarts on each client next(). */
+    options?: { timeoutMs: number } | { idleTimeoutMs: number },
   ) {
     const prompter = createWizardSessionPrompter(this);
-    if (options?.timeoutMs !== undefined) {
-      this.expiryTimer = setTimeout(() => {
-        this.expiryPending = true;
-        this.cancel();
-      }, options.timeoutMs);
+    this.renewsOnClientActivity = options !== undefined && "idleTimeoutMs" in options;
+    if (options) {
+      this.expiryTimer = setTimeout(
+        () => {
+          if (this.status !== "running") {
+            return;
+          }
+          if (this.renewsOnClientActivity) {
+            this.expireIdleSession();
+            return;
+          }
+          this.expiryPending = true;
+          this.cancel();
+        },
+        "idleTimeoutMs" in options ? options.idleTimeoutMs : options.timeoutMs,
+      );
       this.expiryTimer.unref?.();
     }
     this.runnerPromise = this.run(prompter);
   }
 
+  // Close input exactly as a client closing its setup window does, so locked
+  // durable writes follow the same rules; unlike cancel(), it also releases a
+  // prompt that waits after cancellation was locked.
+  private expireIdleSession() {
+    if (this.inputClosedError) {
+      return;
+    }
+    this.idleExpired = true;
+    this.close(new WizardCancelledError("Setup expired without client activity; start it again."));
+  }
+
+  private renewExpiryOnClientActivity() {
+    if (!this.renewsOnClientActivity || this.status !== "running" || this.inputClosedError) {
+      return;
+    }
+    this.expiryTimer?.refresh();
+  }
+
+  /** Whether the idle deadline, not a client or the runner, ended this session. */
+  wasExpired(): boolean {
+    return this.idleExpired && this.status === "cancelled";
+  }
+
   async next(): Promise<WizardNextResult> {
+    this.renewExpiryOnClientActivity();
     // Retired progress must not hide the terminal outcome or bypass the Gateway's
     // done-result settlement barrier before clients decide whether setup may retry.
     if (this.status !== "running") {
@@ -294,6 +332,8 @@ export class WizardSession {
       this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
+    // The idle window starts again when the client receives the step it waited for.
+    this.renewExpiryOnClientActivity();
     if (step && this.getStatus() === "running") {
       return { done: false, step, status: "running" };
     }
@@ -547,9 +587,7 @@ export class WizardSession {
     } finally {
       this.settled = true;
       this.consumeExternalUrl();
-      if (this.expiryTimer) {
-        clearTimeout(this.expiryTimer);
-      }
+      clearTimeout(this.expiryTimer);
       // Browser completion can win while manual input is pending. Terminal
       // sessions must retire that prompt and reject retained answer handles.
       this.rejectPendingAnswers();
