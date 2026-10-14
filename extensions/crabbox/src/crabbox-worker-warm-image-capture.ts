@@ -54,6 +54,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
   deleteImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   retireImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
+  prepareCapture: (
+    context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
+  ) => Promise<void>;
 }) {
   const {
     openStore,
@@ -85,7 +88,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
       onCaptureStart?: () => void;
       onCaptureEnd?: () => void;
     },
-    prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
+    prepareSource?: () => Promise<{
+      timeoutMs: number;
+      run: (scrubScript: string) => Promise<void>;
+    }>,
   ): Promise<boolean | "source-running"> {
     assertCurrent(context);
     const captureId = randomUUID();
@@ -97,6 +103,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     let claimed = false;
     let creating = false;
     let preparing = false;
+    let preparingLifetime = false;
     let captured: boolean | "source-running" = false;
     let captureError: string | undefined;
     const attemptCapture = async () => {
@@ -245,12 +252,33 @@ export function createCrabboxWarmImageCapture(dependencies: {
           return;
         }
         context.onCaptureStart?.();
+        preparing = true;
+        const source = await prepareSource?.();
+        preparing = false;
+        assertCurrent(context);
+        if (source) {
+          const current = await openStore().lookup(key);
+          if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
+            return;
+          }
+        }
+        preparingLifetime = true;
+        await dependencies.prepareCapture({
+          ...context,
+          sourcePreparationTimeoutMs: source?.timeoutMs ?? 0,
+        });
+        preparingLifetime = false;
+        assertCurrent(context);
+        const prepared = await openStore().lookup(key);
+        if (prepared?.operation?.type !== "capture" || prepared.operation.id !== captureId) {
+          return;
+        }
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
-        if (prepareAndScrubSource) {
+        if (source) {
           preparing = true;
-          await prepareAndScrubSource(SCRUB_WORKER_STATE);
+          await source.run(SCRUB_WORKER_STATE);
           preparing = false;
         } else {
           await checkpointCommand(
@@ -435,6 +463,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         // Required project captures must fail before enrollment. Optional teardown
         // captures can warn and let source deletion complete.
+        if (preparingLifetime) {
+          if (context.projectCaptureRequired || (!context.teardown && owner?.projectKey)) {
+            throw new Error(`Crabbox project image preparation failed: ${captureError}`, {
+              cause: error,
+            });
+          }
+          warnOnce("capture skipped", error, false);
+          return;
+        }
         if (preparing || (notSubmitted && owner?.projectKey)) {
           throw error;
         }

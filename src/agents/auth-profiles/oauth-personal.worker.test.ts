@@ -438,68 +438,57 @@ it("rechecks a live pin after refresh and never discloses a revoked selection", 
   });
 });
 
-it.each(["formatter", "validator"] as const)(
-  "returns and publishes the credential accepted before a late %s mutation",
-  async (source) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { profileId, replacement, replace } = fixture();
-      replace();
-      let formatted: OAuthCredential | undefined;
-      let accepting = false;
-      let mutationScheduled = false;
-      const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
-      const manager = createOAuthManager({
-        canRefreshCredential: async () => false,
-        refreshCredential: async () => null,
-        buildApiKey: async (_provider, value) => {
-          formatted = value;
-          return value.access;
-        },
-        readBootstrapCredential: () => null,
-      });
-      // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
-      const post = Worker.prototype.postMessage;
-      vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-        this: Worker,
-        request: SqliteWorkerRequest,
-        transferList,
-      ) {
-        if (request.type === "execute") {
-          const command: unknown = deserialize(request.input);
-          if (isRecord(command) && command.type === "authProfiles.personalAccept") {
-            accepting = true;
-            if (source === "formatter") {
-              if (!formatted) {
-                throw new Error("Acceptance started before credential formatting");
-              }
-              formatted.access = "synthetic-late-formatter-mutation";
-            }
+it("resolves and accepts published personal credentials without SQL or worker requests", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { profileId, credential, replacement, replace } = fixture();
+    const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
+    await withPersonalAuthProfileStore(profileId, async (owner) => {
+      await owner.read();
+      const withoutDatabase = async <T>(run: () => Promise<T>) => {
+        const sql = observeMainThreadSql();
+        const requests = vi.spyOn(Worker.prototype, "postMessage");
+        try {
+          return await run();
+        } finally {
+          try {
+            sql.expectIdle();
+            expect(requests).not.toHaveBeenCalled();
+          } finally {
+            sql.restore();
+            requests.mockRestore();
           }
         }
-        return post.call(this, request, transferList);
+      };
+      await withCanonicalAuthProfileCredentialObserver(observe, async () => {
+        expect(await withoutDatabase(() => owner.accept(credential))).toEqual(credential);
+        replace();
+        await expect(withoutDatabase(() => owner.accept(credential))).rejects.toThrow(
+          "changed during provider preparation",
+        );
+        const manager = createOAuthManager({
+          canRefreshCredential: async () => false,
+          refreshCredential: async () => null,
+          buildApiKey: async (_provider, current) => current.access,
+          readBootstrapCredential: () => null,
+        });
+        expect(
+          await withoutDatabase(() =>
+            manager.resolveOAuthAccess({
+              personalStore: owner,
+              profileId,
+              credential,
+              store: { version: 1, profiles: { [profileId]: credential } },
+            }),
+          ),
+        ).toEqual({ apiKey: replacement.access, credential: replacement });
       });
-      const result = await withCanonicalAuthProfileCredentialObserver(observe, () =>
-        manager.resolveOAuthAccess({
-          profileId,
-          credential: replacement,
-          store: { version: 1, profiles: { [profileId]: replacement } },
-          validateCredential: (current) => {
-            if (source === "validator" && accepting && !mutationScheduled) {
-              mutationScheduled = true;
-              queueMicrotask(() => {
-                current.access = "synthetic-late-validator-mutation";
-              });
-            }
-          },
-        }),
-      );
-      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
-      expect(result).toEqual({ apiKey: replacement.access, credential: replacement });
-      expect(observe).toHaveBeenCalledTimes(1);
-      expect(observe.mock.calls[0]?.[0].profiles[profileId]).toEqual(replacement);
+      expect(observe.mock.calls.map(([value]) => value.profiles[profileId])).toEqual([
+        credential,
+        replacement,
+      ]);
     });
-  },
-);
+  });
+});
 
 it.each(["capability", "refresh"] as const)(
   "retains the original personal generation when the %s adapter mutates its input",

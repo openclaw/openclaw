@@ -207,7 +207,7 @@ jobs:
             session_diagnostics=true
           else
             # Complete the fetch before the loop so API failures cannot select zero shards.
-            changed_files="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
+            changed_files="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[].filename')"
             while IFS= read -r file; do
               case "${file}" in
                 .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql|.github/codeql/openclaw-boundary/tests/network-runtime/*)
@@ -451,7 +451,7 @@ jobs:
           codex_transport="extensions/codex/src/app-server/transport-websocket.ts"
           network_codeql_contract_pattern='^\.github/codeql/(codeql-network-runtime-boundary-critical-quality\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\.ql)$'
 
-          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" > "$file_metadata"
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" > "$file_metadata"
           jq -r '.[].filename' "$file_metadata" > "$changed_files"
           jq -c '
             .[]

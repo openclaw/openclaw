@@ -99,6 +99,8 @@ export function renderChatWorkingIndicator(
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
   const outputTokens = options.outputTokens;
+  const hasOutputTokens = outputTokens !== null && outputTokens !== undefined;
+  const statusLabelHidden = working && !continuation && indicator !== "none";
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   const status = html`
@@ -128,7 +130,7 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
+        <span class=${statusLabelHidden ? "sr-only" : ""}
           >${
             !waitingApproval && options.retryAt !== undefined
               ? html`<openclaw-chat-retry-status
@@ -138,10 +140,24 @@ export function renderChatWorkingIndicator(
           }</span
         >
         ${
+          hasOutputTokens
+            ? html`
+                ${statusLabelHidden ? nothing : html`<span aria-hidden="true">·</span>`}
+                <span class="chat-working-indicator__tokens"
+                  >${outputTokensLabel(outputTokens)}</span
+                >
+              `
+            : nothing
+        }
+        ${
           waitingApproval
             ? nothing
             : html`
-                ${options.startupLabel ? html`<span aria-hidden="true">·</span>` : nothing}
+                ${
+                  options.startupLabel || hasOutputTokens
+                    ? html`<span aria-hidden="true">·</span>`
+                    : nothing
+                }
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
@@ -149,23 +165,16 @@ export function renderChatWorkingIndicator(
               `
         }
         ${
-          outputTokens !== null && outputTokens !== undefined
+          !hasOutputTokens && working
             ? html`
-                <span aria-hidden="true">·</span>
-                <span class="chat-working-indicator__tokens"
-                  >${outputTokensLabel(outputTokens)}</span
-                >
+                <openclaw-working-phrase
+                  aria-hidden="true"
+                  .startMs=${part.startedAt}
+                  .seed=${part.key}
+                  .phrases=${options.workingPhrases}
+                ></openclaw-working-phrase>
               `
-            : working
-              ? html`
-                  <openclaw-working-phrase
-                    aria-hidden="true"
-                    .startMs=${part.startedAt}
-                    .seed=${part.key}
-                    .phrases=${options.workingPhrases}
-                  ></openclaw-working-phrase>
-                `
-              : nothing
+            : nothing
         }
         ${
           runningSubagents > 0
@@ -214,15 +223,15 @@ export function renderTurnRecapRow(
               >${renderThemeBrandIcon(icons.claw)}</span
             >`
       }
-      <span>${t("chat.turnRecap.doneIn", { duration })}</span>
       ${
         tokens === null
           ? nothing
           : html`
-              <span class="chat-turn-recap__sep" aria-hidden="true">·</span>
               <span>${tokens}</span>
+              <span class="chat-turn-recap__sep" aria-hidden="true">·</span>
             `
       }
+      <span>${t("chat.turnRecap.doneIn", { duration })}</span>
     </div>
   `;
 }
