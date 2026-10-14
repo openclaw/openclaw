@@ -9,6 +9,10 @@ const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "agent-harness-sdk-alias",
   "plugin-sdk-shipped-channel-setup-exports",
   "runtime-config-sync-load",
+  // Removal dates follow the stable releases that first ship these deprecations.
+  "cron-store-sync-path",
+  "session-transcript-sync-view",
+  "web-search-sync-provider-list",
 ]);
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);

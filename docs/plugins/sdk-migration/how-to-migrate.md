@@ -1610,6 +1610,7 @@ Keep the same arguments and await the replacement's result:
 | `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`              |
 | `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`            |
 | `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync`   |
+| `agent-runtime`                          | `replaceRuntimeAuthProfileStoreSnapshots`     | `replaceRuntimeAuthProfileStoreSnapshotsAsync`       |
 | `agent-runtime`                          | `loadAuthProfileStoreForSecretsRuntime`       | `loadAuthProfileStoreForRuntimeAsync`                |
 | `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`            |
 | `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`      |

@@ -140,16 +140,17 @@ it("keeps selected owners across agents and resumes the selected agent's own con
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await settleLitElement(sidebar);
     const researchMenuItem = sidebar.querySelector<HTMLElement>(
-      '.sidebar-agent-menu wa-dropdown-item[value="agent:research"]',
+      '.sidebar-agent-menu [data-value="agent:research"]',
     )!;
     expect.soft(researchMenuItem.querySelector('[aria-label="Unread"]')).not.toBeNull();
     researchMenuItem.click();
-
-    expect.soft(onNavigate).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        pathname: "/chat/research/00000002000040008000000000000000",
-      }),
+    await vi.waitFor(() =>
+      expect(onNavigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          pathname: "/chat/research/00000002000040008000000000000000",
+        }),
+      ),
     );
 
     bindChatPageSession(context, rows[2]!.key);
@@ -167,7 +168,9 @@ it("keeps selected owners across agents and resumes the selected agent's own con
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await settleLitElement(sidebar);
     expect(
-      sidebar.querySelector('.sidebar-agent-menu [value="agent:research"] [aria-label="Unread"]'),
+      sidebar.querySelector(
+        '.sidebar-agent-menu [data-value="agent:research"] [aria-label="Unread"]',
+      ),
     ).toBeNull();
   } finally {
     provider.remove();

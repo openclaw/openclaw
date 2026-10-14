@@ -269,7 +269,7 @@ suite.define(() => {
         }
         await page.locator("#new-session-checkout-trigger").click();
         await page
-          .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
+          .locator('.oc-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
         await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");

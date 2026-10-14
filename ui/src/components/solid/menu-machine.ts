@@ -120,7 +120,12 @@ export function useMenuMachine(
           ? value == null
             ? null
             : `${params.scope.id}:${value}`
-          : computed.highlightedId(params);
+          : // Submenu triggers keep the caller's logical value and their own DOM id.
+            ((value == null
+              ? null
+              : params.scope.query(
+                  `[data-menu-item="${CSS.escape(overlay.id)}"][data-value="${CSS.escape(value)}"]`,
+                )?.id) ?? computed.highlightedId(params));
       },
     },
     implementations: {

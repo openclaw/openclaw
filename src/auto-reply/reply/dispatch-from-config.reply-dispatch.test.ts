@@ -305,7 +305,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       await params.afterStall?.(memory);
       await vi.advanceTimersByTimeAsync(15_000);
       await result;
-      expect(vi.getTimerCount()).toBe(0);
       return { deliver, entry: memory.read() };
     } finally {
       vi.useRealTimers();

@@ -350,8 +350,7 @@ describe("AppSidebar session source lifecycle", () => {
     );
     await sidebar.updateComplete;
     const menu = sidebar.querySelector(".sidebar-rail-pin-menu")!;
-    const remove = menu.querySelector('wa-dropdown-item[value="remove"]');
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: remove } }));
+    menu.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);

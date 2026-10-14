@@ -14,7 +14,6 @@ import {
 } from "../../../plugin-state/plugin-state-store.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { retainNativeSessionGenerationAuthority } from "./binding-generation-authority.js";
@@ -153,17 +152,18 @@ describe("native binding worker admission", () => {
               } else if (mutation === "delete") {
                 await asyncState.delete(key);
               } else {
-                const context = captureOpenClawStateWorkerContext({ env: fixture.env });
-                pluginStatePublication.invalidateEntries(
-                  { identity: context.admission.identity.key, incarnation: "unknown-settlement" },
-                  [{ plugin_id: "binding-proof", namespace: "bindings", entry_key: key }],
-                );
+                const stopFault = pluginStatePublication.subscribeFacts((change) => {
+                  if (change.kind === "committed") {
+                    throw new Error("Synthetic binding publication failure");
+                  }
+                });
+                try {
+                  await asyncState.register(key, current);
+                } finally {
+                  stopFault();
+                }
               }
               expect(assertCurrent).toThrow();
-              if (mutation === "unknown") {
-                await owner.owner(key)!.facts!.refresh();
-                expect(assertCurrent).not.toThrow();
-              }
             },
             { prepareLease: prepareBindingTestLease },
           );

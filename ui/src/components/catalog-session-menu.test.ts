@@ -2,8 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./catalog-session-menu.ts";
-import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
+import "./catalog-session-menu-solid.tsx";
+import type { CatalogSessionMenuAction } from "./catalog-session-menu-solid.tsx";
 
 type CatalogMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type CatalogMenuItem = HTMLButtonElement;

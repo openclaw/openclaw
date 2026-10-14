@@ -11,8 +11,8 @@ import {
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 import {
@@ -70,7 +70,9 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
   const memory = captureSessionManagerIncognitoBinding(captured);
   const options = memory?.database ?? toDatabaseOptions(resolveSqliteTranscriptScope(captured));
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
-  const persist = async (database: OpenClawAgentDatabase | SessionManagerIncognitoDatabase) => {
+  const persist = async (
+    database: OpenClawAgentDatabaseExecution | SessionManagerIncognitoDatabase,
+  ) => {
     const { withSessionMetadataWorker } = await runInDetachedAsyncContext(
       () => import("../../agents/sessions/session-manager-metadata-runtime.js"),
     );
@@ -134,11 +136,12 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
       ),
     );
   }
-  return trackAsyncWork(() =>
-    runOpenClawAgentWriteAdmission(
-      options,
-      () => withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent),
-      true,
-    ),
-  );
+  const database = captureOpenClawAgentDatabaseExecution(options);
+  return trackAsyncWork(async () => {
+    try {
+      return await runOpenClawAgentWriteAdmission(options, () => persist(database), true);
+    } finally {
+      await database.release();
+    }
+  });
 }

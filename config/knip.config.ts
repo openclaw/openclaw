@@ -35,6 +35,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // db:postgres:gen/check invoke this generator through the source loader.
+  "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
@@ -61,8 +63,9 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
-  // The team-shaped fixture README invokes this measurement CLI by path.
+  // The team-shaped fixture README invokes these measurement CLIs by path.
   "scripts/perf/team-shape-measure.ts",
+  "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.

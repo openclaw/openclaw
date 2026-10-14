@@ -10,10 +10,12 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
@@ -43,6 +45,7 @@ async function repairWorktreeObjects(
       throw new Error("Worktree object repair exceeded its five-minute budget");
     }
     return {
+      operation,
       signal: params.signal,
       beforeRun: () => {
         params.signal?.throwIfAborted();
@@ -163,6 +166,7 @@ async function maintainWorktreePacks(
     params.commitGuard?.();
   };
   const options = {
+    operation,
     signal: params.signal,
     beforeRun: assertCurrent,
     killProcessTree: true,
@@ -388,6 +392,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               repoRoot,
               ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
               {
+                operation,
                 killProcessTree: true,
                 lowerPriority: true,
                 signal: params.signal,

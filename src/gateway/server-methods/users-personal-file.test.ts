@@ -40,13 +40,23 @@ const state = vi.hoisted(() => ({
 // mock-isolation: exercise profile revocation without opening shared profile storage.
 vi.mock("../../state/user-profile-list.js", () => ({
   isUserProfileCatalogReady: () => true,
+  prepareUserProfileCatalog: async () => ({
+    hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
+    readCurrentIdentity: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+    }),
+    release: () => {},
+  }),
   hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
-  readResidentUserProfileId: (id: string) => (id === "alice-alias" ? state.canonical : id),
+  hasMultipleResidentSessionSharingIdentities: () => state.multipleProfiles,
   readUserProfileIdentity: (id: string): UserProfileIdentity => ({
-    profileId: id,
+    profileId: id === "alice-alias" ? state.canonical : id,
     role: state.role,
     aliases: new Set([id]),
   }),
+  readResidentUserProfileId: (id: string) => (id === "alice-alias" ? state.canonical : id),
+  readResidentUserProfileIdentity: (id: string) => ({ profileId: id, role: state.role }),
   getUserProfileDisplay: (id: string): UserProfileDisplay => ({
     id,
     displayName: null,

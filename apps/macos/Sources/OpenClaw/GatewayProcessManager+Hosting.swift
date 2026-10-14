@@ -151,10 +151,14 @@ extension GatewayProcessManager {
                 operations: operations)
             guard self.isCurrentGatewayStart(generation) else { throw CancellationError() }
             switch outcome {
-            case .preservedNewerRuntime:
-                return .skipped
             case .versionUpdated:
                 self.nodeMigrationVersionUpdated = true
+            case .preservedNewerRuntime:
+                // Health satisfies runtime reconciliation, not outstanding core repair.
+                // PostUpdate still owns update repair before it settles that receipt.
+                self.nodeMigrationVersionUpdated = false
+                self.nodeMigrationCompleted = PostAppUpdateReceiptStore.pending(
+                    currentVersion: targetVersion)?.coreUpdatePending != true
             case .migrated:
                 self.nodeMigrationVersionUpdated = false
                 self.nodeMigrationCompleted = true

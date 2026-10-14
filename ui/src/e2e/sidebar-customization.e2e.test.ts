@@ -406,7 +406,7 @@ suite.define(() => {
       const openSettingsFromIdentity = async () => {
         await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };

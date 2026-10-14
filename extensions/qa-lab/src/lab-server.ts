@@ -39,6 +39,7 @@ import {
   proxyUpgradeRequest,
   resolveAdvertisedBaseUrl,
   resolveUiAssetVersion,
+  sanitizeControlUiPublicUrl,
   tryResolveUiAsset,
 } from "./lab-server-ui.js";
 import type {
@@ -116,50 +117,6 @@ function parseQaEvidenceArtifactIndexText(value: string): number {
     throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
   }
   return index;
-}
-
-const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
-  "access_token",
-  "api_key",
-  "apikey",
-  "auth",
-  "devicetoken",
-  "id_token",
-  "password",
-  "refresh_token",
-  "token",
-]);
-const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
-  /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
-
-function sanitizeControlUiPublicUrl(rawUrl: string | null): string | null {
-  if (!rawUrl) {
-    return null;
-  }
-  const fragmentIndex = rawUrl.indexOf("#");
-  let sanitized = fragmentIndex === -1 ? rawUrl : rawUrl.slice(0, fragmentIndex);
-  try {
-    const url = new URL(sanitized);
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
-        url.searchParams.delete(key);
-      }
-    }
-    return url.toString();
-  } catch {
-    for (;;) {
-      const next = sanitized
-        .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
-          match.endsWith("&") ? separator : "",
-        )
-        .replace(/[?&]$/, "")
-        .replace("?&", "?");
-      if (next === sanitized) {
-        return next;
-      }
-      sanitized = next;
-    }
-  }
 }
 
 const QA_EVIDENCE_CONTENT_TYPES: Record<string, string> = {
@@ -307,6 +264,7 @@ export async function startQaLabServer(
   let runnerSnapshot = createIdleQaRunnerSnapshot(scorecardReport.profiles);
   runnerSnapshot.plan = await resolveServerRunPlan(runnerSnapshot.selection);
   let activeSuiteRun: Promise<void> | null = null;
+  let stopping = false;
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
@@ -322,7 +280,7 @@ export async function startQaLabServer(
   let runnerModelCatalogPromise: Promise<void> | null = null;
   let runnerModelCatalogAbort: AbortController | null = null;
   const ensureRunnerModelCatalog = () => {
-    if (runnerModelCatalogPromise) {
+    if (stopping || runnerModelCatalogPromise) {
       return runnerModelCatalogPromise;
     }
     runnerModelCatalogAbort = new AbortController();
@@ -607,9 +565,13 @@ export async function startQaLabServer(
           ["/api/reset", "/api/scenario/self-check", "/api/scenario/suite"].includes(
             url.pathname,
           ) &&
-          activeSuiteRun
+          (stopping || activeSuiteRun)
         ) {
-          writeError(res, 409, "QA suite run already in progress");
+          writeError(
+            res,
+            stopping ? 503 : 409,
+            stopping ? "QA Lab is stopping" : "QA suite run already in progress",
+          );
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/reset") {
@@ -678,8 +640,12 @@ export async function startQaLabServer(
             });
             return;
           }
-          if (activeSuiteRun) {
-            writeError(res, 409, "QA suite run already in progress");
+          if (stopping || activeSuiteRun) {
+            writeError(
+              res,
+              stopping ? 503 : 409,
+              stopping ? "QA Lab is stopping" : "QA suite run already in progress",
+            );
             return;
           }
           state.reset();
@@ -825,11 +791,12 @@ export async function startQaLabServer(
   });
 
   const stopLabServerResources = async (): Promise<Error | undefined> => {
+    stopping = true;
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
+    await activeSuiteRun;
     let cleanupError: Error | undefined;
-    // Gateway shutdown can flush completed work through this server, so the
-    // bus must remain reachable until the gateway has fully stopped.
+    // Accepted suites and Gateway shutdown flush through the bus before it closes.
     try {
       await gateway?.stop();
     } catch (error) {

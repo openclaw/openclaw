@@ -71,6 +71,16 @@ const hostClock: GatewaySchedulerClock = {
   },
 };
 
+/** Next maintenance slot on one clock after a run, skipping missed slots without replay. */
+function nextMaintenanceSlot(slotMs: number, clockMs: number, everyMs: number): number {
+  // A slot more than half a period ahead was not served by this run (a forward wall-clock
+  // jump fired the job early); keep it so the elapsed cadence still runs on time.
+  if (slotMs - clockMs > everyMs / 2) {
+    return slotMs;
+  }
+  return slotMs + (Math.floor(Math.max(0, clockMs - slotMs) / everyMs) + 1) * everyMs;
+}
+
 /** Owns Gateway wakeups; stores and execution owners retain their deadlines and authority. */
 export class GatewayScheduler {
   private readonly clock: GatewaySchedulerClock;
@@ -333,15 +343,17 @@ export class GatewayScheduler {
           if (job.elapsedAtMs !== undefined) {
             job.elapsedAtMs -= alignmentMs;
           }
-          // A wall-clock jump must not advance the elapsed cadence with it.
-          const nowMs = this.now();
-          if (job.atMs <= nowMs) {
-            job.atMs += (Math.floor((nowMs - job.atMs) / job.everyMs) + 1) * job.everyMs;
-          }
-          const elapsedMs = this.clock.monotonicNow();
-          if (job.elapsedAtMs !== undefined && job.elapsedAtMs <= elapsedMs) {
-            job.elapsedAtMs +=
-              (Math.floor((elapsedMs - job.elapsedAtMs) / job.everyMs) + 1) * job.everyMs;
+          // Each clock advances only the slot this run served. A wall-clock jump must not
+          // advance the elapsed cadence with it, but ordinary drift between the clocks
+          // leaves the other clock's slot just ahead; it was served too, or the job would
+          // run again milliseconds later for the same slot.
+          job.atMs = nextMaintenanceSlot(job.atMs, this.now(), job.everyMs);
+          if (job.elapsedAtMs !== undefined) {
+            job.elapsedAtMs = nextMaintenanceSlot(
+              job.elapsedAtMs,
+              this.clock.monotonicNow(),
+              job.everyMs,
+            );
           }
         } else {
           job.atMs = this.now() + job.everyMs;

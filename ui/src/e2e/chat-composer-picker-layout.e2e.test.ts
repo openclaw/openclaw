@@ -16,7 +16,8 @@ suite.define(() => {
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("composer-picker-targets", artifactRoot)
       : undefined;
-    await suite.withPage({ viewport: { width: 701, height: 729 } }, async ({ page }) => {
+    // Keep the shell desktop-sized; Files supplies the narrow composer.
+    await suite.withPage({ viewport: { width: 1100, height: 729 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", reasoning: true }],
         sessions: [
@@ -43,7 +44,7 @@ suite.define(() => {
         .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
         .toBeLessThan(360);
 
-      for (const width of [701, 1280, 560, 393]) {
+      for (const width of [1100, 1280, 560, 393]) {
         if (width === 560) {
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await page.locator(".chat-workspace-rail").waitFor({ state: "hidden" });
