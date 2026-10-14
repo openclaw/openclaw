@@ -6,6 +6,10 @@
  */
 import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
+import {
+  resolveOpenAIReasoningEffortMapping,
+  supportsOpenAIReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
@@ -309,7 +313,10 @@ export function resolveOpenAICompletionsCompat(
   const thinkingOffControlUndeclared =
     capabilities.usesExplicitProxyLikeEndpoint &&
     thinkingFormat === "zai" &&
-    configured?.thinkingFormat === undefined;
+    configured?.thinkingFormat === undefined &&
+    !supportsOpenAIReasoningEffort({ compat: configured }, "none") &&
+    !supportsOpenAIReasoningEffort({ compat: configured }, "off") &&
+    resolveOpenAIReasoningEffortMapping("off", configured?.reasoningEffortMap) === undefined;
   return {
     supportsStore: configured?.supportsStore ?? defaults.supportsStore,
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,

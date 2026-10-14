@@ -69,7 +69,8 @@ Full key reference, defaults, and JSON5 examples: [Configuration reference](/gat
 
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
-unless an explicit thinking format or reasoning-effort mapping declares the contract.
+unless an explicit thinking format, supported off effort, or reasoning-effort mapping
+declares the contract.
 This avoids rejected requests on always-thinking GLM models. Other thinking formats
 retain their existing off controls; explicit compatibility settings remain authoritative.
 Failed title attempts log a warning naming the provider/model and suggesting that
