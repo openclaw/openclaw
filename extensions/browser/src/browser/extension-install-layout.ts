@@ -296,6 +296,7 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
 
 /** Discovery read failures mean presence is unknown, not absent. */
 function isBlockedReadError(error: unknown): boolean {
+  // SAFETY: fs errors are NodeJS.ErrnoException with an optional code; optional chaining covers non-errno throwers.
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "EPERM" || code === "EACCES";
 }
