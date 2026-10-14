@@ -39,6 +39,7 @@ import {
   prepareGatewaySessionEntryReadOnlyInWorker,
   type GatewaySessionEntryReadPlan,
 } from "../../gateway/session-utils-store-worker.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -584,6 +585,11 @@ export function prepareReplyToolAuthority(
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) => {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "ReplyToolAuthoritySnapshot.fingerprint",
+        replacement: "await fingerprintAsync()",
+      });
       if (!fingerprintRead) {
         throw new Error("Reply tool authority requires asynchronous preparation");
       }
@@ -600,6 +606,11 @@ export function prepareReplyToolAuthority(
       return prepared.read();
     },
     project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "ReplyToolAuthoritySnapshot.project",
+        replacement: "await projectAsync()",
+      });
       const prepared = projectionRead ?? fingerprintRead;
       if (!prepared) {
         throw new Error("Reply tool authority requires asynchronous preparation");

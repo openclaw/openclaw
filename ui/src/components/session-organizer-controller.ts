@@ -545,7 +545,7 @@ export class SessionOrganizerController {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
+    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.tsx"));
     if (!dialog || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

@@ -30,7 +30,7 @@ import {
   type PreparedKeyedStoreOptions,
 } from "./plugin-state-store.validation.js";
 
-/** @deprecated Use openKeyedStoreV2; removal follows a stable deprecation period. */
+/** @deprecated Use openKeyedStoreV2; final compatibility day: 2026-12-31. */
 export function createSyncKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -46,7 +46,7 @@ export function createSyncKeyedStoreForPluginId<T>(
   );
 }
 
-/** @deprecated Use openKeyedStoreV2; removal follows a stable deprecation period. */
+/** @deprecated Use openKeyedStoreV2; final compatibility day: 2026-12-31. */
 export function createSyncKeyedStore<T>(
   { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env }: PreparedKeyedStoreOptions,
   assertActive?: () => void,

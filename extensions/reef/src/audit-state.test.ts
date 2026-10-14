@@ -5,7 +5,7 @@ import type {
   PluginStateOperation,
   PluginStateOperationDefinitions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -39,9 +39,9 @@ function interceptAuditOperation(
     operation: PluginStateOperation<Operations>,
   ) => PluginStateOperation<Operations>,
 ) {
-  const open = runtime.state.openKeyedStore;
+  const open = runtime.state.openKeyedStoreV2;
   return vi
-    .spyOn(runtime.state, "openKeyedStore")
+    .spyOn(runtime.state, "openKeyedStoreV2")
     .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
       const store = open<T>(options);
       if (options.namespace === REEF_AUDIT_HEAD_NAMESPACE && store.createOperation) {
@@ -356,7 +356,7 @@ describe("Reef SQLite audit state", () => {
   it("rechecks a foreign audit migration marker before committing prepared rows", async () => {
     const runtime = createRuntime(stateDir);
     const key = new Uint8Array(32).fill(1);
-    const migration = runtime.state.openKeyedStore<{ pending: true }>({
+    const migration = runtime.state.openKeyedStoreV2<{ pending: true }>({
       namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
       maxEntries: 1,
       overflowPolicy: "reject-new",
@@ -411,8 +411,8 @@ describe("Reef SQLite audit state", () => {
       11,
     );
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
+    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests<T>("reef", { ...options, env }, { assertCurrent() {} });
     interceptAuditOperation(runtime, (operation) => ({
       ...operation,
       async execute(command, options) {

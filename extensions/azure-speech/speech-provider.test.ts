@@ -73,13 +73,15 @@ describe("buildAzureSpeechProvider", () => {
     vi.resetModules();
   });
 
-  it("reports configured only when key plus region or endpoint is available", () => {
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
-    expect(provider.isConfigured({ providerConfig: { apiKey: "key" }, timeoutMs: 30_000 })).toBe(
+  it("reports configured only when key plus region or endpoint is available", async () => {
+    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
       false,
     );
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({ providerConfig: { apiKey: "key" }, timeoutMs: 30_000 }),
+    ).toBe(false);
+    expect(
+      await provider.isConfiguredAsync?.({
         providerConfig: { apiKey: "key", region: "eastus" },
         timeoutMs: 30_000,
       }),
@@ -87,7 +89,9 @@ describe("buildAzureSpeechProvider", () => {
 
     vi.stubEnv("AZURE_SPEECH_KEY", "env-key");
     vi.stubEnv("AZURE_SPEECH_REGION", "eastus");
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(true);
+    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
+      true,
+    );
   });
 
   it("normalizes provider-owned config under canonical and alias keys", () => {
@@ -318,7 +322,7 @@ describe("buildAzureSpeechProvider", () => {
     vi.stubEnv("SPEECH_KEY", "   ");
     const providerConfig = { apiKey: "   ", region: "eastus" };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 1_000 })).toBe(false);
     await expect(
       provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
     ).rejects.toThrow("Azure Speech API key missing");

@@ -5,6 +5,7 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
+  getRestartRecoveryPendingFinalSourceRunId,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
@@ -582,6 +583,10 @@ export function createReplyRestartRecoveryClaimController(params: {
                   ? { intentId: pendingFinalDelivery.intentId }
                   : {}),
                 deliveries: pendingFinalDelivery.deliveries,
+                sourceRunId: getRestartRecoveryPendingFinalSourceRunId(
+                  current,
+                  pendingFinalDelivery.context,
+                ),
                 ...(pendingFinalDelivery.context ? { context: pendingFinalDelivery.context } : {}),
               },
               // Hook-owned replies are already terminal. A restart may only deliver this
