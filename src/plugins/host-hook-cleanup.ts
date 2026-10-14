@@ -295,7 +295,7 @@ export async function runPluginHostCleanup(params: {
   if (params.reason === "reset" || params.reason === "delete") {
     for (const { pluginId, hookId, error } of result.failures) {
       log.warn(
-        `Plugin host cleanup failed during session ${params.reason}; check the plugin cleanup hook and retry.`,
+        `Plugin host cleanup failed during session ${params.reason}; check the reported cleanup error and retry.`,
         { pluginId, hookId, error: String(error) },
       );
     }

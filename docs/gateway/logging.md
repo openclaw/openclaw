@@ -70,7 +70,7 @@ preparations, and model calls independently of log levels.
 
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
-error. Check the named plugin's cleanup hook before retrying. Successful cleanup
+error. Check the reported cleanup error before retrying. Successful cleanup
 stays quiet, and failures remain best effort. Console diagnostics use the shared
 secret redactor; plain-text console fields are capped at 2,048 characters.
 

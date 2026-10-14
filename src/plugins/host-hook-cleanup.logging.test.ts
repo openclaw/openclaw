@@ -48,7 +48,7 @@ it.each(["reset", "delete"] as const)(
     expect(line).toContain(`session ${reason}`);
     expect(line).toContain("pluginId=cleanup-fixture");
     expect(line).toContain("hookId=runtime:release");
-    expect(line).toContain("check the plugin cleanup hook and retry");
+    expect(line).toContain("check the reported cleanup error and retry");
     expect(line).not.toContain(secret);
     expect(line).toContain("...(truncated)");
     expect(line.length).toBeLessThan(2300);
