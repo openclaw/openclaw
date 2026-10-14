@@ -587,7 +587,7 @@ export async function createGlobalInstallEnv(
   return merged;
 }
 
-export async function tryRealpath(targetPath: string): Promise<string> {
+async function tryRealpath(targetPath: string): Promise<string> {
   try {
     return await fs.realpath(targetPath);
   } catch {

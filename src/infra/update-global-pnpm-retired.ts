@@ -1,12 +1,20 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../utils.js";
 import {
   inferPnpmGlobalRootFromPackageRoot,
   resolvePnpmGlobalInstallOwner,
-  tryRealpath,
 } from "./update-global.js";
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
+
+async function realpathOrResolved(targetPath: string): Promise<string> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
 
 /**
  * A launcher path into a pnpm store generation that no longer exists belongs to
@@ -40,5 +48,7 @@ export async function isRetiredPnpmGenerationOfInstall(params: {
   ) {
     return false;
   }
-  return (await tryRealpath(retiredGlobalRoot)) === (await tryRealpath(activeGlobalRoot));
+  return (
+    (await realpathOrResolved(retiredGlobalRoot)) === (await realpathOrResolved(activeGlobalRoot))
+  );
 }
