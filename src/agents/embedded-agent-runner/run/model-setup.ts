@@ -42,7 +42,7 @@ import {
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import { resolveOpenAIRuntimeProvider as resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,

@@ -6,7 +6,7 @@ import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { resolveOpenAIRuntimeProvider as resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";

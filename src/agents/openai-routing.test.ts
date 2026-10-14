@@ -6,9 +6,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   resolveOpenAIImplicitAgentRuntime,
-  resolveContextConfigProviderForRuntime,
   resolveOpenAIRuntimeProvider,
-  resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-routing.js";
 
 describe("OpenAI runtime routing policy", () => {
@@ -126,7 +124,7 @@ describe("OpenAI runtime routing policy", () => {
     expect(resolveOpenAIImplicitAgentRuntime({ provider: "openai", config })).toBe("openclaw");
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
     expect(
-      resolveContextConfigProviderForRuntime({
+      resolveOpenAIRuntimeProvider({
         provider: "openai",
         runtimeId: "codex",
         config,
@@ -263,7 +261,7 @@ describe("OpenAI runtime routing policy", () => {
 
   it("keeps OpenAI as the runtime provider when harness runtime is codex", () => {
     expect(
-      resolveSelectedOpenAIRuntimeProvider({
+      resolveOpenAIRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
       }),
@@ -272,7 +270,7 @@ describe("OpenAI runtime routing policy", () => {
 
   it("does not route non-OpenAI providers when runtime is codex", () => {
     expect(
-      resolveSelectedOpenAIRuntimeProvider({
+      resolveOpenAIRuntimeProvider({
         provider: "anthropic",
         harnessRuntime: "codex",
       }),
