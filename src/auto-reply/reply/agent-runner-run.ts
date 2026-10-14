@@ -83,9 +83,8 @@ import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
-  input: RunReplyAgentParams,
+  params: RunReplyAgentParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const params = { ...input };
   const {
     followupRun,
     queueKey,
@@ -110,7 +109,7 @@ export async function runReplyAgent(
     blockReplyChunking,
     sessionCtx,
     typingMode,
-    resetTriggered,
+    resetTriggered = false,
     replyOperation: providedReplyOperation,
   } = params;
   followupRun.operatorAuthority?.assertCurrent();
@@ -126,7 +125,6 @@ export async function runReplyAgent(
     typing.cleanup();
   };
   let activeSessionEntry = sessionEntry;
-  const effectiveResetTriggered = resetTriggered === true;
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const replyExpectation = (followupRun.run.terminalReplyExpectation ??=
@@ -243,8 +241,8 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
-  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const effectiveShouldSteer = !isHeartbeat && !resetTriggered && shouldSteer;
+  const effectiveShouldFollowup = !resetTriggered && shouldFollowup;
   const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const activeReplyOperation = sessionKey
     ? replyRunRegistry.get(sessionKey)
@@ -279,7 +277,7 @@ export async function runReplyAgent(
     messageInjectionDisposition === "none" &&
     terminalDeliveryBlockReason !== undefined;
 
-  const questionInput = await runReplyQuestionInput(input);
+  const questionInput = await runReplyQuestionInput(params);
   if (questionInput.handled) {
     releaseUnusedAdmission();
     return questionInput.payload;
@@ -383,7 +381,7 @@ export async function runReplyAgent(
     isActive,
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
-    resetTriggered: effectiveResetTriggered,
+    resetTriggered,
   });
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
@@ -552,7 +550,7 @@ export async function runReplyAgent(
       expectedSessionId: activeSessionEntry?.sessionId,
       storePath,
       kind: replyTurnKind,
-      resetTriggered: effectiveResetTriggered,
+      resetTriggered,
       routeThreadId: replyRouteThreadId,
       originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: resolveFollowupAbortSignal({
@@ -567,6 +565,9 @@ export async function runReplyAgent(
           : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
+      if (admission.error) {
+        opts?.internalEventExecution?.onFailed?.(admission.error);
+      }
       releaseUnusedAdmission();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
         return undefined;
