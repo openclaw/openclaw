@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -37,17 +38,19 @@ type FactChange =
   | { kind: "settled"; identity: string; operation: object; outcome: "published" | "unknown" };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sandboxRegistryPublication"), () => ({
-  sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
+  sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
   capture: new AsyncLocalStorage<Change[]>(),
   installingFacts: 0,
   facts: new Set<(change: FactChange) => void>(),
 }));
 
-function receiptFor(database: DatabaseSync, changes: readonly Change[]): Receipt {
+function receiptFor(database: EngineConnection, changes: readonly Change[]): Receipt {
   let source = state.sources.get(database);
   if (!source) {
     source = {
-      identity: readTrackedStateDatabaseIdentity(database)?.key ?? Symbol("sandbox-registry"),
+      identity:
+        readTrackedStateDatabaseIdentity(sqlPublicationAnchor(database))?.key ??
+        Symbol("sandbox-registry"),
       incarnation: randomUUID(),
     };
     state.sources.set(database, source);
@@ -94,7 +97,7 @@ export const sandboxRegistryPublication = {
   subscribeFacts(listener: (change: FactChange) => void) {
     return registerListener(state.facts, listener);
   },
-  stage(database: DatabaseSync, rows: readonly RegistryRow[], removed = false) {
+  stage(database: EngineConnection, rows: readonly RegistryRow[], removed = false) {
     if (state.installingFacts) {
       throw new Error("Sandbox registry cannot mutate during fact installation");
     }
@@ -126,7 +129,7 @@ export const sandboxRegistryPublication = {
 };
 
 /** Capture the same postimages for native installation and transport, including no-op settlement. */
-export function withSandboxRegistryWorkerReceipt<T>(database: DatabaseSync, write: () => T): T {
+export function withSandboxRegistryWorkerReceipt<T>(database: EngineConnection, write: () => T): T {
   return state.capture.run([], () => {
     const result = write();
     const receipt = receiptFor(database, state.capture.getStore()!);

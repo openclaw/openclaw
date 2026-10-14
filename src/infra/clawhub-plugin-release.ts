@@ -22,19 +22,28 @@ export type ClawHubPluginSecurity = {
   checkedAt?: number;
 };
 
-function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSecurity {
+function projectSecurity(
+  value: ClawHubPackageSecurityResponse,
+  disposition: PluginInstallTrust["disposition"],
+): ClawHubPluginSecurity {
   const trust = value.trust;
   const moderationStatus =
     trust.moderationState && trust.moderationState !== "approved"
       ? trust.moderationState
       : undefined;
-  const status = trust.blockedFromDownload
-    ? "blocked"
-    : trust.pending
-      ? "pending"
-      : trust.stale
-        ? "stale"
-        : (moderationStatus ?? trust.scanStatus ?? "unknown");
+  const trustStatus = trust.pending
+    ? "pending"
+    : trust.stale
+      ? "stale"
+      : (moderationStatus ?? trust.scanStatus ?? "unknown");
+  const normalizedTrustStatus = trustStatus.trim().toLowerCase();
+  const status =
+    disposition === "blocked"
+      ? "blocked"
+      : disposition !== "clean" &&
+          (normalizedTrustStatus === "clean" || normalizedTrustStatus === "benign")
+        ? "review"
+        : trustStatus;
   return {
     status,
     ...(value.verdict ? { verdict: value.verdict } : {}),
@@ -104,10 +113,11 @@ export async function readClawHubPluginReleaseFacts(params: {
       ) {
         throw new Error("ClawHub security metadata does not describe the selected release.");
       }
-      security = projectSecurity(parsedSecurity);
       const { assessClawHubTrust } = await import("./clawhub-install-trust.js");
+      const disposition = assessClawHubTrust(parsedSecurity);
+      security = projectSecurity(parsedSecurity, disposition);
       trust = {
-        disposition: assessClawHubTrust(parsedSecurity.trust),
+        disposition,
         reasons: parsedSecurity.trust.reasons,
         pending: parsedSecurity.trust.pending,
         stale: parsedSecurity.trust.stale,

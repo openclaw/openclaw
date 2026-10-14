@@ -107,7 +107,7 @@ type TelegramTransportAttemptHealth = {
   unhealthyUntilMs: number;
 };
 
-type TelegramDnsResultOrder = "ipv4first" | "verbatim";
+type TelegramDnsResultOrder = ReturnType<typeof resolveTelegramDnsResultOrderDecision>["value"];
 
 type LookupCallback =
   | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)

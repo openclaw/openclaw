@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   prepareOomScoreAdjustedSpawn,
   prepareOomScoreAdjustedSpawnPreservingExecEnv,
+  resolveOomScoreWrappedCommand,
   spawnOomScoreAdjusted,
   type OomScoreAdjustedSpawn,
 } from "./linux-oom-score.js";
@@ -33,6 +34,36 @@ function spawnPreparedWithBashAsSh(prepared: OomScoreAdjustedSpawn) {
     encoding: "utf8",
   });
 }
+
+describe("resolveOomScoreWrappedCommand", () => {
+  it.each([prepareOomScoreAdjustedSpawn, prepareOomScoreAdjustedSpawnPreservingExecEnv])(
+    "attributes an owner-prepared wrapper to the final executable",
+    (prepare) => {
+      const prepared = prepare("/usr/bin/node", ["run.js"], linux);
+      expect(resolveOomScoreWrappedCommand(prepared.command, prepared.args)).toBe("/usr/bin/node");
+      expect(
+        resolveOomScoreWrappedCommand(prepared.command, [
+          prepared.args[0]!,
+          prepared.args[1]! + "; printf user-script",
+          ...prepared.args.slice(2),
+        ]),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { command: "/bin/bash", args: ["-c", wrapScript, "node"] },
+    { command: "/bin/sh", args: ["-lc", wrapScript, "node"] },
+    { command: "/bin/sh", args: ["-c", "exec node", "node"] },
+    { command: "/bin/sh", args: ["-c", wrapScript] },
+    { command: "/bin/sh", args: ["-c", wrapScript, ""] },
+  ])(
+    "does not classify an unrelated or incomplete invocation ($command, $args)",
+    ({ command, args }) => {
+      expect(resolveOomScoreWrappedCommand(command, args)).toBeUndefined();
+    },
+  );
+});
 
 describe("prepareOomScoreAdjustedSpawn", () => {
   it("preserves the spawn shape when wrap does not apply", () => {

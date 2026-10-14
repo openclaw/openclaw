@@ -14,7 +14,7 @@ RPC method families for Talk and TTS, secrets, config, update, and wizard flows,
 ## Talk and TTS
 
 - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: standard provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, standard modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Optional `sessionKey` uses the existing session visibility checks and selects that session's agent for transcription and realtime readiness; unknown or inaccessible sessions are rejected. Without it, the catalog retains the configured Talk agent. Speech readiness uses the shared speech configuration, matching `talk.speak` and `tts.speak`. Chat clients pass their current session key; Talk settings omit it. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
-- `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
+- `talk.config` returns the effective Talk config payload from the Gateway's applied runtime and matching source snapshot; pending or rejected file edits appear only after a successful config reload. `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
 - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
 - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
 - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions. Send the `turnId` from the current audio event's `talkEvent`; the result is `applied`, `stale`, or `idle`.
@@ -69,6 +69,7 @@ providers ignore barge-in and end the session on an explicit output stop.
 - Durable run JSON from `update.runs.get`, `update.runs.list`, and update status can include `admission: { owner: "candidate" | "installed", protocol?, candidateVersion?, checks?, fallbackReason? }`. Each check has `name`, `status` (`ok`, `warn`, or `refuse`), and optional `detail`. This projects `origin.admission` from the existing ledger JSON; `origin.candidateAdmission` retains the bounded candidate verdict, reasons, warnings, and facts. Older records omit these fields. See [candidate-owned admission](/cli/update#candidate-owned-admission) for ownership and fallback behavior.
 - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+  Each answered step uses the current `wizard.next` caller's authority through inference verification, including after progress replies. Device revocation still rejects the probe.
 
 ## Agent and workspace helpers
 

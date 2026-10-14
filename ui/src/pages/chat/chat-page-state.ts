@@ -57,6 +57,13 @@ import {
   singlePaneLayout,
 } from "./split-layout.ts";
 export class ChatPageState extends ControllerHost {
+  private static readonly hosts = new WeakMap<HTMLElement, ChatPageState>();
+
+  static readonly forHost = (host: ChatPageHost): ChatPageState =>
+    this.get(host) ?? new ChatPageState(host);
+
+  static readonly get = (host: ChatPageHost) => this.hosts.get(host);
+
   context!: ApplicationContext;
   @viewState() private layout: ChatSplitLayout | undefined;
   @viewState() private narrow = false;
@@ -153,6 +160,7 @@ export class ChatPageState extends ControllerHost {
       () => this.context,
     );
     this.addController(this.prefetch);
+    ChatPageState.hosts.set(host, this);
   }
 
   override connect() {
@@ -199,6 +207,7 @@ export class ChatPageState extends ControllerHost {
     this.sessionDrop.disconnect();
     window.removeEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     super.disconnect();
+    ChatPageState.hosts.delete(this.host);
   }
 
   private updateQueued = false;

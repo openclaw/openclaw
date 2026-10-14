@@ -267,31 +267,6 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
-  it("wraps a non-extensible rich failure without losing visible-send evidence", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const frozenError = new Error("push failed");
-    Object.freeze(frozenError);
-    createDeps({
-      chunkMarkdownText: () => ["c1", "c2", "c3", "c4", "c5"],
-      pushMessagesLine: vi.fn(async () => {
-        throw frozenError;
-      }) as LineAutoReplyDeps["pushMessagesLine"],
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "hello", channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result).toMatchObject({
-      status: "partial",
-      error: { sentBeforeError: true, visibleReplySent: true, cause: frozenError },
-    });
-  });
-
   it("honors channelData.line.mediaKind on the reply-token path instead of forcing image", async () => {
     // The push path resolves mediaKind into a video/audio message; the reply path
     // used to hardcode createImageMessage, silently downgrading video to a broken

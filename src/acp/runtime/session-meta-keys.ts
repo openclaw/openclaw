@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
@@ -8,6 +7,8 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -41,10 +42,10 @@ const metadataReceipt: SqliteDatabaseAdmissionKey<AcpMetadataReceipt> = {
     return undefined;
   },
 };
-const pendingMetadataChanges = new WeakMap<DatabaseSync, AcpMetadataReceipt>();
-const localMetadataChanges = new WeakMap<DatabaseSync, AcpMetadataReceipt>();
+const pendingMetadataChanges = new WeakMap<EngineConnection, AcpMetadataReceipt>();
+const localMetadataChanges = new WeakMap<EngineConnection, AcpMetadataReceipt>();
 const metadataRows = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   {
     schema: SqliteReadOperationRevision["schema"];
     receipt: AcpMetadataReceipt | undefined;
@@ -52,7 +53,7 @@ const metadataRows = new WeakMap<
   }
 >();
 
-function publishAcpMetadataChanges(db: DatabaseSync, keys: readonly string[]) {
+function publishAcpMetadataChanges(db: EngineConnection, keys: readonly string[]) {
   if (keys.length === 0) {
     return;
   }
@@ -79,11 +80,11 @@ function publishAcpMetadataChanges(db: DatabaseSync, keys: readonly string[]) {
   publishSqliteDatabaseAdmission(db, metadataReceipt, receipt);
 }
 
-export function getAcpSessionKysely(db: DatabaseSync) {
+export function getAcpSessionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
 }
 
-export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
+export function selectAcpSessionRows(db: EngineConnection): AcpSessionRow[] {
   return executeSqliteQuerySync(
     db,
     getAcpSessionKysely(db)
@@ -95,7 +96,7 @@ export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
 }
 
 export function selectAcpSessionRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
 ): AcpSessionRow | undefined {
   return executeSqliteQueryTakeFirstSync(
@@ -108,7 +109,7 @@ export function selectAcpSessionRow(
 }
 
 export function* selectAcpSessionRowsByKeys(
-  db: DatabaseSync,
+  db: EngineConnection,
   keys: readonly string[],
   firstCohort?: readonly AcpSessionRow[],
 ) {
@@ -120,7 +121,7 @@ export function* selectAcpSessionRowsByKeys(
     if (!cached) {
       cached = { schema: revision.schema, receipt, rows: new Map() };
       metadataRows.set(db, cached);
-      registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
+      registerNodeSqliteDisposeCallback(sqlPublicationAnchor(db), () => metadataRows.delete(db));
     } else if (cached.schema !== revision.schema || cached.receipt !== receipt) {
       cached.schema = revision.schema;
       cached.receipt = receipt;
@@ -224,7 +225,7 @@ export function acpSessionRowMatchesEntry(
 }
 
 export function selectAcpSessionRowForStoreEntry(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeSessionKey: string,
   agentId?: string,
   entry?: AcpSessionEntryBinding,
@@ -237,7 +238,7 @@ export function selectAcpSessionRowForStoreEntry(
 }
 
 export function selectAcpSessionRowForRead(
-  db: DatabaseSync,
+  db: EngineConnection,
   { keys, entry }: AcpSessionReadInput,
 ): AcpSessionRow | undefined {
   for (const key of keys) {
@@ -257,7 +258,7 @@ export function resolveReadableAcpSessionRow(params: {
   return row && acpSessionRowMatchesEntry(row, entry) ? row : undefined;
 }
 
-export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>) {
+export function upsertAcpSessionMetaRow(db: EngineConnection, row: Insertable<AcpSessionsTable>) {
   const written = executeSqliteQueryTakeFirstSync(
     db,
     getAcpSessionKysely(db)
@@ -289,7 +290,7 @@ export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSes
   return written;
 }
 
-export function deleteAcpSessionMetaRows(db: DatabaseSync, keys: readonly string[]): void {
+export function deleteAcpSessionMetaRows(db: EngineConnection, keys: readonly string[]): void {
   if (keys.length === 0) {
     return;
   }

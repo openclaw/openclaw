@@ -11,9 +11,9 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,

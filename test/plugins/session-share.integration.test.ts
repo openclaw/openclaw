@@ -39,6 +39,7 @@ import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js"
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
 import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../src/test-utils/native-sqlite.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -601,7 +602,7 @@ describe("session-share node commands", () => {
         );
       }
       const counter = trackSqliteStatementExecutions(
-        openOpenClawStateDatabase().db,
+        requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
         ["identities", "profiles"],
         (sql) =>
           /\bfrom\s+"?user_profile_identities\b/i.test(sql)

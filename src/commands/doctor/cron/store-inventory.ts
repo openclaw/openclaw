@@ -1,13 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
 
 /** SQL ownership is independently authoritative when legacy JSON omits it. */
-export function inspectCronOwnerRowsForDoctor(db: DatabaseSync, storeKey: string) {
+export function inspectCronOwnerRowsForDoctor(db: EngineConnection, storeKey: string) {
   if (!tableExists(db, "cron_jobs")) {
     return [];
   }
@@ -23,7 +23,7 @@ export function inspectCronOwnerRowsForDoctor(db: DatabaseSync, storeKey: string
 }
 
 /** Raw inspection deliberately bypasses runtime loading and its repair/filter policies. */
-export function inspectCronRowsForDoctor(db: DatabaseSync): PluginDoctorCronJob[] {
+export function inspectCronRowsForDoctor(db: EngineConnection): PluginDoctorCronJob[] {
   if (!tableExists(db, "cron_jobs")) {
     return [];
   }

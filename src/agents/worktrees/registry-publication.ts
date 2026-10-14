@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -43,17 +44,19 @@ type WorkerReceipt<T = unknown> = {
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.worktreeRegistryPublication"), () => ({
-  sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
+  sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
   capture: new AsyncLocalStorage<Map<string, SqliteCommittedFact<RegistryFact>>>(),
   facts: new Set<(change: Change) => void>(),
   installing: false,
 }));
 
-function sourceFor(db: DatabaseSync): SqliteCommitSource {
+function sourceFor(db: EngineConnection): SqliteCommitSource {
   let source = state.sources.get(db);
   if (!source) {
     source = {
-      identity: readTrackedStateDatabaseIdentity(db)?.key ?? Symbol("untracked-worktree-registry"),
+      identity:
+        readTrackedStateDatabaseIdentity(sqlPublicationAnchor(db))?.key ??
+        Symbol("untracked-worktree-registry"),
       incarnation: randomUUID(),
     };
     state.sources.set(db, source);
@@ -68,7 +71,7 @@ function keyFor(row: Pick<RegistryRow, "id"> | Pick<LeaseRow, "scope" | "lease_k
 }
 
 function captureReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   facts: ReadonlyMap<string, SqliteCommittedFact<RegistryFact>>,
 ) {
   return createSqliteCommitReceipt({
@@ -107,18 +110,18 @@ function publication(receipt: Receipt) {
 /** Exact owner-written rows only; raw writes and protecting session/placement sets remain separate. */
 export const worktreeRegistryPublication = {
   subscribeFacts: (listener: (change: Change) => void) => registerListener(state.facts, listener),
-  rows(db: DatabaseSync, rows: readonly RegistryFact[]) {
+  rows(db: EngineConnection, rows: readonly RegistryFact[]) {
     stage(db, new Map(rows.map((row) => [keyFor(row), { kind: "postimage", value: { ...row } }])));
   },
   deleted(
-    db: DatabaseSync,
+    db: EngineConnection,
     rows: readonly (RegistryRow | Pick<LeaseRow, "scope" | "lease_key">)[],
   ) {
     stage(db, new Map(rows.map((row) => [keyFor(row), { kind: "absent" }])));
   },
 };
 
-function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<RegistryFact>>) {
+function stage(db: EngineConnection, facts: Map<string, SqliteCommittedFact<RegistryFact>>) {
   if (!facts.size) {
     return;
   }
@@ -143,7 +146,7 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<Registry
 
 /** The result and existing operation token survive ordinary reply loss without replaying the write. */
 export function withWorktreeRegistryWorkerReceipt<T>(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: () => T,
   receipt?: string,
 ): T {

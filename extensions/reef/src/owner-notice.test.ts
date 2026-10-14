@@ -31,7 +31,6 @@ function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliv
       loadState: async () => undefined,
       reserve: async () => ({ kind: "reserved" }),
       complete: async () => true,
-      prepareOutboundDelivery: async () => undefined,
     },
   };
 }

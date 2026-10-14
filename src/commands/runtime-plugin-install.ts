@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilot-routing.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -72,6 +73,17 @@ const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
   warningLabel: "GitHub Copilot",
   shouldEnsure: ({ cfg, model }) =>
     modelSelectionShouldEnsureCopilotRuntimePlugin({ config: cfg, model }),
+};
+const MUSE_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
+  pluginId: "muse",
+  label: "Muse Code",
+  npmSpec: "@openclaw/muse",
+  warningLabel: "Muse Code",
+  shouldEnsure: ({ cfg, model, agentId }) =>
+    Boolean(
+      model &&
+      resolveModelRuntimePolicy({ config: cfg, modelId: model, agentId }).policy?.id === "muse",
+    ),
 };
 
 function isInstalledRecordPresentOnDisk(
@@ -245,7 +257,11 @@ export async function repairModelSelectionRuntimePlugins(
   params: RuntimePluginRepairParams,
 ): Promise<string[]> {
   const warnings: string[] = [];
-  for (const descriptor of [CODEX_RUNTIME_PLUGIN_DESCRIPTOR, COPILOT_RUNTIME_PLUGIN_DESCRIPTOR]) {
+  for (const descriptor of [
+    CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
+    COPILOT_RUNTIME_PLUGIN_DESCRIPTOR,
+    MUSE_RUNTIME_PLUGIN_DESCRIPTOR,
+  ]) {
     if (descriptor.shouldEnsure(params)) {
       const repaired = await repairRequiredRuntimePluginInstall(params, descriptor.pluginId);
       warnings.push(...repaired.warnings);
@@ -265,7 +281,14 @@ export async function ensureModelSelectionRuntimePlugins(
     { ...params, cfg: codex.cfg },
     COPILOT_RUNTIME_PLUGIN_DESCRIPTOR,
   );
-  return copilot.ok
-    ? { ok: true, cfg: copilot.cfg, codexInstalled: codex.required }
-    : { ok: false, message: copilot.message };
+  if (!copilot.ok) {
+    return { ok: false, message: copilot.message };
+  }
+  const muse = await ensureRuntimePluginForModelSelection(
+    { ...params, cfg: copilot.cfg },
+    MUSE_RUNTIME_PLUGIN_DESCRIPTOR,
+  );
+  return muse.ok
+    ? { ok: true, cfg: muse.cfg, codexInstalled: codex.required }
+    : { ok: false, message: muse.message };
 }

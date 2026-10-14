@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -7,6 +6,7 @@ import {
   type UserProfile as UserProfileListItem,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -84,7 +84,10 @@ type PendingPublication = {
   githubConnections: UserGitHubConnectionCommit;
 };
 
-function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
+function selectUserProfileListItemById(
+  db: EngineConnection,
+  profileId: string,
+): UserProfileListItem {
   const kysely = userProfilesDb(db);
   const profile = executeSqliteQueryTakeFirstSync(
     db,

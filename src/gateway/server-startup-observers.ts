@@ -108,6 +108,20 @@ export async function runGatewayStartupObservers(params: {
           includeMaintenance: true,
           isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
         });
+        // A crash can leave agent databases under background integrity admission.
+        // Discover saved deliveries only after the existing reader startup joins it.
+        if (context && !params.signal.aborted && !params.isClosing?.()) {
+          try {
+            const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+            await recoverSessionSendDeliveries(context, params.signal);
+          } catch {
+            if (!params.signal.aborted) {
+              params.log.warn(
+                "Session delivery restart recovery could not complete; saved inputs remain available.",
+              );
+            }
+          }
+        }
         const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
         if (!params.signal.aborted && params.isClosing?.() !== true) {
           await activateSubagentRegistry(params.resolveGatewayContext);
