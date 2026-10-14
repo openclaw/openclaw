@@ -113,6 +113,8 @@ compiler preparation. Source-runner CLI fixtures also use the selected runtime
 after Node completes build preparation. This does not use Bun's native test runner.
 Set `OPENCLAW_VITEST_RUNTIME=node` to force Node, or `bun` to require Bun.
 Without an explicit selection, CI retains Node (`CI` is nonempty and not `false`).
+When CI selects Bun, the runner uses the workflow-provisioned `bun` on PATH without
+staging a local cache, unless `OPENCLAW_BUN_PATH` explicitly overrides it.
 Windows and platforms without a pinned artifact fall back to Node, as do offline
 machines without a usable cached fork. The runner prints one notice with the
 reason; explicitly selecting Node silences it. An explicit Bun selection fails

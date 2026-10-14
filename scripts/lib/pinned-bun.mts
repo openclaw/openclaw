@@ -36,6 +36,10 @@ const defaults: PinnedBunDeps = {
   },
 };
 
+export function isCiEnvironment(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.CI && env.CI !== "false");
+}
+
 export function resolvePinnedBun(
   env: NodeJS.ProcessEnv = process.env,
   overrides: Partial<PinnedBunDeps> = {},
@@ -53,6 +57,9 @@ export function resolvePinnedBun(
       // An explicit override never silently selects a different Bun installation.
     }
     return { reason: `OPENCLAW_BUN_PATH is not executable: ${command}` };
+  }
+  if (isCiEnvironment(env)) {
+    return { command: "bun" };
   }
   const target = `${deps.platform}-${deps.arch}`;
   if (deps.platform !== "darwin" && deps.platform !== "linux") {
@@ -107,6 +114,7 @@ export function resolvePinnedBun(
     deps.fs.mkdirSync(path.join(directory, "bin"), { recursive: true });
     const staging = deps.fs.mkdtempSync(path.join(directory, ".stage-"));
     try {
+      console.error(`[openclaw] Staging pinned Bun fork ${pin.tag} (one-time download)…`);
       deps.stage(staging, deps.platform, deps.arch);
       // Publish complete bytes so concurrent local launchers cannot execute a partial copy.
       deps.fs.renameSync(path.join(staging, "bin/bun"), command);
@@ -131,5 +139,9 @@ export function requirePinnedBun(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export function pinnedBunEnv(command: string, env: NodeJS.ProcessEnv): { PATH: string } {
-  return { PATH: [path.dirname(command), env.PATH].filter(Boolean).join(path.delimiter) };
+  return {
+    PATH: path.isAbsolute(command)
+      ? [path.dirname(command), env.PATH].filter(Boolean).join(path.delimiter)
+      : (env.PATH ?? ""),
+  };
 }

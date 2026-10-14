@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
+import { pinnedBunEnv, resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bytes = "synthetic bun executable";
 const digest = createHash("sha256").update(bytes).digest("hex");
 
+afterEach(() => vi.restoreAllMocks());
+
 function fixture() {
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
   const directory = tempDirs.make("pinned-bun-");
   const repoRoot = path.join(directory, "repo");
   fs.mkdirSync(path.join(repoRoot, "scripts/lib"), { recursive: true });
@@ -30,36 +33,60 @@ function fixture() {
   const env = { XDG_CACHE_HOME: directory };
   const command = path.join(directory, "openclaw/bun/test-pin/linux-x64/bin/bun");
   const stamp = path.join(path.dirname(path.dirname(command)), "verified.json");
-  return { deps, env, command, stamp, directory, readFileSync, stage };
+  return { deps, env, command, stamp, directory, readFileSync, stage, stderr };
 }
 
 describe("pinned Bun resolution", () => {
-  it("uses an explicit executable without reading the pin or staging", () => {
+  it.each([undefined, "1"])("uses an explicit executable with CI=%s without staging", (CI) => {
     const { env, deps, directory, stage, readFileSync } = fixture();
     const command = path.join(directory, "custom-bun");
     fs.writeFileSync(command, bytes, { mode: 0o755 });
-    expect(resolvePinnedBun({ ...env, OPENCLAW_BUN_PATH: command }, deps)).toEqual({ command });
+    expect(resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: command }, deps)).toEqual({ command });
     expect(stage).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalled();
     expect(
-      resolvePinnedBun({ ...env, OPENCLAW_BUN_PATH: `${command}-missing` }, deps).reason,
+      resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: `${command}-missing` }, deps).reason,
     ).toContain("OPENCLAW_BUN_PATH is not executable");
     expect(stage).not.toHaveBeenCalled();
   });
 
-  it("stages once, then reuses the stamped executable without reading its bytes", () => {
-    const { env, deps, command, stamp, stage, readFileSync } = fixture();
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
-    expect(stage).toHaveBeenCalledOnce();
-    expect(JSON.parse(fs.readFileSync(stamp, "utf8"))).toMatchObject({
-      executableSha256: digest,
-      size: Buffer.byteLength(bytes),
-    });
-    readFileSync.mockClear();
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
-    expect(stage).toHaveBeenCalledOnce();
-    expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(false);
+  it.each(["1", "true", "custom", "0"])("uses workflow-provisioned Bun with CI=%s", (CI) => {
+    const { env, deps, stage, readFileSync, stderr } = fixture();
+    const ciEnv = {
+      ...env,
+      CI,
+      OPENCLAW_VITEST_RUNTIME: "bun",
+      PATH: "/workflow/bun/bin:/usr/bin",
+    };
+    expect(resolvePinnedBun(ciEnv, deps)).toEqual({ command: "bun" });
+    expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
+    expect(stage).not.toHaveBeenCalled();
+    expect(readFileSync).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "", "false"])(
+    "stages once with CI=%s, then silently reuses the cache",
+    (CI) => {
+      const { env, deps, command, stamp, stage, readFileSync, stderr } = fixture();
+      const localEnv = { ...env, CI };
+      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
+      expect(stage).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledExactlyOnceWith(
+        "[openclaw] Staging pinned Bun fork test-pin (one-time download)…",
+      );
+      expect(stderr).toHaveBeenCalledBefore(stage);
+      expect(JSON.parse(fs.readFileSync(stamp, "utf8"))).toMatchObject({
+        executableSha256: digest,
+        size: Buffer.byteLength(bytes),
+      });
+      readFileSync.mockClear();
+      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
+      expect(stage).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(false);
+    },
+  );
 
   it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
     const { env, deps, command, stamp, stage, readFileSync } = fixture();

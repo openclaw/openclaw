@@ -1,4 +1,4 @@
-import { resolvePinnedBun } from "./pinned-bun.mts";
+import { isCiEnvironment, resolvePinnedBun } from "./pinned-bun.mts";
 
 let fallbackReported = false;
 
@@ -10,7 +10,7 @@ export function resolveTestRuntime(env: NodeJS.ProcessEnv = process.env): "node"
     }
     return runtime;
   }
-  if (env.CI && env.CI !== "false") {
+  if (isCiEnvironment(env)) {
     return "node";
   }
   const bun = resolvePinnedBun(env);
