@@ -1,7 +1,7 @@
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, type vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { createRequireRecord } from "../plugin-sdk/test-fixtures.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export function makeSuccessResult(provider: string, model: string) {
