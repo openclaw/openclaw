@@ -136,14 +136,20 @@ struct BundledRecoveryCompositionTests {
 
             AppStateStore.shared.isPaused = false
             PostUpdateController.shared.retry()
-            _ = try await AppKitTestSupport.waitForAccessibilityElement(
-                in: window, description: "newer-schema Doctor diagnostic", matching: { elements in
+            let diagnostic = try await AppKitTestSupport.waitForAccessibilityElement(
+                in: window, description: "newer-schema Doctor outcome", matching: { elements in
                     elements.first {
                         let value: Any? = $0.accessibilityValue?()
+                        let text = value as? String
                         return $0.accessibilityRole?() == .staticText &&
-                            (value as? String)?.contains("2147483646") == true
+                            (text?.contains("2147483646") == true ||
+                                text?.contains("The bundled Gateway update could not finish.") == true)
                     }
                 })
+            let diagnosticValue: Any? = diagnostic.accessibilityValue?()
+            try #require(
+                (diagnosticValue as? String)?.contains("2147483646") == true,
+                Comment(rawValue: "Unexpected recovery refusal: log=\(manager.log)"))
             _ = try await AppKitTestSupport.waitForAccessibilityElement(
                 in: window, description: "required newer-schema refusal", matching: { elements in
                     elements.first { $0.accessibilityRole?() == .button && $0.accessibilityLabel?() == "Retry" }
@@ -194,6 +200,7 @@ struct BundledRecoveryCompositionTests {
         } catch {
             // Cancellation otherwise hides the accessibility snapshot carried by the wait failure.
             print("Bundled recovery composition failed: \(error.localizedDescription)")
+            print("Bundled recovery lifecycle diagnostics: \(manager.log)")
             // The still-live app owner joins its service stop before a failed fixture host exits.
             manager.stop()
             await manager.waitForStartupAttempt()
