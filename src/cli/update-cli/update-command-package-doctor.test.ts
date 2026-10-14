@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as backupConfigCapture from "../../infra/backup-config-capture.js";
+import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -28,6 +29,8 @@ import {
 import * as processRunner from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import * as stateSnapshots from "../../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -73,7 +76,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
       await fs.writeFile(includePath, originalInclude);
     }
     if (completeGraph) {
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      openOpenClawStateDatabase({ env });
+      await closeStateDatabaseForTest();
       const database = new DatabaseSync(databasePath);
       try {
         database.exec(`PRAGMA user_version = ${newerSchema}`);
@@ -104,10 +108,15 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         assert(resultPath, "Missing Doctor result path");
         await writeUpdatePostInstallDoctorResult({
           resultPath,
-          result: { status: "ok", configHash: "unchanged" },
+          result: completeGraph
+            ? {
+                ...createDeferredConfiguredPluginRepairDoctorResult(["Optional repair deferred."]),
+                configHash: "unchanged",
+              }
+            : { status: "ok", configHash: "unchanged" },
         });
         return {
-          code: 0,
+          code: completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0,
           stdout: "",
           stderr: "",
           signal: null,
@@ -117,15 +126,21 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
       });
     const onConfigSnapshot = vi.fn();
     const onStepComplete = vi.fn();
+    const stateRead = vi.spyOn(stateSnapshots, "withOpenClawStateDatabaseReadSnapshot");
 
-    const step = await runPackageUpdateDoctor({
-      root,
-      timeoutMs: 1_000,
-      progress: { onStepComplete },
-      managedServiceEnv: env,
-      onConfigSnapshot,
-    });
+    const step = await runPackagePostInstallVerification(root, (candidateRoot, results) =>
+      runPackageUpdateDoctor({
+        root: candidateRoot,
+        timeoutMs: 1_000,
+        progress: { onStepComplete },
+        managedServiceEnv: env,
+        onConfigSnapshot,
+        results,
+      }),
+    );
 
+    expect(isFailedUpdateStep(step), JSON.stringify(step)).toBe(false);
+    expect(stateRead).not.toHaveBeenCalled();
     expect(invokeDoctor).toHaveBeenCalledOnce();
     expect(onConfigSnapshot).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -134,8 +149,15 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         doctorOwned: completeGraph,
       }),
     );
-    expect(step).toMatchObject({ exitCode: 0 });
+    expect(step.failureFacts ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "runtime-verification-failed" })]),
+    );
     if (completeGraph) {
+      expect(step).toMatchObject({
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        advisory: { kind: "package-post-install-doctor" },
+        warnings: [expect.stringContaining("Optional repair deferred.")],
+      });
       expect(onConfigSnapshot.mock.calls[0]?.[0]).toMatchObject({
         includedFiles: [
           {
