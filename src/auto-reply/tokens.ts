@@ -117,7 +117,7 @@ function stripLeadingReasoningBlocks(text: string): string {
 
 function stripFinalSilentToken(text: string, token: string): string | null {
   const escaped = escapeRegExp(token);
-  const stripped = text.replace(new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i"), "").trim();
+  const stripped = text.replace(new RegExp(`(?:^|[\\s*.])${escaped}[.!?]*\\s*$`, "i"), "").trim();
   return stripped === text.trim() ? null : stripped;
 }
 
