@@ -69,7 +69,7 @@ const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("unavailable") }),
 ]);
 
-/** Retained only by the native queued launch; acceptance or settlement clears it. */
+/** Private accepted-input basis; only its current input owner may restore authority. */
 export type QueuedOperatorRecoverySource = z.infer<typeof queuedSourceSchema>;
 
 export function decodeQueuedOperatorRecoverySource(value: unknown): QueuedOperatorRecoverySource {

@@ -52,7 +52,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
-  /** Existing immutable policy and link; only a queued collector serializes them. */
+  /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
   channelRecoverySource?: Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
     modelPolicy?: PreparedOperatorModelPolicy;

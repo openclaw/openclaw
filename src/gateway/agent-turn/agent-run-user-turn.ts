@@ -387,10 +387,21 @@ export async function prepareAgentRunUserTurn(params: {
       });
       let peerMessage = peerDelivery?.acceptedMessage;
       if (peerDelivery && !peerMessage) {
+        const { captureQueuedOperatorRecoverySource } =
+          await import("../operator-run-recovery-source.js");
+        params.assertCurrent();
+        const operatorSource =
+          captureQueuedOperatorRecoverySource(operatorAuthority) ??
+          (requesterOrigin?.operatorProfileId ? { kind: "unavailable" as const } : null);
         const original = buildPersistedUserTurnMessage(input);
         peerMessage = {
           ...original,
-          __openclaw: { ...original["__openclaw"], sessionSendDelivery: peerDelivery.delivery },
+          __openclaw: {
+            ...original["__openclaw"],
+            // The exact unconsumed pending input owns this source; a retained
+            // transcript copy cannot authorize replay.
+            sessionSendDelivery: { ...peerDelivery.delivery, operatorSource },
+          },
         };
       }
       recorder = createUserTurnTranscriptRecorder({

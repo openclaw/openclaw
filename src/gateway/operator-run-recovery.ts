@@ -43,7 +43,6 @@ import {
   decodeGatewayOperatorRecoverySource,
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
-  type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
@@ -453,7 +452,7 @@ export async function restoreGatewayRunRecovery(params: {
 
 /** A queued native launch reuses its original authenticated source, never profile attribution. */
 export async function restoreGatewayQueuedOperatorRecovery(params: {
-  source: QueuedOperatorRecoverySource;
+  source: unknown;
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">> {
