@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setDiscordPolicyBindings } from "../channel-policy-state.js";
+import { setDiscordChannelPolicyBindings } from "../channel-policy-state.js";
 import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
 import { ChannelType } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
@@ -18,7 +18,7 @@ import {
 installDiscordIngressTestRuntime();
 
 describe("Discord admitted conversation tool policy", () => {
-  afterEach(() => setDiscordPolicyBindings("default", []));
+  afterEach(() => setDiscordChannelPolicyBindings("default", []));
 
   it.each([
     { name: "text-channel thread", parentType: ChannelType.GuildText },
@@ -49,7 +49,7 @@ describe("Discord admitted conversation tool policy", () => {
         session: { store: state.path("sessions.json") },
         channels: { discord: { guilds } },
       };
-      setDiscordPolicyBindings("default", [
+      setDiscordChannelPolicyBindings("default", [
         { guildKey: "145", channelKey: "general", channelId: "444" },
       ]);
       const client = isThread
