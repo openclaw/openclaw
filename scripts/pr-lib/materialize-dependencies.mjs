@@ -37,6 +37,7 @@ const dependencies = [
         "dotenv",
         "execa",
         "hosted-git-info",
+        "iconv-lite",
         "import-meta-resolve",
         "ipaddr.js",
         "jiti",

@@ -45,6 +45,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "dotenv",
     "execa",
     "hosted-git-info",
+    "iconv-lite",
     "import-meta-resolve",
     "ipaddr.js",
     "jiti",
