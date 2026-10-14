@@ -181,6 +181,7 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    requestTimeoutMs: resolved.requestTimeoutMs,
     beforeRequest: options?.beforeRequest,
   });
   const headers =

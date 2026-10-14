@@ -15,7 +15,7 @@ exports.install = () => {
   "11-dom-a-producer.test.ts": `
 /* @vitest-environment jsdom */
 import { createRequire } from "node:module";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 it("registers live source and external dependency DOM resources", async () => {
   createRequire(import.meta.url)("./dependency/node_modules/persistent-dom.cjs").install();
   const temporaryErrorListener = () => {};
@@ -25,6 +25,10 @@ it("registers live source and external dependency DOM resources", async () => {
   for (const target of [window, document, document.body, document.documentElement]) {
     target.addEventListener("repo-event", listener, true);
   }
+  const ownerWindow = window;
+  vi.stubGlobal("window", { addEventListener: ownerWindow.addEventListener.bind(ownerWindow) });
+  window.addEventListener("repo-event", listener, true);
+  vi.unstubAllGlobals();
   const observer = new MutationObserver(() => document.body.dataset.repoMutation = "observed");
   observer.observe(document, { childList: true, subtree: true });
   document.dispatchEvent(new Event("repo-event"));
