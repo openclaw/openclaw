@@ -213,7 +213,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat
-    ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
+    ? buildGroupIntro({
+        activation: conversation.activation,
+        defaultActivation,
+        silentReplyPolicy: silentReplySettings.policy,
+      })
     : "";
   const terminalReplyExpectation = resolveSourceReplyExpectation({
     ctx: promptSessionCtx,

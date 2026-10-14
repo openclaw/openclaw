@@ -103,12 +103,47 @@ describe("group runtime loading", () => {
     ).toContain("You see every message; most need no response. When you do reply");
     expect(
       isolatedGroups.buildGroupIntro({
+        defaultActivation: "always",
+        silentReplyPolicy: "disallow",
+      }),
+    ).toContain(
+      "You see every message; answer required conversational requests briefly, and follow current-turn guidance for optional ambient events or synthetic continuations. When you do reply",
+    );
+    expect(
+      isolatedGroups.buildGroupIntro({
         activation: "mention",
         defaultActivation: "always",
       }),
     ).toContain("Activation: trigger-only");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
+  });
+
+  it("avoids unconditional silence instructions when silent replies are disallowed", () => {
+    const groupChatContext = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "discord",
+      },
+      silentReplyPolicy: "disallow",
+      silentToken: "NO_REPLY",
+    });
+
+    expect(groupChatContext).toContain(
+      "For required conversational requests, reply briefly even when another participant is addressed; do not speak on their behalf.",
+    );
+    expect(groupChatContext).toContain("Emoji reactions are welcome when available.");
+    expect(groupChatContext).not.toContain("mostly lurk");
+    expect(groupChatContext).not.toContain("reply only when directly addressed");
+    expect(groupChatContext).not.toContain("stay silent");
+    expect(groupChatContext).not.toContain("NO_REPLY");
+
+    const alwaysOnIntro = groups.buildGroupIntro({
+      defaultActivation: "always",
+      silentReplyPolicy: "disallow",
+    });
+    expect(alwaysOnIntro).toContain("answer required conversational requests briefly");
+    expect(alwaysOnIntro).not.toContain("most need no response");
   });
 
   it("builds direct chat context without silent-token guidance", () => {

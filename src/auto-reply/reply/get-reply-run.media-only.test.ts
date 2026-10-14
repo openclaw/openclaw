@@ -2234,6 +2234,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(buildGroupIntro).toHaveBeenCalledWith({
         activation: usesBaseSession ? "always" : undefined,
         defaultActivation: "mention",
+        silentReplyPolicy: "disallow",
       });
       expect(vi.mocked(buildInboundMetaSystemPrompt).mock.calls[0]?.[0]).toMatchObject({
         Provider: liveChannel,
