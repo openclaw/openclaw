@@ -14,6 +14,48 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./shared.ts";
 
+async function startActiveControlFixture(controlResult: Record<string, unknown>) {
+  const client = createClient();
+  vi.mocked(client["request"]).mockImplementation(async (method) => {
+    if (method === "talk.client.toolCall") {
+      return { runId: "run-1" };
+    }
+    if (method === "talk.client.steer") {
+      return controlResult;
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const transport = await createTransport({}, client);
+  const ws = await startTransport(transport);
+  ws.emitMessage(
+    encodeJsonFrame({
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
+    }),
+  );
+  await waitForFast(() => expect(createdSources).toHaveLength(1));
+  ws.emitMessage(
+    encodeJsonFrame({
+      toolCall: {
+        functionCalls: [
+          {
+            id: "call-1",
+            name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+            args: { question: "status?" },
+          },
+        ],
+      },
+    }),
+  );
+  await waitForFast(() =>
+    expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+  );
+  return { client, transport, ws };
+}
+
 describe("GoogleLiveRealtimeTalkTransport control results", () => {
   installGoogleLiveTestFixture();
 
@@ -67,53 +109,16 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
   });
 
   it("sends spoken active-control acknowledgements through Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const { client, transport, ws } = await startActiveControlFixture({
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "OpenClaw is working in read (running).",
+      speak: true,
+      show: true,
+      suppress: false,
     });
-    const transport = await createTransport({}, client);
-    const ws = await startTransport(transport);
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await waitForFast(() => expect(createdSources).toHaveLength(1));
-    ws.emitMessage(
-      encodeJsonFrame({
-        toolCall: {
-          functionCalls: [
-            {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
-            },
-          ],
-        },
-      }),
-    );
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -137,54 +142,17 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
   });
 
   it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const { client, transport, ws } = await startActiveControlFixture({
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
-    const transport = await createTransport({}, client);
-    const ws = await startTransport(transport);
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await waitForFast(() => expect(createdSources).toHaveLength(1));
-    ws.emitMessage(
-      encodeJsonFrame({
-        toolCall: {
-          functionCalls: [
-            {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
-            },
-          ],
-        },
-      }),
-    );
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -208,54 +176,17 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
   });
 
   it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "cancel",
-          sessionKey: "main",
-          active: true,
-          aborted: true,
-          message: "Cancelled the active OpenClaw run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const { client, transport, ws } = await startActiveControlFixture({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "main",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
-    const transport = await createTransport({}, client);
-    const ws = await startTransport(transport);
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await waitForFast(() => expect(createdSources).toHaveLength(1));
-    ws.emitMessage(
-      encodeJsonFrame({
-        toolCall: {
-          functionCalls: [
-            {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
-            },
-          ],
-        },
-      }),
-    );
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
 
     ws.emitMessage(
       encodeJsonFrame({

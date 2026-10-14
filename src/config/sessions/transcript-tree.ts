@@ -213,11 +213,13 @@ export function scanSessionTranscriptNavigation<T>(
   for (const entry of entries) {
     const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
+    const isLeafControl =
+      explicitTreeEntry !== undefined && isRecord(entry) && entry.type === "leaf";
     if (
       latestResetId &&
       leafId !== null &&
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (explicitTreeEntry.leafId === null || !resetDescendantIds.has(explicitTreeEntry.leafId))
     ) {
       explicitTreeEntry = {
@@ -231,7 +233,7 @@ export function scanSessionTranscriptNavigation<T>(
       id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
     const invalidLeafControl =
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (!isKnownLeafReference(explicitTreeEntry.leafId) ||
         !isKnownLeafReference(explicitTreeEntry.appendParentId));
     if (invalidLeafControl && explicitTreeEntry) {
@@ -307,7 +309,7 @@ export function scanSessionTranscriptNavigation<T>(
         hasExplicitLeafUpdate = true;
       }
     }
-    if (isSessionTranscriptLeafControl(entry)) {
+    if (isLeafControl) {
       hasLeafControl = true;
     }
   }

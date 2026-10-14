@@ -46,6 +46,26 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
+
+// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
+// acyclic plain data; count strings without allocating or scanning their JSON.
+function estimateReplicaBytes(value: unknown): number {
+  if (typeof value === "string") {
+    return 16 + value.length * 2;
+  }
+  if (!value || typeof value !== "object") {
+    return 8;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
+  }
+  let bytes = 32;
+  for (const key in value) {
+    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
+  }
+  return bytes;
+}
+
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
   () => ({ cells: new Map(), snapshots: 0, bytes: 0 }),
@@ -175,7 +195,7 @@ export function ensureReplicaSubscription(): void {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
         cell.entry = unchangedEntry;
-        cell.bytes = JSON.stringify(unchangedEntry).length * 2;
+        cell.bytes = estimateReplicaBytes(unchangedEntry);
         pool.snapshots += 1;
         pool.bytes += cell.bytes;
       }
@@ -224,7 +244,7 @@ export function ensureReplicaSubscription(): void {
             members: sharingUnchanged ? previous?.members : undefined,
             participants: sharingUnchanged ? previous?.participants : undefined,
           });
-          cell.bytes = JSON.stringify(cell.entry).length * 2;
+          cell.bytes = estimateReplicaBytes(cell.entry);
           pool.snapshots += 1;
           pool.bytes += cell.bytes;
           touch(cell);
@@ -271,7 +291,7 @@ function retainSnapshot(
   discard(cell);
   cell.snapshot = state;
   cell.generation = generation;
-  cell.bytes = JSON.stringify(state).length * 2;
+  cell.bytes = estimateReplicaBytes(state);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (
@@ -288,8 +308,8 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   if (!cell.snapshot && !cell.entry && !cell.transcript) {
     pool.snapshots += 1;
   }
-  const previousBytes = cell.transcript ? JSON.stringify(cell.transcript).length * 2 : 0;
-  const bytes = JSON.stringify(transcript).length * 2;
+  const previousBytes = cell.transcript ? estimateReplicaBytes(cell.transcript) : 0;
+  const bytes = estimateReplicaBytes(transcript);
   cell.transcript = transcript;
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
@@ -539,7 +559,7 @@ export function retainSessionActorEntryFacts(
     }),
   );
   cell.generation = incarnation;
-  cell.bytes = JSON.stringify(cell.entry).length * 2;
+  cell.bytes = estimateReplicaBytes(cell.entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   touch(cell);

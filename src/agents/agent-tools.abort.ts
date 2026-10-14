@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Abort-signal wrapping for agent tools.
@@ -68,6 +69,13 @@ export function raceWithAbortSignal<T>(
   });
 }
 
+function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
+  return (
+    tool.name === "sessions_yield" ||
+    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume")
+  );
+}
+
 /** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
@@ -96,7 +104,7 @@ export function wrapToolWithAbortSignal(
         : await raceWithAbortSignal(
             execution,
             combinedSignal,
-            tool.name === "sessions_yield" ? abortSignal : undefined,
+            isTurnYieldCall(tool, params) ? abortSignal : undefined,
           );
     },
   };
@@ -137,7 +145,11 @@ export function wrapToolWithAbortSignal(
           const execution = prepared.execute(onImplementationStart);
           return ownsCancellationOutcome
             ? execution
-            : raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
+            : raceWithAbortSignal(
+                execution,
+                combinedSignal,
+                isTurnYieldCall(tool, prepared.args) ? abortSignal : undefined,
+              );
         },
         dispose: prepared.dispose,
       };

@@ -530,10 +530,6 @@ vi.mock("../../system-prompt-params.js", () => ({
   }),
 }));
 
-vi.mock("../../system-prompt-report.js", () => ({
-  buildSystemPromptReport: () => undefined,
-}));
-
 vi.mock("../../system-prompt-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
@@ -857,7 +853,7 @@ export function resetEmbeddedAttemptHarness(
   });
   hoisted.subscribeEmbeddedAgentSessionMock
     .mockReset()
-    .mockImplementation(() => createSubscriptionMock());
+    .mockImplementation(params.subscribeImpl ?? (() => createSubscriptionMock()));
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
@@ -884,9 +880,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
-  if (params.subscribeImpl) {
-    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
-  }
 }
 
 export async function cleanupTempPaths(tempPaths: string[]) {
@@ -1146,6 +1139,8 @@ export async function createContextEngineAttemptRunner(params: {
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
+    session.setBaseSystemPrompt(options.systemPrompt);
+    session.setActiveToolsByName(options.tools);
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {

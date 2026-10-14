@@ -1,13 +1,16 @@
+import { hkdfSync } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
+  loadChatRequestIdentityKeyAsync,
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateDeviceIdentityAsync,
   loadOrCreateProcessDeviceIdentityAsync,
 } from "./device-identity-async.js";
 import type { DeviceIdentity, DeviceIdentityStoreOptions } from "./device-identity-store.js";
+import { ed25519PrivateKeyPemFromRaw } from "./ed25519-signature.js";
 
 type IdentityCommand = {
   type: "deviceIdentity.load" | "deviceIdentity.read";
@@ -22,6 +25,7 @@ type IdentityOperationOptions = {
 };
 
 const boundary = vi.hoisted(() => ({
+  warn: vi.fn(),
   run: vi.fn<
     (
       context: OpenClawStateWorkerContext,
@@ -34,6 +38,17 @@ const boundary = vi.hoisted(() => ({
     throw new Error("Native storage is outside this pure async identity control");
   },
 }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
+      ...actual.createSubsystemLogger(...args),
+      warn: boundary.warn,
+    }),
+  };
+});
 
 // Retain pure path resolution without config/paths' process-wide path initialization.
 vi.mock("../config/paths.js", async () => {
@@ -81,6 +96,55 @@ beforeEach(() => {
 });
 
 describe("async device identity boundary", () => {
+  it("derives and caches a chat-only key from persisted raw Ed25519 bytes", async () => {
+    const options = syntheticOptions("chat-request-key");
+    const privateKey = Buffer.alloc(32, 7);
+    boundary.run.mockImplementation(async (_context, operation, opening) => {
+      expect(opening).toEqual({ existingOnly: true });
+      return operation({
+        execute: async (command) => {
+          expect(command).toEqual({
+            type: "deviceIdentity.read",
+            input: { identityKey: "primary" },
+          });
+          return { ...identity, privateKeyPem: ed25519PrivateKeyPemFromRaw(privateKey) };
+        },
+      });
+    });
+    const key = await loadChatRequestIdentityKeyAsync(options);
+    expect(key).toEqual(
+      Buffer.from(
+        hkdfSync("sha256", privateKey, "openclaw.device-identity", "openclaw.chat.request.v1", 32),
+      ),
+    );
+    expect(key).not.toEqual(privateKey);
+    expect(await loadChatRequestIdentityKeyAsync(options)).toBe(key);
+    expect(boundary.run).toHaveBeenCalledOnce();
+  });
+
+  it("warns once for missing or unreadable chat identity without creating or caching a replacement", async () => {
+    const options = syntheticOptions("unavailable-chat-request-key");
+    boundary.run
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("synthetic identity read failure"))
+      .mockResolvedValueOnce({
+        ...identity,
+        privateKeyPem: ed25519PrivateKeyPemFromRaw(Buffer.alloc(32, 8)),
+      });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await expect(loadChatRequestIdentityKeyAsync(options)).resolves.toBeNull();
+    }
+    await expect(loadChatRequestIdentityKeyAsync(options)).resolves.toHaveLength(32);
+    for (const call of boundary.run.mock.calls) {
+      expect(call[2]).toEqual({ existingOnly: true });
+    }
+    expect(boundary.run).toHaveBeenCalledTimes(4);
+    expect(boundary.warn).toHaveBeenCalledExactlyOnceWith(
+      'Gateway device identity "primary" is missing or unreadable; chat.send will continue without a keyed request fingerprint.',
+    );
+  });
+
   it.each([
     { mode: "create", explicitPath: false },
     { mode: "read", explicitPath: true },

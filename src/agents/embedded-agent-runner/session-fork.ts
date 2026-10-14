@@ -22,11 +22,11 @@ export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string; 
 type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   model: Model;
-  context: string;
+  context: Buffer;
   publications: Message[];
   options: StreamOptions;
   streamFn: StreamFn;
-  payload: string;
+  payload: Buffer;
   expires: number;
   bytes: number;
   expiryTimer: NodeJS.Timeout;
@@ -137,20 +137,22 @@ export function wrapStreamFnWithSessionFork(
       headers,
       ...requestOptions
     } = options ?? {};
-    // Encode before streaming can mutate history; only a fork needs a private object graph.
-    let savedContext: string;
+    // Retain UTF-8 bytes before streaming mutates history; Unicode must not widen the entire cache.
+    let savedContext: Buffer;
     try {
-      savedContext = JSON.stringify({
-        systemPrompt: context.systemPrompt,
-        messages: context.messages,
-        // AgentTool objects also carry executors. Retain only the transport's Tool contract.
-        tools: context.tools?.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
-      });
+      savedContext = Buffer.from(
+        JSON.stringify({
+          systemPrompt: context.systemPrompt,
+          messages: context.messages,
+          // AgentTool objects also carry executors. Retain only the transport's Tool contract.
+          tools: context.tools?.map(({ name, description, parameters, async }) => ({
+            name,
+            description,
+            parameters,
+            ...(async === false ? { async } : {}),
+          })),
+        }),
+      );
     } catch {
       // Skip this capture without revoking running forks; the old snapshot is already forgotten.
       return streamFn(model, context, options);
@@ -173,10 +175,10 @@ export function wrapStreamFnWithSessionFork(
         const finalPayload = replacement === undefined ? payload : replacement;
         if (isRecord(finalPayload) && authority.active && authority.capture === capture) {
           // Retain wire data once; only forks need a mutable decoded request.
-          const savedPayload = JSON.stringify(finalPayload);
+          const savedPayload = Buffer.from(JSON.stringify(finalPayload));
           const bytes =
-            Buffer.byteLength(savedPayload) +
-            Buffer.byteLength(savedContext) +
+            savedPayload.length +
+            savedContext.length +
             Buffer.byteLength(JSON.stringify({ model: savedModel, options: savedOptions })) +
             22; // ,"context": and ,"payload": within the accounted envelope
           forgetSnapshot(identity.sessionId);
@@ -272,7 +274,7 @@ export async function runEmbeddedSessionFork(params: {
       "Cache-parity session fork requires the parent's prepared model. Send a normal message first.",
     );
   }
-  const context: Parameters<StreamFn>[1] = JSON.parse(snapshot.context);
+  const context: Parameters<StreamFn>[1] = JSON.parse(snapshot.context.toString("utf8"));
   const publishedMessageStart = context.messages.length;
   context.messages = context.messages.concat(structuredClone(snapshot.publications));
   // Only publications after the prepared request can still be in flight. Pair them
@@ -320,7 +322,7 @@ export async function runEmbeddedSessionFork(params: {
       asyncToolExecution: false,
       onPayload: (payload) => {
         assertCurrent();
-        const parentPayload: unknown = JSON.parse(snapshot.payload);
+        const parentPayload: unknown = JSON.parse(snapshot.payload.toString("utf8"));
         if (!isRecord(payload) || !isRecord(parentPayload)) {
           throw new Error("Cache-parity session fork requires an object provider request.");
         }

@@ -200,8 +200,9 @@ beforeAll(async () => {
   } finally {
     captureKernel.mockRestore();
   }
-  // Prepare the real history handler before the RPC deadline starts.
+  // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.
   await import("./server-methods/chat.js");
+  await import("./server-methods/sessions-create.js");
 });
 
 beforeEach(async () => {

@@ -54,7 +54,6 @@ const coreCommands = new Set([
   "session.entry.replacements.prepare",
   "session.entry.replacements.commit",
   "session.lifecycle.project",
-  "session.maintenance.read",
   "session.maintenance.metadata",
   "session.maintenance.prepare",
   "session.maintenance.release",

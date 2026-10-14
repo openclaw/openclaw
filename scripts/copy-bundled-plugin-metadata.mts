@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
 import { MAX_THEME_DEFINITION_BYTES } from "../packages/gateway-protocol/src/theme.ts";
+import { loadPluginControlUiDeclaration } from "../src/plugins/control-ui-build-manifest.ts";
+import { createPluginCache, withPluginCache } from "../src/plugins/plugin-cache.ts";
 import {
   isPluginActivityToolName,
   MAX_PLUGIN_ACTIVITY_TOOL_ICONS,
@@ -276,6 +278,11 @@ function copyPluginIcons(pluginDir: string, distPluginDir: string): void {
  * Copies bundled plugin metadata and package extension files.
  */
 export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void {
+  // Publication observes completed build hooks, independently of an earlier inventory.
+  withPluginCache(createPluginCache(), () => copyMetadata(params));
+}
+
+function copyMetadata(params: CopyMetadataParams): void {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -335,9 +342,18 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         throw new Error(`invalid plugin manifest: ${manifestPath}`);
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
+      const controlUi = loadPluginControlUiDeclaration({
+        rootDir: pluginDir,
+        controlUi: manifest.controlUi,
+        rejectHardlinks: false,
+      });
+      if (!controlUi.ok) {
+        throw new Error(`${manifestPath}: ${controlUi.error}`);
+      }
       const mergedManifest = mergeGeneratedChannelConfigs(
-        mapPluginCatalogEntries(manifest, (entry: string) =>
-          rewritePackageEntry(entry, buildEntry.runtimeExtension),
+        mapPluginCatalogEntries(
+          { ...manifest, ...(controlUi.value ? { controlUi: controlUi.value } : {}) },
+          (entry: string) => rewritePackageEntry(entry, buildEntry.runtimeExtension),
         ),
         pluginId ? generatedChannelConfigsByPlugin.get(pluginId) : undefined,
       );

@@ -6,7 +6,7 @@ import { bindSubagentRunRecord } from "../../src/agents/subagents/registry/subag
 import { writeSubagentRunValuesInDatabase } from "../../src/agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { insertRegistryWorktreeInDatabase } from "../../src/agents/worktrees/registry-run-end.worker.js";
-import { resolveRepositoryIdentity } from "../../src/agents/worktrees/service-preparation.js";
+import { resolveRepositoryIdentity } from "../../src/agents/worktrees/repository-paths.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,

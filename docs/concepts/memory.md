@@ -161,6 +161,11 @@ The agent has three tools for working with memory:
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
 
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
+
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
 that `memory_get` can read. Use `sessions_search` with distinctive text from the

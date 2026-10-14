@@ -34,69 +34,48 @@ export function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
   );
 }
 
-async function buildMemoryItem(params: {
-  id: string;
-  source?: string;
-  sourceLabel: string;
-  target: string;
-  relativePath: string;
-  overwrite?: boolean;
-}): Promise<MigrationItem | undefined> {
-  if (!params.source) {
-    return undefined;
-  }
-  const targetStat = await lstatIfExists(params.target);
-  const targetExists = targetStat !== undefined;
-  const targetNotRegular = targetExists && !targetStat.isFile();
-  const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
-  return createMigrationItem({
-    id: params.id,
-    kind: "memory",
-    action: "copy",
-    source: params.source,
-    target: params.target,
-    status: targetConflict ? "conflict" : "planned",
-    reason: targetNotRegular
-      ? MIGRATION_REASON_TARGET_NOT_REGULAR
-      : targetConflict
-        ? MIGRATION_REASON_TARGET_EXISTS
-        : undefined,
-    message: "Copy Hermes memory into the OpenClaw memory index.",
-    details: {
-      sourceType: "hermes-memory",
-      sourceLabel: params.sourceLabel,
-      collectionId: "hermes",
-      collectionLabel: "Hermes",
-      relativePath: params.relativePath,
-    },
-  });
-}
-
 export async function buildHermesMemoryPlan(
   ctx: MigrationProviderContext,
   source: HermesSource,
 ): Promise<MigrationPlan> {
   const targets = resolvePlannedMigrationTargets(ctx);
   const importRoot = path.join(targets.workspaceDir, "memory", "imports", "hermes");
-  const items = (
-    await Promise.all(
-      (
-        [
-          ["MEMORY.md", source.memoryPath],
-          ["USER.md", source.userPath],
-        ] as const
-      ).map(([filename, sourcePath]) =>
-        buildMemoryItem({
-          id: `memory:${filename}`,
-          source: sourcePath,
+  const items: MigrationItem[] = [];
+  for (const [filename, sourcePath] of [
+    ["MEMORY.md", source.memoryPath],
+    ["USER.md", source.userPath],
+  ] as const) {
+    if (!sourcePath) {
+      continue;
+    }
+    const target = path.join(importRoot, filename);
+    const targetStat = await lstatIfExists(target);
+    const targetNotRegular = targetStat !== undefined && !targetStat.isFile();
+    const targetConflict = targetNotRegular || (targetStat !== undefined && !ctx.overwrite);
+    items.push(
+      createMigrationItem({
+        id: `memory:${filename}`,
+        kind: "memory",
+        action: "copy",
+        source: sourcePath,
+        target,
+        status: targetConflict ? "conflict" : "planned",
+        reason: targetNotRegular
+          ? MIGRATION_REASON_TARGET_NOT_REGULAR
+          : targetConflict
+            ? MIGRATION_REASON_TARGET_EXISTS
+            : undefined,
+        message: "Copy Hermes memory into the OpenClaw memory index.",
+        details: {
+          sourceType: "hermes-memory",
           sourceLabel: `Hermes ${filename}`,
-          target: path.join(importRoot, filename),
+          collectionId: "hermes",
+          collectionLabel: "Hermes",
           relativePath: filename,
-          overwrite: ctx.overwrite,
-        }),
-      ),
-    )
-  ).filter((item): item is MigrationItem => item !== undefined);
+        },
+      }),
+    );
+  }
   return {
     providerId: "hermes",
     source: source.root,

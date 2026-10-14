@@ -17,7 +17,52 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+const multilinePlaceholder = "Default guidance.\nSecond line.";
+const multilineSchema: JsonSchema = { type: "string", maxLength: 4000 };
+const multilineHints = {
+  reviewInstructions: {
+    label: "Review instructions",
+    multiline: true,
+    placeholder: multilinePlaceholder,
+  },
+};
+
 describe("config form scalar integrity", () => {
+  it.each([false, true])("edits multiline string hints with commitOnBlur=%s", (commitOnBlur) => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const path = ["reviewInstructions"];
+    renderTextInputFixture(container, {
+      schema: multilineSchema,
+      value: undefined,
+      path,
+      inputType: "text",
+      hints: multilineHints,
+      commitOnBlur,
+      onPatch,
+    });
+    const textarea = expectElement(
+      container.querySelector<HTMLTextAreaElement>("textarea"),
+      "review instructions",
+    );
+    expect(textarea.getAttribute("aria-label")).toBe("Review instructions");
+    expect(textarea.placeholder).toBe(multilinePlaceholder);
+    expect(textarea.value).toBe("");
+    expect(onPatch).not.toHaveBeenCalled();
+    textarea.value = "Look for scope drift.\nPreserve required checks.";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commitOnBlur) {
+      expect(onPatch).not.toHaveBeenCalled();
+      textarea.dispatchEvent(new FocusEvent("blur"));
+    }
+    expect(onPatch).toHaveBeenLastCalledWith(path, textarea.value);
+    textarea.value = "x".repeat(4001);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    expect(onPatch).toHaveBeenCalledTimes(1);
+  });
+
   it("separates boolean help from its default description", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
