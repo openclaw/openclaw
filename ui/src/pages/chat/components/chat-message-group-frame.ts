@@ -188,8 +188,8 @@ export function prepareMessageGroupFrame(
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
-  const footerAction = preparedMessages.at(-1);
-  const footerActionDetails = footerAction?.ownsActions ? footerAction.actions : null;
+  // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
+  const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
