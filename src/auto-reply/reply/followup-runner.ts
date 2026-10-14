@@ -232,7 +232,6 @@ export function createFollowupRunner(
               ? execution.execution.outcome.sessionWriter
               : undefined,
           operation: turn.operation,
-          prepareRestartClaimCleanup: turn.restartRecovery?.prepareCompletionCleanup,
           publish: (entry) => turn.session.publish(entry),
         },
         async (turnCompletion) => {
