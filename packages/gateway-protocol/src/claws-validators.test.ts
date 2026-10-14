@@ -66,6 +66,14 @@ describe("Claws Gateway contract", () => {
           plugins: 1,
           mcpServers: 0,
           scheduledJobs: 0,
+          contents: {
+            instructions: [
+              { name: "AGENTS.md", source: "workspace/AGENTS.md", excerpt: "Purpose" },
+            ],
+            skills: [{ name: "@openclaw/research", version: "1.0.0", excerpt: "Research skill" }],
+            integrations: [{ name: "@openclaw/lobster", kind: "plugin", version: "1.0.0" }],
+            automations: [],
+          },
         },
       }),
     ).toBe(true);

@@ -32,8 +32,20 @@ export const ClawsCatalogSearchResultSchema = closedObject({
 });
 
 const ClawsCatalogContentsSchema = closedObject({
-  instructions: Type.Array(closedObject({ name: NonEmptyString, source: NonEmptyString })),
-  skills: Type.Array(closedObject({ name: NonEmptyString, version: NonEmptyString })),
+  instructions: Type.Array(
+    closedObject({
+      name: NonEmptyString,
+      source: NonEmptyString,
+      excerpt: Type.Optional(Type.String()),
+    }),
+  ),
+  skills: Type.Array(
+    closedObject({
+      name: NonEmptyString,
+      version: NonEmptyString,
+      excerpt: Type.Optional(Type.String()),
+    }),
+  ),
   integrations: Type.Array(
     closedObject({
       name: NonEmptyString,
