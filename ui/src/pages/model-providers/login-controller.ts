@@ -14,6 +14,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
+import { readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
 import type {
@@ -95,14 +96,16 @@ export class ModelProviderLoginController {
           canonicalModelAuthProviderId(model.provider) === this.providerId &&
           model.available === true &&
           model.manualSelectionAllowed !== false;
-        // Prefer the hosted ranking. Its absence must not lose the provider's
-        // own starter model, verified by the setup owner in this sign-in.
-        this.completionModel =
-          catalog.models.find((model) => available(model) && model.recommended === true) ??
-          catalog.models.find(
-            (model) =>
-              available(model) && `${model.provider}/${model.id}` === this.verifiedModelRef,
-          );
+        const selected = this.completionModel;
+        this.completionModel = selected
+          ? (catalog.models.find(
+              (model) => model.provider === selected.provider && model.id === selected.id,
+            ) ?? selected)
+          : (catalog.models.find((model) => available(model) && model.recommended === true) ??
+            catalog.models.find(
+              (model) =>
+                available(model) && `${model.provider}/${model.id}` === this.verifiedModelRef,
+            ));
         host.requestUpdate();
       },
     });
@@ -493,6 +496,33 @@ export class ModelProviderLoginController {
     };
   }
 
+  private showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
+    const modelRef = completion.modelActivation?.modelRef;
+    if (!modelRef) {
+      return;
+    }
+    const { context, agentId } = this.options.getScope();
+    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
+    const slash = modelRef.indexOf("/");
+    const provider = modelRef.slice(0, slash);
+    const id = modelRef.slice(slash + 1);
+    const known = catalog.models.find((model) => model.provider === provider && model.id === id);
+    this.verifiedModelRef = modelRef;
+    const recommended =
+      !catalog.retired &&
+      catalog.models.find(
+        (model) =>
+          canonicalModelAuthProviderId(model.provider) === this.providerId &&
+          model.available === true &&
+          model.manualSelectionAllowed !== false &&
+          model.recommended === true,
+      );
+    this.completionModel = recommended
+      ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
+      : { provider, id, name: known?.name ?? modelRef };
+    this.host.requestUpdate();
+  }
+
   private async complete(completion: ModelSetupWizardCompletion): Promise<void> {
     const { context, agentId } = this.options.getScope();
     const client = context.gateway.snapshot.client;
@@ -542,7 +572,7 @@ export class ModelProviderLoginController {
     }
     if (client && agentId && providerId) {
       this.completionCatalog.bind(context.gateway, { agentId });
-      await this.completionCatalog.read();
+      void this.completionCatalog.read();
     }
   }
 
@@ -603,6 +633,13 @@ export class ModelProviderLoginController {
           const completion = await task();
           if (completion) {
             invalidateModelAuthStatusRequests(mutationClient);
+            if (
+              generation === this.generation &&
+              this.options.getScope().context.gateway.snapshot.client === mutationClient &&
+              completion.isCurrent?.() !== false
+            ) {
+              this.showVerifiedStarter(completion);
+            }
           }
           return completion;
         },

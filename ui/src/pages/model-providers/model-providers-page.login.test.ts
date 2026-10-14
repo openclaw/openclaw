@@ -9,11 +9,7 @@ import type {
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type {
-  ModelAuthStatusResult,
-  ModelCatalogResult,
-  WizardNextResult,
-} from "../../api/types.ts";
+import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
@@ -116,7 +112,7 @@ describe("Models provider login", () => {
       });
       await waitForSolid(() =>
         expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-          "Account connected",
+          "Example API key is connected",
         ),
       );
       if (recommended || verified) {
@@ -368,7 +364,7 @@ describe("Models provider login", () => {
             { timeout: 3000 },
           );
           expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-            "Account connected.",
+            "Example browser sign-in is connected",
           );
           expect(session?.getStatus()).toBe("done");
           expect(page.renderRoot.textContent).toContain(
@@ -486,7 +482,9 @@ describe("Models provider login", () => {
     await waitForSolid(() =>
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
-    expect(page.querySelector(".model-setup-wizard")?.textContent).toContain("Account connected.");
+    expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
+      "Example API key is connected",
+    );
     expect(context.navigate).not.toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
