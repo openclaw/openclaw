@@ -1,7 +1,7 @@
 // Xai tests cover web search plugin behavior.
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
@@ -46,14 +46,6 @@ function profileAuth(
   profileId = "xai:default",
 ) {
   return { apiKey, source: `profile:${profileId}`, mode, profileId };
-}
-
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
 }
 
 function xaiAnswerResponse(text: string): Response {

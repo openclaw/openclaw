@@ -59,7 +59,6 @@ describe("tui last session state", () => {
         open,
         unused,
         unused,
-        unused,
       ),
     );
     expect(readConfigMachineStateWithMetadata("authProfiles.store", options)).toBeUndefined();
@@ -260,7 +259,6 @@ describe("tui last session state", () => {
         executeSharedStateCommand(
           { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
           { databasePath: context.admission.databasePath },
-          open,
           open,
           open,
           open,

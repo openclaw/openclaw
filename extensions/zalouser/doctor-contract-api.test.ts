@@ -222,6 +222,7 @@ describe("zalouser doctor state migration", () => {
         sessionId: "session-1",
         updatedAt: 1,
         chatType: "direct",
+        skillsSnapshot: { prompt: "Retained session skill context", skills: [] },
         delivery: normalizeSessionDeliveryState({
           context: { channel: "zalouser", accountId: "default" },
         }),
@@ -251,7 +252,11 @@ describe("zalouser doctor state migration", () => {
     );
     expect(entries.has(legacyKey)).toBe(false);
     expect(entries.has(groupKey)).toBe(true);
-    expect(entries.get(canonicalKey)).toMatchObject({ sessionId: "session-1", chatType: "direct" });
+    expect(entries.get(canonicalKey)).toMatchObject({
+      sessionId: "session-1",
+      chatType: "direct",
+      skillsSnapshot: { prompt: "Retained session skill context", skills: [] },
+    });
   });
 
   it("keeps the freshest session when identity links collapse legacy peers", async () => {

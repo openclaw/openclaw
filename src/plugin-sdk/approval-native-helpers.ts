@@ -338,7 +338,7 @@ function createNativeApprovalChannelRoutePolicy<TTarget extends NativeApprovalTa
   };
 }
 
-/** @deprecated Use createNativeApprovalChannelRouteGatesAsync for worker-owned session reads. */
+/** @deprecated Use createNativeApprovalChannelRouteGatesAsync for worker-owned session reads. Final compatibility day: 2026-12-31. */
 export function createNativeApprovalChannelRouteGates<TTarget extends NativeApprovalTarget>(
   params: NativeApprovalChannelRouteGateParams<TTarget>,
 ): NativeApprovalChannelRouteGates {
@@ -530,7 +530,7 @@ function prepareForwardingMatch<TTarget extends NativeApprovalTarget>(
   };
 }
 
-/** @deprecated Use createNativeApprovalForwardingFallbackSuppressorAsync with awaited route eligibility. */
+/** @deprecated Use createNativeApprovalForwardingFallbackSuppressorAsync with awaited route eligibility. Final compatibility day: 2026-12-31. */
 export function createNativeApprovalForwardingFallbackSuppressor<
   TTarget extends NativeApprovalTarget,
 >(

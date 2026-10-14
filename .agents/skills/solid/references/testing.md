@@ -22,11 +22,11 @@ Follow [writing tests](../../../../docs/help/testing/writing-tests.md), [test-au
 
 - E2E selects host tags and classes, which is why both stay stable.
 - Wait on the readiness contract, never on timers: `window.openclawControlUi?.snapshot()` facts (`routeReady`, `gatewayPhase`, `rosterReady`, …). The hook loads lazily on first read, so a one-shot read must first `waitForFunction(() => window.openclawControlUi !== undefined)`.
-- Overlay and focus changes need WebKit runs as well as Chromium.
+- Overlay and focus changes need WebKit proof as well as Chromium; use PR CI under the migration's local compute budget. Chat, shell/routes, overlays/focus, and widely imported shared owners require `ci:full` before the run used to land.
 
 ## Visual parity
 
-`pnpm ui:parity` captures the scene gallery (924 shots across profiles) on two builds and diffs them. Run it on your merge base and your head for the routes and states you touched. Same-SHA captures are deterministic except an explicit, documented list of known-nondeterministic shots (Apps image clipping). One-level color noise is reported separately. Inspect the gallery before claiming parity, and embed sanitized before/after screenshots in the PR for visual changes.
+Visual changes require inspected, sanitized before/after screenshots in chat and the PR. Under the final-wave budget, capture synthetic touched states locally with one build per side and targeted Playwright screenshots; do not run local E2E batteries or `pnpm ui:parity`. The parity gallery remains available for an explicitly assigned parity campaign. Same-SHA determinism and its named exceptions belong to that tool, not a blanket image tolerance.
 
 ## Quantitative gates
 
@@ -37,3 +37,5 @@ The chat gates (see [state and ownership](state-and-ownership.md#chat-render-lif
 Follow the canonical [proof policy](../../openclaw-testing/SKILL.md#proof-policy)
 for local, PR CI, and exceptional remote proof; use the owning UI/Gateway lane
 for the changed contract.
+
+The final-wave local budget is `pnpm tsgo:ui` plus at most 1–3 directly changed test files, once each with `--maxWorkers=1`. Build locally only for boot/startup changes or the bounded screenshot capture above. Broad UI suites run in PR CI. Attribute inherited failures by the exact failing test names against scheduled `main`, never by shard name alone.

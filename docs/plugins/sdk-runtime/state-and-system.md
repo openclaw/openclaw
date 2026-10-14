@@ -209,7 +209,7 @@ keep the existing synchronous fallback.
 
     Current host factories provide `count`, but it remains optional in the public async and synchronous store types for supported older hosts and adapters. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
 
-    New integrations should use `openKeyedStoreV2<T>(...)` and await its methods. `openSyncKeyedStore<T>(...)` preserves released synchronous return values and errors during the `stable-deprecation-period` compatibility gate; no removal date has been announced. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+    Use `openKeyedStoreV2<T>(...)` and await its methods. `openSyncKeyedStore<T>(...)` preserves released synchronous return values and errors through 2026-12-31, the final compatibility day. Removal ships in the first January 2027 stable release without a Plugin SDK major version. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration) and the [complete migration mapping](/plugins/sdk-migration/sqlite-async#keyed-state).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
@@ -217,7 +217,7 @@ keep the existing synchronous fallback.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
-    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional through the next Plugin SDK major for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional for existing external queue implementations until a separately announced compatibility window ends; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
 
     Plugin-state leases were removed in 2026.8.1. Use plugin-scoped keyed stores (`openKeyedStoreV2`) for bounded durable state and their data-only commands for atomic database work.
 
@@ -335,7 +335,8 @@ that native work has stopped.
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
-supported during the stable deprecation period. Actual legacy
+supported through 2026-12-31, with removal in the first January 2027 stable
+release. Actual legacy
 calls emit one deprecation diagnostic per plugin and capability family per
 Gateway process; importing the SDK does not warn. Synchronous methods still
 commit and install their facts before returning.

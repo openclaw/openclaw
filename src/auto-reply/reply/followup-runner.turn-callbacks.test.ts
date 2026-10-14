@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { admitFollowupTurn } from "./followup-turn-admission.js";
@@ -86,6 +87,17 @@ describe("queued turn callback ownership", () => {
       const finished = [createDeferred(), createDeferred()];
       const executed: string[] = [];
       const message = makeAssistantMessageFixture();
+      const originalRecorder = createUserTurnTranscriptRecorder({
+        target: {
+          agentId: "agent",
+          sessionId: "session",
+          sessionKey: "main",
+          storePath: "/tmp/store",
+          sessionEntry: undefined,
+        },
+        message: { role: "user", content: "original request", timestamp: 1 },
+        updateMode: "none",
+      });
       let attempts = 0;
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
         if (++attempts === 1) {
@@ -101,6 +113,9 @@ describe("queued turn callback ownership", () => {
           throw new Error("Followup execution did not bind its run ID");
         }
         executed.push(item);
+        expect(params.opts?.userTurnTranscriptRecorder).toBe(
+          params.followupRun.userTurnTranscriptRecorder,
+        );
         expect(params.opts?.internalEventExecution).toBe(
           params.followupRun.run.internalEventExecution,
         );
@@ -135,6 +150,7 @@ describe("queued turn callback ownership", () => {
           defaultModel: "gpt-test",
           opts: {
             ...opts,
+            userTurnTranscriptRecorder: originalRecorder,
             internalEventExecution: decoyEvent,
             sourceReplyDeliveryMode: "message_tool_only",
           },

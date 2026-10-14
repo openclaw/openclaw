@@ -32,7 +32,6 @@ import {
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
-import { freezeTranscriptPayloads } from "./session-manager-snapshot.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -111,7 +110,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in a later stable release after the deprecation period. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -288,9 +287,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
-    if (target) {
-      this.fileEntries.forEach(freezeTranscriptPayloads);
-    }
     this.buildIndex();
     if (bounded) {
       this.boundedParentIds = new Map(bounded.parents);
@@ -361,7 +357,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in a later stable release after the deprecation period. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();

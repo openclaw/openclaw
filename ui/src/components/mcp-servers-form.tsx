@@ -1,5 +1,8 @@
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
+
+registerMcpEnglish();
 
 export function McpServersForm(props: {
   busy: boolean;

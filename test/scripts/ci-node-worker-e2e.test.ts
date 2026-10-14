@@ -15,7 +15,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimeRoot = "test/e2e/qa-lab/runtime";
 const expectedFiles = readdirSync(runtimeRoot)
   .filter((file) =>
-    /^(?:(?:codex|gateway)-node-|node-worker-launch-|paired-node-worker-|native-worker-|required-native-|skill-library-worker-).*\.e2e\.test\.ts$/u.test(
+    /^(?:cloud-worker-|(?:codex|gateway)-node-|node-worker-launch-|paired-node-worker-|native-worker-|required-native-|skill-library-worker-).*\.e2e\.test\.ts$/u.test(
       file,
     ),
   )

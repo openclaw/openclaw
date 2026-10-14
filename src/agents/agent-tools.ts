@@ -92,6 +92,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
+import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -361,11 +362,19 @@ function* assembleOpenClawCodingTools(
     ownerOnlyCoreToolDenylist,
   );
   // Passed by reference to sessions_spawn and populated after the final policy
-  // pass so child sessions inherit the actual parent tool surface.
+  // pass so child sessions inherit the parent's tool policy.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
+  // A new managed child has its own publication workspace. Run the real tool
+  // through all parent policies before capturing it, without exposing it here.
+  const unavailablePublicationTool =
+    (shouldInheritEffectiveToolAllowlist || options?.inheritedPublicationToolRef) &&
+    includeOpenClawTools &&
+    options?.githubPublicationAvailable === false
+      ? createGitHubPublishTool()
+      : undefined;
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const gatewayCaller = resolveScheduledToolCallerContext({
     scheduledToolPolicy: options?.scheduledToolPolicy,
@@ -517,6 +526,9 @@ function* assembleOpenClawCodingTools(
   const tools = preparedTools
     ? [...new Map([...assembledTools, ...preparedTools].map((tool) => [tool.name, tool])).values()]
     : assembledTools;
+  if (unavailablePublicationTool) {
+    tools.push(unavailablePublicationTool);
+  }
   const swarmStructuredOutputTool =
     options?.swarmCollector && options.swarmOutputSchema
       ? tools.find((tool) => tool.name === "structured_output")
@@ -565,7 +577,7 @@ function* assembleOpenClawCodingTools(
   const subagentFiltered = messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter);
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = applySwarmCollectorToolContract(
+  const inheritableTools = applySwarmCollectorToolContract(
     applyDelegationCapability(
       mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
       options?.delegationCapability,
@@ -575,12 +587,20 @@ function* assembleOpenClawCodingTools(
       structuredOutputTool: swarmStructuredOutputTool,
     },
   );
+  const authorizedTools = unavailablePublicationTool
+    ? inheritableTools.filter((tool) => tool !== unavailablePublicationTool)
+    : inheritableTools;
+  if (options?.inheritedPublicationToolRef) {
+    options.inheritedPublicationToolRef.current = inheritableTools.find(
+      (tool) => tool === unavailablePublicationTool,
+    );
+  }
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);
   if (shouldInheritEffectiveToolAllowlist) {
-    // Snapshot exporter only: this copies authorizedTools for descendants and
+    // Snapshot exporter only: this copies policy-approved tools for descendants and
     // never filters the mandatory structured_output tool from this turn.
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
     getPluginToolMeta(tool),
@@ -718,7 +738,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   );
 }
 
-/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. */
+/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. Supported through 2026-12-31. */
 export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): AnyAgentTool[] {
   warnPluginSdkDeprecation({
     family: "tool-surface",

@@ -65,6 +65,8 @@ const loaders = {
   sessionUpstream: async () => sessionUpstreamReadOperations,
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
+  restartLifecycle: () =>
+    import("../infra/restart-handoff.read.worker.js").then((m) => m.restartHandoffReadOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.read.worker.js").then((m) => m.restartSentinelReadOperations),
 };

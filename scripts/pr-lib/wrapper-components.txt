@@ -222,6 +222,7 @@ scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
+scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
@@ -351,9 +352,11 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
+src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
@@ -919,6 +922,7 @@ src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
+src/infra/gc-observer.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
@@ -1023,6 +1027,7 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
+src/infra/private-dir-mode.ts
 src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
@@ -1032,6 +1037,7 @@ src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
+src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
@@ -1216,6 +1222,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
@@ -1226,6 +1233,7 @@ src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
+src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
@@ -1354,6 +1362,7 @@ src/plugins/config-policy.ts
 src/plugins/config-state.ts
 src/plugins/control-plane-workspace.ts
 src/plugins/control-ui-assets.ts
+src/plugins/control-ui-build-manifest.ts
 src/plugins/current-plugin-metadata-snapshot.ts
 src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
@@ -1826,6 +1835,7 @@ src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
+src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
@@ -1861,6 +1871,7 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/postgres-schema.generated/runtime.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema-ensure.ts
@@ -1906,6 +1917,7 @@ src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-owner.ts
+src/state/openclaw-state-worker-registry.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

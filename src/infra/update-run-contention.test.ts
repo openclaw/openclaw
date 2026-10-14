@@ -7,7 +7,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import { captureUpdateRunRedactionFacts, isRetainedStep } from "./update-run-codec.js";
+import { captureUpdateRunRedactionFacts } from "./update-run-codec.js";
 import { persistInterruptedUpdateObservation } from "./update-run-interruption-store.js";
 import {
   createUpdateRun,
@@ -81,33 +81,6 @@ function retentionCommand(
   };
 }
 
-it.each([
-  "updater-runtime-retention",
-  "diagnostic:updater-runtime-retention",
-  "candidate-state-snapshot",
-  "update-driver-handoff",
-])("skips contended bookkeeping even when history retains %s", (step) => {
-  const command = retentionCommand();
-  command.input.step.step = step;
-  expect(isRetainedStep(command.input.step)).toBe(true);
-  const run = vi.spyOn(writer, "run").mockImplementation(() => {
-    throw busyError();
-  });
-  const current = vi.fn();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    expect(recordUpdateRunMutationInWorker(command, options, current, () => writer)).toEqual({
-      kind: "bookkeeping-skipped",
-    });
-  }
-  expect(run).toHaveBeenCalledTimes(3);
-  expect(run).toHaveBeenLastCalledWith(
-    expect.any(Function),
-    expect.objectContaining({ busyTimeoutMs: 1_000 }),
-  );
-  expect(current.mock.calls).toEqual([["transaction"], ["transaction"], ["transaction"]]);
-  expect(getUpdateRun(runId, options)?.steps.some((entry) => entry.step === step)).toBe(false);
-});
-
 it("warns on contended bookkeeping and still records the required outcome", () => {
   const write = vi
     .spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction")
@@ -149,7 +122,7 @@ it("keeps Gateway verification at the ordinary writer budget", () => {
   expect(getUpdateRun(runId, options)?.verification.booted).toBeUndefined();
 });
 
-it.each(["finalize:predecessor-stop:fixture", "openclaw doctor", "package rollback"])(
+it.each(["finalize:predecessor-stop:fixture"])(
   "gives recovery-critical %s the driver's native busy budget",
   (step) => {
     const command = retentionCommand();

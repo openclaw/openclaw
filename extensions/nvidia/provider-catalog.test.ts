@@ -161,16 +161,18 @@ describe("nvidia provider catalog", () => {
       id: "nvidia/nemotron-3-super-120b-a12b",
       contextWindow: 1_000_000,
     });
-    expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.5")).toMatchObject({
+    expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.6")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
       contextWindow: 262_144,
-      maxTokens: 32_768,
+      maxTokens: 65_536,
     });
-    expect(provider.models.find((model) => model.id === "minimaxai/minimax-m2.7")).toMatchObject({
+    expect(
+      provider.models.find((model) => model.id === "nvidia/nemotron-3.5-lightning-30b-a3b"),
+    ).toMatchObject({
       input: ["text"],
       reasoning: true,
-      contextWindow: 204_800,
+      contextWindow: 1_048_576,
       maxTokens: 16_384,
     });
   });
@@ -188,13 +190,13 @@ describe("nvidia provider catalog", () => {
         ],
       },
       200,
-      ["z-ai/glm-5.2"],
+      ["moonshotai/kimi-k2.6"],
     );
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.2",
-          "model-name": "Updated GLM 5.2",
+          model: "moonshotai/kimi-k2.6",
+          "model-name": "Updated Kimi K2.6",
           context: 262144,
           "max-output": 8192,
         },
@@ -204,7 +206,7 @@ describe("nvidia provider catalog", () => {
     await expect(buildLiveNvidiaProvider()).rejects.toThrow("no usable model metadata");
     const second = await buildLiveNvidiaProvider();
     expect(second.models).toMatchObject([
-      { id: "z-ai/glm-5.2", name: "Updated GLM 5.2", contextWindow: 262144 },
+      { id: "moonshotai/kimi-k2.6", name: "Updated Kimi K2.6", contextWindow: 262144 },
     ]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(3);
   });

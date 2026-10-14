@@ -3,10 +3,11 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { execa } from "execa";
+import { execa, type Options as ExecaOptions } from "execa";
 import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
@@ -385,6 +386,44 @@ type SpawnCommandOptions = CommandSpawnOptions & {
   inheritScopeCancellation?: boolean;
 };
 
+function commandCreatesChildPipes(
+  options: Pick<
+    ExecaOptions,
+    | "ipc"
+    | "node"
+    | "ipcInput"
+    | "gracefulCancel"
+    | "input"
+    | "inputFile"
+    | "stdio"
+    | "stdin"
+    | "stdout"
+    | "stderr"
+  >,
+): boolean {
+  // Execa defaults IPC on for Node children, IPC input, and graceful cancellation.
+  const ipc =
+    options.ipc ??
+    (options.node === true || options.ipcInput !== undefined || options.gracefulCancel === true);
+  if (ipc || options.input !== undefined || options.inputFile !== undefined) {
+    return true;
+  }
+  const stdio =
+    typeof options.stdio === "string" || options.stdio === undefined
+      ? [options.stdio, options.stdio, options.stdio]
+      : options.stdio;
+  const descriptors = [
+    options.stdin ?? stdio[0],
+    options.stdout ?? stdio[1],
+    options.stderr ?? stdio[2],
+    ...stdio.slice(3).filter((entry) => entry !== undefined),
+  ];
+  return descriptors.some(
+    (entry) =>
+      entry !== "ignore" && entry !== "inherit" && !(typeof entry === "number" && entry >= 0),
+  );
+}
+
 export function spawnCommandWithInvocation<
   OptionsType extends SpawnCommandOptions = SpawnCommandOptions,
 >(
@@ -394,6 +433,9 @@ export function spawnCommandWithInvocation<
   child: CommandSubprocess<OptionsType>;
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
+  if (process.platform === "win32" && commandCreatesChildPipes(options)) {
+    assertAppContainerSpawnSupported();
+  }
   const scope = commandProcessScope.getStore();
   if (scope?.signal.aborted) {
     throw new Error("Command process scope is closed");

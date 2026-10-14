@@ -224,6 +224,7 @@ export function createGatewayMatrixWorkload(
       .update(fixture.prompt)
       .update("\0")
       .update(fixture.interviewPrompt)
+      .update(fixture.instructions ? `\0${fixture.instructions}` : "")
       .digest("hex"),
     fixtureSha256: createHash("sha256")
       .update(fixture.pluginSource)
@@ -265,7 +266,7 @@ function gatewayAllowedTools(
   if (task === "automation-contracts") {
     return ["automations"];
   }
-  if (task === "process-contracts") {
+  if (task === "process-contracts" || task === "process-wait-recovery") {
     return ["exec", "process"];
   }
   if (task === "javascript-contracts") {
@@ -814,7 +815,7 @@ export function evaluateGatewayMatrixTask(params: {
         initialJobs.toSorted((a, b) => String(a.id).localeCompare(String(b.id))),
         finalJobs.toSorted((a, b) => String(a.id).localeCompare(String(b.id))),
       );
-  } else if (task === "process-contracts") {
+  } else if (task === "process-contracts" || task === "process-wait-recovery") {
     const processes = activity.filter((item) => item.name === "process");
     const launches = trace.activities.filter((item) => item.name === "exec");
     const helperSessionIds = new Set(
@@ -831,8 +832,10 @@ export function evaluateGatewayMatrixTask(params: {
       helperSessionIds.has(String(item.input.sessionId)),
     );
     checks.realProcessControl =
-      processes.some((item) => item.input.action === "list") &&
-      processes.some((item) => item.input.action === "poll" || item.input.action === "log");
+      task === "process-wait-recovery"
+        ? processes.some((item) => item.input.action === "poll")
+        : processes.some((item) => item.input.action === "list") &&
+          processes.some((item) => item.input.action === "poll" || item.input.action === "log");
     checks.singleHelperLaunch =
       launches.length === 1 &&
       launches.every(
@@ -861,6 +864,80 @@ export function evaluateGatewayMatrixTask(params: {
       helperOperations.some((item) =>
         JSON.stringify(item.result).includes(String(expected.marker)),
       );
+    if (task === "process-wait-recovery") {
+      const launch = launches.length === 1 ? launches[0] : undefined;
+      const launchCell = trace.calls.find(
+        (call) =>
+          launch !== undefined &&
+          call.id === launch.parentId &&
+          call.sessionKey === launch.sessionKey,
+      );
+      const launchOutcome = launchCell
+        ? trace.outcomes.find(
+            (outcome) =>
+              outcome.id === launchCell.id && outcome.sessionKey === launchCell.sessionKey,
+          )
+        : undefined;
+      const sessionId = launch?.result.sessionId;
+      const waits = trace.calls.filter((call) => call.name === "wait");
+      const wrongWait = waits.length === 1 ? waits[0] : undefined;
+      const failedWait = wrongWait
+        ? trace.outcomes.find(
+            (outcome) => outcome.id === wrongWait.id && outcome.sessionKey === wrongWait.sessionKey,
+          )
+        : undefined;
+      checks.completedLaunchWithRunningProcess =
+        launch?.result.status === "running" &&
+        launchOutcome?.details.status === "completed" &&
+        !launchOutcome.isError &&
+        record(launchOutcome.details.value) &&
+        launchOutcome.details.value.status === "running" &&
+        launchOutcome.details.value.sessionId === sessionId;
+      checks.wrongWaitObserved =
+        typeof sessionId === "string" &&
+        wrongWait !== undefined &&
+        wrongWait.args.runId === sessionId &&
+        trace.calls.filter(
+          (call) =>
+            call.eventIndex === wrongWait.eventIndex && call.sessionKey === wrongWait.sessionKey,
+        ).length === 1 &&
+        wrongWait.sessionKey === launchCell?.sessionKey &&
+        wrongWait.eventIndex > (launchOutcome?.eventIndex ?? Infinity) &&
+        failedWait !== undefined &&
+        failedWait.eventIndex > wrongWait.eventIndex &&
+        (failedWait.isError || failedWait.details.status === "failed");
+      // A later assistant call proves the failed result reached a new model turn;
+      // activity completion alone could also come from a premature/same-turn poll.
+      const processCalls = trace.activities
+        .filter((item) => item.name === "process")
+        .map((item) => ({
+          item,
+          call: trace.calls.find(
+            (call) => call.id === item.parentId && call.sessionKey === item.sessionKey,
+          ),
+        }));
+      checks.recoveryAfterFailedWait =
+        failedWait !== undefined &&
+        processCalls.length > 0 &&
+        processCalls.every(
+          ({ item, call }) =>
+            call?.name === "exec" &&
+            call.sessionKey === wrongWait?.sessionKey &&
+            call.eventIndex > failedWait.eventIndex &&
+            item.input.sessionId === sessionId,
+        );
+      checks.completedRecoveryPoll = processCalls.some(
+        ({ item, call }) =>
+          item.input.action === "poll" &&
+          item.input.sessionId === sessionId &&
+          !item.isError &&
+          item.result.status === "completed" &&
+          item.result.exitCode === 0 &&
+          item.result.sessionId === sessionId &&
+          call !== undefined &&
+          completedCallOutcome(callOutcomes(trace, call)) !== undefined,
+      );
+    }
   } else if (task === "partial-failure") {
     const mutations = receiptRows.filter((row) => row.kind === "effect");
     const failedCall = trace.activities.find(
@@ -1109,6 +1186,7 @@ async function agentRequest(
   abortSignal?: AbortSignal,
   sessionKey?: string,
   maxOutputTokens?: number,
+  instructions?: string,
 ) {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
@@ -1125,6 +1203,7 @@ async function agentRequest(
     body: JSON.stringify({
       model: "openclaw/qa",
       input: prompt,
+      ...(instructions ? { instructions } : {}),
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
       stream: false,
@@ -1499,6 +1578,7 @@ export async function runGatewayMatrixCell(
         params.abortSignal,
         rootSessionKey,
         performance ? undefined : MAX_MODEL_OUTPUT_TOKENS,
+        fixture.instructions,
       );
     } finally {
       taskResponseAt = Date.now();

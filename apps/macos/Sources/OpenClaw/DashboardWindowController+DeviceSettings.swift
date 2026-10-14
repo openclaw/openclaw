@@ -89,32 +89,8 @@ extension DashboardWindowController {
                 NSLocalizedDescriptionKey: "Open the Mac app connected to the requested node and try again.",
             ])
         }
-        // Resolve local consent before requesting OS grants, regardless of the
-        // order in which the failed command reports missing capabilities.
-        for capability in capabilities {
-            guard isCurrent(), try await self.enableNodeCapability(capability, isCurrent: isCurrent) else { return }
-        }
-        var missingStates: [(Capability, OpenClawPermissionState)] = []
-        for capability in capabilities {
-            if let state = await PermissionManager.missingState(capability) {
-                missingStates.append((capability, state))
-            }
-            guard isCurrent() else { return }
-        }
-        guard let remediation = PermissionManager.primaryRemediation(missingStates) else { return }
-        for capability in remediation.capabilities {
-            guard isCurrent() else { return }
-            switch remediation.state {
-            case .restartRequired:
-                DebugActions.restartApp()
-                return
-            case .denied, .staleGrant:
-                SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
-            case .notDetermined:
-                _ = await PermissionManager.ensure([capability], interactive: true, isCurrent: isCurrent)
-            case .disabledInOpenClaw:
-                break
-            }
+        try await PermissionManager.resolve(capabilities, isCurrent: isCurrent) { capability in
+            try await self.enableNodeCapability(capability, isCurrent: isCurrent)
         }
     }
 

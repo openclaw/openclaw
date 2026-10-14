@@ -108,9 +108,12 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-The submitted browser draft is retired before the confirmed conversation URL is
-committed, so closing the tab does not restore a sent prompt. Saved worktree-name
-preferences can finish clearing alongside navigation.
+As soon as creation is accepted, the submitted prompt and attachments are cleared
+from the New session composer, without waiting for its chat preview to load. The
+submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. A failed creation or
+a newer unsent draft stays available. Saved worktree-name preferences can finish
+clearing alongside navigation.
 
 ## Move an existing session
 
@@ -172,6 +175,10 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
+Changing agents or handing a draft to its new session closes the draft's open
+menus. In the command palette's session settings, Escape closes the nested agent
+menu first and returns focus to its trigger.
+
 In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
 focus to **Browse**. Loading and folder errors are announced without moving focus
 away from the path field.
@@ -180,6 +187,10 @@ Tab completes a folder name. If the starting workspace does not exist yet, Brows
 opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+
+Guests with session access can save these choices in their own profile without
+broader Gateway write permission. This does not allow changing another person's
+preferences or private background resources.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
 accepted, New session clears that name while remembering the repository, checkout

@@ -513,6 +513,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     modelFallbacksOverride,
     ...authProfile,
     thinkLevel: snapshot.run.thinkLevel,
+    thinkingExplicit: snapshot.run.thinkingExplicit,
     fastMode: snapshot.run.fastMode,
     fastModeAutoOnSeconds: snapshot.run.fastModeAutoOnSeconds,
     verboseLevel: snapshot.run.verboseLevel,

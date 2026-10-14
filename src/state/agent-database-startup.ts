@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { retryAsync } from "../infra/retry.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
@@ -9,6 +11,7 @@ import {
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -143,6 +146,8 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
+  // Readiness releases the whole fleet; leave room for other shared-state readers.
+  private readonly journalReads = createPermitPool(8);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
@@ -425,11 +430,30 @@ class AgentDatabaseStartupAdmission {
             }
           };
           const assertNotDeleted = async () => {
-            assertCurrent();
-            const deletion = await readAgentDeletionJournalStatusInWorker(
-              agentId,
-              { env },
-              this.signal,
+            const deletion = await retryAsync(
+              async () => {
+                const release = await this.journalReads.acquire({ signal: this.signal });
+                try {
+                  assertCurrent();
+                  return await readAgentDeletionJournalStatusInWorker(
+                    agentId,
+                    { env },
+                    this.signal,
+                  );
+                } finally {
+                  release?.();
+                }
+              },
+              {
+                attempts: 4,
+                minDelayMs: 500,
+                maxDelayMs: 8000,
+                jitter: 0.2,
+                sleep: (ms) => sleepWithAbort(ms, this.signal),
+                // Other producers can still saturate the shared pool after our permit wait.
+                shouldRetry: (error) =>
+                  error instanceof WorkerTaskError && error.code === "overloaded",
+              },
             );
             assertCurrent();
             if (deletion !== "absent") {

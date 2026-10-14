@@ -200,7 +200,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
-/** @deprecated Use dispatchInboundDirectDm. Retained during stable deprecation. */
+/** @deprecated Use dispatchInboundDirectDm. Final compatibility day: 2026-12-31. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;

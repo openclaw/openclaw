@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -12,6 +13,11 @@ import type { ReplyPayload } from "../types.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+
+const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
+  pluginId: "a2a",
+  artifactBasename: "channel-plugin-api.js",
+});
 
 const channelState = vi.hoisted(() => ({
   outcomes: [] as Array<"delivered" | "failed">,
@@ -156,6 +162,41 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each(["a2a", "slack"])(
+    "delivers queued terminal content and keeps host notices specific to human channels: %s",
+    async (channel) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" },
+          { pluginId: "slack", plugin: createChannelPlugin("slack"), source: "test" },
+        ]),
+      );
+      const turn = createTurn({ messageProvider: channel, originatingChannel: channel });
+      turn.queued.originatingTo = channel === "a2a" ? "a2a:hermes" : "channel:C1";
+      const payloads = [
+        { text: "thinking level clamped", isStatusNotice: true },
+        { text: "run failed", isError: true },
+        setReplyPayloadMetadata({ text: "Gateway restarting" }, { hostNotice: true }),
+        { text: "agent answer" },
+      ];
+      channelState.outcomes = ["delivered", "delivered", "delivered", "delivered"];
+      const onBlockReply = vi.fn(async () => {});
+
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads },
+        turn,
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(channelState.deliver.mock.calls.map(([send]) => send.payloads)).toEqual(
+        channel === "a2a" ? [[{ text: "agent answer" }]] : payloads.map((payload) => [payload]),
+      );
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "optional group generic silence",

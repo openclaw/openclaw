@@ -12,7 +12,7 @@ import type { ChannelApprovalKind } from "./approval-types.js";
 /** Runtime-context capability key used by channels to register native approval resources. */
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
-/** @deprecated Use createLazyChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. */
+/** @deprecated Use createLazyChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. Final compatibility day: 2026-12-31. */
 export function createLazyChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,

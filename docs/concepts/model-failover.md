@@ -20,6 +20,18 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+An explicit organization-wide tokens-per-minute (TPM) exhaustion skips same-model
+backoff and auth-profile rotation when another configured candidate remains and the
+attempt is safe to replay. Auth-profile-backed credentials use the existing model cooldown,
+starting at 30 seconds, before another primary check. Other models on the same
+provider remain eligible. Generic 429 throttles, request limits, server errors,
+and connection failures keep bounded same-model recovery. The last configured
+candidate retains same-model recovery. If all later candidates are skipped by
+policy, authentication, or cooldown checks, the turn reports the exhausted chain
+instead of returning to the TPM-limited model. Inline provider keys still retry
+the primary on later turns; their existing cooldown policy covers auth and billing
+failures rather than model rate limits.
+
 An output-token limit is separate from a transient provider outage. The embedded
 runtime permits at most one continuation for a truncated Responses tool call or
 an empty length stop that still needs an answer. It records an output-limit
@@ -521,6 +533,8 @@ While recovery is in progress, the Control UI updates the working claw with **Re
 If the run ultimately fails after its available recovery attempts, the Control UI shows one terminal failure notice, not one warning per attempt. Partial output and media remain visible, and the raw transcript retains attempt diagnostics for troubleshooting. The latest failed run offers **Try again** to send a continuation that checks completed work before retrying actions, and **Change model** opens the existing model picker. Neither action silently replays the original prompt or clears an unsent draft.
 
 ## Observability and failure summaries
+
+Each admitted retry or fallback request gets its own start-relative diagnostic recovery allowance. Earlier failed attempts remain in cumulative no-progress evidence, but that evidence cannot cancel a fresh request before its recorded allowance expires. User cancellation, retry limits, and overall run budgets still apply.
 
 `runWithModelFallback(...)` records per-attempt details that feed logs and user-facing cooldown messaging:
 

@@ -67,7 +67,7 @@ import {
   createRequesterSettleBatchClaim,
   createRequesterSettleBatchDeferral,
   captureRequesterRunOwner,
-  resolvePrivateSettlePolicy,
+  resolveRequesterSettlePolicy,
   retainedYieldIdentity,
   startRequesterSettleWakeAttempt,
   deferRequesterSettleWakePreparation,
@@ -425,14 +425,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       lifecycleRevision: requesterEntry.lifecycleRevision,
     };
     const completionRows = currentCompletionRows(settledBatch);
+    const recoveryRows = completionRows.filter((entry) =>
+      matchesSubagentRequesterSession(entry, requesterIdentity),
+    );
     // Delivered children remain in yield cohorts; the admitted marker owns whether
     // the requester may deliver its final under the conversation's reply policy.
-    const { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker } =
-      resolvePrivateSettlePolicy(
+    const { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker } =
+      resolveRequesterSettlePolicy(
         completionRows,
         requesterYieldedAfterDelivery,
         selectedState,
         requesterIdentity,
+        recoveryRows.length === completionRows.length,
       );
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable retry must not post old findings into a reset session.
@@ -447,9 +451,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       });
       return false;
     }
-    const recoveryRows = completionRows.filter((entry) =>
-      matchesSubagentRequesterSession(entry, requesterIdentity),
-    );
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows);
@@ -628,7 +629,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                 requesterIsSubagent: requesterDepth >= 1,
                 expectsCompletionMessage: false,
                 requireDirectDelivery: true,
-                ...privateBinding,
+                ...requesterBinding,
                 ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
                 directIdempotencyKey,
                 signal: params.signal,

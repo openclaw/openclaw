@@ -98,6 +98,7 @@ type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, 
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
+  | "thinkingExplicit"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
@@ -478,7 +479,7 @@ export type AgentHarnessDescendantCancellationResult = {
 };
 
 /** Activation-only native readiness check; it does not authorize a model turn. */
-export type AgentHarnessSetupVerificationContext = {
+type AgentHarnessSetupVerificationContext = {
   config: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -515,6 +516,8 @@ type AgentHarnessContract<
    * host requirements.
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
+  /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
+  contextManagement?: "native";
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";
@@ -539,7 +542,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removal follows a stable deprecation period.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

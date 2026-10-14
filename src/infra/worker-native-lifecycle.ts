@@ -20,6 +20,7 @@ import {
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
@@ -144,6 +145,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       }
     };
     const receive = (reply: NativeWorkerReply) => {
+      observeWorkerMessage(reply, "from_worker", "lifecycle");
       handles.get(reply.id)?.receive(reply);
     };
     const runtime: NativeRuntime = {
@@ -188,7 +190,9 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         if (runtime.failure) {
           throw runtime.failure;
         }
+        const bytes = workerMessagePayloadBytes(message);
         port1.postMessage(message, [...transfers]);
+        observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {
         return (source.broker ??= runInDetachedAsyncContext(() =>

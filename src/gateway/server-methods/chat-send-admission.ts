@@ -235,7 +235,11 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const localRecovery = restartSafeRequest && !currentConfig.cloudWorkers?.requiredProfile;
         retryComparison = comparison;
         params.assertCurrent?.();
-        const retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
+        const retainedRequestConflict = resolveChatSendRequestConflict(
+          params,
+          retryComparison,
+          pendingAttemptId,
+        );
         if (retainedRequestConflict) {
           throw new Error(retainedRequestConflict.message);
         }
@@ -248,6 +252,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },
           retryComparison,
+          pendingAttemptId,
         );
         if (requestConflict) {
           throw new Error(requestConflict.message);
@@ -451,7 +456,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     });
     workPhase?.finish();
     retainedRequestConflict = await consumeChatSendCurrent(params, () =>
-      resolveChatSendRequestConflict(params, retryComparison),
+      resolveChatSendRequestConflict(params, retryComparison, pendingAttemptId),
     );
   } catch (err) {
     pendingReservation.clear();
@@ -468,6 +473,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   if (
+    requestIdentity !== undefined &&
     admittedRunAbort?.registered &&
     !reservationSuperseded &&
     !readChatSendDedupeResponse(context.dedupe, clientRunId)
@@ -556,7 +562,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     };
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
-    const consumeCurrent = <T>(consume: () => T): Promise<T | undefined> =>
+    const consumeCurrent = <T>(consume: () => T): Promise<T> =>
       consumeChatSendCurrent(params, () => {
         capturedOperator.authority?.assertCurrent();
         return consume();
@@ -573,9 +579,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           }),
         ),
       }));
-      if (!pending) {
-        return { ok: false as const };
-      }
       const interruption = await pending.interruption();
       interruptedActiveRun = interruption.interrupted;
       if (!interruption.settled) {
@@ -602,17 +605,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           : undefined,
       };
     });
-    if (!pending) {
-      return { ok: false as const };
-    }
     if (pending.admission) {
       if (!(await pending.admission())) {
         cleanupPreDispatchAdmission();
         return { ok: false as const };
       }
-      if (!(await consumeCurrent(() => true))) {
-        return { ok: false as const };
-      }
+      await consumeCurrent(() => undefined);
     }
   } catch (error) {
     // Join effects before releasing custody on reader failure; never replay them.

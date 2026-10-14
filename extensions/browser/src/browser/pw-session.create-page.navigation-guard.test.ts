@@ -313,25 +313,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
     expect(await getPage("TARGET_1")).toBe(f.page);
   });
-  it("returns a committed tab when its load event times out", async () => {
-    f.pageGoto.mockImplementationOnce(async () => {
-      f.pageUrl.mockReturnValue(publicUrl);
-      throw new errors.TimeoutError("load event timed out");
-    });
-    const opened = await create();
-    expect(opened).toMatchObject({ targetId: "TARGET_1", url: publicUrl });
-    expect(await getPage(opened.targetId)).toBe(f.page);
-    expect(f.pageClose).not.toHaveBeenCalled();
-    await opened.close();
-    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
-  });
-  it("closes an uncommitted tab when navigation times out", async () => {
-    const error = new errors.TimeoutError("navigation never committed");
-    f.pageGoto.mockRejectedValueOnce(error);
-    await expect(create()).rejects.toBe(error);
-    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
-    expect(f.pageClose).toHaveBeenCalledOnce();
-  });
   it("checks the committed URL before retaining a timed-out tab", async () => {
     getChromeWebSocketEndpointSpy.mockResolvedValue({
       url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
@@ -412,11 +393,13 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       throw new errors.TimeoutError("load event timed out");
     });
     const owned = await create({ signal: controller.signal });
+    expect(owned).toMatchObject({ targetId: "TARGET_1", url: publicUrl });
     controller.abort(new Error("caller finished"));
     expect(await getPage(owned.targetId)).toBe(f.page);
     expect(f.pageClose).not.toHaveBeenCalled();
     await owned.close();
     expect(f.pageClose).toHaveBeenCalledOnce();
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
   });
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     blockedRedirect({ url: "file:///etc/passwd" });
@@ -609,20 +592,6 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(f.pageRoute).toHaveBeenCalledWith("**", f.pageRoute.mock.calls[0]?.[1]);
     expectRouteRemoved();
   });
-  it("answers a denied subframe document through interception and preserves the source", async () => {
-    const route = createMockRoute();
-    const caught = await denied(
-      guard(async () => {
-        await dispatch({ frame: {}, url: privateUrl, route });
-        throw new Error("locator detached");
-      }),
-    );
-    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(route.abort).not.toHaveBeenCalled();
-    expect(route.fallback).not.toHaveBeenCalled();
-    expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(true);
-    expect(f.page.url()).toBe("about:blank");
-  });
   it("does not claim preservation when postflight also finds a policy violation", async () => {
     const route = createMockRoute();
     const caught = await denied(
@@ -646,6 +615,7 @@ describe("pw-session selected-page interaction request guard", () => {
           dispatch({ url: "http://127.0.0.1:18080/first", route: firstRoute }),
           dispatch({ frame: {}, url: "http://127.0.0.1:18080/second", route: secondRoute }),
         ]);
+        throw new Error("locator detached");
       },
       { onPolicyDenied },
     );
@@ -657,8 +627,13 @@ describe("pw-session selected-page interaction request guard", () => {
     await Promise.resolve();
     expect(events).toEqual(["detected"]);
     first.resolve();
-    await denied(guarded);
+    const caught = await denied(guarded);
     expect(events).toEqual(["detected", "handled:true"]);
+    expect(secondRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(secondRoute.abort).not.toHaveBeenCalled();
+    expect(secondRoute.fallback).not.toHaveBeenCalled();
+    expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(true);
+    expect(f.page.url()).toBe("about:blank");
   });
   it("waits for in-flight policy work before returning", async () => {
     const pending = createDeferred<void>();

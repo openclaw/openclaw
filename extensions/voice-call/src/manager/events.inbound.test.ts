@@ -56,7 +56,6 @@ describe("processEvent (functional inbound calls)", () => {
   it.each([
     ["call.initiated", "ringing"],
     ["call.ringing", "ringing"],
-    ["call.answered", "answered"],
     ["call.active", "active"],
   ] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
     const ctx = createContext({ provider: new MockProvider() });

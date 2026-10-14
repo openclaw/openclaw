@@ -30,7 +30,11 @@ import type { createSessionRosterObservations } from "./session-roster-observati
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
   scope: SessionListScope,
-  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
+  refresh: (
+    entry: ManagedSessionList,
+    isCurrent: () => boolean,
+    immediate: boolean,
+  ) => Promise<void>,
 ): ManagedSessionList {
   const key = sessionListQueryKey(scope);
   const current = lists.get(key);
@@ -52,7 +56,7 @@ export function getManagedSessionList(
     listeners: new Set(),
     coordinator: createSessionEventRefreshCoordinator({
       active: false,
-      refresh: (isCurrent) => refresh(entry, isCurrent),
+      refresh: (isCurrent, immediate) => refresh(entry, isCurrent, immediate),
     }),
     pending: null,
     queued: null,
@@ -129,7 +133,7 @@ export function createSessionManagedListRefresh(
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
         entry.readGeneration += 1;
-        entry.queued = refresh;
+        entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
       }
       return entry.pending;
     }
@@ -314,7 +318,7 @@ export function createSessionManagedListRefresh(
         entry.pending = null;
         if (entry.queued?.background && isCurrent() && isPageActive()) {
           // Release this request's admission before scheduling its automatic successor.
-          entry.coordinator.schedule();
+          entry.coordinator.schedule(entry.queued.immediate);
         }
       }
     });
@@ -331,7 +335,7 @@ export function createSessionManagedListRefresh(
       return refreshManagedList(entry, refresh);
     }
     if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
-      entry.queued = refresh;
+      entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
     }
     return host.background(entry, async () => {
       if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
