@@ -265,6 +265,9 @@ conclusion are separate observations. Linux requests likewise remain
 reader binds the request attempt, builder identity, selected tag, and source SHA;
 main advancing can produce an explicit receiver rejection, not a silent pending
 request. Builder completion and admission are not publication qualification.
+The `Linux App Release` workflow accepts only completed release requests through
+`workflow_run`. Detached mirror-only dispatches use `Linux App Mirror`
+(`linux-app-mirror.yml`); they never select or build release-tag code.
 
 If Linux packaging checks fail after bundles finish building, the builder retains
 `linux-app-release-unqualified-<run-id>-<attempt>` for 14 days. Its `identity.json`

@@ -923,7 +923,7 @@ dispatch_linux_mirror() {
     --release-publish-run-id "$parent_run" --release-publish-run-attempt "$parent_attempt" \
     --release-publish-ref "$parent_ref" --release-publish-full-ref "$parent_full_ref" \
     --release-publish-parent-state-policy active-or-success || return 1
-  mirror_run_id="$(dispatch_workflow_at_ref "$parent_ref" "$parent_sha" linux-app-release.yml \
+  mirror_run_id="$(dispatch_workflow_at_ref "$parent_ref" "$parent_sha" linux-app-mirror.yml \
     -f release_tag="$RELEASE_TAG" -f source_sha="$TARGET_SHA" -f tooling_sha="$parent_sha" \
     -f release_publish_run_id="$parent_run" -f release_publish_run_attempt="$parent_attempt")" || return 1
   jq --arg runId "$mirror_run_id" '. + {state: "dispatched", childRunId: $runId}' \

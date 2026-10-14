@@ -6443,7 +6443,8 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
       ["openclaw-release-promote.yml", "finalize"],
     ] as const
   ).map(([file, job]) => parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[job]);
-  for (const job of [...finalizers, linux.jobs.publish, linux.jobs.mirror_legacy]) {
+  const mirror = parse(readFileSync(".github/workflows/linux-app-mirror.yml", "utf8"));
+  for (const job of [...finalizers, linux.jobs.publish, mirror.jobs.mirror_legacy]) {
     expect(job.concurrency).toEqual({
       group: "linux-app-release-publish",
       "cancel-in-progress": false,
@@ -6453,15 +6454,12 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(linux.concurrency["cancel-in-progress"]).toBe(false);
   expect(linux.concurrency.queue).toBe("max");
   expect(linux.concurrency.group).not.toBe(linux.jobs.publish.concurrency.group);
-  for (const event_name of ["workflow_run", "workflow_dispatch"]) {
-    for (const alreadyPublished of ["true", "false"]) {
-      expect(
-        runInNewContext(linux.jobs.build_linux.if.replace(/^\$\{\{|\}\}$/gu, ""), {
-          github: { event_name },
-          needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
-        }),
-      ).toBe(event_name === "workflow_run" && alreadyPublished !== "true");
-    }
+  for (const alreadyPublished of ["true", "false"]) {
+    expect(
+      runInNewContext(linux.jobs.build_linux.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+        needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
+      }),
+    ).toBe(alreadyPublished !== "true");
   }
   for (const [alreadyPublished, build, signing, expected] of [
     ["true", "skipped", "skipped", true],
@@ -6515,16 +6513,20 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
 
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {
   const linux = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  expect(Object.keys(linux.on)).toEqual(["workflow_run"]);
+  const mirror = parse(readFileSync(".github/workflows/linux-app-mirror.yml", "utf8"));
+  expect(Object.keys(mirror.on)).toEqual(["workflow_dispatch"]);
+  expect(Object.keys(mirror.jobs)).toEqual(["mirror_legacy"]);
   for (const event_name of ["push", "pull_request", "workflow_run", "workflow_dispatch"]) {
     expect(
-      runInNewContext(linux.jobs.mirror_legacy.if.slice(3, -2), {
+      runInNewContext(mirror.jobs.mirror_legacy.if.slice(3, -2), {
         github: { repository: "openclaw/openclaw", event_name },
       }),
     ).toBe(event_name === "workflow_dispatch");
   }
   expect(linux.on.push).toBeUndefined();
   expect(linux.on.pull_request).toBeUndefined();
-  const mirrorSteps = linux.jobs.mirror_legacy.steps as WorkflowStep[];
+  const mirrorSteps = mirror.jobs.mirror_legacy.steps as WorkflowStep[];
   expect(JSON.stringify(mirrorSteps)).not.toContain("TAURI_SIGNING_PRIVATE_KEY");
   expect(JSON.stringify(mirrorSteps)).not.toContain("linux-app-channel.mjs publish");
   expect(JSON.stringify(mirrorSteps)).not.toContain("cargo");
@@ -6561,6 +6563,63 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
   expect(preparedDispatch).toContain(".releaseRunAttempt");
   expect(preparedDispatch).toContain(".tooling.fullRef");
   expect(preparedDispatch).not.toContain("$GITHUB_RUN_ID");
+  const directory = tempDirs.make("openclaw-linux-mirror-dispatch-");
+  const toolingSha = "a".repeat(40);
+  const sourceSha = "b".repeat(40);
+  const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-123`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `source scripts/lib/release-publish-children.sh
+       verify_release_tag_target() { return 0; }
+       node() { return 0; }
+       dispatch_workflow_at_ref() {
+         printf '%s\\n' "$@" > "$RUNNER_TEMP/dispatch-args"
+         printf '456\\n'
+       }
+       dispatch_linux_mirror "$GITHUB_REF_NAME" "$GITHUB_REF" "$PARENT_WORKFLOW_SHA" 123 2`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_REF_NAME: toolingRef,
+        GITHUB_REF: `refs/tags/${toolingRef}`,
+        PARENT_WORKFLOW_SHA: toolingSha,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_STEP_SUMMARY: path.join(directory, "summary"),
+        RUNNER_TEMP: directory,
+        RELEASE_TAG: "v2026.8.2",
+        TARGET_SHA: sourceSha,
+      },
+    },
+  );
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  expect(readFileSync(path.join(directory, "dispatch-args"), "utf8").trim().split("\n")).toEqual([
+    toolingRef,
+    toolingSha,
+    "linux-app-mirror.yml",
+    "-f",
+    "release_tag=v2026.8.2",
+    "-f",
+    `source_sha=${sourceSha}`,
+    "-f",
+    `tooling_sha=${toolingSha}`,
+    "-f",
+    "release_publish_run_id=123",
+    "-f",
+    "release_publish_run_attempt=2",
+  ]);
+  expect(
+    JSON.parse(readFileSync(path.join(directory, "linux-mirror-dispatch.json"), "utf8")),
+  ).toEqual({
+    tag: "v2026.8.2",
+    sourceSha,
+    state: "dispatched",
+    mirrorVerified: false,
+    childRunId: "456",
+  });
 });
 
 it("reports stale Linux release requests before selected code runs", () => {
@@ -6815,7 +6874,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
           (job as { permissions?: { contents?: string } }).permissions?.contents === "write",
       )
       .map(([name]) => name),
-  ).toEqual(["mirror_legacy"]);
+  ).toEqual([]);
   expect(linux.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
   expect(
     Object.entries(linux.jobs)
