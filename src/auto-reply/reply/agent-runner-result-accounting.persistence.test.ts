@@ -8,8 +8,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -26,10 +29,14 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { createFollowupRunner } from "./followup-runner.js";
+import * as followupAdmission from "./followup-turn-admission.js";
+import * as followupExecution from "./followup-turn-execution.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -96,6 +103,91 @@ it.each(["before-accounting", "during-payload-preparation"] as const)(
   },
 );
 
+it("retains an accepted rejected followup's recovery claim until source delivery settles", async () => {
+  const fixture = await createFixture();
+  const { context, sessionId, turn } = fixture;
+  const sessionKey = context.sessionKey!;
+  const scope = { agentId: "main", storePath, sessionKey };
+  const entry = {
+    ...fixture.read()!,
+    restartRecoveryDeliveryRunId: "accepted-followup",
+    restartRecoveryDeliverySourceRunId: "accepted-source",
+  };
+  await fixture.replace(entry);
+  turn.session.publish(entry);
+  await using actor = createReplyRecoveryActorFixture({
+    ...scope,
+    getSessionId: () => sessionId,
+    operation: turn.operation,
+  });
+  const recovery = createReplyRestartRecoveryClaimController({
+    ...scope,
+    acquireSessionActor: () => actor.acquireSessionActor(),
+    admissionRunId: "accepted-followup",
+    executionRunId: turn.runId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    getEntry: turn.session.current,
+    getSessionId: () => sessionId,
+    isRestartAbort: () => false,
+    resolveDeliveryContext: () => undefined,
+    setEntry: (next) => turn.session.publish(next),
+  });
+  await recovery.admitUserTurn();
+  turn.restartRecovery = recovery;
+  let deliveryEntry: SessionEntry | undefined;
+  const deliver = vi.fn(async () => {
+    deliveryEntry = fixture.read();
+  });
+  turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+  const admission = vi
+    .spyOn(followupAdmission, "admitFollowupTurn")
+    .mockResolvedValue({ kind: "admitted", turn });
+  const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
+    commentaryPayloadsEnabled: false,
+    execution: {
+      runId: turn.runId,
+      outcome: { kind: "rejected", payload: { text: "Accepted setup failed", isError: true } },
+    },
+    runStartedAt: context.runStartedAt,
+    sessionCtx: {},
+    pendingToolTasks: new Set(),
+    progress: { drain: async () => {} },
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "synthetic",
+    source: "test",
+    provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+  });
+  try {
+    await withPluginRuntimeRegistryScope(registry, () =>
+      createFollowupRunner({
+        defaultModel: diagnostic.model,
+        typing: createMockTypingController(),
+        typingMode: "never",
+      })(turn.queued),
+    );
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        payloads: [expect.objectContaining({ text: "Accepted setup failed", isError: true })],
+        completion: expect.objectContaining({ kind: "failed" }),
+      }),
+    );
+    expect(deliveryEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "accepted-followup",
+      restartRecoveryDeliverySourceRunId: "accepted-source",
+    });
+    expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
+    const settledEntry = fixture.read();
+    expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
+  } finally {
+    admission.mockRestore();
+    execution.mockRestore();
+  }
+});
+
 it.each([
   { name: "auth profile", authProfileOverride: "openai:new", authProfileOverrideSource: "user" },
   { name: "auth provenance", authProfileOverride: "openai:old", authProfileOverrideSource: "user" },
@@ -137,19 +229,21 @@ it.each([
   },
 );
 
-it("keeps native incognito accounting and final custody on the retained memory owner", async () => {
+it("keeps incognito accounting and final custody on the retained memory owner", async () => {
   const root = tempDirs.make("openclaw-native-completion-");
   const env = { OPENCLAW_STATE_DIR: root };
   const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const options = { agentId: "main", env, path: nativePath };
-  const owner = openOpenClawAgentDatabase(options);
   try {
     const fixture = await createAgentAccountingPersistenceFixture({
       storePath: nativePath,
+      incognito: true,
       root,
       fixtureId: ++fixtureSequence,
       registerOperation: (operation) => operations.push(operation),
     });
+    const owner = memorySessionActorOwners.read(options);
+    expect(owner).toBeDefined();
     fixture.context.execution.result.meta.agentMeta = {
       sessionId: fixture.sessionId,
       provider: diagnostic.provider,
@@ -174,10 +268,11 @@ it("keeps native incognito accounting and final custody on the retained memory o
         deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
       },
     });
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(owner);
+    expect(memorySessionActorOwners.read(options)).toBe(owner);
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
     expect(fs.existsSync(nativePath)).toBe(false);
   } finally {
-    await disposeOpenClawAgentDatabaseByPath(nativePath);
+    memorySessionActorOwners.closeDatabase(options);
   }
 });
 
@@ -390,6 +485,42 @@ it.each([
     if (diagnostics) {
       expect(diagnostics.text).toContain("QUEUED_INPUT");
       expect(isReplyPayloadTerminalContent(diagnostics)).toBe(false);
+    }
+    expect(fixture.read()?.traceLevel).toBe(stored);
+  },
+);
+
+it.each([
+  { stored: "off", selected: "raw", authorized: true, trace: true },
+  { stored: "raw", selected: "off", authorized: true, trace: false },
+  { stored: "raw", selected: undefined, authorized: true, trace: true },
+  { stored: "raw", selected: "raw", authorized: false, trace: false },
+] as const)(
+  "retains trace $selected over stored $stored after native delivery with authority=$authorized",
+  async ({ stored, selected, authorized, trace }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      traceLevel: stored,
+      verboseLevel: "off",
+    });
+    fixture.context.followupRun.run.traceAuthorized = authorized;
+    fixture.context.followupRun.run.traceLevelOverride = selected;
+    fixture.context.execution.result.payloads = [];
+    fixture.context.execution.result.sourceReplyDeliveryState = "delivered";
+    fixture.context.execution.result.meta!.finalAssistantRawText = "STREAMED_REPLY";
+    fixture.context.sessionCtx.agentText = "STREAMED_INPUT";
+
+    const result = await finalizeReplyAgentRun(fixture.context);
+    const delivered = Array.isArray(result) ? result : result ? [result] : [];
+    expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
+    const diagnostics = delivered.find((payload) =>
+      payload.text?.includes("Model Input (User Role)"),
+    );
+    expect(Boolean(diagnostics)).toBe(trace);
+    if (diagnostics) {
+      expect(diagnostics.text).toContain("STREAMED_INPUT");
+      expect(diagnostics.text).toContain("STREAMED_REPLY");
     }
     expect(fixture.read()?.traceLevel).toBe(stored);
   },

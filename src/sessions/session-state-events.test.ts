@@ -21,6 +21,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
 import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
@@ -89,6 +90,32 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({ dedupeKey: "replayed-event" });
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => recordSessionStateEventInDatabase(db, input, now),
+        database,
+      );
+    const first = record(1000);
+    expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.notices).toHaveLength(1);
+    const db = openOpenClawStateDatabase(database).db;
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+
+    const replay = record(2000);
+    expect(replay.row).toEqual(first.row);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
@@ -421,7 +448,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,

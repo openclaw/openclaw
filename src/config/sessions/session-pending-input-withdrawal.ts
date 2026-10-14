@@ -1,8 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -14,7 +10,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputWithdrawal } from "./session-pending-input-withdrawal.worker.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import {
@@ -43,7 +39,7 @@ export async function discardSessionPendingInput(
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
-  if (getSessionActorStorageBinding(scope)) {
+  if (captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent })) {
     throw new Error(
       "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
     );
@@ -52,18 +48,11 @@ export async function discardSessionPendingInput(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const target = { ...scope, env };
   const logical = resolveSqliteScope({ ...target, storePath: undefined });
-  const storePath =
-    logical.path ?? target.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
   const input: SessionPendingInputWithdrawal = {
     sessionKey: logical.sessionKey,
     sessionId: target.sessionId,
     runId,
   };
-  if (isIncognitoOpenClawAgentSqlitePath(storePath, toDatabaseOptions(logical))) {
-    throw new Error(
-      "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
-    );
-  }
   const captured = captureSessionStoreReadTarget(
     target,
     "Pending input withdrawal changed its captured database owner",

@@ -442,7 +442,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       params.markSessionSubscribePhase?.(
         subscriptionAccessOnly ? "accessFacts" : "projectionReadiness",
       );
-      const preparedSessionMutation =
+      const sessionMutation =
         projection && params.consumeSessionTurn && !subscriptionAccessOnly
           ? await projection.withPreparedExactRows((cfg) => {
               signal?.throwIfAborted();
@@ -456,20 +456,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
                 return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
               });
             }, authorizeSessionAndConsume)
-          : { kind: "complete" as const, value: authorizeSessionAndConsume() };
+          : authorizeSessionAndConsume();
       params.markSessionSubscribePhase?.("accessFacts");
       signal?.throwIfAborted();
-      if (preparedSessionMutation.kind === "pending") {
-        workerSessionMutation.authorization?.release?.();
-        const { certifySessionCanonicalValidationPending } =
-          await import("../../config/sessions/session-canonical-validation-readiness.js");
-        signal?.throwIfAborted();
-        await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
-        // No permission result survives readiness. Method scopes, profile binding,
-        // startup state, target selection and current session facts all run again.
-        continue;
-      }
-      const sessionMutation = preparedSessionMutation.value;
       if (sessionMutation.error) {
         workerSessionMutation.authorization?.release?.();
         return { error: sessionMutation.error };

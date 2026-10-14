@@ -6,6 +6,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
+import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -15,6 +16,7 @@ import {
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
 import "../../components/agent-select-registration.ts";
+import type { ProjectChipOptions } from "./project-chip.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -45,8 +47,8 @@ export function AgentSelect(props: { params: AgentSelectOptions }) {
         prop:menuLabel={t("newSession.agents")}
         prop:disabled={props.params.disabled}
         prop:onSelect={props.params.onSelect}
-        onWa-show={() => props.params.onOpenChange(true)}
-        onWa-hide={() => props.params.onOpenChange(false)}
+        onOverlay-show={() => props.params.onOpenChange(true)}
+        onOverlay-hide={() => props.params.onOpenChange(false)}
       />
     </span>
   );
@@ -82,6 +84,7 @@ export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) 
 
 export function NewSessionPlaceControls(props: { params: NewSessionPlaceControlsOptions }) {
   const folderValue = liveValue(() => props.params.place.folder);
+  const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
     const { context, data, gateway, place, submitting, pendingPlacement, requestUpdate } =
       props.params;
@@ -115,7 +118,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
         environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
     });
     const projectState = resolveProjectChip({
-      folder: place.folder,
+      folder: place.deviceFolder?.path ?? place.folder,
       workspace: place.workspacePath(),
       projectId: browser.projectId,
       selectedRemoteProject: browser.remoteProject,
@@ -180,7 +183,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     cloudDisabledReason: environmentCloudDisabledReason(props.params.place.modelControl),
     cloudProfileDisabledReason: (profile) =>
       environmentCloudDisabledReason(props.params.place.modelControl, profile),
-    submitting: props.params.submitting,
+    submitting: props.params.submitting || props.params.place.suggestedCloudProfile.pending,
+    suggestedProfile: props.params.gateway.suggestedProfile,
+    onAdoptSuggestedProfile: () => void props.params.place.suggestedCloudProfile.adopt(),
     pendingPlacement: props.params.pendingPlacement,
     catalogLoading: props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
     isAdmin: props.params.place.isAdmin(),
@@ -200,6 +205,86 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       view().browser.close();
       props.params.onNavigate("cloud-workers");
     },
+  }));
+  const projectParams = createMemo((): ProjectChipOptions => ({
+    state: props.params.place.deviceFolder
+      ? { ...view().projectState, label: t("newSession.deviceFolder") }
+      : view().projectState,
+    browseAvailable: props.params.place.browseAvailable(),
+    isAdmin: props.params.place.isAdmin(),
+    canWrite: props.params.place.canWrite(),
+    folder: props.params.place.folder,
+    workspace: props.params.place.workspacePath(),
+    projects: view().projects,
+    projectQuery: view().browser.projectQuery,
+    projectSearchAvailable:
+      !view().nativeTerminal &&
+      canCallGatewayMethod(
+        props.params.context?.gateway.snapshot,
+        "projects.searchRemote",
+        "operator.read",
+      ),
+    projectAddAvailable:
+      !view().nativeTerminal &&
+      canCallGatewayMethod(
+        props.params.context?.gateway.snapshot,
+        props.params.place.remotePlacement ? "sessions.create" : "projects.add",
+        "operator.write",
+      ),
+    remoteProjects: view().browser.projectSearchResult?.projects ?? [],
+    selectedRemoteProject: view().browser.remoteProject,
+    projectSearchCredentialMissing: view().browser.projectSearchResult?.credential === "missing",
+    projectSearchLoading: view().browser.projectSearchLoading,
+    projectSearchError: view().browser.projectSearchError,
+    projectId: view().browser.projectId,
+    freshWorkspace: props.params.place.freshWorkspace,
+    onNewWorkspace: props.params.place.remotePlacement
+      ? () => props.params.place.selectNewWorkspace()
+      : undefined,
+    deviceFolder: Boolean(props.params.place.deviceFolder),
+    deviceFolderDisabledReason: props.params.place.deviceFolderRuntimeUnsupportedReason,
+    onDeviceFolder: props.params.place.deviceFolderOffered
+      ? () => props.params.place.selectDeviceFolder()
+      : undefined,
+    gatewayLabel: view().gatewayLabel,
+    submitting: props.params.submitting,
+    pendingPlacement: props.params.pendingPlacement,
+    ...view().browser.popoverCallbacks("project"),
+    browserOpen: view().browser.browserOpen,
+    browser: view().browser.browser,
+    registerProjectPath: view().browser.browserProjectPath,
+    registeringProject: view().browser.browserRegistering,
+    onSelectProject: (projectId) => props.params.place.selectProjectId(projectId),
+    onProjectQueryInput: (query) => view().browser.changeProjectQuery(query),
+    onSelectRemoteProject: (project) => props.params.place.selectRemoteProject(project),
+    onApplyFolder: (folder) => props.params.place.applyFolder(folder),
+    onBrowse: () =>
+      view().browser.selectGatewayBrowser(
+        props.params.place.folder.trim() || props.params.place.workspacePath(),
+      ),
+    onBrowserBack: () => view().browser.showRoot(),
+    onRegisterProject: (path) => void view().browser.registerBrowserProject(path),
+    onClose: () => view().browser.close(),
+  }));
+  const checkoutParams = createMemo((): CheckoutChipOptions => ({
+    state: view().checkoutState,
+    remotePlacement: props.params.place.remotePlacement,
+    repository: Boolean(props.params.place.remoteRepository),
+    folderLabel: view().projectState.label,
+    worktree: props.params.place.worktree,
+    worktreeAvailable: props.params.place.worktreeAvailable(),
+    repositoryUnavailable: props.params.place.repository.kind === "unavailable",
+    branches: view().branches,
+    branchesLoading: props.params.place.repository.kind === "checking",
+    baseRef: props.params.place.baseRef,
+    worktreeName: props.params.place.worktreeName,
+    submitting: props.params.submitting,
+    pendingPlacement: props.params.pendingPlacement,
+    ...view().browser.popoverCallbacks("checkout"),
+    onSelectWorktree: (value) => props.params.place.selectWorktree(value),
+    onBaseRefInput: (baseRef) => props.params.place.setBaseRef(baseRef),
+    onWorktreeNameInput: (worktreeName) => props.params.place.setWorktreeName(worktreeName),
+    onConfirm: props.params.onFocusComposer,
   }));
   return (
     <>
@@ -237,88 +322,29 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               />
             </label>
           ) : (
-            <ProjectChip
-              params={{
-                state: view().projectState,
-                browseAvailable: props.params.place.browseAvailable(),
-                isAdmin: props.params.place.isAdmin(),
-                canWrite: props.params.place.canWrite(),
-                folder: props.params.place.folder,
-                workspace: props.params.place.workspacePath(),
-                projects: view().projects,
-                projectQuery: view().browser.projectQuery,
-                projectSearchAvailable:
-                  !view().nativeTerminal &&
-                  canCallGatewayMethod(
-                    props.params.context?.gateway.snapshot,
-                    "projects.searchRemote",
-                    "operator.read",
-                  ),
-                projectAddAvailable:
-                  !view().nativeTerminal &&
-                  canCallGatewayMethod(
-                    props.params.context?.gateway.snapshot,
-                    props.params.place.remotePlacement ? "sessions.create" : "projects.add",
-                    "operator.write",
-                  ),
-                remoteProjects: view().browser.projectSearchResult?.projects ?? [],
-                selectedRemoteProject: view().browser.remoteProject,
-                projectSearchCredentialMissing:
-                  view().browser.projectSearchResult?.credential === "missing",
-                projectSearchLoading: view().browser.projectSearchLoading,
-                projectSearchError: view().browser.projectSearchError,
-                projectId: view().browser.projectId,
-                freshWorkspace: props.params.place.freshWorkspace,
-                onNewWorkspace: props.params.place.remotePlacement
-                  ? () => props.params.place.selectNewWorkspace()
-                  : undefined,
-                gatewayLabel: view().gatewayLabel,
-                submitting: props.params.submitting,
-                pendingPlacement: props.params.pendingPlacement,
-                ...view().browser.popoverCallbacks("project"),
-                browserOpen: view().browser.browserOpen,
-                browser: view().browser.browser,
-                registerProjectPath: view().browser.browserProjectPath,
-                registeringProject: view().browser.browserRegistering,
-                onSelectProject: (projectId) => props.params.place.selectProjectId(projectId),
-                onProjectQueryInput: (query) => view().browser.changeProjectQuery(query),
-                onSelectRemoteProject: (project) => props.params.place.selectRemoteProject(project),
-                onApplyFolder: (folder) => props.params.place.applyFolder(folder),
-                onBrowse: () =>
-                  view().browser.selectGatewayBrowser(
-                    props.params.place.folder.trim() || props.params.place.workspacePath(),
-                  ),
-                onBrowserBack: () => view().browser.showRoot(),
-                onRegisterProject: (path) => void view().browser.registerBrowserProject(path),
-                onClose: () => view().browser.close(),
-              }}
-            />
+            <ProjectChip params={projectParams()} />
           )}
+          {props.params.place.deviceFolder ? (
+            <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
+              <span>{t("newSession.deviceFolderPath")}</span>
+              <input
+                aria-label={t("newSession.deviceFolderPath")}
+                placeholder={t("newSession.deviceFolderPathPlaceholder")}
+                ref={deviceFolderValue}
+                disabled={props.params.submitting || props.params.pendingPlacement}
+                onInput={(event) =>
+                  props.params.place.setDeviceFolderPath(event.currentTarget.value)
+                }
+              />
+              <span class="muted">
+                {props.params.place.deviceFolderRuntimeUnsupportedReason ??
+                  t("newSession.deviceFolderDescription")}
+              </span>
+            </label>
+          ) : undefined}
           {props.params.place.checkoutVisible &&
           !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-            <CheckoutChip
-              params={{
-                state: view().checkoutState,
-                remotePlacement: props.params.place.remotePlacement,
-                repository: Boolean(props.params.place.remoteRepository),
-                folderLabel: view().projectState.label,
-                worktree: props.params.place.worktree,
-                worktreeAvailable: props.params.place.worktreeAvailable(),
-                repositoryUnavailable: props.params.place.repository.kind === "unavailable",
-                branches: view().branches,
-                branchesLoading: props.params.place.repository.kind === "checking",
-                baseRef: props.params.place.baseRef,
-                worktreeName: props.params.place.worktreeName,
-                submitting: props.params.submitting,
-                pendingPlacement: props.params.pendingPlacement,
-                ...view().browser.popoverCallbacks("checkout"),
-                onSelectWorktree: (value) => props.params.place.selectWorktree(value),
-                onBaseRefInput: (baseRef) => props.params.place.setBaseRef(baseRef),
-                onWorktreeNameInput: (worktreeName) =>
-                  props.params.place.setWorktreeName(worktreeName),
-                onConfirm: props.params.onFocusComposer,
-              }}
-            />
+            <CheckoutChip params={checkoutParams()} />
           ) : undefined}
         </>
       )}{" "}

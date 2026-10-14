@@ -40,8 +40,12 @@ const preparation = vi.hoisted(() => {
 vi.mock("../../auto-reply/reply/model-runtime-normalization.js", () => ({
   prepareModelSelectionRuntime: preparation.prepare,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  resolveSessionWorkerPlacementPatchError: () => undefined,
+vi.mock("./sessions-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sessions-shared.js")>()),
+  prepareSessionWorkerPlacementPatchValidation: async () => ({
+    validate: () => undefined,
+    release() {},
+  }),
 }));
 
 beforeEach(() => {

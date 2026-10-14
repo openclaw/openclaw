@@ -82,8 +82,23 @@ export function pluginCacheExistsSync(targetPath: string): boolean {
 
 function resolveRealpath(targetPath: string): string {
   const absolute = path.resolve(targetPath);
-  if (absolute === targetPath && pluginCacheRealpathSync(targetPath, true) === targetPath) {
-    return targetPath;
+  if (absolute === targetPath) {
+    if (pathFacts(targetPath).nativeRealpath === targetPath) {
+      return targetPath;
+    }
+    if (process.platform !== "win32") {
+      const parent = path.dirname(targetPath);
+      const stat = pluginCacheLstatSync(targetPath);
+      if (parent !== targetPath && stat && !stat.isSymbolicLink()) {
+        // Metadata shares ancestor facts until invalidation; actual opens validate independently.
+        const realParent = pluginCacheRealpathSync(parent);
+        if (realParent) {
+          return path.join(realParent, path.basename(targetPath));
+        }
+      }
+    } else if (pluginCacheRealpathSync(targetPath, true) === targetPath) {
+      return targetPath;
+    }
   }
   // The JavaScript resolver supports paths that the native resolver may reject.
   return fs.realpathSync(targetPath);
@@ -206,6 +221,10 @@ export function checkPluginCacheEntry(params: {
       fs.closeSync(opened.fd);
       root = bindPluginCacheRoot(params.rootDir, opened.rootRealPath);
       Object.assign(pathFacts(opened.path), { exists: true, stat: opened.stat });
+      // Safe-open already resolved this path natively. Windows admission can rebase root aliases.
+      if (process.platform !== "win32") {
+        pathFacts(opened.path).nativeRealpath = opened.path;
+      }
       checked = { ok: true, path: opened.path, rootRealPath: opened.rootRealPath, exists: true };
     }
   }

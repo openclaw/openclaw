@@ -38,26 +38,35 @@ describe("memory manager retained worker reads", () => {
     }
   });
 
-  it("loads vectors and publishes a full reindex without host SQLite", async () => {
+  it("admits, reindexes, and reopens status without host SQLite", async () => {
     await fs.writeFile(path.join(fixture.paths.memory, "vectors.md"), "Alpha vector source.");
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({
-        provider: "openai",
-        sources: ["memory"],
-        vectorEnabled: true,
-      }),
-      "cli",
-    );
+    const config = fixture.createConfig({
+      provider: "openai",
+      sources: ["memory"],
+      vectorEnabled: true,
+    });
     const observed = observeHostDataSql();
     try {
+      const manager = await fixture.getFreshManager(config, "cli");
+      expect(await manager.statusAsync()).toMatchObject({ files: 0, chunks: 0 });
       expect(await manager.probeVectorStoreAvailability()).toBe(true);
       await manager.sync({ reason: "cold-vectors", force: true });
+      const indexed = await manager.statusAsync();
+      expect(indexed.files).toBe(2);
+      expect(indexed.chunks).toBeGreaterThan(0);
+      expect((await manager.search("alpha", { minScore: 0 })).length).toBeGreaterThan(0);
+      await manager.close();
+      const reopened = await fixture.getFreshManager(config, "status");
+      expect(await reopened.statusAsync()).toMatchObject({
+        files: 2,
+        chunks: indexed.chunks,
+        sourceCounts: indexed.sourceCounts,
+      });
+      await reopened.close();
       expect(observed.queries).toEqual([]);
     } finally {
       observed.restore();
     }
-    expect((await manager.search("alpha", { minScore: 0 })).length).toBeGreaterThan(0);
-    expect(Reflect.get(manager, "publishedDatabase").facts.hasVectorTable).toBe(true);
   });
 
   it("keeps transcript statistics off the host during session catch-up", async () => {

@@ -351,6 +351,10 @@ Native dependency policy:
 
 ### E2E (gateway smoke)
 
+The node-worker process group runs on owner-changing PRs and hourly main CI.
+Its explicit inventory, selection, and capacity policy are documented in
+[Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 - Command: `pnpm test:e2e:gateway`
 - Config: `test/vitest/vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`

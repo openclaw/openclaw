@@ -1351,8 +1351,10 @@ describe("native hook relay registry", () => {
       return true;
     });
 
-    await expect(
-      invokeNativeHookRelayBridge({
+    // Cold locator startup must not consume this invalid-record fixture's deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const result = invokeNativeHookRelayBridge({
         provider: "codex",
         relayId,
         event: "pre_tool_use",
@@ -1363,9 +1365,14 @@ describe("native hook relay registry", () => {
           tool_name: "Bash",
           tool_input: { command: "pnpm test" },
         },
-      }),
-    ).rejects.toThrow("native hook relay bridge not found");
-    expect(kill).toHaveBeenCalledWith(9_999_996, 0);
+      });
+      vi.advanceTimersByTime(1);
+      await expect(result).rejects.toThrow("native hook relay bridge not found");
+      expect(kill).toHaveBeenCalledWith(9_999_996, 0);
+      expect(testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("accepts only loopback direct bridge records", async () => {
@@ -1384,8 +1391,10 @@ describe("native hook relay registry", () => {
       } as unknown as NativeHookRelayBridgeRecord,
     });
 
-    await expect(
-      invokeNativeHookRelayBridge({
+    // Cold locator startup must not consume this invalid-record fixture's deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const result = invokeNativeHookRelayBridge({
         provider: "codex",
         relayId: relay.relayId,
         generation: relay.generation,
@@ -1397,8 +1406,13 @@ describe("native hook relay registry", () => {
           tool_name: "Bash",
           tool_input: { command: "pnpm test" },
         },
-      }),
-    ).rejects.toThrow("native hook relay bridge not found");
+      });
+      vi.advanceTimersByTime(1);
+      await expect(result).rejects.toThrow("native hook relay bridge not found");
+      expect(testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports whether a relay already observed a tool use invocation", async () => {

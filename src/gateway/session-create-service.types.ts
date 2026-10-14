@@ -146,6 +146,7 @@ export type CreateGatewaySessionParams = {
     allow: string[];
     deny: string[];
   };
+  deviceFolder?: SessionEntry["deviceFolder"];
   spawnedCwd?: string;
   sessionRoot?: string;
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */

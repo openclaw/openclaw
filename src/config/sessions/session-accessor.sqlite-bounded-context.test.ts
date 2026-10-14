@@ -126,6 +126,56 @@ function countAcquiredTranscriptPayloadBytes(
   return acquiredBytes;
 }
 
+it("skips sizing an empty transcript and reads its first committed turn", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
+      sql.includes("serialized_bytes") ? "sizing" : null,
+    );
+    const onRead = vi.fn();
+    try {
+      const empty = readSessionTranscriptBoundedActiveContextCore(scope, {
+        maxBytes: 1024,
+        maxEvents: 10,
+        onRead,
+      });
+      expect(empty).toMatchObject({
+        version: { rawSeq: null },
+        activeLeafEntryId: null,
+        events: [],
+        serializedBytes: 0,
+        totalEvents: 0,
+        boundaryCount: 0,
+        truncated: false,
+        completeActivePath: true,
+      });
+      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), []);
+      expect(counter.counts.sizing).toBe(0);
+
+      await persistSessionTranscriptTurn(scope, {
+        messages: [transcriptMessage("first", null, { role: "user", content: "first turn" })],
+        touchSessionEntry: false,
+      });
+      const populated = readSessionTranscriptBoundedActiveContextCore(scope, {
+        maxBytes: 1024,
+        maxEvents: 10,
+      });
+      expect(populated).toMatchObject({
+        activeLeafEntryId: "first",
+        events: [
+          { type: "session", id: scope.sessionId },
+          { id: "first", message: { role: "user", content: "first turn" } },
+        ],
+        totalEvents: 1,
+        truncated: false,
+        completeActivePath: true,
+      });
+    } finally {
+      counter.restore();
+    }
+  });
+});
+
 it("enforces context count and byte budgets and releases rejected reads for later appends", async () => {
   await withBoundedContextScope(async (scope) => {
     const append = (id: string, parent: string | null, content = id) =>

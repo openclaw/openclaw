@@ -114,7 +114,7 @@ describe("runGatewayLoop", () => {
   registerNaturalExitTests(waitForLoopTurn);
   registerGatewayRequestTests(fixtures);
 
-  registerExternalHandoffShutdownTests(fixtures, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+  registerExternalHandoffShutdownTests(fixtures);
 
   it("does not grant process control to a nonexclusive embedded host", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -176,7 +176,7 @@ describe("runGatewayLoop", () => {
         expect(hostedStopExecute).not.toHaveBeenCalled();
         joined.resolve();
         await expect(exited).resolves.toBe(0);
-        expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+        expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
           onSnapshot: expect.any(Function),
         });
         expect(hostedStopExecute).toHaveBeenCalledOnce();
@@ -452,7 +452,7 @@ describe("runGatewayLoop", () => {
             captureSignal(signal)();
             await enteredDrain.promise;
             expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
-            expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+            expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
               onSnapshot: expect.any(Function),
             });
             expect(createGatewayActiveWorkSnapshot).not.toHaveBeenCalled();
@@ -460,7 +460,7 @@ describe("runGatewayLoop", () => {
             expect(cleanupSignal.aborted).toBe(false);
             expect(runtime.exit).not.toHaveBeenCalled();
             expect(gatewayLog.info).toHaveBeenCalledWith(
-              `draining active work before stop with timeout 315000ms: ${counts}`,
+              `draining active work before stop with timeout 20000ms: ${counts}`,
             );
             captureSignal(signal)();
             expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();

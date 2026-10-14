@@ -9,6 +9,7 @@ import {
   environmentImage,
   preparationNeedsAttention,
   showPreparationRow,
+  snapshotState,
   type CloudEnvironment,
   type SnapshotImage,
   type SnapshotProfile,
@@ -31,44 +32,42 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
   const menu = createMemo<MenuItem[]>(() => {
     const current = props.image;
     const blocked = props.busy || Boolean(current.capture || current.retirement);
-    return [
-      ...(current.checkpointId && props.canCall("crabbox.images.pin")
-        ? [
-            {
-              id: "pin",
-              label: t(`cloudWorkersPage.snapshots.${current.pinned ? "unpin" : "pin"}`),
-              disabled: blocked,
-            },
-          ]
-        : []),
-      ...(current.previous && props.canCall("crabbox.images.pin")
-        ? [
-            {
-              id: "pinPrevious",
-              label: t(
-                current.previous.pinned
-                  ? "cloudWorkersPage.environments.unpinPrevious"
-                  : "cloudWorkersPage.environments.pinPrevious",
-              ),
-              disabled: blocked,
-            },
-          ]
-        : []),
-      ...(current.previous && props.canCall("crabbox.images.rollback")
-        ? [{ id: "rollback", label: t("cloudWorkersPage.snapshots.rollback"), disabled: blocked }]
-        : []),
-      ...(current.checkpointId && props.canCall("crabbox.images.delete")
-        ? [
-            {
-              id: "delete",
-              label: t("common.delete"),
-              disabled: props.busy || Boolean(props.deleteReason(current)),
-              variant: "danger" as const,
-              attributes: { title: props.deleteReason(current) ?? undefined },
-            },
-          ]
-        : []),
-    ];
+    const items: MenuItem[] = [];
+    if (current.checkpointId && props.canCall("crabbox.images.pin")) {
+      items.push({
+        id: "pin",
+        label: t(`cloudWorkersPage.snapshots.${current.pinned ? "unpin" : "pin"}`),
+        disabled: blocked,
+      });
+    }
+    if (current.previous && props.canCall("crabbox.images.pin")) {
+      items.push({
+        id: "pinPrevious",
+        label: t(
+          current.previous.pinned
+            ? "cloudWorkersPage.environments.unpinPrevious"
+            : "cloudWorkersPage.environments.pinPrevious",
+        ),
+        disabled: blocked,
+      });
+    }
+    if (current.previous && props.canCall("crabbox.images.rollback")) {
+      items.push({
+        id: "rollback",
+        label: t("cloudWorkersPage.snapshots.rollback"),
+        disabled: blocked,
+      });
+    }
+    if (current.checkpointId && props.canCall("crabbox.images.delete")) {
+      items.push({
+        id: "delete",
+        label: t("common.delete"),
+        disabled: props.busy || Boolean(props.deleteReason(current)),
+        variant: "danger",
+        attributes: { title: props.deleteReason(current) ?? undefined },
+      });
+    }
+    return items;
   });
   return (
     <Show when={menu().length}>
@@ -94,17 +93,6 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
 export function CloudWorkerSnapshotRow(
   props: SnapshotActions & { image: SnapshotImage; label?: string; actions?: boolean },
 ) {
-  const state = () =>
-    props.image.capture?.phase === "uncertain" ||
-    props.image.recipePreparation?.failure ||
-    (props.image.retirement?.checkpointId === props.image.checkpointId &&
-      Boolean(props.image.retirement))
-      ? "attention"
-      : props.image.capture
-        ? "building"
-        : props.image.state === "available"
-          ? "ready"
-          : "coldOnly";
   return (
     <div
       class="cloud-environments__snapshot"
@@ -114,7 +102,7 @@ export function CloudWorkerSnapshotRow(
       <div class="cloud-environments__snapshot-summary">
         <div class="cloud-environments__facts">
           <Show when={props.label}>{(label) => <strong>{label()}</strong>}</Show>
-          <span>{t(`cloudWorkersPage.environments.${state()}`)}</span>
+          <span>{t(`cloudWorkersPage.environments.${snapshotState(props.image)}`)}</span>
           <Show when={props.image.baseCommit}>
             {(commit) => <code>{commit().slice(0, 8)}</code>}
           </Show>
@@ -207,22 +195,15 @@ export function CloudWorkerBuildRow(props: {
   );
 }
 
-export function CloudWorkerEnvironmentSheet(props: {
-  environment: CloudEnvironment;
-  profiles: SnapshotProfile[];
-  busy: boolean;
-  destroying: boolean;
-  canCall: (method: string) => boolean;
-  deleteReason: (image: SnapshotImage) => string | null;
-  onRebuild: (profileId: string, root: string) => void;
-  onMutate: (
-    image: SnapshotImage,
-    action: "pin" | "delete" | "rollback",
-    previous?: boolean,
-  ) => void;
-  onRecover: (image: SnapshotImage) => void;
-  onDestroy: (worker: EnvironmentSummary, dismiss: boolean) => void;
-}) {
+export function CloudWorkerEnvironmentSheet(
+  props: SnapshotActions & {
+    environment: CloudEnvironment;
+    profiles: SnapshotProfile[];
+    destroying: boolean;
+    onRebuild: (profileId: string, root: string) => void;
+    onDestroy: (worker: EnvironmentSummary, dismiss: boolean) => void;
+  },
+) {
   const selectedImage = createMemo(() => environmentImage(props.environment));
   const profileId = () =>
     props.environment.defaultProfile ??

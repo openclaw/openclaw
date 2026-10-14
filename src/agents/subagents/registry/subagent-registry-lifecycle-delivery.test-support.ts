@@ -5,8 +5,10 @@ import {
   type SubagentAnnounceDeliveryResult,
 } from "../announce/subagent-announce-dispatch.js";
 import {
+  mutateLifecycleRun,
   readLifecycleRun,
   type LifecycleControllerFixtureOptions,
+  type LifecycleFixtureWrite,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type {
   SubagentLifecycleController,
@@ -363,7 +365,14 @@ export function registerLifecycleDeliveryReceiptCases({
   });
 
   it("persists identified completion delivery while completing the active multipart send", async () => {
-    const persist = vi.fn();
+    const cleanupSnapshots: SubagentRunRecord[] = [];
+    const persist = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
+      for (const postimage of postimages.values()) {
+        if (postimage) {
+          cleanupSnapshots.push(postimage);
+        }
+      }
+    });
     const entry = createRunEntry({
       expectsCompletionMessage: true,
       delivery: {
@@ -420,12 +429,33 @@ export function registerLifecycleDeliveryReceiptCases({
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
       expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
       expect.soft(sentChunks).toEqual([1, 2, 3]);
+      await mutateLifecycleRun(entry, (draft) => {
+        draft.label = "updated while sending";
+        draft.completion = {
+          ...draft.completion,
+          required: true,
+          fallbackResultText: "earlier fallback",
+          fallbackCapturedAt: 12_000,
+        };
+        draft.wakeOnDescendantSettle = true;
+      });
+      cleanupSnapshots.length = 0;
     } finally {
       announcePending.resolve();
       await join();
     }
     expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+    expect(readLifecycleRun(entry).label).toBe("updated while sending");
+    expect(readLifecycleRun(entry).completion?.fallbackResultText).toBeUndefined();
+    expect(readLifecycleRun(entry).completion?.fallbackCapturedAt).toBeUndefined();
+    expect(readLifecycleRun(entry).wakeOnDescendantSettle).toBeUndefined();
+    expect(cleanupSnapshots.length).toBeGreaterThan(0);
+    for (const snapshot of cleanupSnapshots) {
+      expect(snapshot.cleanupCompletedAt).toBeTypeOf("number");
+      expect(snapshot.completion?.fallbackResultText).toBeUndefined();
+      expect(snapshot.label).toBe("updated while sending");
+    }
   });
 
   it("keeps a delivered receipt when a late failure arrives after the next turn starts", async () => {

@@ -16,7 +16,7 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admi
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetWithStoreAsync,
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
@@ -35,7 +35,12 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
     addSessionMember(scope, { identityId: "first-member", addedBy: "owner", addedAt: 1 });
-    const selected = resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true });
+    const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
+      cfg,
+      key,
+      env,
+      exactRead: true,
+    });
     const qualified = await prepareQualifiedSessionEntryTarget(
       {
         ...selected,
@@ -98,7 +103,7 @@ it.for(["membership", "explicit", "qualified"] as const)(
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
       const selected =
         ordering === "qualified"
-          ? resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true })
+          ? await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key, env, exactRead: true })
           : undefined;
       const qualified = selected
         ? await prepareQualifiedSessionEntryTarget(

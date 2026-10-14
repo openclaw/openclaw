@@ -1,5 +1,4 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -67,152 +66,143 @@ export function readPreparedSessionRows<T>(
   consume: (read: SessionRowReadView) => T,
   privateRepositories?: ReadonlyMap<string, PreparedPrivateSessionRepository>,
   capturedPrivateRows?: ReadonlyMap<string, records.Row | undefined>,
-  env?: NodeJS.ProcessEnv,
 ) {
   if (!isActive()) {
     throw new Error("Session row read view is no longer active");
   }
-  return withCanonicalSessionValidationDeferral(() => {
-    let state = owner.state;
-    const privateRows = new Map<string, records.MaterializedRow | undefined>();
-    const childSelections = new Map<string, records.EntryRow[]>();
-    const privateKey = (query: records.Lookup) => privateSessionRowReadKey(state.cfg, query);
-    for (const query of queries(state.cfg)) {
+  // Durable facts were admitted by the worker owner; private rows use the memory actor.
+  let state = owner.state;
+  const privateRows = new Map<string, records.MaterializedRow | undefined>();
+  const childSelections = new Map<string, records.EntryRow[]>();
+  const privateKey = (query: records.Lookup) => privateSessionRowReadKey(state.cfg, query);
+  for (const query of queries(state.cfg)) {
+    const key = privateKey(query);
+    if (key && !privateRows.has(key)) {
+      const prepared = privateRepositories?.get(key);
+      const row = capturedPrivateRows?.has(key)
+        ? capturedPrivateRows.get(key) && owner.describe(query, capturedPrivateRows.get(key))
+        : prepared
+          ? owner.describe(query, prepared.row, prepared.repository.current() ?? null)
+          : owner.describe(query);
+      if (
+        prepared &&
+        (!records.isCurrentGeneration(prepared.row, row) ||
+          row?.entry?.repositoryWorkspaceId !== prepared.workspaceId)
+      ) {
+        throw new Error("Session repository binding changed while preparing its description");
+      }
+      privateRows.set(key, row);
+    }
+  }
+  for (const row of privateRows.values()) {
+    for (const group of row?.materialized.row.swarm?.groups ?? []) {
+      for (const child of group.children ?? []) {
+        if (!childSelections.has(child.sessionKey)) {
+          const related = row?.preparedPrivate;
+          const prepared = related?.relatedRows[child.sessionKey];
+          childSelections.set(
+            child.sessionKey,
+            prepared
+              ? [{ ...records.create(prepared, prepared.entry), entry: prepared.entry }]
+              : related
+                ? []
+                : owner.selectEntries({ key: child.sessionKey }),
+          );
+        }
+      }
+    }
+    // Native custody and deletion admission remain authoritative until the memory owner moves.
+    if (row && !owner.isCurrent(row)) {
+      throw new Error("Session changed while preparing its description; retry the request");
+    }
+  }
+  // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
+  const preparedState = owner.state;
+  state = {
+    cfg: preparedState.cfg,
+    policyConfig: preparedState.policyConfig,
+    rowContext: preparedState.rowContext,
+  };
+  let active = true;
+  const assertActive = () => {
+    if (!active || !isActive()) {
+      throw new Error("Session row read view is no longer active");
+    }
+  };
+  const read: SessionRowReadView = {
+    readSource(row) {
+      assertActive();
+      return owner.readSource(row);
+    },
+    describe(query, captured) {
+      assertActive();
       const key = privateKey(query);
-      if (key && !privateRows.has(key)) {
-        const prepared = privateRepositories?.get(key);
-        const row = capturedPrivateRows?.has(key)
-          ? capturedPrivateRows.get(key) && owner.describe(query, capturedPrivateRows.get(key))
-          : prepared
-            ? owner.describe(query, prepared.row, prepared.repository.current() ?? null)
-            : owner.describe(query);
-        if (
-          prepared &&
-          (!records.isCurrentGeneration(prepared.row, row) ||
-            row?.entry?.repositoryWorkspaceId !== prepared.workspaceId)
-        ) {
-          throw new Error("Session repository binding changed while preparing its description");
-        }
-        privateRows.set(key, row);
+      if (!key) {
+        return owner.describe(query, captured);
       }
-    }
-    for (const row of privateRows.values()) {
-      for (const group of row?.materialized.row.swarm?.groups ?? []) {
-        for (const child of group.children ?? []) {
-          if (!childSelections.has(child.sessionKey)) {
-            const related = row?.preparedPrivate;
-            const prepared = related?.relatedRows[child.sessionKey];
-            childSelections.set(
-              child.sessionKey,
-              prepared
-                ? [{ ...records.create(prepared, prepared.entry), entry: prepared.entry }]
-                : related
-                  ? []
-                  : owner.selectEntries({ key: child.sessionKey }),
-            );
-          }
-        }
+      if (!privateRows.has(key)) {
+        throw new Error("Incognito session description was not prepared");
       }
-      // Native custody and deletion admission remain authoritative until the memory owner moves.
-      if (row && !owner.isCurrent(row)) {
-        throw new Error("Session changed while preparing its description; retry the request");
-      }
-    }
-    // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
-    const preparedState = owner.state;
-    state = {
-      cfg: preparedState.cfg,
-      policyConfig: preparedState.policyConfig,
-      rowContext: preparedState.rowContext,
-    };
-    let active = true;
-    const assertActive = () => {
-      if (!active || !isActive()) {
-        throw new Error("Session row read view is no longer active");
-      }
-    };
-    const read: SessionRowReadView = {
-      readSource(row) {
-        assertActive();
-        return owner.readSource(row);
-      },
-      describe(query, captured) {
-        assertActive();
-        const key = privateKey(query);
-        if (!key) {
-          return owner.describe(query, captured);
-        }
+      const row = privateRows.get(key);
+      return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
+    },
+    readMembership(query) {
+      assertActive();
+      const key = privateKey(query);
+      if (key) {
         if (!privateRows.has(key)) {
           throw new Error("Incognito session description was not prepared");
         }
-        const row = privateRows.get(key);
-        return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
-      },
-      readMembership(query) {
-        assertActive();
-        const key = privateKey(query);
-        if (key) {
-          if (!privateRows.has(key)) {
-            throw new Error("Incognito session description was not prepared");
-          }
-          return privateRows.get(key)?.membership;
-        }
-        return owner.readMembership(query);
-      },
-      present(record, options) {
-        assertActive();
-        return owner.present(record, options);
-      },
-      selectEntries(query) {
-        assertActive();
-        if (privateRows.size > 0) {
-          const rows = childSelections.get(query.key);
-          if (!rows) {
-            throw new Error("Session child selection was not prepared");
-          }
-          return rows;
-        }
-        return owner.selectEntries(query);
-      },
-      get state() {
-        assertActive();
-        return { ...state, policyConfig: owner.getPolicyConfig() };
-      },
-    };
-    try {
-      const result = consume(read);
-      if (isPromiseLike(result)) {
-        void Promise.resolve(result).catch(() => {});
-        throw new Error("Session row read consumers must remain synchronous");
+        return privateRows.get(key)?.membership;
       }
+      return owner.readMembership(query);
+    },
+    present(record, options) {
       assertActive();
-      for (const row of privateRows.values()) {
-        row?.privateSource?.assertCurrent();
+      return owner.present(record, options);
+    },
+    selectEntries(query) {
+      assertActive();
+      if (privateRows.size > 0) {
+        const rows = childSelections.get(query.key);
+        if (!rows) {
+          throw new Error("Session child selection was not prepared");
+        }
+        return rows;
       }
-      return result;
-    } finally {
-      active = false;
-      privateRows.clear();
-      childSelections.clear();
+      return owner.selectEntries(query);
+    },
+    get state() {
+      assertActive();
+      return { ...state, policyConfig: owner.getPolicyConfig() };
+    },
+  };
+  try {
+    const result = consume(read);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {});
+      throw new Error("Session row read consumers must remain synchronous");
     }
-  }, env);
+    assertActive();
+    for (const row of privateRows.values()) {
+      row?.privateSource?.assertCurrent();
+    }
+    return result;
+  } finally {
+    active = false;
+    privateRows.clear();
+    childSelections.clear();
+  }
 }
 
-/** Awaited facade keeps existing callers on one synchronous presentation owner. */
-export async function withPreparedSessionRows<T>(
-  ...args: Parameters<typeof readPreparedSessionRows<T>>
-) {
-  return readPreparedSessionRows(...args);
-}
-
-/** Reenter the same synchronous consumer after canonical readiness finishes. */
+/** Consume prepared facts with the request's cancellation scope. */
 export async function withReadySessionRows<T>(
   owner: {
     withPreparedExactRows<U>(
       queries: (config: OpenClawConfig) => readonly records.Lookup[],
       consume: (read: SessionRowReadView) => U,
       options?: SessionRowPreparationOptions,
-    ): ReturnType<typeof withPreparedSessionRows<U>>;
+    ): Promise<U>;
   },
   queries: (config: OpenClawConfig) => readonly records.Lookup[],
   consume: (read: SessionRowReadView) => T,
@@ -227,16 +217,8 @@ export async function withReadySessionRows<T>(
     signal?.throwIfAborted();
     return consume(read);
   };
-  while (true) {
-    signal?.throwIfAborted();
-    const prepared = await owner.withPreparedExactRows(select, consumeCurrent, options);
-    signal?.throwIfAborted();
-    if (prepared.kind === "complete") {
-      return prepared.value;
-    }
-    const { certifySessionCanonicalValidationPending } =
-      await import("../config/sessions/session-canonical-validation-readiness.js");
-    signal?.throwIfAborted();
-    await certifySessionCanonicalValidationPending(prepared.database);
-  }
+  signal?.throwIfAborted();
+  const result = await owner.withPreparedExactRows(select, consumeCurrent, options);
+  signal?.throwIfAborted();
+  return result;
 }

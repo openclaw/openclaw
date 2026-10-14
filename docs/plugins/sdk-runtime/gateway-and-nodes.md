@@ -579,8 +579,10 @@ api.registerService({
 
 The handler runs in the Gateway process and does not add a Gateway protocol subscription. Keep the
 returned unsubscribe function and call it during service cleanup. The payload is a lightweight
-change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
-current session entry.
+change notice; await `api.runtime.agent.session.getSessionEntryAsync(...)` when the plugin needs
+the full current session entry. Handle asynchronous refresh failures in the plugin's event handler.
+The synchronous `getSessionEntry` compatibility method is deprecated through
+2026-12-31; see the [session reader migration](/plugins/sdk-migration/sqlite-async#session-reads-and-inbound-envelopes).
 
 OpenClaw calls a service's `stop()` at most once per startup attempt, including when a replacement
 times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;

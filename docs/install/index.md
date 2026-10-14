@@ -18,20 +18,25 @@ title: "Install"
 
 Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
 
-- **Windows**: the [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
+- **Windows (recommended)**: the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
   - [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
   - [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
   - All Hub releases: [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
 - **macOS**: the [macOS menu bar app](/platforms/macos) — download the `OpenClaw-<version>.dmg` (preferred) or `.zip` asset from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases), then install and launch **OpenClaw.app**. See the [macOS app page](/platforms/macos) for details, including what to do when the newest release ships no macOS asset.
 
-Both desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
+On Windows, the cross-platform [Tauri desktop app](/platforms/windows#backup-tauri-desktop-app)
+is the backup option. Its `OpenClaw-<version>-windows-x86_64.exe` installer ships
+in regular [OpenClaw releases](https://github.com/openclaw/openclaw/releases)
+and can set up a local Windows Gateway with bundled Bun or connect remotely.
+
+Both native desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
 
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
 
 <Note>
-Windows desktop users can also install the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
+For Windows desktop setup, we recommend the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
 </Note>
 
 <Tabs>

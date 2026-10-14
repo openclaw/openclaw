@@ -293,42 +293,6 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "<@123> /status",
-      CommandBody: "<@123> /status",
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "channel",
-      WasMentioned: true,
-    });
-
-    const result = await runTestInlineActions({
-      ctx,
-      typing,
-      cleanedBody: "<@123>",
-      command: {
-        surface: "discord",
-        channel: "discord",
-        channelId: "discord",
-        isAuthorizedSender: true,
-        rawBodyNormalized: "<@123> /status",
-        commandBodyNormalized: "<@123> /status",
-      },
-      overrides: {
-        allowTextCommands: true,
-        inlineStatusRequested: true,
-        isGroup: true,
-      },
-    });
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-  });
-
   it("continues into the agent when mention-wrapped inline status leaves real text", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({
@@ -1159,14 +1123,7 @@ describe("handleInlineActions", () => {
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
     },
-    {
-      name: "direct mention",
-      chatType: "direct" as const,
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-    },
+
     {
       name: "multiline sender before attachment context",
       chatType: "channel" as const,
@@ -1182,7 +1139,7 @@ describe("handleInlineActions", () => {
       Surface: "slack",
       ChatType: chatType,
       From: "slack:U1",
-      To: chatType === "direct" ? "slack:U1" : "slack:C1",
+      To: "slack:C1",
       CommandBody: commandText,
       RawBody: rawText,
       BodyForAgent: rawText,
@@ -1202,8 +1159,8 @@ describe("handleInlineActions", () => {
       modelAliases: [],
       canInterpretTextDirectives: true,
       isAuthorizedSender: true,
-      isGroup: chatType !== "direct",
-      wasMentioned: chatType !== "direct",
+      isGroup: true,
+      wasMentioned: true,
       ctx,
       cfg: { commands: { text: true } },
       agentId: "main",

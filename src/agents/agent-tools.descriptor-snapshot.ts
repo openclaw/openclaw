@@ -110,39 +110,46 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
       if (!inputs.sessionId) {
         return;
       }
+      // Capture only descriptor data before returning to the attempt.
+      const pending = finalized.map((tool, index): PreparedDescriptor => {
+        const entry = entries?.[index];
+        if (
+          entry &&
+          entry.source === sources[index] &&
+          entry.descriptor.parameters === tool.parameters &&
+          entry.descriptor.outputSchema === tool.outputSchema &&
+          entry.descriptor.description === tool.description
+        ) {
+          // Keep the original output source when another tool changes this catalog.
+          return entry;
+        }
+        return {
+          // SAFETY: Finalization maps the same ordered tools without filtering or reordering.
+          source: sources[index]!,
+          // SAFETY: Normalized schemas are captured from that same positional finalization pass.
+          normalized: normalized[index]!,
+          finalSource: tool.parameters,
+          outputSource: tool.outputSchema,
+          descriptor: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+            outputSchema: tool.outputSchema,
+          },
+        };
+      });
       if (
-        entries?.length === finalized.length &&
-        finalized.every((tool, index) => {
-          const entry = entries[index];
-          return (
-            entry !== undefined &&
-            entry.source === sources[index] &&
-            entry.descriptor.parameters === tool.parameters &&
-            entry.descriptor.outputSchema === tool.outputSchema &&
-            entry.descriptor.description === tool.description
-          );
-        })
+        entries?.length === pending.length &&
+        pending.every((entry, index) => entry === entries[index])
       ) {
         return;
       }
-      // Capture only descriptor data before returning to the attempt.
-      const pending = finalized.map((tool, index) => ({
-        // SAFETY: Finalization maps the same ordered tools without filtering or reordering.
-        source: sources[index]!,
-        // SAFETY: Normalized schemas are captured from that same positional finalization pass.
-        normalized: normalized[index]!,
-        finalSource: tool.parameters,
-        outputSource: tool.outputSchema,
-        descriptor: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          outputSchema: tool.outputSchema,
-        },
-      }));
       const sessionId = inputs.sessionId;
       const publish = () => {
-        const prepared = pending.map((entry): PreparedDescriptor | undefined => {
+        const prepared = pending.map((entry, index): PreparedDescriptor | undefined => {
+          if (entry === entries?.[index]) {
+            return entry;
+          }
           const normalizedSchema = publishParameters(entry.normalized, entry.descriptor.name);
           const parameters =
             entry.finalSource === entry.normalized

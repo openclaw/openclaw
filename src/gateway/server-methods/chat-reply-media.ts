@@ -32,7 +32,8 @@ import {
   withChannelReadAuthority,
 } from "../../shared/channel-read-authority.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
-import { loadGatewaySessionEntryReadOnlyInWorker, loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { loadIncognitoGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
@@ -127,7 +128,7 @@ export function captureWebchatReplyMediaAuthority(
 export async function captureWebchatReplyMediaScope(
   params: Omit<WebchatReplyMediaScope, "sessionEntry"> & {
     sessionKey: string;
-    sessionLoadOptions?: Parameters<typeof loadSessionEntry>[1];
+    sessionLoadOptions?: Parameters<typeof loadIncognitoGatewaySessionEntryReadOnly>[1];
   },
 ) {
   const readPlacement = (entry: SessionEntry | undefined) =>
@@ -147,7 +148,7 @@ export async function captureWebchatReplyMediaScope(
       cfg: params.cfg,
       key: params.sessionKey,
       ...params.sessionLoadOptions,
-      agentId: params.agentId,
+      agentId: params.sessionLoadOptions?.agentId ?? params.agentId,
       onSelected: (target) => {
         const entry = findCanonicalStoreMatch(target.store, target.storeKeys)?.entry;
         retained?.release();
@@ -180,10 +181,15 @@ export async function captureWebchatReplyMediaScope(
       ...scope,
       workspace: selectedAuthority.workspace,
       release,
+      prepareRead: () => retained?.prepareRead(),
       assertCurrent: () => {
         params.assertCurrent?.();
         const current = isIncognitoSessionKey(params.sessionKey)
-          ? loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry
+          ? loadIncognitoGatewaySessionEntryReadOnly(
+              params.sessionKey,
+              params.sessionLoadOptions,
+              params.cfg,
+            ).entry
           : sessionEntry;
         if (
           !active ||
@@ -233,6 +239,11 @@ export async function withPreparedWebchatReplyMedia<T>(
   const hasMedia = sourcePayloads.some(
     (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0,
   );
+  // Finalization can await transcript reads after capture while a writer publishes.
+  const publication = scope.prepareRead();
+  if (publication) {
+    await publication;
+  }
   return await withChannelReadAuthority(
     scope.assertCurrent,
     async () => {
@@ -315,6 +326,7 @@ function resolveWebchatReplyWorkspace(
   // Placement can be remote before any workspace metadata has been published.
   const remote = Boolean(
     entry?.execNode ||
+    entry?.deviceFolder ||
     entry?.repositoryWorkspaceId ||
     isCloudWorkerPlacementState(placement?.state),
   );

@@ -50,13 +50,15 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-67 plugins
+68 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
 - **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
+
+- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: reviews ongoing agent work on the session's own model and offers one short correction.
 
 - **[agentsapi](/plugins/reference/agentsapi)** (`@openclaw/agentsapi`) - included in OpenClaw. OpenAI Agents API harness with hosted or self-hosted sessions.
 
@@ -188,7 +190,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-96 plugins
+97 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -295,6 +297,8 @@ Each entry lists the package, distribution route, and description.
 - **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - npm or ClawHub: `clawhub:@openclaw/moonshot-provider`. Adds Moonshot model provider support to OpenClaw.
 
 - **[msteams](/plugins/reference/msteams)** (`@openclaw/msteams`) - npm or ClawHub: `clawhub:@openclaw/msteams`. OpenClaw Microsoft Teams channel plugin for bot conversations.
+
+- **[muse](/plugins/reference/muse)** (`@openclaw/muse`) - npm or ClawHub: `clawhub:@openclaw/muse`. Runs Meta models through the Muse Code CLI.
 
 - **[mxc](/plugins/reference/mxc)** (`@openclaw/mxc-sandbox`) - npm or ClawHub: `clawhub:@openclaw/mxc-sandbox`. OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.
 

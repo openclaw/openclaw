@@ -448,11 +448,11 @@
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
-        var maxRecoveryAttempts = 6;
+        var maxRecoveryNavigations = 3;
         var timer;
         var recoveryTimer;
         var recoveryAttempt = 0;
-        var recoveryNavigation = false;
+        var recoveryNavigation = 0;
         var bootSettled = false;
         var documentLoaded = document.readyState === "complete";
         var recoveryController;
@@ -470,7 +470,13 @@
 
         try {
           var initialUrl = new URL(window.location.href);
-          recoveryNavigation = initialUrl.searchParams.has("openclaw_mount_recovery");
+          var recoveryMarker = initialUrl.searchParams.get("openclaw_mount_recovery");
+          // Runtime reloads pass a timestamp cache buster; count it as the first recovery navigation.
+          if (recoveryMarker !== null) {
+            var count = Number(recoveryMarker);
+            recoveryNavigation =
+              Number.isInteger(count) && count >= 1 && count <= maxRecoveryNavigations ? count : 1;
+          }
           if (recoveryNavigation) {
             initialUrl.searchParams.delete("openclaw_mount_recovery");
             window.history.replaceState(null, "", initialUrl.href);
@@ -494,20 +500,14 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (bootSettled || recoveryAttempt >= maxRecoveryAttempts) return;
-          var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
+          if (bootSettled) return;
+          var retryDelay = Math.min(15000, 1000 * Math.pow(2, Math.min(recoveryAttempt - 1, 4)));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryController = undefined;
           if (bootSettled) return;
-          if (recoveryAttempt >= maxRecoveryAttempts) {
-            setSummary(
-              "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
-            );
-            return;
-          }
           setSummary(
             "The gateway is not reachable yet. OpenClaw will keep retrying while it restarts.",
           );
@@ -531,22 +531,16 @@
         }
 
         function retryCurrentDocument() {
-          if (
-            bootSettled ||
-            recoveryController ||
-            recoveryAttempt >= maxRecoveryAttempts ||
-            typeof window.fetch !== "function"
-          )
-            return;
+          if (bootSettled || recoveryController || typeof window.fetch !== "function") return;
           var documentUrl = new URL(window.location.href);
-          if (recoveryNavigation) {
+          if (recoveryNavigation >= maxRecoveryNavigations) {
             setSummary(
               "A fresh page still could not start the Control UI. Try again, then check the troubleshooting guide if the problem persists.",
             );
             return;
           }
           recoveryAttempt += 1;
-          documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          documentUrl.searchParams.set("openclaw_mount_recovery", String(recoveryNavigation + 1));
           var controller = new AbortController();
           recoveryController = controller;
           var requestTimer = window.setTimeout(function () {
@@ -609,7 +603,7 @@
           "DOMContentLoaded",
           function () {
             documentLoaded = true;
-            if (!fallback.hidden) showFallback();
+            if (!bootSettled) armFallbackTimer();
           },
           { once: true },
         );

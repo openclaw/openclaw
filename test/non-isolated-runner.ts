@@ -110,6 +110,18 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
+function retirableModuleExecution(
+  node: EvaluatedModuleNode,
+  modules: EvaluatedModules,
+  executions: ModuleExecutionInfo,
+): ModuleExecution | undefined {
+  const id = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
+  const execution = executions.get(id);
+  return execution && !execution.external && !modules[RETIRED_TEST_API_EXECUTIONS]?.has(execution)
+    ? execution
+    : undefined;
+}
+
 function resetEvaluatedModules(
   modules: EvaluatedModules,
   executions: ModuleExecutionInfo,
@@ -140,14 +152,8 @@ function resetEvaluatedModules(
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
     const sqliteKey = sqliteTestSingletonPublications.get(node.file);
-    const executionId = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
-    const execution = executions.get(executionId);
-    if (
-      (key || (sqliteKey && !retainedSqlite)) &&
-      execution &&
-      !execution.external &&
-      !retiredExecutions.has(execution)
-    ) {
+    const execution = retirableModuleExecution(node, modules, executions);
+    if ((key || (sqliteKey && !retainedSqlite)) && execution) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
@@ -535,6 +541,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       .map((file) => path.relative(this.config.root, file.filepath))
       .join(", ");
     const internals = this as unknown as TestRunnerInternals;
+    const modules = internals.workerState.evaluatedModules as EvaluatedModules;
+    const executions = internals.workerState.moduleExecutionInfo;
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
       const detail = inspect(error, { depth: null, customInspect: false, colors: false });
@@ -646,7 +654,19 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         retainSqliteTestCustody();
       }
     }
-    if (!(await drain("singleton lifecycle", () => drainSqliteTestSingletons(recordFailure)))) {
+    const canRetireSource = this.config.isolate
+      ? undefined
+      : (key: symbol) =>
+          Array.from(modules.idToModuleMap.values()).some(
+            (node) =>
+              sqliteTestSingletonPublications.get(node.file) === key &&
+              retirableModuleExecution(node, modules, executions) !== undefined,
+          );
+    if (
+      !(await drain("singleton lifecycle", () =>
+        drainSqliteTestSingletons(recordFailure, canRetireSource),
+      ))
+    ) {
       retainSqliteTestCustody();
     }
     clean("secret redaction", resetOpenClawSecretRedactionState);
@@ -657,15 +677,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
-        [
-          "evaluated modules",
-          () =>
-            resetEvaluatedModules(
-              internals.workerState.evaluatedModules as EvaluatedModules,
-              internals.workerState.moduleExecutionInfo,
-              testFiles,
-            ),
-        ],
+        ["evaluated modules", () => resetEvaluatedModules(modules, executions, testFiles)],
       ] as const) {
         clean(phase, run);
       }

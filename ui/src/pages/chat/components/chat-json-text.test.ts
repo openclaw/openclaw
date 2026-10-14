@@ -6,12 +6,11 @@ import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import "./chat-tool-output.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderToolFixture } from "./chat-tool-render.test-support.ts";
+import { renderToolFixture, renderToolCard } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
 // rounding and duplicate-key loss that the display must not introduce.

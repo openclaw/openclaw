@@ -108,6 +108,8 @@ describe("session suggestion store", () => {
   });
 
   it("does not recreate a missing canonical suggestions table", async () => {
+    // Keep deliberate schema damage isolated from automatic maintenance admission.
+    setRuntimeConfigSnapshot({ session: { maintenance: { mode: "warn" } } });
     const dir = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };

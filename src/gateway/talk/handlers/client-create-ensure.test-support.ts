@@ -300,7 +300,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         context: fixture.context,
         client: fixture.client,
       } as never);
-      expect(respond.mock.lastCall?.[0]).toBe(true);
+      expect(respond.mock.lastCall?.[0], JSON.stringify(respond.mock.lastCall?.[2])).toBe(true);
       const ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
       harness.ownVoice(ownedVoiceSessionId, key);
       expect(

@@ -37,6 +37,11 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Startup guidance to keep local CLI/SDK and Gateway versions aligned uses `info`;
+it does not indicate that a version mismatch was detected. In-memory auth storage
+initialization does not emit synchronous-storage deprecation warnings. Explicit
+calls to deprecated storage APIs still warn with their replacements.
+
 Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
 `info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
 a stack on every routine message. `error` and `fatal` records retain it. All levels
@@ -250,7 +255,7 @@ Diagnostics exports and captured provider/WebSocket console output retain redact
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only "interesting" RPC results print - errors (`ok=false`), slow calls (default threshold: `>= 50ms`), and parse errors.
+- **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`

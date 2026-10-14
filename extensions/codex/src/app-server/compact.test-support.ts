@@ -96,6 +96,7 @@ export function compactCodexSessionWithTestHost(
   params: CompactTestParams,
   options: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1],
 ) {
+  setRuntimeConfigSnapshot(params.config ?? {});
   const cleanup = compactionTestCleanup;
   if (!cleanup) {
     return runCompactionWithTestHost(params, options);

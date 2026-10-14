@@ -78,8 +78,9 @@ for turn settlement; suppressing its display history does not undo its execution
 Starts and partial updates remain transient. Older missing child history cannot be
 reconstructed from source code or outer results.
 
-Nested tool failures cross into the guest as catchable JavaScript errors. If
-guest code does not catch an error, `exec` or `wait` returns a failed tool
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+If guest code does not catch an error, `exec` or `wait` returns a failed tool
 result and the agent can continue normally. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors

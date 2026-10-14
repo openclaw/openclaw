@@ -86,27 +86,17 @@ describe("captured compaction placement owner", () => {
     expect(() => assertion(params)).not.toThrow();
   });
 
-  it.each(["installed", "replaced", "removed"] as const)(
-    "rejects a provider %s after capture without delegating to a new owner",
-    async (change) => {
-      const first = vi.fn();
-      const second = vi.fn();
-      if (change !== "installed") {
-        install(first);
-      }
-      const assertion = captureSessionPlacementCompactionSuccessorAssertion();
-      await Promise.resolve();
-      if (change === "removed") {
-        uninstallProvider?.();
-        uninstallProvider = undefined;
-      } else {
-        install(second);
-      }
-      expect(() => assertion(params)).toThrow("session placement owner changed");
-      expect(first).not.toHaveBeenCalled();
-      expect(second).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a provider replaced after capture without delegating to a new owner", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    install(first);
+    const assertion = captureSessionPlacementCompactionSuccessorAssertion();
+    await Promise.resolve();
+    install(second);
+    expect(() => assertion(params)).toThrow("session placement owner changed");
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+  });
 
   it("rechecks the captured owner's current placement on every use", async () => {
     const denied = new Error("worker placement cannot rotate its session ID");

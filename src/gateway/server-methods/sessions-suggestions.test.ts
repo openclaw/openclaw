@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
-import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-store.js";
+import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-policy.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";

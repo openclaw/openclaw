@@ -349,9 +349,8 @@ describe("AppSidebar session source lifecycle", () => {
       new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
     );
     await sidebar.updateComplete;
-    sidebar
-      .querySelector(".sidebar-rail-pin-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    const menu = sidebar.querySelector(".sidebar-rail-pin-menu")!;
+    menu.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);

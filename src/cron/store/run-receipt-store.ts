@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { deleteExecutionOwnerLifecycleMetadata } from "../../audit/execution-owner-lifecycle-binding-store.js";
 import {
@@ -6,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import type { CronJob } from "../types.js";
@@ -48,13 +48,13 @@ export const ensureCronRunReceiptSchema = createSqliteSchemaEnsurer(
   },
 );
 
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(database);
 }
 
-function activeRow(db: DatabaseSync, key: string): Array<Pick<CronRunReceiptRow, "job_id">>;
-function activeRow(db: DatabaseSync, key: string, jobId: string): CronRunReceiptRow | undefined;
-function activeRow(db: DatabaseSync, key: string, jobId?: string) {
+function activeRow(db: EngineConnection, key: string): Array<Pick<CronRunReceiptRow, "job_id">>;
+function activeRow(db: EngineConnection, key: string, jobId: string): CronRunReceiptRow | undefined;
+function activeRow(db: EngineConnection, key: string, jobId?: string) {
   const find = () => {
     const active = query(db)
       .selectFrom("cron_run_receipts")
@@ -99,7 +99,7 @@ function assertCronRunDelivery(hasCanonicalMode: boolean, receiptId: string): vo
 }
 
 function pruneTerminalReceipts(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
   jobId: string,
   pendingReceiptId: string | undefined,
@@ -152,7 +152,7 @@ function pruneTerminalReceipts(
 
 /** Inserts a receipt after the queue has admitted its current job and free slot. */
 export function claimCronRunReceiptInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   handle: CronRunReceiptHandle;
   job: CronJob | undefined;
   requestRunId?: string;
@@ -162,13 +162,6 @@ export function claimCronRunReceiptInDatabase(params: {
   const { handle } = params;
   const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
-  pruneTerminalReceipts(
-    params.database,
-    handle.storeKey,
-    handle.jobId,
-    job.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
-    params.receiptSchema,
-  );
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -200,7 +193,7 @@ export function claimCronRunReceiptInDatabase(params: {
 }
 
 export function findActiveCronRunReceiptInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storePath: string;
   jobId: string;
 }): CronRunReceiptRecoveryCandidate | undefined {
@@ -209,7 +202,7 @@ export function findActiveCronRunReceiptInDatabase(params: {
 }
 
 export function listActiveCronRunReceiptJobIdsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storePath: string,
 ) {
   return new Set(activeRow(database, cronStoreKey(storePath)).map((row) => row.job_id));
@@ -217,7 +210,7 @@ export function listActiveCronRunReceiptJobIdsInDatabase(
 
 /** Advances a queued request to its execution start inside the marker transaction. */
 export function activateCronRunReceiptInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   handle: CronRunReceiptHandle;
   job: CronJob;
   startedAtMs: number;
@@ -244,15 +237,15 @@ export function activateCronRunReceiptInDatabase(params: {
 
 /** Completes the exact active receipt inside its caller's cron-state transaction. */
 export function finishCronRunReceiptInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   receiptSchema: CronRunReceiptWriteSchema;
   handle: CronRunReceiptHandle;
   pendingReceiptId: string | undefined;
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
   error?: string;
-}): void {
-  executeSqliteQuerySync(
+}): boolean {
+  const completed = executeSqliteQuerySync(
     params.database,
     query(params.database)
       .updateTable("cron_run_receipts")
@@ -264,6 +257,9 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("receipt_id", "=", params.handle.receiptId)
       .where("status", "=", "running"),
   );
+  if (!completed.numAffectedRows) {
+    return false;
+  }
   pruneTerminalReceipts(
     params.database,
     params.handle.storeKey,
@@ -271,4 +267,5 @@ export function finishCronRunReceiptInDatabase(params: {
     params.pendingReceiptId,
     params.receiptSchema,
   );
+  return true;
 }

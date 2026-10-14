@@ -81,6 +81,7 @@ export type AgentSessionPersistResult = {
 };
 
 export async function persistAgentSessionPhase(params: {
+  freshChild?: boolean;
   assertAdmissionCurrent?: () => void;
   onSessionCommitted?: (entry: SessionEntry) => void;
   request: AgentRunRequest;
@@ -150,7 +151,18 @@ export async function persistAgentSessionPhase(params: {
     );
     return undefined;
   };
-  if (params.storePath && !params.suppressVisibleSessionEffects) {
+  if (params.freshChild) {
+    // Creation committed the final metadata. The acquired work lease supplies the
+    // current entry and still rejects reset/replacement before launch.
+    params.assertGatewayWorkAdmissionAllowed();
+    if (params.respondToGatewayAdmissionOutcome() || abortForLifecycleRotation()) {
+      return undefined;
+    }
+    if (sessionEntry) {
+      params.onSessionCommitted?.(sessionEntry);
+    }
+    skipAgentInitialSessionTouch = true;
+  } else if (params.storePath && !params.suppressVisibleSessionEffects) {
     if (abortForLifecycleRotation()) {
       return undefined;
     }
@@ -535,10 +547,10 @@ export async function persistAgentSessionPhase(params: {
     admittedSessionId: params.state.admittedSessionId,
     skipAgentInitialSessionTouch,
     isNewSession,
-    spawnedBy: patchBuild.spawnedBy,
-    groupId: patchBuild.groupId,
-    groupChannel: patchBuild.groupChannel,
-    groupSpace: patchBuild.groupSpace,
+    spawnedBy: params.freshChild ? sessionEntry?.spawnedBy : patchBuild.spawnedBy,
+    groupId: params.freshChild ? sessionEntry?.groupId : patchBuild.groupId,
+    groupChannel: params.freshChild ? sessionEntry?.groupChannel : patchBuild.groupChannel,
+    groupSpace: params.freshChild ? sessionEntry?.space : patchBuild.groupSpace,
     pendingChatRun: isMainSession
       ? {
           sessionKey: params.canonicalSessionKey,

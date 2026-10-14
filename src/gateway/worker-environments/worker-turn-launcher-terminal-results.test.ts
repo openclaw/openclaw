@@ -32,6 +32,8 @@ import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-tr
 import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "../server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -516,19 +518,19 @@ describe("worker turn launcher terminal results", () => {
       claimWaitEntered.resolve();
       return pending;
     });
-    const entry = { sessionId: SESSION_ID, updatedAt: 1 };
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetInWorker: async () => ({
-          storePath: sessionTarget.storePath,
-          canonicalKey: SESSION_KEY,
-          storeKeys: [SESSION_KEY],
-          agentId: "main",
-          store: { [SESSION_KEY]: entry },
-        }),
-        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+        resolveGatewaySessionStoreTargetInWorker: (params) =>
+          resolveGatewaySessionStoreTargetInWorker({
+            ...params,
+            cfg: {
+              ...params.cfg,
+              session: { ...params.cfg.session, store: sessionTarget.storePath },
+            },
+          }),
+        resolveCanonicalSessionEntryFromStoreKeys,
       }),
       cancelSessionWork: async ({ assertCurrent }) => {
         assertCurrent();

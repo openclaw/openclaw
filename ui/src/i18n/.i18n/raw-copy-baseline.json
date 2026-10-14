@@ -122,6 +122,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/app-sidebar-session-indicators.tsx",
+      "text": "0ms"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/components/app-topbar-solid.tsx",
@@ -215,20 +222,6 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/components/mcp-server-form.ts",
-      "text": "context7"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/mcp-server-form.ts",
-      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
       "path": "ui/src/components/mcp-servers-form.tsx",
       "text": "context7"
     },
@@ -280,6 +273,27 @@
       "name": "label",
       "path": "ui/src/components/provider-icon-data.ts",
       "text": "Machine0"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/sidebar-build-chip.tsx",
+      "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "follow"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "join"
     },
     {
       "count": 1,
@@ -367,14 +381,7 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
-      "text": "Open in editor"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
+      "kind": "object-property",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
       "text": "Open in editor"

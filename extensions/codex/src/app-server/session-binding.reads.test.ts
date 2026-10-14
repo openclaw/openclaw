@@ -241,6 +241,68 @@ describe("Codex app-server binding reads", () => {
     expect(lookupMany.mock.calls.map(([keys]) => keys.length)).toEqual([10_000, 1]);
     expect(syncLookup).not.toHaveBeenCalled();
   });
+  it("keeps borrowed settlement authority through cancellation while observing parent revocation", async () => {
+    const fixture = await createOpenClawTestState({
+      prefix: "codex-settlement-authority-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    const storePath = path.join(fixture.stateDir, "sessions.json");
+    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "current",
+      sessionKey: "agent:main:settlement",
+    };
+    const scope = { agentId: identity.agentId, sessionKey: identity.sessionKey, storePath };
+    const abort = new AbortController();
+    try {
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "native-thread", cwd: "/repo" },
+      });
+      const retained = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity,
+        storePath,
+        signal: abort.signal,
+      });
+      const settlement = retained.authority.withLiveness(() => {});
+      try {
+        const child = await resolveCodexSessionBinding({
+          bindingStore: store,
+          identity,
+          storePath,
+          authority: retained.authority,
+        });
+        child.release();
+        expect(() => child.authority.assertLegacyCurrent()).toThrow();
+        expect(() => retained.authority.assertLegacyCurrent()).not.toThrow();
+        abort.abort(new Error("foreground canceled"));
+        expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground canceled");
+        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+        await patchSessionEntry({ ...scope, update: () => ({ updatedAt: 2 }) });
+        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+        await patchSessionEntry({
+          ...scope,
+          update: () => ({ previousSessionId: "replacement-predecessor" }),
+        });
+        expect(() => settlement.assertLegacyCurrent()).toThrow(
+          "Codex session generation is no longer current",
+        );
+      } finally {
+        retained.release();
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("combines lease and mutation lineage and refuses a same-id predecessor change", async () => {
     const fixture = await createOpenClawTestState({
       prefix: "codex-combined-authority-",
@@ -267,12 +329,15 @@ describe("Codex app-server binding reads", () => {
         });
       }
       await store.mutate(identity, { kind: "set", binding });
+      using captures = new DisposableStack();
       const lease = await resolveCodexSessionBinding({ bindingStore: store, identity, storePath });
+      captures.defer(() => lease.release());
       const mutation = await resolveCodexSessionBinding({
         bindingStore: store,
         identity: source,
         storePath,
       });
+      captures.defer(() => mutation.release());
       await store.withLease(
         identity,
         async () => {
@@ -294,9 +359,9 @@ describe("Codex app-server binding reads", () => {
             storePath,
             update: () => ({ previousSessionId: "changed-without-new-session-id" }),
           });
-          // Pure caller liveness remains valid. Only the fresh composed source
-          // validation can refuse this mutation, even though its lease is current.
-          mutation.authority.assertCurrent();
+          expect(() => mutation.authority.assertCurrent()).toThrow(
+            "Codex session generation is no longer current",
+          );
           await expect(
             store.mutate(
               identity,

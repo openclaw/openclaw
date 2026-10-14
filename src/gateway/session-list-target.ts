@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -45,6 +46,7 @@ export function readSessionListSelectionFacts(
 export type SessionListTargetLookup = (key: string) =>
   | {
       agentId: string;
+      entry: SessionEntry;
       selection: ReturnType<typeof readSessionListSelectionFacts>;
       storeKey?: string;
     }

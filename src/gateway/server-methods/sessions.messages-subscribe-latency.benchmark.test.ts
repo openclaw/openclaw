@@ -85,9 +85,9 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
     let readMs = 0;
     let currencyReads = 0;
     const retain = lifetime.retainGatewaySessionEntryReadOnly;
-    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation((...args) => {
+    vi.spyOn(lifetime, "retainGatewaySessionEntryReadOnly").mockImplementation(async (...args) => {
       const start = performance.now();
-      const read = retain(...args);
+      const read = await retain(...args);
       readMs += performance.now() - start;
       const assert = read.isCurrentAtResponse;
       return {

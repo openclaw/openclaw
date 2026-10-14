@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -18,14 +19,14 @@ import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcr
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
-const inputMessageJson =
+const inputMessageJson = (database: DatabaseSync) =>
   /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
-  sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
-    'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-    'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'),
+  sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.role'),
+    'idempotencyKey', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.idempotencyKey'),
+    'provenance', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.provenance'),
     '__openclaw', json_object(
-      'runId', ${transcriptEventRunIdSql("event")},
-      'steerTargetRunId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')))`;
+      'runId', ${transcriptEventRunIdSql(database, "event")},
+      'steerTargetRunId', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.__openclaw.steerTargetRunId')))`;
 
 type RunInputVisibility =
   | { hidden: false }
@@ -82,7 +83,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     .select([
       "active.message_position",
       "event.navigation_valid",
-      inputMessageJson.as("message_json"),
+      inputMessageJson(projection.database.db).as("message_json"),
     ])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.message_position", "<", projection.state.activeMessageCount)
@@ -113,7 +114,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
           /* kysely-allow-raw: A steering admission cannot identify the input that originated its receiving run. */
           sql<
             string | null
-          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
+          >`json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.__openclaw.steerTargetRunId')`,
           "is",
           null,
         )
@@ -134,11 +135,11 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
       eb.or([
         eb(
           /* kysely-allow-raw: Match only steering committed to this exact run. */
-          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
+          sql<string>`json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.__openclaw.steerTargetRunId')`,
           "=",
           params.runId,
         ),
-        eb(transcriptEventRunIdSql("event"), "=", params.runId),
+        eb(transcriptEventRunIdSql(projection.database.db, "event"), "=", params.runId),
       ]),
     )
     .orderBy("active.message_position", "asc");

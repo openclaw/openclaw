@@ -13,7 +13,6 @@ import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness
 import {
   isRestartRecoveryTombstone,
   SessionWorkStartChangedError,
-  resolveSessionWorkStartError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
 } from "../../config/sessions/lifecycle.js";
@@ -23,6 +22,10 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  resolveSessionWorkStartBlock,
+  type SessionWorkStartError,
+} from "../../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -104,6 +107,7 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
 function rejectLifecycleInvalidatedWork(params: {
   kind: ReplyTurnKind;
   message: string;
+  error?: SessionWorkStartError;
   restartRecoveryTombstone?: boolean;
   transientSessionChange?: boolean;
 }): never {
@@ -120,7 +124,7 @@ function rejectLifecycleInvalidatedWork(params: {
   if (params.kind === "visible" && params.transientSessionChange === true) {
     throw new SessionWorkStartChangedError(params.message);
   }
-  throw new Error(params.message);
+  throw params.error ?? new Error(params.message);
 }
 
 /** Waits for or claims the per-session reply run slot. */
@@ -344,7 +348,7 @@ export async function admitReplyTurn(
                 if (activeOperationRotatedExpectedSession) {
                   expectedSessionId = currentEntry?.sessionId;
                 }
-                const archivedSessionError = resolveSessionWorkStartError(
+                const archivedSessionError = resolveSessionWorkStartBlock(
                   params.sessionKey || sessionId,
                   currentEntry,
                   {
@@ -358,11 +362,14 @@ export async function admitReplyTurn(
                 if (archivedSessionError) {
                   const tombstone = currentEntry?.mainRestartRecovery?.tombstone;
                   if (params.kind === "visible" && tombstone) {
-                    log.warn(`${archivedSessionError} Recovery reason: ${tombstone.reason}`);
+                    log.warn(
+                      `${archivedSessionError.message} Recovery reason: ${tombstone.reason}`,
+                    );
                   }
                   rejectLifecycleInvalidatedWork({
                     kind: params.kind,
-                    message: archivedSessionError,
+                    message: archivedSessionError.message,
+                    error: archivedSessionError,
                     restartRecoveryTombstone: isRestartRecoveryTombstone(currentEntry),
                   });
                 }

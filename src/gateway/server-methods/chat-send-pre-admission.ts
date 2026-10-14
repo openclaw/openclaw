@@ -187,17 +187,17 @@ export function resolveChatSendRequestConflict(
   ) {
     return conflict(true);
   }
-  const retryEntries =
+  const ownsPendingReservation =
     ownPendingAttemptId !== undefined &&
     readPreRegisteredRun({
       key: session.pendingChatSendKey,
       entry: entries[1],
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-    })?.payload.attemptId === ownPendingAttemptId
-      ? entries.slice(0, 1)
-      : entries;
+    })?.payload.attemptId === ownPendingAttemptId;
+  const retryEntries = ownsPendingReservation ? entries.slice(0, 1) : entries;
   if (
     !comparison &&
+    request.requestIdentity !== undefined &&
     retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
   ) {
     return undefined;
@@ -207,7 +207,7 @@ export function resolveChatSendRequestConflict(
     sameDurableSource ||
     hasRestartRecoveryTerminalRun(session.entry, session.clientRunId) ||
     context.chatRunState.hasAbortMarker(session.clientRunId) ||
-    context.chatAbortControllers.has(session.clientRunId) ||
+    (!ownsPendingReservation && context.chatAbortControllers.has(session.clientRunId)) ||
     context.chatQueuedTurns?.has(session.clientRunId);
   if (!knownRetry) {
     return undefined;

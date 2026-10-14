@@ -9,6 +9,18 @@ sidebarTitle: "Node test lanes"
 
 How the slowest Node test families are split, balanced, packed, and cached. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
+Node-worker process E2Es have an explicit owner map in
+`scripts/lib/ci-node-worker-e2e-inventory.mts`. Changes to worker environments,
+node hosts, worker processes, node RPCs, and their launch/transport inputs select
+the complete group on PRs, even when packaged subprocesses hide import edges.
+Docs-only changes do not select it. Hourly main and ordinary manual/release CI
+also run the group in one serial row with a shared private-QA build, reserved
+inside the existing Node matrix cap. PR chunks target 150 test seconds, with
+indivisible slow files kept intact. The hourly row trades a longer test run for
+fewer registrations and repeated builds; it retains the existing job deadline.
+The Docker-opt-in `node-worker-container-wire` proof remains separate, as do
+the ACP cancellation and ordinary local-session compatibility proofs.
+
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners:
 
 - Hourly main and ordinary manual/release validation retain complete plugin and channel contract jobs with their existing weighted process selections and runner fallbacks. PRs select exact contract tests through the changed-owner Node plan; frozen historical manual targets keep their separate jobs.

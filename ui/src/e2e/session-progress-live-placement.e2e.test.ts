@@ -670,7 +670,7 @@ suite.define(() => {
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
         await card.getByRole("button", { name: "Task progress options" }).click();
-        const clear = card.locator('wa-dropdown-item[value="clear"]');
+        const clear = card.locator('[data-value="clear"]');
         await expect.poll(() => clear.isVisible()).toBe(true);
         await captureProof(page, "clear-separate-control-before.png");
         await clear.click();
@@ -729,7 +729,7 @@ suite.define(() => {
         const card = page.locator('[data-progress-card-placement="details"]');
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
-        expect(await card.locator('wa-dropdown-item[value="clear"]').count()).toBe(0);
+        expect(await card.locator('[data-value="clear"]').count()).toBe(0);
         await card.getByRole("button", { name: "Dismiss progress card" }).click();
         await expect.poll(() => card.count()).toBe(0);
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);

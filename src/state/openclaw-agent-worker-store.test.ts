@@ -121,6 +121,13 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   return { db, worker };
 }
 
+it("leaves agent worker checkpoints to maintenance instead of foreground commits", async () => {
+  const { worker } = await setup();
+  expect(
+    await worker.execute({ type: "inspect", input: "wal_autocheckpoint" }, () => undefined),
+  ).toBe(0);
+});
+
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
   const shared = openOpenClawStateDatabase();
@@ -857,13 +864,11 @@ describe("pooled agent publication owner (captured source)", () => {
     const failures: unknown[] = [];
     try {
       const closing = await Promise.allSettled(revokeAgentDatabaseResources(selection));
-      const cleanupErrors = closing.flatMap((result): unknown[] => {
-        if (result.status === "fulfilled") {
-          return [];
-        }
-        const reason: unknown = result.reason;
-        return reason instanceof AggregateError ? reason.errors : [reason];
-      });
+      const causes = (error: unknown): unknown[] =>
+        error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
+      const cleanupErrors = closing.flatMap((result) =>
+        result.status === "rejected" ? causes(result.reason) : [],
+      );
       expect(cleanupErrors.length).toBeGreaterThan(0);
       for (const error of cleanupErrors) {
         expect(error).toMatchObject({ message: "controlled worker lease cleanup failure" });

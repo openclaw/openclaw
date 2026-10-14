@@ -1445,6 +1445,7 @@ function testCrabboxConfigDir(home: string): string {
 }
 
 function testHomeEnv(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
   return {
     APPDATA: path.join(home, "AppData", "Roaming"),
     HOME: home,

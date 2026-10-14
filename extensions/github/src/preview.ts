@@ -1,4 +1,5 @@
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asFiniteNumber,
   isRecord,
@@ -35,6 +36,7 @@ const CO_AUTHOR_TRAILER =
 const SUCCESS_CACHE_MS = 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 200;
+const log = createSubsystemLogger("github/preview");
 
 export type ControlUiGitHubPreviewTarget = GitHubItemTarget;
 
@@ -267,6 +269,7 @@ async function fetchPreview(
   identity?: ControlUiGitHubPreviewIdentity,
   previous?: CachedPreview,
 ): Promise<CachedPreview> {
+  const startedAt = performance.now();
   const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>, etag?: string) =>
     fetchGitHubApi(
       url,
@@ -331,13 +334,23 @@ async function fetchPreview(
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
+  const metadataAt = performance.now();
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
+  const renderedAt = performance.now();
   // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
     commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
     token && assertPublicRepository(previewRepositoryApiUrl(target, parsed)),
   ]);
+  const finishedAt = performance.now();
+  if (finishedAt - startedAt >= 500) {
+    log.info("Slow GitHub preview load", {
+      metadataMs: Math.round(metadataAt - startedAt),
+      renderMs: Math.round(renderedAt - metadataAt),
+      decorationMs: Math.round(finishedAt - renderedAt),
+    });
+  }
   return {
     pages,
     credentialScope,
@@ -361,7 +374,8 @@ export async function loadControlUiGitHubPreview(
   fetchImpl: typeof fetch = fetch,
   refresh = false,
 ): Promise<ControlUiGitHubPreview> {
-  await identity?.revalidate();
+  const startedAt = performance.now();
+  // Cache lookup has no external effect. Dispatch and delivery revalidate live credentials.
   identity?.assertSelected();
   const { token, cacheScope } = identity ?? { token: undefined, cacheScope: "anonymous" };
   const key = cacheKey(target, `${cacheScope}\0${githubApiCredentialCacheScope(token)}`);
@@ -401,10 +415,20 @@ export async function loadControlUiGitHubPreview(
     identity.assertSelected();
     result = await read();
   }
+  const loadedAt = performance.now();
   // Transport is credential-scoped, but every reader must still hold its
   // current identity before cached or newly fetched metadata is delivered.
   await identity?.revalidate();
   identity?.assertSelected();
+  const deliveredAt = performance.now();
+  if (deliveredAt - startedAt >= 500) {
+    log.info("Slow GitHub preview read", {
+      cacheWaitMs: Math.round(loadedAt - startedAt),
+      deliveryAuthMs: Math.round(deliveredAt - loadedAt),
+      stale: result.stale,
+      refresh,
+    });
+  }
   return result.stale || identity?.stale
     ? { ...result.value.preview, stale: true }
     : result.value.preview;

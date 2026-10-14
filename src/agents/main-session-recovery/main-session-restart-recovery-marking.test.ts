@@ -9,6 +9,8 @@ import {
 import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
@@ -37,10 +39,10 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -56,6 +58,40 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+
+it("keeps retained subagent interruptions out of main-session startup recovery", async () => {
+  const stateDir = sessionDirs.make();
+  const storePath = path.join(stateDir, "sessions.json");
+  const sessionKey = "agent:main:main";
+  await replaceSessionEntry(
+    { storePath, sessionKey },
+    { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
+  );
+  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
+  const retained = Array.from({ length: 4_500 }, (_, index) => ({
+    sessionKey: `agent:main:subagent:retained-${index}`,
+    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+  }));
+  const read = vi
+    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
+    .mockResolvedValue([...retained, ...summaries]);
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
+  try {
+    expect(
+      await markStartupOrphanedMainSessionsForRecovery({
+        cfg: { session: { store: storePath } },
+        stateDir,
+      }),
+    ).toEqual({ marked: 1, skipped: 0 });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 0 },
+    });
+  } finally {
+    read.mockRestore();
+    warn.mockRestore();
+  }
+});
 
 it.each([false, true])(
   "reports skipped shutdown sessions when another is marked: %s",
@@ -370,6 +406,14 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   const resolveGatewayContext = () => undefined;
   const otherGatewayContext = () => undefined;
   const admissions: SessionWorkAdmissionLease[] = [];
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const incognitoTarget = {
+    agentId: "main",
+    env,
+    sessionKey: "agent:main:dashboard:incognito-closing",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
+  const memoryLocation = { agentId: incognitoTarget.agentId, path: incognitoTarget.storePath };
   try {
     for (const [name, resolver] of [
       ["closing", resolveGatewayContext],
@@ -389,13 +433,6 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
         }),
       );
     }
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const incognitoTarget = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:dashboard:incognito-closing",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-    };
     await replaceSessionEntry(incognitoTarget, {
       sessionId: "volatile",
       updatedAt: Date.now(),
@@ -421,10 +458,15 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
     expect(
       loadSessionEntry({ storePath, sessionKey: "agent:main:other" })?.abortedLastRun,
     ).toBeUndefined();
-    expect(loadSessionEntry(incognitoTarget)?.abortedLastRun).toBeUndefined();
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+    const incognito = memorySessionActorOwners
+      .read(memoryLocation)
+      ?.readSession(incognitoTarget.sessionKey, { assertCurrent() {}, authorize() {} });
+    expect(incognito?.entry).toMatchObject({ sessionId: "volatile", incognito: true });
+    expect(incognito?.entry?.abortedLastRun).toBeUndefined();
+    expect(getOpenClawAgentDatabaseIfOpen(memoryLocation)).toBeUndefined();
   } finally {
     admissions.forEach((admission) => admission.release());
+    memorySessionActorOwners.closeDatabase(memoryLocation);
   }
 });
 

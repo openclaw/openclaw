@@ -83,6 +83,10 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   defaults: TDefaults;
   /** Response-local display facts referenced by sidebar rows. */
   sharedFacts?: Partial<TRow>[];
+  /** Opaque identity of the authorized sidebar row vector, independent of list facets. */
+  rowsRevision?: string;
+  /** Only the rows are omitted; counts, defaults and facets remain current. */
+  rowsUnchanged?: true;
   sessions: TRow[];
 };
 

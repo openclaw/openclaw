@@ -19,6 +19,7 @@ import {
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../src/agents/auth-profiles/path-resolve.native.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
@@ -187,6 +188,7 @@ async function withFixture(
   } = {},
 ) {
   await withState(async (state) => {
+    prepareSharedAuthStoreOwnershipForNative(state.env);
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",

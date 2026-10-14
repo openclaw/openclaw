@@ -413,12 +413,14 @@ export type LoadedChatSendSession = Extract<
 
 export type PreparedChatSendSession = LoadedChatSendSession & {
   sessionTarget: QualifiedSessionEntryAccessTarget;
+  releaseSessionStorage?: () => void;
   activeRunScopeKey: string;
   readSource?: CapturedSessionEntryReadSource;
 };
 
 export async function qualifyChatSendSession(
   loaded: LoadedChatSendSession,
+  releaseSessionStorage?: () => void,
 ): Promise<PreparedChatSendSession> {
   const qualified = await prepareQualifiedSessionEntryTarget(
     {
@@ -433,6 +435,7 @@ export async function qualifyChatSendSession(
   return {
     ...loaded,
     sessionTarget: qualified,
+    releaseSessionStorage,
     activeRunScopeKey: qualified.canonicalKey,
     readSource: qualified.readSource,
   };

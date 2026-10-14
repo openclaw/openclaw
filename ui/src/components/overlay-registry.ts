@@ -355,7 +355,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
     }
   };
   const pointercancel = (event: PointerEvent) => {
-    if (press?.pointerId === event.pointerId) {
+    if (press && press.pointerId === event.pointerId) {
       press.canceled = true;
       press = undefined;
     }

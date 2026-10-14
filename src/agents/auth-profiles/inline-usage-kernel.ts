@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
@@ -48,7 +48,7 @@ export type InlineAuthFailureOperations = AuthStoreUpdateOperations & {
 
 /** The admitted agent transaction owns the fresh read, health reduction, and durable cells. */
 export function recordInlineAuthFailureInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   input: InlineAuthFailureInput,
 ): InlineAuthFailureReceipt {

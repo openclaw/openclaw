@@ -23,39 +23,44 @@ const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | nul
 
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: (command, commandOptions) => {
+                if (
+                  command.type === "session.lifecycle.reset" ||
+                  command.type === "session.lifecycle.project"
+                ) {
+                  // The snapshot is prepared, but the worker has not begun its transaction.
+                  const inject = transactionInjection.run;
+                  transactionInjection.run = null;
+                  inject?.();
+                }
+                return worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: (command, commandOptions) => {
-                  if (
-                    command.type === "session.lifecycle.reset" ||
-                    command.type === "session.lifecycle.project"
-                  ) {
-                    // The snapshot is prepared, but the worker has not begun its transaction.
-                    const inject = transactionInjection.run;
-                    transactionInjection.run = null;
-                    inject?.();
-                  }
-                  return worker.execute(command, commandOptions);
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 

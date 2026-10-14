@@ -6,7 +6,7 @@ read_when:
   - You need to select a SQLite library for Bun on macOS
 ---
 
-Bun is an explicit opt-in runtime for standalone OpenClaw CLI, Gateway, and managed node host installations. Node remains their primary and recommended runtime. The native macOS app and fresh local Tauri installations on Linux use the OpenClaw Bun fork for their app-managed runtime. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for standalone installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
+Bun is an explicit opt-in runtime for standalone OpenClaw CLI, Gateway, and managed node host installations. Node remains their primary and recommended runtime. The native macOS app and fresh local Tauri installations on Linux and Windows use the OpenClaw Bun fork for their app-managed runtime. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for standalone installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
 
 Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, even when `Module.registerHooks` is available; Node uses `Module.registerHooks`. Windows paths alone do not force native loading: captured source uses the same capability-based selection as other platforms, and retiring a plugin generation removes its native and Jiti cache records. Native SDK aliases return platform-native filenames from `require.resolve()`; Jiti transformation maps retain their own path spelling.
 
@@ -213,6 +213,12 @@ a newer candidate cannot change the installed updater's first-hop behavior.
 Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not require a separate Node or npm installation.
 
 ## SQLite worker lifecycle
+
+SQLite worker requests and replies use exclusively owned transfer buffers on both
+Node and Bun. Bun's serializer can return shared backing storage; OpenClaw copies
+those bytes before transfer, including prepared opens and large command frames.
+Doctor migrations and runtime database operations retain their existing admission,
+byte limits, and native cleanup.
 
 After selecting SQLite, long-lived Gateway, node, and worker hosts that own SQLite
 pools on macOS and Linux await a check of whether Bun's ordinary

@@ -43,7 +43,7 @@ export type TranscriptProjectionRebuildOperations = {
   };
   appendChunk: {
     input: Parameters<typeof appendPreparedSessionTranscriptProjectionChunkInTransaction>[1];
-    output: boolean;
+    output: void;
   };
   finalize: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };

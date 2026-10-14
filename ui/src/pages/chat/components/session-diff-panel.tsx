@@ -23,6 +23,10 @@ import {
   splitSessionDiffFileText,
   type SessionDiffGapDirection,
 } from "../../../lib/chat/session-diff-gaps.ts";
+import {
+  createDiffPairingBudget,
+  pairSessionDiffLines,
+} from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
@@ -106,6 +110,15 @@ function SessionDiffContent(props: SessionDiffProps) {
   const [pending, setPending] = createSignal(false);
   const [failure, setFailure] = createSignal<{ error: unknown } | null>(null);
   const [gapRevision, setGapRevision] = createSignal(0);
+  const pairedRows = createMemo(() => {
+    gapRevision();
+    const budget = createDiffPairingBudget();
+    return new Map(
+      (value()?.views ?? [])
+        .filter((view) => !collapsedPaths().has(view.file.path))
+        .map((view) => [view, pairSessionDiffLines(view.parsed?.lines ?? [], budget)]),
+    );
+  });
   const fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   const unavailableFileText = new WeakSet<FileView>();
   let generation = 0;
@@ -436,6 +449,7 @@ function SessionDiffContent(props: SessionDiffProps) {
               lines={lines()}
               renderSkip={(line) => <Gap view={body.view} line={line} />}
               file={body.view.file}
+              rows={pairedRows().get(body.view)}
             />
           }
         >
@@ -443,6 +457,7 @@ function SessionDiffContent(props: SessionDiffProps) {
             lines={lines()}
             renderSkip={(line) => <Gap view={body.view} line={line} />}
             file={body.view.file}
+            rows={pairedRows().get(body.view) ?? []}
           />
         </Show>
         {body.view.parsed?.truncated && (

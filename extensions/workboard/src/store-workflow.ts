@@ -118,12 +118,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           (guarded.status === "running" && !isWorkboardClaimReclaimable(existingClaim, now)))
           ? existingClaim
           : undefined;
-      if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
-        throw new Error(
-          guarded.status === "blocked"
-            ? "card is blocked; use workboard_unblock before claiming."
-            : "card dependencies are not done.",
-        );
+      const parentIds = cardParentIds(guarded);
+      if (parentIds.length > 0 && guarded.status !== "ready" && !activeClaim) {
+        if (guarded.status === "blocked") {
+          throw new Error("card is blocked; use workboard_unblock before claiming.");
+        }
+        // Dependency promotion skips review and running cards, so judge the parents.
+        if (!(await this.parentsDone(parentIds))) {
+          throw new Error("card dependencies are not done.");
+        }
       }
       if (guarded.status === "scheduled") {
         throw new Error("card is scheduled for later.");

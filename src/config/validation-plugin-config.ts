@@ -91,8 +91,8 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
-  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
+  schemaValidations: PreparedPluginSchemaValidations;
   deferredPluginIds?: ReadonlySet<string>;
   ensureCompatPluginIds: () => ReadonlySet<string>;
   ensureOverriddenPluginIds: () => Set<string>;

@@ -1,6 +1,9 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -9,6 +12,8 @@ import { resolveSessionAgentIdsStrict } from "../agent-scope.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "./types.js";
+
+export class SessionRuntimeOwnershipChanged extends AgentHarnessPreflightError {}
 
 type SessionRuntimeOwnershipReadParams = {
   config?: OpenClawConfig;
@@ -43,21 +48,21 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
   }
   const { agentId, sessionKey, storePath } = params;
   const privateSource = sessionKey
-    ? captureIncognitoSessionSource({ agentId, sessionKey, storePath })
+    ? captureSessionActorStorageOwner(
+        { agentId, sessionKey, storePath },
+        {
+          assertCurrent() {
+            params.assertCurrent?.();
+          },
+          authorize() {},
+        },
+      )
     : undefined;
-  const claim =
-    privateSource && !("kind" in privateSource)
-      ? privateSource.actor.sessions.captureCurrent(sessionKey!)
-      : undefined;
   let active = true;
   const assertCurrent = () => {
     if (active) {
       params.assertCurrent?.();
-      privateSource?.admissionSignal?.throwIfAborted();
-      if (privateSource && "kind" in privateSource) {
-        privateSource.assertCurrent();
-      }
-      claim?.assertCurrent();
+      privateSource?.owner?.assertCurrent();
     }
     if (
       !active ||
@@ -65,7 +70,7 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
       entry?.sessionId !== sessionId ||
       resolveSessionPinnedHarnessId(entry) !== harnessId
     ) {
-      throw new AgentHarnessPreflightError(
+      throw new SessionRuntimeOwnershipChanged(
         "Native session ownership changed while reading its runtime. Reattach the original native session before retrying.",
       );
     }
@@ -146,10 +151,7 @@ export function readSessionRuntimeOwnership(
           }
           if (privateSource) {
             const key = params.sessionKey?.trim();
-            const current =
-              !key || "kind" in privateSource
-                ? undefined
-                : privateSource.actor.sessions.readSharing(key)?.entry;
+            const current = !key ? undefined : readCapturedSessionActorEntry(privateSource, key);
             assertCurrent();
             return current?.sessionId === sessionId ? current.previousSessionId : undefined;
           }
@@ -192,10 +194,7 @@ export async function readSessionRuntimeOwnershipAsync(
         }
         if (privateSource) {
           const key = params.sessionKey?.trim();
-          const current =
-            !key || "kind" in privateSource
-              ? undefined
-              : privateSource.actor.sessions.readSharing(key)?.entry;
+          const current = !key ? undefined : readCapturedSessionActorEntry(privateSource, key);
           assertCurrent();
           return current?.sessionId === sessionId ? current.previousSessionId : undefined;
         }

@@ -42,6 +42,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("shares auth across config publications until the auth owner publishes changed facts", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const initial: ModelAuthStatusResult = { ts: 1, providers: [] };
+  const updated: ModelAuthStatusResult = {
+    ts: 2,
+    providers: [{ provider: "example", displayName: "Example", status: "missing", profiles: [] }],
+  };
+  const request = current().request.mockResolvedValue(initial);
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: {
+      config: createShellConfigFixture(),
+      gateway,
+    } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const read = () =>
+    Promise.all(Array.from({ length: 40 }, () => loadModelAuthStatus(client, { agentId: "main" })));
+  try {
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    request.mockResolvedValue(updated);
+    for (let index = 0; index < 10; index++) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "config.changed",
+        payload: { hash: `plugin-toggle-${index}`, ts: index },
+      });
+      expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    }
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { authChanged: true, modelCatalogChanged: false, commandsChanged: false },
+    });
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => updated));
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
+  } finally {
+    stopShell();
+    gateway.stop();
+  }
+});
+
 it("retains model and auth reads across 50 metadata-only publications", async () => {
   vi.useFakeTimers();
   const { gateway, current } = createGatewayStoreTestStore();
@@ -106,7 +154,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       await read();
       await read();
       expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-        1,
+        event === "chat.metadata.changed" ? 1 : 0,
       );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
       expect(changed).toHaveBeenCalledOnce();

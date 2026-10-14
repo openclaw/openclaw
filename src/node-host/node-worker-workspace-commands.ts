@@ -19,7 +19,11 @@ import {
 import { executeGitCommandBuffered, executeGitCommandBytes } from "../infra/git-exec.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  projectNodeWorkerWorkspaceExecResult,
+  type NodeWorkerWorkspaceExecResult,
+} from "../worker/node-workspace-protocol.js";
 
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const commandLog = createSubsystemLogger("node-host/worker-workspace");
@@ -187,4 +191,23 @@ export async function captureManifest(params: {
     ...envelope.metrics,
   });
   return envelope.manifestRef;
+}
+
+export function projectWorkspaceOperationResult(
+  workspaceDir: string,
+  stdout: string,
+  argv?: readonly string[],
+): NodeWorkerWorkspaceExecResult {
+  return projectNodeWorkerWorkspaceExecResult(
+    workspaceDir,
+    {
+      stdout,
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    },
+    argv,
+  );
 }

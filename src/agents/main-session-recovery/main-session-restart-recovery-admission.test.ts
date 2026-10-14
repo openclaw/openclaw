@@ -524,7 +524,7 @@ describe("startup recovery admission", () => {
                 sessionKey: first.sessionKey,
                 sourceRunId: "interrupted-main",
                 decision: "started",
-                nextOwner: "main-lane",
+                nextOwner: "background-lane",
                 boot: expect.any(String),
                 pass: expect.any(String),
               }),

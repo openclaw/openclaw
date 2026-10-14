@@ -142,7 +142,7 @@ describe("chat sidebar hosted tabs", () => {
         expect(press(target).defaultPrevented).toBe(false);
         expect(postMessage).not.toHaveBeenCalled();
       }
-      const menu = shell.querySelector("wa-dropdown")!.shadowRoot!.querySelector('[role="menu"]')!;
+      const menu = shell.querySelector('.side-panel-type-menu [role="menu"]')!;
       expect(press(menu).defaultPrevented).toBe(false);
       expect(postMessage).not.toHaveBeenCalled();
       expect(press(panel).defaultPrevented).toBe(false);

@@ -42,7 +42,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["sessions.list", "sessions.subscribe"])(
   "%s restores ordinary ancestor delivery across reads and recap-only events",
   async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const root = "agent:main:root";
       const child = "agent:main:child";
@@ -172,7 +172,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
 );
 
 it("publishes fresh ancestor rows through private intermediates with list visibility and no duplicates", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const profiles = [
@@ -409,7 +409,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       } finally {
         serialization.mockRestore();
       }
-      expect(normalizations).toBe(3);
+      // A new connection gets full rows without reencoding unchanged immutable presentations.
+      expect(normalizations).toBe(0);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);

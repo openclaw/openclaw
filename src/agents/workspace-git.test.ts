@@ -15,7 +15,9 @@ afterEach(() => {
 });
 
 it("retains workspace Git presentation while current admission and external changes stay visible", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   const workspace = tempDirs.make("workspace-git-projection-");
   const metadata = path.join(workspace, ".git");
   const exists = vi.spyOn(fs, "existsSync");
@@ -35,7 +37,7 @@ it("retains workspace Git presentation while current admission and external chan
     metadata,
   ]);
   expect(findGitCheckoutRoot(workspace)).toBe(workspace);
-  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.advanceTimersByTimeAsync(300_000);
   expect(hasWorkspaceGitCheckout(workspace)).toBe(true);
 
   await promisify(execFile)(process.execPath, [
@@ -44,7 +46,7 @@ it("retains workspace Git presentation while current admission and external chan
     metadata,
   ]);
   expect(findGitCheckoutRoot(workspace)).toBeNull();
-  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.advanceTimersByTimeAsync(300_000);
   expect(hasWorkspaceGitCheckout(workspace)).toBe(false);
 
   await ensureGitRepo(workspace, true);

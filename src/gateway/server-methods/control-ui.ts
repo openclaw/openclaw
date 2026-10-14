@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
@@ -12,9 +11,9 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -141,16 +140,16 @@ function createGitHubReadHandler<T>(
     if (!resolved) {
       return;
     }
+    const startedAt = performance.now();
+    let preparedAt: number | undefined;
     try {
       const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
         options,
         resolved.agentId,
       );
       assertSelected();
-      const result =
-        params.refresh === true
-          ? await load(target, identity, undefined, true)
-          : await load(target, identity);
+      preparedAt = performance.now();
+      const result = await load(target, identity, undefined, params.refresh === true);
       assertSelected();
       respond(true, result, undefined);
     } catch (error) {
@@ -161,6 +160,14 @@ function createGitHubReadHandler<T>(
             ? { message: error.message, retryable: error.reason !== "unavailable" }
             : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    } finally {
+      const finishedAt = performance.now();
+      if (method === "controlUi.githubPreview" && finishedAt - startedAt >= 500) {
+        context.logGateway?.info("Slow GitHub preview handler", {
+          identityMs: Math.round((preparedAt ?? finishedAt) - startedAt),
+          loadMs: preparedAt === undefined ? 0 : Math.round(finishedAt - preparedAt),
+        });
+      }
     }
   };
 }
@@ -290,19 +297,24 @@ async function prepareCheckDetailsSession(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
+  assertRequestCurrent: () => void,
 ): Promise<(ControlUiSessionPrTarget & { release: () => Promise<void> }) | null> {
   const sourceCfg = context.getRuntimeConfig();
   const sourceRequest = resolveRequestedGlobalAgentId(sourceCfg, sessionKey);
   if (!sourceRequest.ok) {
     return null;
   }
-  const binding = captureIncognitoSessionSource({ sessionKey, agentId: sourceRequest.agentId });
-  if (binding && "kind" in binding) {
-    binding.assertCurrent();
-    return null;
-  }
+  const assertRoutingCurrent = captureSessionMutationRouting(sourceCfg);
+  const assertCurrent = () => {
+    assertRequestCurrent();
+    assertRoutingCurrent(context.getRuntimeConfig());
+  };
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId: sourceRequest.agentId },
+    { assertCurrent, authorize: assertCurrent },
+  );
   const profiles = await prepareSessionSharingProfiles(client);
-  const facts = !binding
+  const facts = !memory
     ? await prepareSessionMutationFacts({
         cfg: sourceCfg,
         sessionKey,
@@ -344,6 +356,7 @@ async function prepareCheckDetailsSession(
             "pendingProjectGitUrl",
           ],
           assertCurrent() {
+            assertCurrent();
             facts.readCurrent(context.getRuntimeConfig());
           },
           refuse() {
@@ -352,67 +365,35 @@ async function prepareCheckDetailsSession(
         }),
       );
     }
-    const claim = binding?.actor.sessions.captureCurrent(sessionKey);
-    const assertRoutingCurrent = captureSessionMutationRouting(sourceCfg);
-    const preparedEntry =
-      binding &&
-      (await binding.actor.sessions.read(
-        {
-          assertCurrent() {
-            binding.admissionSignal?.throwIfAborted();
-            claim?.assertCurrent();
-            assertRoutingCurrent(context.getRuntimeConfig());
-          },
-        },
-        { sessionKey },
-        binding.admissionSignal,
-      ));
-    preparedEntry?.snapshot.assertCurrent();
-    const preparedMedia = binding?.actor.sessions.readMedia(sessionKey);
     const readSelected = () => {
+      assertCurrent();
       const cfg = context.getRuntimeConfig();
       const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
       if (!requested.ok) {
         return undefined;
       }
-      if (binding) {
-        binding.admissionSignal?.throwIfAborted();
-        claim?.assertCurrent();
-        assertRoutingCurrent(cfg);
-        const entry = preparedEntry?.entry && {
-          ...preparedEntry.entry,
-          pendingWorktree: preparedMedia?.pendingWorktree,
-          pendingProjectGitUrl: preparedMedia?.pendingProjectGitUrl,
-        };
-        const sharing = binding.actor.sessions.readSharing(sessionKey)?.entry;
-        const media = binding.actor.sessions.readMedia(sessionKey);
+      if (memory) {
+        const owner = memory.owner;
+        const current = owner?.readSession(sessionKey, memory.authority);
+        const entry = current?.entry;
         const entryFilter = createSessionListEntryFilter({ client, cfg });
         if (
+          !owner ||
           !entry ||
-          !sharing ||
-          !media ||
-          requested.agentId !== binding.actor.agentId ||
-          sharing.sessionId !== entry.sessionId ||
-          sharing.lifecycleRevision !== entry.lifecycleRevision ||
-          media.repositoryWorkspaceId !== entry.repositoryWorkspaceId ||
-          media.worktreeId !== entry.worktree?.id ||
-          media.spawnedCwd !== entry.spawnedCwd ||
-          media.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
-          !isDeepStrictEqual(media.pendingWorktree, entry.pendingWorktree) ||
-          media.pendingProjectGitUrl !== entry.pendingProjectGitUrl ||
-          (entryFilter && !entryFilter(sessionKey, sharing))
+          requested.agentId !== memory.agentId ||
+          (entryFilter && !entryFilter(sessionKey, entry))
         ) {
           return undefined;
         }
         return {
           cfg,
-          agentId: binding.actor.agentId,
+          agentId: memory.agentId,
           canonicalKey: sessionKey,
-          storePath: binding.actor.path,
+          storePath: memory.path,
           readSource: {
-            agentId: binding.actor.agentId,
-            path: binding.actor.path,
-            databaseIdentity: binding.actor.identity.incarnation,
+            agentId: memory.agentId,
+            path: memory.path,
+            databaseIdentity: owner.identity.incarnation,
           },
           entry,
         };
@@ -650,6 +631,7 @@ export function createControlUiHandlers(
               parsed.sessionKey,
               context,
               client,
+              () => signal?.throwIfAborted(),
             ));
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");

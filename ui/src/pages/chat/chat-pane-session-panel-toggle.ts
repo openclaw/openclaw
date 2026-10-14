@@ -234,6 +234,13 @@ export class ChatPaneSessionPanelToggleController {
         if (!isCurrent()) {
           return;
         }
+        // The region's sibling outlet can connect a panel before its owner has committed.
+        const recipient =
+          owner.renderRoot.querySelector<HTMLElementTagNameMap[PanelTagName]>(tagName);
+        await recipient?.updateComplete;
+        if (!isCurrent()) {
+          return;
+        }
         for (const pendingEvent of queue.events) {
           if (!isCurrent()) {
             return;

@@ -373,7 +373,9 @@ export async function discoverOpenAICompatibleLocalModels(
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
       name: modelId,
-      reasoning: /r1|reasoning|think|reason/i.test(modelId),
+      reasoning: /r1|reason|think|deepseek[-_]?v4|nemotron-3[-_](?:nano|super|ultra)\b/i.test(
+        modelId,
+      ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
       contextWindow:

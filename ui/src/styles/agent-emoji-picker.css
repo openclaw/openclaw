@@ -30,11 +30,7 @@ openclaw-agent-emoji-picker {
   height: 18px;
 }
 
-wa-popover.agent-emoji-picker__popover {
-  --max-width: min(306px, calc(100vw - 24px));
-}
-
-wa-popover.agent-emoji-picker__popover::part(body) {
+.agent-emoji-picker__popover {
   width: min(306px, calc(100vw - 24px));
   padding: 12px;
   border: 1px solid var(--overlay-border);

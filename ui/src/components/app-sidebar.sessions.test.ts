@@ -21,11 +21,11 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   createSessionsHarness,
 } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   storeSidebarSessionOwnerFilter,
   type SidebarSessionOwnerFilter,
@@ -72,12 +72,9 @@ async function mountOwnerFilter(
   }
   const context = createContext(gateway.gateway, harness.sessions);
   const provider = createApplicationContextProvider(context);
-  const sidebar = document.createElement("openclaw-app-sidebar");
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("Expected registered sidebar");
-  }
+  const sidebar = await createSidebarElement();
   sidebar.sidebarEntries = [];
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   document.body.append(provider);
   await settleLitElement(sidebar);
   await sidebar.sidebarMenus.preloadMenuRenderer();
@@ -114,11 +111,8 @@ describe("Sessions owner filter", () => {
     await settleLitElement(sidebar);
     expect(ownerTitle(sidebar)).toBe("Other");
     sidebar.remove();
-    const reloaded = document.createElement("openclaw-app-sidebar");
-    if (!(reloaded instanceof AppSidebarSessionNavigationElement)) {
-      throw new Error("Expected sidebar");
-    }
-    provider.append(reloaded);
+    const reloaded = await createSidebarElement();
+    provider.append(reloaded.hostElement);
     await settleLitElement(reloaded);
     expect(reloaded.sidebarSessionOwnerFilter()).toEqual(filter);
     expect(ownerTitle(reloaded)).toBe("Other");

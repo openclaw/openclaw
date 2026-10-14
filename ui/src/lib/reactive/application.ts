@@ -1,7 +1,9 @@
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import type { MentionsCapability } from "../../app/mentions.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
+import type { SidebarAttentionStore } from "../../app/sidebar-attention-store.ts";
 import type { WebPushCapability } from "../../app/web-push.ts";
 import { projectOwner, projectSource } from "./projection.ts";
 
@@ -36,6 +38,14 @@ export function projectAgentSelection(source: AgentSelectionCapability) {
 
 export function projectOverlays(source: ApplicationOverlays) {
   return projectOwner(source, (overlays) => overlays.snapshot);
+}
+
+export function projectMentions(source: MentionsCapability) {
+  return projectOwner(source, (mentions) => mentions.snapshot);
+}
+
+export function projectSidebarAttention(source: SidebarAttentionStore) {
+  return projectOwner(source, (attention) => attention.entries);
 }
 
 export function projectWebPush(source: WebPushCapability) {

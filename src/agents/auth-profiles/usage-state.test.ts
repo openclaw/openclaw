@@ -4,12 +4,34 @@ import { createAuthProfileUsageStore as makeStore } from "./credential-fixtures.
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   clearExpiredCooldowns,
+  resetAuthProfileFailureState,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage-state.js";
+
+it("preserves a sibling model cooldown until that model succeeds", () => {
+  const existing: ProfileUsageStats = {
+    cooldownReason: "rate_limit",
+    cooldownModel: "primary",
+    cooldownUntil: 31_000,
+    errorCount: 1,
+    failureCounts: { rate_limit: 1 },
+    lastFailureAt: 1_000,
+  };
+  const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
+  expect(siblingSuccess).toMatchObject({ ...existing, lastUsed: 2_000 });
+  const primarySuccess = resetAuthProfileFailureState(
+    siblingSuccess,
+    { lastUsed: 32_000 },
+    "primary",
+  );
+  expect(primarySuccess.cooldownUntil).toBeUndefined();
+  expect(primarySuccess.failureCounts).toBeUndefined();
+  expect(primarySuccess.lastUsed).toBe(32_000);
+});
 
 const now = 1_700_000_000_000;
 const until = now + 60_000;

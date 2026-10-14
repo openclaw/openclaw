@@ -14,10 +14,10 @@ import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
-  readWorkspaceSkillSources,
   resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+import { readWorkspaceSkillSources } from "./workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,

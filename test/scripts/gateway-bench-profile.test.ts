@@ -9,6 +9,7 @@ import { expect, it, onTestFinished } from "vitest";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
+  measureGatewayAllocations,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
   readGatewayResources,
@@ -373,3 +374,70 @@ it.each([
   },
   30_000,
 );
+
+it("measures discarded allocation churn and GC per completed operation, and cleans up failures", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-allocation-"));
+  const child = spawn(
+    nodeExecutable,
+    [
+      "--expose-gc",
+      "--input-type=module",
+      "-e",
+      `
+    await import(${JSON.stringify(new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href)});
+    process.channel.ref();
+    function discardedAllocation() {
+      let checksum = 0;
+      for (let batch = 0; batch < 10; batch++) {
+        const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
+        checksum += rows[rows.length - 1].values[1];
+      }
+      return checksum;
+    }
+    process.on('message', async message => {
+      if (!message.run) return;
+      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      globalThis.gc();
+      await new Promise(setImmediate);
+      await new Promise(setImmediate);
+      process.send({ completed: 4 });
+    });
+    process.send({ ready: true });
+  `,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+  const closed = once(child, "close");
+  onTestFinished(async () => {
+    child.kill();
+    await closed;
+    await rm(directory, { recursive: true, force: true });
+  });
+  await waitMessage(child, "ready");
+  await expect(
+    measureGatewayAllocations(child, path.join(directory, "failed"), 1, async () => {
+      throw new Error("workload failed");
+    }),
+  ).rejects.toThrow("workload failed");
+  const result = await measureGatewayAllocations(
+    child,
+    path.join(directory, "completed"),
+    4,
+    async () => {
+      const completed = once(child, "message");
+      child.send({ run: true });
+      expect((await completed)[0]).toEqual({ completed: 4 });
+    },
+  );
+  expect(result.scope).toBe("main-isolate");
+  expect(result.includesCollectedObjects).toBe(true);
+  expect(result.estimatedAllocatedBytesPerOperation).toBeGreaterThan(1_000_000);
+  expect(result.gcMsPerOperation).toBeGreaterThan(0);
+  expect(result.gcCount).toBeGreaterThan(0);
+  expect(
+    result.topAllocationSites.some((site) =>
+      site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
+    ),
+  ).toBe(true);
+  expect(result.cpu.pid).toBe(child.pid);
+});

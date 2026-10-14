@@ -23,6 +23,10 @@ import {
   patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
+import {
+  commitReplySessionInitialization,
+  loadReplySessionInitializationSnapshot,
+} from "./session-accessor.reset.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   runSqliteSessionDeletionTransaction,
@@ -418,108 +422,109 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
   expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
 });
 
-it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
-  const tempDir = sessionDirs.make();
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
-  const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
-  const finalized = createDeferredCore();
-  void finalized.promise.catch(() => {});
-  const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  vi.spyOn(
-    maintenance,
-    "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
-  ).mockImplementation(async (...args) => {
-    const includesLaterEntry = args[1].some((plan) =>
-      plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
-    );
-    try {
-      const result = await finalize(...args);
-      if (includesLaterEntry) {
-        finalized.resolve();
-      }
-      return result;
-    } catch (error) {
-      if (includesLaterEntry) {
-        finalized.reject(error);
-      }
-      throw error;
-    }
-  });
-  replaceSessionEntrySync(
-    { sessionKey: staleSessionKey, storePath },
-    { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
-  );
-
-  const materializationStarted = createDeferredCore();
-  const materializationReleased = createDeferredCore();
-  archiveMaterializationHook.beforeMaterialize = async () => {
-    materializationStarted.resolve();
-    await materializationReleased.promise;
-  };
-
-  const entryWrite = recordInboundSession({
-    storePath,
-    sessionKey: "agent:main:discord:direct:maintenance-ingress",
-    ctx: {
-      Body: "maintenance ingress proof",
-      ChatType: "direct",
-      From: "discord:maintenance-ingress",
-      Provider: "discord",
-      SenderId: "maintenance-ingress",
-      To: "discord:bot",
-    },
-    updateLastRoute: {
-      accountId: "default",
-      channel: "discord",
-      sessionKey: "agent:main:discord:direct:maintenance-ingress",
-      to: "user:maintenance-ingress",
-    },
-    onRecordError(error) {
-      throw error;
-    },
-  });
-  const firstCompleted = await Promise.race([
-    entryWrite.then(() => "entry-write" as const),
-    materializationStarted.promise.then(() => "maintenance" as const),
-  ]);
-  if (firstCompleted === "entry-write") {
-    await materializationStarted.promise;
-    replaceSessionEntrySync(
-      { sessionKey: laterStaleSessionKey, storePath },
-      { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
-    );
-    await recordInboundSession({
-      storePath,
-      sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
-      ctx: {
-        Body: "later maintenance ingress proof",
-        ChatType: "direct",
-        From: "discord:maintenance-ingress-later",
-        Provider: "discord",
-        SenderId: "maintenance-ingress-later",
-        To: "discord:bot",
-      },
-      updateLastRoute: {
-        accountId: "default",
-        channel: "discord",
-        sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
-        to: "user:maintenance-ingress-later",
-      },
-      onRecordError(error) {
+it.for(["channel recording", "reply initialization"] as const)(
+  "does not hold %s behind automatic session maintenance",
+  async (operation, { signal }) => {
+    const tempDir = sessionDirs.make();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
+    const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
+    const finalized = createDeferredCore();
+    void finalized.promise.catch(() => {});
+    const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+    vi.spyOn(
+      maintenance,
+      "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
+    ).mockImplementation(async (...args) => {
+      const includesLaterEntry = args[1].some((plan) =>
+        plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
+      );
+      try {
+        const result = await finalize(...args);
+        if (includesLaterEntry) {
+          finalized.resolve();
+        }
+        return result;
+      } catch (error) {
+        if (includesLaterEntry) {
+          finalized.reject(error);
+        }
         throw error;
-      },
+      }
     });
-  }
-  materializationReleased.resolve();
-  await entryWrite;
+    replaceSessionEntrySync(
+      { sessionKey: staleSessionKey, storePath },
+      { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
+    );
 
-  expect(firstCompleted).toBe("entry-write");
-  // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
-  await racePromiseWithAbortSignal(finalized.promise, signal);
-  expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
-});
+    const materializationStarted = createDeferredCore();
+    const materializationReleased = createDeferredCore();
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      materializationStarted.resolve();
+      await materializationReleased.promise;
+    };
+
+    const write = async (suffix: string) => {
+      const sessionKey = `agent:main:discord:direct:maintenance-ingress${suffix}`;
+      if (operation === "reply initialization") {
+        const target = { agentId: "main", storePath, sessionKey };
+        const snapshot = await loadReplySessionInitializationSnapshot(target);
+        const result = await commitReplySessionInitialization({
+          ...target,
+          activeSessionKey: sessionKey,
+          expectedRevision: snapshot.revision,
+          sessionEntry: { sessionId: `maintenance-ingress${suffix}`, updatedAt: Date.now() },
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+        });
+        expect(result.ok).toBe(true);
+        expect(loadSessionEntry(target)?.sessionId).toBe(`maintenance-ingress${suffix}`);
+        return;
+      }
+      await recordInboundSession({
+        storePath,
+        sessionKey,
+        ctx: {
+          Body: "maintenance ingress proof",
+          ChatType: "direct",
+          From: `discord:maintenance-ingress${suffix}`,
+          Provider: "discord",
+          SenderId: `maintenance-ingress${suffix}`,
+          To: "discord:bot",
+        },
+        updateLastRoute: {
+          accountId: "default",
+          channel: "discord",
+          sessionKey,
+          to: `user:maintenance-ingress${suffix}`,
+        },
+        onRecordError(error) {
+          throw error;
+        },
+      });
+    };
+    const entryWrite = write("");
+    const firstCompleted = await Promise.race([
+      entryWrite.then(() => "entry-write" as const),
+      materializationStarted.promise.then(() => "maintenance" as const),
+    ]);
+    if (firstCompleted === "entry-write") {
+      await materializationStarted.promise;
+      replaceSessionEntrySync(
+        { sessionKey: laterStaleSessionKey, storePath },
+        { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
+      );
+      await write("-later");
+    }
+    materializationReleased.resolve();
+    await entryWrite;
+
+    expect(firstCompleted).toBe("entry-write");
+    // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
+    await racePromiseWithAbortSignal(finalized.promise, signal);
+    expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
+  },
+);
 
 it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
   const { database, storePath } = createPlannerStore(66);

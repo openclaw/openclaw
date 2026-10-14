@@ -9,6 +9,7 @@ import {
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import * as secretEgressRuntime from "openclaw/plugin-sdk/secret-egress-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,8 +30,8 @@ import {
   inspectCases,
   mappedCatalog,
 } from "./crabbox-worker-provider.test-support.js";
+import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
@@ -41,6 +42,19 @@ import {
 vi.mock("./crabbox-managed-binary.js", () => ({
   ensureManagedCrabboxBinary: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/secret-egress-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-egress-runtime")>()),
+  withSetupSecretEgress: vi.fn(),
+}));
+
+const SETUP_SECRETS = {
+  ARTIFACT_TOKEN: { source: "store", provider: "default", id: "ARTIFACT_TOKEN" },
+} as const;
+const SETUP_SENTINEL = "openclaw-secret-sentinel:fixture-artifact-token";
+const HOST_PROXY = "http://fixture-proxy-grant@127.0.0.1:4321";
+const CA_BUNDLE = "-----BEGIN CERTIFICATE-----\npublic-ca-fixture\n-----END CERTIFICATE-----";
+const revokeSetupGrant = vi.fn();
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = "cbx_6071fc2062a6";
@@ -65,6 +79,17 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 beforeEach(() => {
+  revokeSetupGrant.mockReset();
+  vi.mocked(secretEgressRuntime.withSetupSecretEgress)
+    .mockReset()
+    .mockImplementation(async (_options, run) =>
+      run({
+        remoteEnv: { ARTIFACT_TOKEN: SETUP_SENTINEL },
+        hostEnv: { HTTPS_PROXY: HOST_PROXY },
+        caBundle: CA_BUNDLE,
+        revoke: revokeSetupGrant,
+      }),
+    );
   vi.mocked(ensureManagedCrabboxBinary)
     .mockReset()
     .mockImplementation(async (params) => ({
@@ -126,6 +151,11 @@ function providerWithRunner(
     async (argv, options) => {
       if (argv[1] === "config" && argv[2] === "show") {
         return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+      }
+      if (argv[1] === "egress" && argv.includes("--help")) {
+        return commandResult({
+          stdout: "  --allow-public-destinations\n  --upstream-proxy-env string",
+        });
       }
       return runCommand(argv, options);
     },
@@ -477,146 +507,191 @@ describe("Crabbox worker provider", () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it("forwards profile setup environment without widening node enrollment", async () => {
-    const forwardedEnv = {
-      OPENCLAW_WORKER_ARTIFACT_TOKEN: "fixture artifact #tag \"quoted\" \\path 'single'",
-      CRABBOX_EMPTY_VALUE: "",
-    };
+  it("runs profile setup with sentinels while keeping the proxy and enrollment credentials separate", async () => {
+    vi.stubEnv("ARTIFACT_TOKEN", "unforwarded-host-value");
+    vi.stubEnv("CRABBOX_ENV_ALLOW", "OPENCLAW_UNSELECTED_SECRET");
+    vi.stubEnv("OPENCLAW_UNSELECTED_SECRET", "unselected-secret");
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    let enrollmentProfile: string | undefined;
     const enrollmentEnv = {
       CRABBOX_WORKER_BOOTSTRAP_TOKEN: JSON.stringify({
         nodeBootstrap: createNodeBootstrapFixture().token,
       }),
       CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
     };
-    const setupEnv = Object.keys(forwardedEnv);
-    vi.stubEnv("CRABBOX_ENV_ALLOW", "OPENCLAW_UNSELECTED_SECRET");
-    vi.stubEnv("OPENCLAW_UNSELECTED_SECRET", "unselected-secret");
-    for (const [name, value] of Object.entries(forwardedEnv)) {
-      vi.stubEnv(name, value);
-    }
-    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-    const profileObservations = new Map<
-      string,
-      { directoryMode: number; fileMode: number; valuesMatch: boolean }
-    >();
     const setup = "command -v node || install-node";
     const provider = providerWithRunner(async (argv, options) => {
       calls.push({ argv, options });
       if (argv[1] === "run") {
-        const expectedEnv = options.input === setup ? forwardedEnv : enrollmentEnv;
-        const profileFlagIndex = argv.indexOf("--env-from-profile");
-        const profilePath = profileFlagIndex < 0 ? undefined : argv[profileFlagIndex + 1];
-        if (profilePath) {
-          const lines = fs.readFileSync(profilePath, "utf8").split("\n");
-          profileObservations.set(profilePath, {
-            directoryMode: fs.statSync(path.dirname(profilePath)).mode & 0o777,
-            fileMode: fs.statSync(profilePath).mode & 0o777,
-            valuesMatch: Object.entries(expectedEnv).every(([name, value]) =>
-              lines.includes(`${name}="${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`),
-            ),
-          });
+        enrollmentProfile = argv[argv.indexOf("--env-from-profile") + 1];
+        if (!enrollmentProfile) {
+          throw new Error("missing enrollment environment profile");
         }
-        return commandResult();
+        const lines = fs.readFileSync(enrollmentProfile, "utf8").split("\n");
+        expect(fs.statSync(path.dirname(enrollmentProfile)).mode & 0o777).toBe(0o700);
+        expect(fs.statSync(enrollmentProfile).mode & 0o777).toBe(0o600);
+        for (const [name, value] of Object.entries(enrollmentEnv)) {
+          expect(lines).toContain(
+            `${name}="${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`,
+          );
+        }
+        expect(lines.join("\n")).not.toContain(SETUP_SENTINEL);
       }
       return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
     });
 
-    const profile = { ...PROFILE, setup, setupEnv };
-    await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
+    await expect(
+      provider.provision({ ...PROFILE, setup, setupSecrets: SETUP_SECRETS }, OPERATION_ID),
+    ).resolves.toMatchObject({ leaseId: LEASE_ID });
+    const setupCall = calls.find((call) => call.argv[1] === "egress");
+    const enrollmentCall = calls.find((call) => call.argv[1] === "run");
+    expect(setupCall?.argv).toEqual([
+      SIBLING_BINARY,
+      "egress",
+      "run",
+      "--id",
+      LEASE_ID,
+      "--provider",
+      "aws",
+      "--allow-public-destinations",
+      "--upstream-proxy-env",
+      "CRABBOX_SETUP_PROXY",
+      "--no-sync",
+      "--no-hydrate",
+      "--script-stdin",
+    ]);
+    expect(setupCall?.options.env).toEqual({
+      CRABBOX_ENV_ALLOW: ",",
+      CRABBOX_SETUP_PROXY: HOST_PROXY,
     });
-    const [setupCall, enrollmentCall] = calls.filter((call) => call.argv[1] === "run");
-    for (const [call, expectedEnv] of [
-      [setupCall, forwardedEnv],
-      [enrollmentCall, enrollmentEnv],
-    ] as const) {
-      if (!call) {
-        throw new Error("missing setup command");
-      }
-      const profileFlagIndex = call.argv.indexOf("--env-from-profile");
-      expect(profileFlagIndex).toBeGreaterThanOrEqual(0);
-      const profilePath = call.argv[profileFlagIndex + 1];
-      if (!profilePath) {
-        throw new Error("missing private environment profile");
-      }
-      expect(profileObservations.get(profilePath)).toEqual({
-        directoryMode: 0o700,
-        fileMode: 0o600,
-        valuesMatch: true,
-      });
-      expect(fs.existsSync(profilePath)).toBe(false);
-      expect(fs.existsSync(path.dirname(profilePath))).toBe(false);
-      for (const value of Object.values(expectedEnv).filter(Boolean)) {
-        expect(call.argv.some((argument) => argument.includes(value))).toBe(false);
-        expect(Object.values(call.options.env ?? {}).includes(value)).toBe(false);
-      }
-      expect(
-        call.argv.filter((argument, index, argv) => argv[index - 1] === "--allow-env"),
-      ).toEqual(Object.keys(expectedEnv));
-      expect(call.options.env).toStrictEqual({
-        ...Object.fromEntries(Object.keys(expectedEnv).map((name) => [name, undefined])),
-        CRABBOX_ENV_ALLOW: ",",
-      });
+    expect(setupCall?.options.input).toContain(`export ARTIFACT_TOKEN='${SETUP_SENTINEL}'`);
+    expect(setupCall?.options.input).toContain(CA_BUNDLE);
+    expect(setupCall?.options.input).toContain("trap 'rm -rf --");
+    expect(setupCall?.options.input).toContain(
+      "export CURL_CA_BUNDLE='/tmp/openclaw-setup-egress.",
+    );
+    expect(setupCall?.options.input).toContain(setup);
+    for (const value of [
+      HOST_PROXY,
+      "unforwarded-host-value",
+      "unselected-secret",
+      "secret-setup-value",
+    ]) {
+      expect(setupCall?.options.input).not.toContain(value);
+      expect(setupCall?.argv.join(" ")).not.toContain(value);
     }
-    expect(setupCall?.argv).toEqual(
-      expect.arrayContaining([
-        "--network",
-        "public",
-        "--tailscale=false",
-        "--id",
-        LEASE_ID,
-        "--keep=true",
-        "--no-sync",
-        "--script-stdin",
-      ]),
+    expect(enrollmentCall?.options.env).toEqual({
+      CRABBOX_ENV_ALLOW: ",",
+      CRABBOX_WORKER_BOOTSTRAP_TOKEN: undefined,
+      CRABBOX_WORKER_SETUP_CODE: undefined,
+    });
+    expect(enrollmentCall?.options.input).not.toContain(SETUP_SENTINEL);
+    expect(enrollmentCall?.options.env).not.toHaveProperty("CRABBOX_SETUP_PROXY");
+    for (const value of Object.values(enrollmentEnv)) {
+      expect(enrollmentCall?.argv.join(" ")).not.toContain(value);
+      expect(Object.values(enrollmentCall?.options.env ?? {})).not.toContain(value);
+    }
+    expect(enrollmentProfile).toBeDefined();
+    expect(fs.existsSync(enrollmentProfile!)).toBe(false);
+    expect(fs.existsSync(path.dirname(enrollmentProfile!))).toBe(false);
+    expect(secretEgressRuntime.withSetupSecretEgress).toHaveBeenCalledExactlyOnceWith(
+      { secrets: SETUP_SECRETS, signal: expect.any(AbortSignal) },
+      expect.any(Function),
     );
-    expect(setupCall?.options.input).toBe(setup);
-    expect(calls.filter((call) => call.argv[1] !== "run").every((call) => !call.options.env)).toBe(
-      true,
-    );
+    expect(revokeSetupGrant).toHaveBeenCalledOnce();
   });
 
-  it("rejects a missing profile setup environment variable before invoking Crabbox", async () => {
-    const missingName = "OPENCLAW_MISSING_WORKER_ARTIFACT_TOKEN";
-    vi.stubEnv(missingName, undefined);
-    const runCommand = vi.fn<CrabboxCommandRunner>();
-    const provider = providerWithRawRunner(runCommand);
+  it("leaves plain HTTP direct while protecting HTTPS setup requests", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult());
+    const createScript = vi.fn<(env: Record<string, string>) => string>(
+      () => "curl http://packages.example.test/",
+    );
+    await runCrabboxSetupEgress({
+      binary: SIBLING_BINARY,
+      provider: "aws",
+      id: LEASE_ID,
+      secrets: SETUP_SECRETS,
+      createScript,
+      runCommand,
+      timeoutMs: 60_000,
+      assertCurrent: () => {},
+    });
+    const script = runCommand.mock.calls[0]?.[1].input;
+    expect(script).not.toMatch(/^export (?:HTTP_PROXY|http_proxy)=/mu);
+    expect(script).toContain("unset HTTP_PROXY http_proxy ALL_PROXY all_proxy");
+    expect(script).toContain("export HTTPS_PROXY='http://127.0.0.1:3128'");
+    expect(script).toContain("export https_proxy='http://127.0.0.1:3128'");
+    expect(script).toContain("export NO_PROXY='localhost,127.0.0.1,::1'");
+    expect(script).toContain("export no_proxy='localhost,127.0.0.1,::1'");
+    expect(script).toContain("export NODE_USE_ENV_PROXY='1'");
+    expect(createScript.mock.calls[0]?.[0]).not.toHaveProperty("HTTP_PROXY");
+    expect(createScript.mock.calls[0]?.[0]).not.toHaveProperty("http_proxy");
+  });
 
+  it("stops the owned lease without launching setup when its protected secret is unavailable", async () => {
+    vi.mocked(secretEgressRuntime.withSetupSecretEgress).mockRejectedValue(
+      new Error(
+        'Setup egress secret "ARTIFACT_TOKEN" was not found as a protected shared-store entry',
+      ),
+    );
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+    });
     await expect(
       provider.provision(
-        { ...PROFILE, setup: "install-node", setupEnv: [missingName] },
+        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
         OPERATION_ID,
       ),
     ).rejects.toMatchObject({
-      name: "Error",
-      message: expect.stringContaining(missingName),
+      code: "cleanup_complete",
+      message: expect.stringContaining("protected shared-store entry"),
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
+  });
+
+  it("rejects retired setupEnv with a Doctor remedy before invoking Crabbox", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>();
+    await expect(
+      providerWithRawRunner(runCommand).provision(
+        { ...PROFILE, setup: "install-node", setupEnv: ["ARTIFACT_TOKEN"] },
+        OPERATION_ID,
+      ),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining("openclaw doctor --fix"),
     });
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it.each([{ name: "command substitution", value: "fixture$(value)" }])(
-    "rejects profile setup environment containing $name without exposing its value",
-    async ({ value }) => {
-      const envName = "OPENCLAW_WORKER_ARTIFACT_TOKEN";
-      vi.stubEnv(envName, value);
-      const calls: string[][] = [];
-      const provider = providerWithRunner(async (argv) => {
-        calls.push(argv);
-        return argv[1] === "inspect" ? commandResult({ stdout: inspectJson() }) : commandResult();
-      });
+  it("rejects a CLI without native public setup egress before allocation", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>(async () =>
+      commandResult({ stdout: "--upstream-proxy-env" }),
+    );
+    await expect(
+      providerWithRawRunner(runCommand).provision(
+        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
+        OPERATION_ID,
+      ),
+    ).rejects.toThrow("update Crabbox to 0.77.0 or newer");
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand.mock.calls[0]?.[0]).toEqual([SIBLING_BINARY, "egress", "run", "--help"]);
+    expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
+  });
 
-      const error = await provider
-        .provision({ ...PROFILE, setup: "install-node", setupEnv: [envName] }, OPERATION_ID)
-        .catch((cause: unknown) => cause);
-
-      expect(error).toMatchObject({
-        code: "cleanup_complete",
-        message: `Crabbox setup environment value cannot be represented safely: ${envName}`,
-      });
-      expect(error instanceof Error && error.message.includes(value)).toBe(false);
-      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
-    },
-  );
+  it("rejects setup secrets on non-Linux targets before invoking Crabbox", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>();
+    await expect(
+      providerWithRawRunner(runCommand).provision(
+        { ...PROFILE, setupSecrets: SETUP_SECRETS },
+        OPERATION_ID,
+        { os: "macos" },
+      ),
+    ).rejects.toThrow("select Linux");
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
+  });
 
   it("leaves a lease live when it disappears from post-setup inspection", async () => {
     const calls: string[][] = [];
@@ -641,60 +716,64 @@ describe("Crabbox worker provider", () => {
     expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "run", "inspect"]);
   });
 
-  it.each([
-    {
-      name: "times out",
-      result: commandResult({ code: null, killed: true, termination: "timeout" }),
-      message: "Crabbox profile setup did not exit normally (timeout)",
-    },
-  ])(
-    "stops the lease and removes its private env profile when setup $name",
-    async ({ result, message }) => {
-      const envName = "OPENCLAW_WORKER_ARTIFACT_TOKEN";
-      vi.stubEnv(envName, "fixture-artifact-token");
-      const calls: string[][] = [];
-      let profilePath: string | undefined;
-      const provider = providerWithRunner(async (argv) => {
-        calls.push(argv);
-        if (argv[1] === "run") {
-          const candidateProfilePath = argv[argv.indexOf("--env-from-profile") + 1];
-          expect(candidateProfilePath).toBeDefined();
-          if (!candidateProfilePath) {
-            throw new Error("missing Crabbox environment profile path");
-          }
-          profilePath = candidateProfilePath;
-          expect(fs.existsSync(profilePath)).toBe(true);
-          if (!result) {
-            throw new Error("spawn unavailable");
-          }
-          return result;
-        }
-        if (argv[1] === "stop") {
-          return commandResult();
-        }
-        return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-      });
-
-      const provisioning = provider.provision(
-        { ...PROFILE, setup: "install-node", setupEnv: [envName] },
+  it("revokes the setup grant and stops the lease after a setup timeout", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push(argv);
+      if (argv[1] === "egress") {
+        expect(options.input).toContain("trap 'rm -rf --");
+        return commandResult({ code: null, killed: true, termination: "timeout" });
+      }
+      if (argv[1] === "stop") {
+        expect(revokeSetupGrant).toHaveBeenCalledOnce();
+      }
+      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+    });
+    await expect(
+      provider.provision(
+        { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
         OPERATION_ID,
-      );
-      if (result) {
-        await expect(provisioning).rejects.toMatchObject({
-          code: "cleanup_complete",
-          message: expect.stringContaining(message),
-        });
-      } else {
-        await expect(provisioning).rejects.toThrow(message);
+      ),
+    ).rejects.toMatchObject({
+      code: "cleanup_complete",
+      message: expect.stringContaining("Crabbox profile setup did not exit normally (timeout)"),
+    });
+    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+  });
+
+  it("revokes setup access before signalling process termination on cancellation", async () => {
+    const controller = new AbortController();
+    const setupStarted = createDeferred<void>();
+    const processSettled = createDeferred<SpawnResult>();
+    const provider = providerWithRunner(async (argv, options) => {
+      if (argv[1] === "egress") {
+        options.signal!.addEventListener(
+          "abort",
+          () => {
+            expect(revokeSetupGrant).toHaveBeenCalledOnce();
+            processSettled.resolve(
+              commandResult({ code: null, killed: true, termination: "timeout" }),
+            );
+          },
+          { once: true },
+        );
+        setupStarted.resolve();
+        return processSettled.promise;
       }
-      expect(profilePath).toBeDefined();
-      if (profilePath) {
-        expect(fs.existsSync(profilePath)).toBe(false);
-        expect(fs.existsSync(path.dirname(profilePath))).toBe(false);
-      }
-      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
-    },
-  );
+      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+    });
+    const reason = new Error("setup cancelled");
+    const provisioning = provider.provision(
+      { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS },
+      OPERATION_ID,
+      { signal: controller.signal },
+    );
+    await Promise.race([setupStarted.promise, provisioning]);
+    const rejection = expect(provisioning).rejects.toThrow(reason);
+    controller.abort(reason);
+    await rejection;
+    expect(revokeSetupGrant).toHaveBeenCalledTimes(2);
+  });
 
   it.each(["AWS"])(
     "rejects an effective %s instance profile during allocation-free preparation",
@@ -964,7 +1043,7 @@ describe("Crabbox worker provider", () => {
         }
         if (argv[1] === "run" || argv[1] === "stop") {
           commandTimeouts.push(options.timeoutMs);
-          elapsedMs += options.timeoutMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS;
+          elapsedMs += options.timeoutMs + 10_000;
         }
         return argv[1] === "stop"
           ? commandResult({ code: null, killed: true, termination: "timeout" })
@@ -1193,12 +1272,29 @@ describe("Crabbox worker provider", () => {
     [{ ttl: "999999999999999999999h" }, "positive Go duration"],
     [{ binary: " " }, "binary"],
     [{ binary: "crabbox" }, "absolute path"],
-    [{ setupEnv: "TOKEN" }, "array"],
-    [{ setupEnv: ["BAD-NAME"] }, "valid"],
-    [{ setupEnv: ["CRABBOX_ENV_ALLOW"] }, "CRABBOX_ENV_ALLOW is reserved"],
-    [{ setupEnv: ["TOKEN", "TOKEN"] }, "duplicate"],
-    [{ setupEnv: Array.from({ length: 17 }, (_, index) => "TOKEN_" + index) }, "at most 16"],
-    [{ setupEnv: ["TOKEN"] }, "requires setup"],
+    [{ setupEnv: ["TOKEN"] }, "openclaw doctor --fix"],
+    [{ setupSecrets: "TOKEN" }, "map of store SecretRefs"],
+    [{ setupSecrets: { "BAD-NAME": SETUP_SECRETS.ARTIFACT_TOKEN } }, "valid POSIX"],
+    [
+      { setupSecrets: { CRABBOX_ENV_ALLOW: SETUP_SECRETS.ARTIFACT_TOKEN } },
+      "CRABBOX_ENV_ALLOW is reserved",
+    ],
+    [{ setupSecrets: { TOKEN: "plaintext" } }, "store SecretRef"],
+    [
+      { setupSecrets: { TOKEN: { source: "env", provider: "default", id: "TOKEN" } } },
+      "store SecretRef",
+    ],
+    [
+      {
+        setupSecrets: Object.fromEntries(
+          Array.from({ length: 17 }, (_, index) => [
+            `TOKEN_${index}`,
+            SETUP_SECRETS.ARTIFACT_TOKEN,
+          ]),
+        ),
+      },
+      "at most 16",
+    ],
     [{ typo: true }, "unknown"],
     [{ setup: "  " }, "Crabbox profile setup must be a non-empty command string"],
     [{ desktop: "yes" }, "Crabbox profile desktop must be a boolean"],
@@ -1346,6 +1442,30 @@ describe("Crabbox worker provider", () => {
       expect(warnings).toHaveLength(1);
     } finally {
       await provider.destroy(lifecycleLease());
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps inspection and teardown available for persisted setupEnv leases without capturing them", async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+    });
+    const profile = {
+      ...PROFILE,
+      warmImage: true,
+      setup: "install-node",
+      setupEnv: ["ARTIFACT_TOKEN"],
+    };
+    try {
+      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
+      await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
+      await provider.destroy(lifecycleLease(LEASE_ID, profile));
+      expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
+      expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
+    } finally {
       vi.useRealTimers();
     }
   });

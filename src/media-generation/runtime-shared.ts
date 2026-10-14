@@ -21,6 +21,7 @@ import {
   isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
 } from "../plugins/provider-auth-availability.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
 function buildCapabilityCandidateFailure(
@@ -153,7 +154,7 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
-  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. */
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
@@ -299,10 +300,15 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
   };
 }
 
-/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. */
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. */
 export function resolveCapabilityModelCandidates(
   params: CapabilityModelCandidatesParams,
 ): ParsedProviderModelRef[] {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveCapabilityModelCandidates",
+    replacement: "await resolveCapabilityModelCandidatesAsync()",
+  });
   const prepared = prepareCapabilityModelCandidates(params);
   const fallbackParams = prepared.fallbackParams;
   if (fallbackParams) {
@@ -353,6 +359,13 @@ export async function resolveCapabilityModelCandidatesAsync(
         continue;
       }
       const ctx = { cfg: params.cfg, agentDir: params.agentDir };
+      if (!provider.isConfiguredAsync && provider.isConfigured) {
+        warnPluginSdkDeprecation({
+          family: "provider-sync-configuration",
+          method: "media provider isConfigured",
+          replacement: "isConfiguredAsync",
+        });
+      }
       const configured = provider.isConfiguredAsync
         ? await provider.isConfiguredAsync(ctx)
         : provider.isConfigured

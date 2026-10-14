@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
@@ -119,7 +120,7 @@ export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };

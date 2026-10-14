@@ -8,6 +8,10 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
+import {
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  resolveManagedOutgoingMediaArtifactDownload,
+} from "../../gateway/managed-image-attachments.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -131,6 +135,7 @@ describe("current-session completion media", () => {
         );
         let available = true;
         let revoked = false;
+        let deliveryWarning = "";
         const revokeOccurrence = () => {
           revoked = true;
           if (revoke === "cancel") {
@@ -175,6 +180,8 @@ describe("current-session completion media", () => {
               { ...job, ...fixture.params.deliveryPlan },
             );
             const result = await dispatchCronDelivery(fixture.params);
+            deliveryWarning =
+              result.diagnostics?.entries.map(({ message }) => message).join("\n") ?? "";
             expect(result.delivered).toBe(stage === "commit");
             if (stage === "commit") {
               expect(result).toMatchObject({
@@ -230,10 +237,32 @@ describe("current-session completion media", () => {
           expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
           expect(await fixture.messages()).toHaveLength(0);
           if (stage === "commit") {
-            expect(await fixture.records()).toEqual([]);
+            // File deletion is best effort; a durable cleanup claim must stay unservable.
+            const entries = await fixture.records();
+            expect(entries.length, deliveryWarning).toBeLessThanOrEqual(1);
+            for (const entry of entries) {
+              expect(entry).toMatchObject({
+                cleanupPending: true,
+                record: {
+                  sessionKey: fixture.scope.sessionKey,
+                  retentionClass: "transient",
+                  messageId: null,
+                  alt: "report.png",
+                },
+              });
+              expect(
+                await resolveManagedOutgoingMediaArtifactDownload({
+                  sessionKey: fixture.scope.sessionKey,
+                  agentId: "main",
+                  stateDir: state.stateDir,
+                  artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${entry.record.attachmentId}`,
+                }),
+              ).toBeNull();
+            }
           }
         } finally {
           cron.stop();
+          await Promise.allSettled(runIsolatedAgentJob.mock.results.map(({ value }) => value));
           admission.mockRestore();
           tts.mockRestore();
           restoreActivePluginRegistrySnapshot(registry);

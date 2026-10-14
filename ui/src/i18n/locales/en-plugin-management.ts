@@ -18,6 +18,12 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    compatibilityDeprecatedDated:
+      "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+    compatibilityDeprecatedUndated:
+      "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
+    compatibilityDetails: "Details",
+    compatibilityApis: "APIs to update",
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",

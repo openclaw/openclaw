@@ -23,6 +23,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
@@ -1267,7 +1268,14 @@ describe("startGatewayPostAttachRuntime", () => {
     loadedPluginRegistry.plugins.push(createPluginRecord({ id: "acpx", status: "loaded" }));
     const loaded = { pluginRegistry: loadedPluginRegistry, gatewayMethods: ["ping", "acp.spawn"] };
     const onStartupPluginsLoading = vi.fn();
-    const onStartupPluginsLoaded = vi.fn(() => attachment.promise);
+    const broadcast = vi.fn();
+    const onStartupPluginsLoaded = vi.fn(async () => {
+      const published = await attachment.promise;
+      if (published) {
+        setActivePluginRegistry(loadedPluginRegistry);
+      }
+      return published;
+    });
     const startGatewaySidecarsEntry = vi.fn(async (params: GatewaySidecarsParams) => {
       expect(params.pluginRegistry).toBe(loadedPluginRegistry);
       return 0;
@@ -1279,6 +1287,7 @@ describe("startGatewayPostAttachRuntime", () => {
           expect(onStartupPluginsLoading).toHaveBeenCalledOnce();
           return loaded;
         },
+        broadcast,
         onStartupPluginsLoading,
         onStartupPluginsLoaded,
         startupTrace: trace.startupTrace,
@@ -1290,9 +1299,15 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded),
       );
       expect(startGatewaySidecarsEntry).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
       attachment.resolve(true);
       await runtime;
       expect(startGatewaySidecarsEntry).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith(
+        "plugins.changed",
+        { generation: expect.any(Number) },
+        { dropIfSlow: true },
+      );
       expect(firstStartupLog().loadedPluginIds).toEqual(["acpx"]);
       expect(trace.details).toContainEqual({
         name: "plugins.runtime-post-bind",
@@ -1403,11 +1418,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect.any(Object),
       );
     expect(log.info).toHaveBeenCalledWith("http server listening (1 plugin: replacement)");
-    expect(log.warn.mock.calls).toEqual([
-      [
-        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
-      ],
-    ]);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {

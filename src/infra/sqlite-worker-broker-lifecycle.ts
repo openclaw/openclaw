@@ -94,28 +94,23 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
     const available = [...slots].filter(
       (slot) =>
-        !slot.ephemeral &&
-        !slot.failed &&
-        !slot.retiring &&
-        slot.runtimeGeneration === options.runtimeGeneration,
+        !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
     );
     // A retained updater cannot borrow another generation's carrier or evict its actors.
     // One extra slot belongs to the broker, not to each generation requesting one.
     const borrowedGenerationSlot =
       shareWorkers &&
-      !hasEphemeral &&
       options.runtimeGeneration !== undefined &&
       available.length === 0 &&
       slots.size >= limits.maxWorkers &&
       ![...slots].some((slot) => slot.borrowedGenerationSlot);
     if (
       !borrowedGenerationSlot &&
-      slots.size >= (shareWorkers || hasEphemeral ? limits.maxWorkers : limits.maxStores)
+      slots.size >= (shareWorkers ? limits.maxWorkers : limits.maxStores)
     ) {
-      if (options.target || !available.length || !shareWorkers) {
+      if (!available.length || !shareWorkers) {
         const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
           await racePromiseWithAbortSignal(
@@ -142,7 +137,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent" | "signal"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -164,7 +159,6 @@ export function createSqliteWorkerLifecycle({
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       custody: new SqliteWorkerSlotCustody(),
-      ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,

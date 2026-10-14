@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 function createDeclarations() {
@@ -113,6 +117,39 @@ function recipient(scopes = ["operator.admin"]): GatewayClient {
 }
 
 describe("presence projection without resident session facts", () => {
+  it("omits pending watch references until the session owner publishes ready facts", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = "agent:main:presence-pending";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: "presence-pending", updatedAt: 1, visibility: "shared" },
+      );
+      const cfg = { agents: { entries: { main: {} } } };
+      const release = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] }).catch(
+        (error: unknown) => {
+          release();
+          throw error;
+        },
+      );
+      try {
+        await projection.ensureMaterialized();
+        const person = { text: "watcher", ts: 1 };
+        const presence = [{ ...person, watchedSessions: [key] }];
+        const snapshot = () =>
+          createPresenceRecipientProjection({ cfg, presence, projection })(recipient());
+        expect(snapshot()).toEqual(presence);
+        sessionChanges.emit({ sessionKey: key, factsInvalidated: "category" });
+        expect(snapshot()).toEqual([person]);
+        await projection.prepareMembership();
+        expect(snapshot()).toEqual(presence);
+      } finally {
+        projection.dispose();
+        release();
+      }
+    });
+  });
+
   it("omits durable watches without reading stores and preserves roster scope enforcement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const person = { text: "watcher", ts: 1 };

@@ -18,7 +18,11 @@ const PHASES = [
   "dispatch",
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
-type PhaseScope = { mark: (phase?: ChatSendPhase) => void; finish: () => void };
+type PhaseScope = {
+  mark: (phase?: ChatSendPhase) => void;
+  finish: () => void;
+  [Symbol.dispose]: () => void;
+};
 type PostAckStage = "startup" | "steer" | "queued";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
@@ -128,6 +132,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       finish() {
         phaseScope.mark();
         active.delete(flush);
+      },
+      [Symbol.dispose]() {
+        phaseScope.finish();
       },
     };
     return phaseScope;

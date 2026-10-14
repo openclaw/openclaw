@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import {
+  captureSessionActorStorageOwner,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import {
   createSqliteSourceFenceAdmission,
   type SqliteSourceFenceOwner,
@@ -8,11 +13,18 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionFactory,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import type { GitHubPublicationSourcePredicate } from "../state/github-publication-source-contract.js";
-import type { GitHubPublicationSourceSelector } from "../state/github-publication-source.types.js";
+import type {
+  GitHubPublicationSourceSelector,
+  GitHubPublicationSessionFacts,
+} from "../state/github-publication-source.types.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -27,11 +39,12 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 type SourceBinding = {
   context: OpenClawStateWorkerContext;
   predicate: GitHubPublicationSourcePredicate;
-  source: SqliteSourceFenceOwner;
-  destination: SqliteSourceFenceOwner;
   signal: AbortSignal;
   admitted: boolean;
-};
+} & (
+  | { kind: "durable"; source: SqliteSourceFenceOwner; destination: SqliteSourceFenceOwner }
+  | { kind: "memory"; assertCurrent(): void; retain: SqliteSourceFenceOwner["retain"] }
+);
 const { bindings, destinationIncarnations } = resolveGlobalSingleton(
   Symbol.for("openclaw.githubPublicationSourceCapabilities"),
   () => ({
@@ -58,8 +71,10 @@ export function bindGitHubPublicationSourceLifetime(
   const signal = AbortSignal.any([binding.signal, lifetime]);
   signal.throwIfAborted();
   binding.signal = signal;
-  binding.source = { ...binding.source, signal };
-  binding.destination = { ...binding.destination, signal };
+  if (binding.kind === "durable") {
+    binding.source = { ...binding.source, signal };
+    binding.destination = { ...binding.destination, signal };
+  }
   return capability;
 }
 
@@ -74,14 +89,103 @@ export function bindGitHubPublicationSource(capability: GitHubPublicationSourceC
     predicate: binding.predicate,
     createAdmission: ((operation) => {
       binding.admitted = true;
+      if (binding.kind === "memory") {
+        binding.retain(operation);
+        return {
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            if (request.stage !== "prepare") {
+              throw new Error("Memory publication authority requires a preparation grant.");
+            }
+            binding.signal.throwIfAborted();
+            binding.assertCurrent();
+            grant();
+          }),
+          nativeLocations: [binding.context.admission.databasePath],
+        };
+      }
       return createSqliteSourceFenceAdmission({
         destination: binding.destination,
         sources: [binding.source],
         signal: binding.signal,
         deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
       })(operation);
-    }) satisfies ReturnType<typeof createSqliteSourceFenceAdmission>,
+    }) satisfies SqliteWorkerAdmissionFactory,
   };
+}
+
+function readMemorySourceFacts(
+  captured: CapturedSessionActorStorageOwner,
+  sessionKey: string,
+): GitHubPublicationSessionFacts {
+  const snapshot = captured.owner
+    ? captured.owner.readSession(sessionKey, captured.authority)
+    : captured.binding?.actor.storage?.readCurrent(
+        { type: "session.members.read", input: {} },
+        captured.authority,
+      );
+  const entry = snapshot?.entry;
+  return {
+    entry: entry && {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      archivedAt: entry.archivedAt,
+      visibility: entry.visibility,
+      incognito: entry.incognito,
+      createdActor: entry.createdActor,
+      owner: entry.owner,
+      worktree: entry.worktree,
+      repositoryWorkspaceId: entry.repositoryWorkspaceId,
+    },
+    members: snapshot?.members ?? [],
+  };
+}
+
+async function prepareMemoryPublicationSource(
+  params: Parameters<typeof prepareGitHubPublicationSource>[0],
+  context: OpenClawStateWorkerContext,
+  captured: CapturedSessionActorStorageOwner,
+): Promise<GitHubPublicationSourceCapability> {
+  const memory = readMemorySourceFacts(captured, params.selector.sessionKey);
+  const source = { memory, selector: structuredClone(params.selector) };
+  const expected = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "githubPublication.sourceFacts", input: { source } }),
+    { signal: params.signal, assertCurrent: () => params.assertCurrent() },
+  );
+  const pending = new Set<Promise<unknown>>();
+  let released = false;
+  const capability: GitHubPublicationSourceCapability = Object.freeze({
+    version: 1,
+    async release() {
+      released = true;
+      await Promise.allSettled(pending);
+    },
+  });
+  bindings.set(capability, {
+    kind: "memory",
+    context,
+    predicate: { ...source, expected },
+    signal: params.signal,
+    admitted: false,
+    assertCurrent() {
+      context.admission.assertCurrent();
+      params.assertCurrent();
+      if (
+        released ||
+        !isDeepStrictEqual(readMemorySourceFacts(captured, params.selector.sessionKey), memory)
+      ) {
+        throw new Error("GitHub publication source authority changed.");
+      }
+    },
+    retain(operation) {
+      pending.add(operation.settled);
+      void operation.settled.then(
+        () => pending.delete(operation.settled),
+        () => pending.delete(operation.settled),
+      );
+    },
+  });
+  return capability;
 }
 
 /** Host policy executes before reservation; the worker rechecks every durable source fact. */
@@ -94,6 +198,13 @@ export async function prepareGitHubPublicationSource(params: {
   params.signal.throwIfAborted();
   params.assertCurrent();
   const context = captureOpenClawStateWorkerContext();
+  const memory = captureSessionActorStorageOwner(
+    { ...params.selector, storePath: params.sourcePath },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    return prepareMemoryPublicationSource(params, context, memory);
+  }
   const physical = readDatabasePathIdentitySync(params.sourcePath);
   if (!physical.key.startsWith("file:") || physical.birthtime === undefined) {
     throw new Error("GitHub publication requires an admitted durable source.");
@@ -197,6 +308,7 @@ export async function prepareGitHubPublicationSource(params: {
     assertCurrent();
     const capability: GitHubPublicationSourceCapability = Object.freeze({ version: 1, release });
     binding = {
+      kind: "durable",
       context,
       predicate: { ...sourceRead, expected },
       source: {

@@ -46,12 +46,6 @@ import {
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 
-const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.loadSessionEntry,
-}));
-
 let state: OpenClawTestState;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "lifecycle-source" });
@@ -61,7 +55,6 @@ beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
 afterEach(() => {
-  routing.loadSessionEntry.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -111,12 +104,6 @@ async function recoveryFixture(name: string) {
       },
     },
   );
-  // Routing is already prepared by the caller; this boundary owns patch and source SQL.
-  routing.loadSessionEntry.mockReturnValue({
-    ...target,
-    canonicalKey: sessionKey,
-    entry: loadSessionEntry(target),
-  });
   const source = createHarnessCompletionSourceAssertion({ claim, storePath: target.storePath });
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
   const admittedRunContext = await admission.admit("embedded");
@@ -304,11 +291,6 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       startedAt: 1_000,
       lifecycleRunId: runId,
       activeWriterRunId: runId,
-    });
-    routing.loadSessionEntry.mockReturnValue({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
     });
     const caller = expectDefined(
       createAdmittedGatewayToolCallerIdentity({

@@ -335,7 +335,7 @@ suite.define(() => {
     );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
@@ -709,7 +709,7 @@ suite.define(() => {
           await gateway.deferNext("sessions.create");
 
           const message = page.locator(".new-session-page__message");
-          const placeSelect = page.locator("wa-popover.new-session-page__project-popover");
+          const placeSelect = page.locator(".oc-popover.new-session-page__project-popover");
           const placeSummary = page.locator("#new-session-project-trigger");
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
@@ -730,7 +730,9 @@ suite.define(() => {
           });
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
-          expect(await placeSelect.getAttribute("open")).not.toBeNull();
+          expect(await placeSelect.evaluate((element) => element.matches(":popover-open"))).toBe(
+            true,
+          );
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");

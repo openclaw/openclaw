@@ -112,7 +112,7 @@ async function launchProbe(
   assertRunCurrent?: () => void,
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
-  if (!waitForInitialPlacement) {
+  if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
@@ -268,6 +268,55 @@ describe("worker detached model-context branch parity", () => {
     if (!hasUnjoinedOwner) {
       await closeStateDatabaseForTest();
     }
+  });
+
+  it("launches a continuation from the committed interruption writes instead of the original admission", async () => {
+    const original = recorder();
+    await original.persistApproved();
+    const originalLeaf = original.getAdmissionReceipt()?.entryId;
+    expect(originalLeaf).toEqual(expect.any(String));
+    const manager = await SessionManager.openAsync(sessionTarget);
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "toolCall",
+            id: "interrupted",
+            name: "exec",
+            arguments: { command: "effect-once" },
+          },
+        ],
+        stopReason: "toolUse",
+      }),
+    );
+    const unknown = "The node disconnected; outcome unknown. Verify state before retrying.";
+    await manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "interrupted",
+      toolName: "exec",
+      content: [{ type: "text", text: unknown }],
+      isError: true,
+      timestamp: 2,
+    });
+    const committedLeaf = await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Preserved partial reply" }],
+        timestamp: 3,
+      }),
+    );
+    expect(committedLeaf).not.toBe(originalLeaf);
+    const stale = await launchProbe({
+      ...request("original-recorder-borrowed"),
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: original,
+    });
+    expect(stale.launch?.baseLeafId).toBe(originalLeaf);
+    const continuation = await launchProbe({
+      ...request("interruption-continuation"),
+      suppressNextUserMessagePersistence: true,
+    });
+    expect(continuation.launch?.baseLeafId).toBe(committedLeaf);
+    expect(continuation.launch?.history).toContainEqual({ role: "toolResult", text: unknown });
   });
 
   it.each([false, true])(

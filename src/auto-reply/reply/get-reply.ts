@@ -958,7 +958,7 @@ async function resolveReplyFromConfig(
         agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null,
     });
   }
-  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
+  const modelLevels = await resolveRunModelLevels();
 
   let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
     ? new Map(
@@ -1093,8 +1093,7 @@ async function resolveReplyFromConfig(
       sessionCfg,
       commandAuthorized,
       directives,
-      resolvedThinkLevel,
-      resolvedReasoningLevel,
+      ...modelLevels,
       modelState: runModelState,
       provider: runProvider,
       model: runModel,

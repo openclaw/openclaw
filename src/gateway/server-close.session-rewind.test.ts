@@ -92,37 +92,41 @@ it("persists an accepted fork and queued rewind across the close prelude before 
   let rewinding: Promise<SessionsRewindResult> | undefined;
   let closing: Promise<void> | undefined;
   try {
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
     let executions = 0;
-    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-      (...args): ReturnType<typeof capture> => {
-        const owner = capture(...args);
-        return {
-          ...owner,
-          get fileIdentity() {
-            return owner.fileIdentity;
-          },
-          runExisting: (source, operation, options) =>
-            owner.runExisting(
-              source,
-              (worker) =>
-                operation({
-                  execute: async (command, commandOptions) => {
-                    if (
-                      command.type === "session.messageCut.commit" ||
-                      command.type === "database.domain.publish"
-                    ) {
-                      executions++;
-                      accepted.resolve();
-                      await releasePersistence.promise;
-                    }
-                    return await worker.execute(command, commandOptions);
-                  },
-                }),
-              options,
-            ),
-        };
+    const wrapExecution = (
+      owner: ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>,
+    ): ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution> => ({
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
       },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (
+                  command.type === "session.messageCut.commit" ||
+                  command.type === "database.domain.publish"
+                ) {
+                  executions++;
+                  accepted.resolve();
+                  await releasePersistence.promise;
+                }
+                return await worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    });
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
+      (...args) => wrapExecution(capture(...args)),
+    );
+    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
+      (...args) => wrapExecution(capturePreparation(...args)),
     );
     const dispatchOptions = {
       client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),

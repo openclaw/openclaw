@@ -21,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../auth-profiles/path-resolve.native.js";
 import { loadPersistedAuthProfileStore } from "../../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -108,6 +109,7 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   } satisfies OpenClawConfig;
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config, config);
+  prepareSharedAuthStoreOwnershipForNative(state.env);
   let sharedBefore: AuthProfileStore | undefined;
   if (owner === "main-with-shared-base") {
     writeConfigMachineState(

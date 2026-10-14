@@ -12,6 +12,7 @@ import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-d
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
+import { useLiveTestRuntimeConfig } from "../live-test-helpers.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
@@ -259,6 +260,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         process.stderr.write(`[openai-checkpoint-live] stage=${stage} phase=started\n`);
         const runId = randomUUID();
         const runConfig = structuredClone(config);
+        using _ = useLiveTestRuntimeConfig(runConfig);
         const admission = prepareSystemAgentRunAdmission(
           runConfig,
           runId,

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -17,7 +18,6 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
@@ -149,28 +149,27 @@ describe("session actor usage accounting", () => {
     }
   });
 
-  it("completes usage in the existing unbound native incognito owner", async () => {
+  it("completes usage in the existing unbound memory actor", async () => {
     const session = await usageSession(
       { incognito: true },
-      "agent:main:dashboard:incognito-native-completion",
+      "agent:main:dashboard:incognito-memory-completion",
     );
     const { scope } = session;
     const database = { agentId: scope.agentId, path: scope.storePath, env: scope.env };
-    const native = expectDefined(
-      getOpenClawAgentDatabaseIfOpen(database),
-      "native incognito owner",
-    );
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
+    const memory = expectDefined(memorySessionActorOwners.read(database), "memory session owner");
+    try {
+      await session.update(producingUpdate);
 
-    await session.update(producingUpdate);
-
-    expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(native);
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
-    expect(existsSync(scope.storePath)).toBe(false);
-    expect(
-      existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
-    ).toBe(false);
+      expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
+      expect(memorySessionActorOwners.read(database)).toBe(memory);
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+      expect(existsSync(scope.storePath)).toBe(false);
+      expect(
+        existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
+      ).toBe(false);
+    } finally {
+      memorySessionActorOwners.closeDatabase(database);
+    }
   });
 
   const retainedRuntime = {

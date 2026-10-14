@@ -33,13 +33,18 @@ export type SqliteWorkerAdmissionRequest = {
   deadlineMs?: number;
 };
 
+// Admission deadlines cross threads, so both sides keep the process monotonic
+// clock captured at import. Fake timers replace `process.hrtime` on one thread
+// with a clock that starts at zero; reading that replacement would expire, or
+// extend, every deadline the other thread set.
+const processMonotonicClock = process.hrtime;
+
+/** Monotonic nanoseconds shared by every thread of this process. */
+export function readSqliteWorkerMonotonicNs(): bigint {
+  return processMonotonicClock.bigint();
+}
+
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
-/** Process-private locator; live owner admission remains separate from this identity. */
-export type SqliteWorkerEphemeralTarget = {
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
-};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -94,6 +99,7 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
@@ -105,21 +111,22 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
-      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
-      input: Uint8Array;
-      preparation?: Uint8Array;
+      input: Uint8Array<ArrayBuffer>;
+      preparation?: Uint8Array<ArrayBuffer>;
     }
-  | { type: "execute"; input: Uint8Array }
+  | { type: "execute"; input: Uint8Array<ArrayBuffer> }
   | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }
-  | { type: "execute-frame"; input: Uint8Array }
+  | { type: "execute-frame"; input: Uint8Array<ArrayBuffer> }
   | { type: "result-next"; transferId: number }
   | { type: "close" }
 );
 
 export type SqliteWorkerReply = {
   id: number;
+  /** Explicit outer BEGINs in this frame, including rollback; excludes savepoints/autocommit. */
+  transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
   databaseAdmissions?: SqliteDatabaseAdmissions;

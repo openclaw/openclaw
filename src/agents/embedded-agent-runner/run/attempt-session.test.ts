@@ -111,7 +111,7 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { activationError?: Error }) {
+function createInput(options?: { terminalHookError?: Error }) {
   const events: string[] = [];
   const settingsManager = { id: "settings", getCompactionEnabled: () => true };
   const resourceLoader = {
@@ -119,12 +119,6 @@ function createInput(options?: { activationError?: Error }) {
       events.push("resource-reload");
     }),
   };
-  const setActiveToolsByName = vi.fn(() => {
-    events.push("activate-tools");
-    if (options?.activationError) {
-      throw options.activationError;
-    }
-  });
   const setPromptPreparation = vi.fn<AgentSession[typeof agentSessionSetPromptPreparation]>();
   const queuePromptContext = vi.fn<
     (message: Parameters<AgentSession[typeof agentSessionQueuePromptContext]>[0]) => () => void
@@ -133,7 +127,6 @@ function createInput(options?: { activationError?: Error }) {
     [agentSessionSetPromptPreparation]: setPromptPreparation,
     [agentSessionQueuePromptContext]: queuePromptContext,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
-    setActiveToolsByName,
     setBaseSystemPrompt: vi.fn((prompt: string) => {
       activeSession.agent.state.systemPrompt = prompt;
       events.push("apply-system-prompt");
@@ -175,13 +168,19 @@ function createInput(options?: { activationError?: Error }) {
     ...clientToolRuntime,
     refreshTools: vi.fn(),
   });
-  hoisted.createAgentSession.mockImplementation(async () => {
-    events.push("create-session");
-    return { session: activeSession };
-  });
+  hoisted.createAgentSession.mockImplementation(
+    async (sessionOptions: { systemPrompt: string }) => {
+      events.push("create-session");
+      activeSession.agent.state.systemPrompt = sessionOptions.systemPrompt;
+      return { session: activeSession };
+    },
+  );
   hoisted.installMessageToolTerminalHook.mockImplementation(
     (input: { onDeliveredSourceReply?: () => void }) => {
       events.push("install-terminal-hook");
+      if (options?.terminalHookError) {
+        throw options.terminalHookError;
+      }
       onDeliveredSourceReply = input.onDeliveredSourceReply;
     },
   );
@@ -222,7 +221,6 @@ function createInput(options?: { activationError?: Error }) {
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
-    setActiveToolsByName,
     sessionToolAllowlist,
     settingsManager,
   };
@@ -701,9 +699,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "stage:session-resource-loader",
       "create-session",
       "publish-session",
-      "activate-tools",
       "publish-system-prompt",
-      "apply-system-prompt",
       "install-terminal-hook",
       "stage:agent-session",
     ]);
@@ -717,7 +713,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
-    expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
+    expect(sessionCall?.[0]).toMatchObject({ tools: fixture.sessionToolAllowlist });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,
@@ -919,11 +915,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it("publishes session ownership before activation can fail", async () => {
-    const fixture = createInput({ activationError: new Error("activation failed") });
+  it("publishes session ownership before terminal-hook installation can fail", async () => {
+    const fixture = createInput({ terminalHookError: new Error("terminal hook failed") });
 
     await expect(prepareEmbeddedAttemptAgentSession(fixture.input)).rejects.toThrow(
-      "activation failed",
+      "terminal hook failed",
     );
 
     expect(fixture.events).toEqual([
@@ -931,7 +927,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "stage:session-resource-loader",
       "create-session",
       "publish-session",
-      "activate-tools",
+      "publish-system-prompt",
+      "install-terminal-hook",
     ]);
   });
 });

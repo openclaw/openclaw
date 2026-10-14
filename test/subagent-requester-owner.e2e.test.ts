@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
@@ -354,12 +355,13 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         // The parent checks the finished child through its real tool before yielding.
         yieldGate.resolve();
         expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
-        await vi.waitFor(
+        const settledRun = await vi.waitFor(
           () => {
             const runs = [...loadSubagentRegistryFromSqlite().values()];
             expect(runs, instance.logs()).toHaveLength(1);
             expect(runs[0]?.delivery?.status, instance.logs()).toBe("delivered");
             expect(runs[0]?.requesterSettleWake).toBeUndefined();
+            return expectDefined(runs[0], "settled child run");
           },
           { interval: 50, timeout: 30_000 },
         );
@@ -378,7 +380,18 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         if (!receipts.found) {
           throw new Error("Expected requester database for completion verification");
         }
-        expect(receipts.value).toEqual([]);
+        const settleRunId = `announce:requester-settle:${REQUESTER_AGENT_ID}:${sessionKey}:${settledRun.runId}:yield-1`;
+        expect(receipts.value).toHaveLength(1);
+        const receipt = expectDefined(receipts.value[0], "requester completion receipt");
+        expect(receipt).toMatchObject({
+          run_id: settleRunId,
+          idempotency_key: `${settleRunId}:user`,
+          succeeded: 1,
+        });
+        expect(JSON.parse(receipt.outcome_json)).toMatchObject({
+          reason: "completed",
+          status: "ok",
+        });
         expect(modelServer.completionResponseCount()).toBe(1);
         expect(chatErrors).toEqual([]);
         const history = await client.request<{

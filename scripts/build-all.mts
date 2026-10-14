@@ -427,7 +427,7 @@ function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   };
 }
 
-export function formatBuildAllDuration(durationMs: number) {
+function formatBuildAllDuration(durationMs: number) {
   const clampedMs = Math.max(0, durationMs);
   const roundedMs =
     clampedMs < 1000

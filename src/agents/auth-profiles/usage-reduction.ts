@@ -149,7 +149,7 @@ export type AuthProfileFailureReduction = {
 };
 
 export type PersonalAuthProfileUsageReduction =
-  | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number }
+  | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number; modelId?: string }
   | ({ kind: "failure" } & AuthProfileFailureReduction);
 
 export type PersonalAuthProfileUsageResult = {

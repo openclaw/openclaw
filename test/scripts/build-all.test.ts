@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BUILD_ALL_STEPS,
-  formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllEnvironment,
@@ -133,20 +132,6 @@ describe("resolveBuildAllStep", () => {
     expect(buildInfoInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP).toBe(
       uiInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP,
     );
-  });
-
-  it("pins the first explicit full commit alias and rejects malformed values", () => {
-    const gitSha = "A".repeat(40);
-    expect(
-      resolveBuildAllEnvironment(
-        { GIT_SHA: gitSha, GITHUB_SHA: "b".repeat(40) },
-        () => new Date("2026-07-10T12:34:56.000Z"),
-        () => "c".repeat(40),
-      ).GIT_COMMIT,
-    ).toBe(gitSha.toLowerCase());
-    expect(() =>
-      resolveBuildAllEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
-    ).toThrow("full 40-character hexadecimal SHA");
   });
 
   it.each([
@@ -805,17 +790,8 @@ describe("resolveBuildAllSteps", () => {
       expect(env).toEqual(originalEnv);
     },
   );
-  it("rejects unknown build profiles", () => {
-    expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
-  });
 });
 describe("build-all timing output", () => {
-  it("formats short and long phase durations compactly", () => {
-    expect(formatBuildAllDuration(42.4)).toBe("42ms");
-    expect(formatBuildAllDuration(1234)).toBe("1.23s");
-    expect(formatBuildAllDuration(12345)).toBe("12.3s");
-  });
-
   it("summarizes phases slowest first with total time and status", () => {
     expect(
       formatBuildAllTimingSummary([

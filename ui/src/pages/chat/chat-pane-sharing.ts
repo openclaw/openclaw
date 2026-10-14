@@ -12,6 +12,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities, projectPresencePayload } from "../../lib/presence-users.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   resolveUiConversationIdentity,
@@ -69,7 +70,16 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
 
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
     const sessionId = session?.sessionId?.trim();
-    if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
+    if (
+      !session ||
+      !sessionId ||
+      !this.presented ||
+      !canManageChatSessionSharing(session) ||
+      !readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "session.members.listEvidence",
+        requiredScope: "operator.read",
+      }).allowed
+    ) {
       return;
     }
     const cacheKey = this.sessionSharingCacheKey(session.key);

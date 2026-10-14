@@ -10,9 +10,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  issueDeviceBootstrapToken,
-  pruneExpiredDevicePairSetupCompletions,
-} from "./device-bootstrap.js";
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { issueDeviceBootstrapToken, startDevicePairSetupMaintenance } from "./device-bootstrap.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import {
@@ -110,32 +111,40 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
 });
 
 test("keeps node authority available while retained setup cleanup is pending", async () => {
-  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const binding = getPublishedPairedDeviceBinding("node", baseDir);
-  expect(binding).not.toBeNull();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
-  const writer = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return run(...args);
-    });
-  const pruning = pruneExpiredDevicePairSetupCompletions({ baseDir });
-  try {
-    await awaitGateBeforeSettlement(entered.promise, pruning, "setup cleanup was not held");
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-    release.resolve();
-    await expect(pruning).resolves.toBe(0);
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([pruning]);
-    writer.mockRestore();
-  }
+  await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+    const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+    const binding = getPublishedPairedDeviceBinding("node", baseDir);
+    expect(binding).not.toBeNull();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    const writer = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return run(...args);
+      });
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const onError = vi.fn();
+    startDevicePairSetupMaintenance({ scheduler: scheduler.scope(), onError });
+    const pruning = Promise.resolve(clock.wake());
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pruning, "setup cleanup was not held");
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      release.resolve();
+      await pruning;
+      expect(onError).not.toHaveBeenCalled();
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pruning]);
+      await scheduler.stop();
+      writer.mockRestore();
+    }
+  });
 });
 
 test.each([

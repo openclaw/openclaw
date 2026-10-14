@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS session_windows (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   transcript_updated_at INTEGER DEFAULT NULL,
+  row_transcript_json TEXT,
+  row_transcript_updated_at INTEGER,
   transcript_observed_at INTEGER DEFAULT NULL,
   session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),
   acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),

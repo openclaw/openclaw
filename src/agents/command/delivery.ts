@@ -97,7 +97,7 @@ type DeliverAgentCommandResultParams = {
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: SessionSourceAssertion;
-  onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
+  onDeliveryResult?: (result: AgentCommandDeliveryResult, payloads: ReplyPayload[]) => void;
 } & FreshSessionDeliveryRefreshParams;
 
 function isFreshDeliverySessionMatch(
@@ -660,7 +660,10 @@ export async function deliverAgentCommandResult(
       deliverySucceeded,
       deliveryStatus: status,
     });
-    params.onDeliveryResult?.(deliveryResult);
+    params.onDeliveryResult?.(
+      deliveryResult,
+      projectOutboundPayloadPlanForDelivery(outboundPayloadPlan),
+    );
     return deliveryResult;
   };
   if (strictPreDeliveryError) {

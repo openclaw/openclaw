@@ -8,6 +8,45 @@ import { Popover, type PopoverHandle } from "./popover.tsx";
 afterEach(cleanup);
 
 describe("Solid native popover", () => {
+  it("keeps a pinned popover open outside and closes once with Escape", async () => {
+    let handle!: PopoverHandle;
+    const changes: boolean[] = [];
+    const view = render(() => (
+      <>
+        <Popover
+          id="pinned-popover"
+          label="Pinned details"
+          dismissOutsidePointer={false}
+          dismissOutsideFocus={false}
+          onOpenChange={(open) => changes.push(open)}
+          ref={(value) => (handle = value)}
+        >
+          <input aria-label="Pinned draft" />
+        </Popover>
+        <input aria-label="Outside" />
+      </>
+    ));
+    flush();
+    const button = view.getByRole("button", { name: "Pinned details" });
+    const outside = view.getByRole("textbox", { name: "Outside" });
+    await userEvent.click(button);
+    await phase(handle.overlay.surface, "open");
+    const input = view.getByRole("textbox", { name: "Pinned draft" });
+    await userEvent.fill(input, "Unsaved draft");
+    await userEvent.click(outside);
+    expect(handle.overlay.open).toBe(true);
+    expect(document.activeElement).toBe(outside);
+    input.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(outside);
+    expect(handle.overlay.open).toBe(true);
+    expect(changes).toEqual([true]);
+    await userEvent.keyboard("{Escape}");
+    await phase(handle.overlay.surface, "hidden");
+    expect(changes).toEqual([true, false]);
+    expect(document.activeElement).toBe(button);
+  });
+
   it("lets a focused control consume Escape before dismissing the popover", async () => {
     let handle!: PopoverHandle;
     const view = render(() => (

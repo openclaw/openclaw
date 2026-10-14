@@ -5,7 +5,7 @@ import { t } from "../../../i18n/index.ts";
 import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
-import type { ChatProps } from "../chat-view.ts";
+import type { ChatProps } from "../chat-view.tsx";
 import { openSlot } from "../sidebar-layout.ts";
 import "./chat-tool-output.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";

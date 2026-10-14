@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/canvas-plugin",
-  "version": "2026.10.2",
+  "version": "2026.10.3",
   "private": true,
   "description": "OpenClaw Canvas plugin",
   "type": "module",
@@ -21,9 +21,8 @@
       "./index.ts"
     ],
     "assetScripts": {
-      "build": "node scripts/bundle-a2ui.mjs",
+      "build": "node --import ../../scripts/tsx.mjs ../../scripts/bundle-a2ui.mts",
       "buildOutputs": [
-        "src/host/a2ui/.bundle.hash",
         "src/host/a2ui/a2ui.bundle.js",
         "src/host/a2ui/a2ui-v0.9.bundle.js"
       ],

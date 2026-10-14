@@ -5,7 +5,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
-import "../pages/chat/chat-pane.ts";
+import "../pages/chat/chat-pane.tsx";
 import "../styles/chat.ts";
 import "../styles/chat/composer.css";
 import "../styles/chat/composer-status.css";

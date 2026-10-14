@@ -214,9 +214,7 @@ const systemBusyness = {
     page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
   open: async (page: Page) => {
     await page.locator(".sidebar-identity-card").click();
-    await page
-      .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]')
-      .click();
+    await page.locator('.sidebar-identity-menu [data-value="command:debug-overlay"]').click();
   },
   ready: (page: Page) =>
     page
@@ -382,7 +380,7 @@ suite.define(() => {
           });
           const failure = await installChunkFailure(
             page,
-            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
             { manualProbe },
           );
           await installMockGateway(page);
@@ -498,7 +496,7 @@ suite.define(() => {
       }
       const failure = await installChunkFailure(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -878,7 +876,7 @@ suite.define(() => {
           await expect
             .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
             .toBe(true);
-          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(held.requests()).toBe(1);
@@ -893,7 +891,12 @@ suite.define(() => {
     );
   });
 
-  it("recovers the native titlebar visibly after its chunk fails", async () => {
+  it("recovers the native titlebar visibly after its chunk fails", async ({ onTestFinished }) => {
+    let releaseProbe = () => {};
+    const manualProbe = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    onTestFinished(releaseProbe);
     await suite.withPage(
       {
         locale: "en-US",
@@ -906,6 +909,7 @@ suite.define(() => {
         const failure = await installChunkFailure(
           page,
           controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+          { manualProbe },
         );
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -916,7 +920,8 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await page.locator(".sidebar-rail").waitFor({ state: "attached" });
         const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-        await expect.poll(failure.headCount).toBe(1);
+        // Automatic recovery may probe again after its cooldown; keep success held until Retry.
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
         expect(failure.chunkRequestCount()).toBe(1);
         if (railProofDir) {
           await page.screenshot({
@@ -924,11 +929,14 @@ suite.define(() => {
           });
         }
 
-        await retryThroughReload(page, error);
+        const reloaded = page.waitForEvent("domcontentloaded");
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        releaseProbe();
+        await reloaded;
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor({ state: "visible" });
-        await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
-        await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+        await page.locator(".sidebar-session-toolbar__collapse").click();
+        await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await page.locator(".new-session-page__message").waitFor({ state: "visible" });
         expect(await error.count()).toBe(0);

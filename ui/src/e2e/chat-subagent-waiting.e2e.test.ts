@@ -159,8 +159,10 @@ suite.define(() => {
         };
         const childHistoryReads = () =>
           gateway.getRequests("chat.history", { sessionKey: child.key });
-        // The auto-opened panel loads child metrics. Once closed, inline observer
+        // Only an explicit open loads child metrics. Once closed, inline observer
         // updates must render from the roster without fetching another transcript.
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
         await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
         await closePanel();
@@ -213,14 +215,14 @@ suite.define(() => {
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
-        // Layout restores focus to its trigger; closing the last tab returns to
+        // Panels restores focus to its trigger; closing the last tab returns to
         // the count that opened the panel.
         await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
         await expect
           .poll(() =>
             activePane
-              .getByRole("button", { name: "Layout", exact: true })
+              .getByRole("button", { name: "Panels", exact: true })
               .evaluate((element) => element.matches(":focus")),
           )
           .toBe(true);
@@ -477,10 +479,12 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        // The next batch reopens its panel, but the parent reflects the event
-        // while that panel's independent roster hydration is still pending.
+        // A later batch updates inline activity without reopening the panel.
+        // An explicit open still hydrates its independent roster.
         await activityRow.waitFor();
         expect(await indicator.count()).toBe(0);
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await gateway.waitForRequest("sessions.list", {
           after: childReads,
           match: childRosterQuery,

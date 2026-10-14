@@ -359,7 +359,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-model-id "qwen3.5:27b"
 ```
 
-`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.6:cloud` also work here.
 
 Non-interactive llama.cpp against an existing `llama-server`:
 

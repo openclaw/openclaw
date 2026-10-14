@@ -18,8 +18,20 @@ agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
+The `Linux App` Windows installer job allows 105 minutes for source staging and
+packaging. Its canonical core build uses the existing
+`OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
+cold Windows declarations exceeded the default 45-minute package deadline, while
+a complete installer job previously took 78 minutes. The remaining job budget
+covers dependency installation, Rust compilation, and NSIS packaging. Linux and
+release-workflow budgets are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
+Agent auth-store admission and configured model-owner changes explicitly select
+the Gateway agent-config readiness suite. Its lazy startup path is not fully
+visible to the bounded import graph; the owner watch preserves overlap coverage.
 
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
@@ -37,7 +49,7 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+PR jobs and independent checks run to completion after a failure, including forks and retries. Setup, planning, build dependencies, cancellation, and watchdog deadlines still stop work that cannot safely proceed. Failing runs therefore take longer and use more runner time; successful runs keep the same selected checks, job names, and concurrency. `pr-failure-report` compares
 every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
 summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
@@ -149,7 +161,9 @@ Android native resource preparation uses the Mermaid renderer's filtered depende
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
 
-macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
+macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Ordinary native phases retain
+a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to build
+and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 

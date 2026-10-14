@@ -12,8 +12,6 @@ import {
 } from "../../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import { createGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import {
   readWorkerPlacementModelSource,
@@ -138,10 +136,10 @@ export async function prepareWorkerPlacementSessionRuntime(params: {
       ...params,
       assertCurrent,
       readSourceEntry: async (key) => {
-        const metadata = captureSessionEntryMetadataRead({
-          sessionKey: key,
-          agentId: params.agentId,
-        });
+        const metadata = captureSessionEntryMetadataRead(
+          { sessionKey: key, agentId: params.agentId },
+          assertCurrent,
+        );
         if (metadata) {
           parents.set(key, () => metadata.readCurrent());
           return metadata.readCurrent();
@@ -177,26 +175,6 @@ export async function prepareWorkerPlacementSessionRuntime(params: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           readSourceEntry: (key) => {
-            if (isIncognitoSessionKey(params.sessionKey)) {
-              const metadata = captureSessionEntryMetadataRead({
-                sessionKey: key,
-                agentId: params.agentId,
-              });
-              if (metadata) {
-                return metadata.readCurrent();
-              }
-              // The unbound native incognito owner retains its live final-effect read.
-              const target = resolveGatewaySessionStoreTargetWithStore({
-                cfg: currentCfg,
-                key: params.sessionKey,
-                agentId: params.agentId,
-                preserveQualifiedAddress: true,
-                clone: false,
-                readOnly: true,
-                exactRead: true,
-              });
-              return createGatewaySessionEntryReader({ ...target, cfg: currentCfg })(key);
-            }
             const read = parents.get(key);
             if (!read) {
               throw new Error("Session model inheritance changed during worker placement; retry.");

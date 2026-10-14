@@ -41,8 +41,8 @@ export async function personalGitHubStatusAsync(
   try {
     const prepared = await prepareUserGitHubConnection(action.owner);
     action.assertCurrent();
-    const status = projectPersonalGitHubStatus(prepared.connection);
-    statusAuthorities.set(status, prepared.assertCurrent);
+    const status = projectPersonalGitHubStatus(prepared.read());
+    statusAuthorities.set(status, prepared.read);
     return status;
   } catch {
     action.assertCurrent();
@@ -101,9 +101,9 @@ export async function resolvePersonalGitHubStatus(
     };
   }
   action.assertCurrent();
-  const record = prepared.connection;
+  const record = prepared.read();
   const status = projectPersonalGitHubStatus(record);
-  statusAuthorities.set(status, prepared.assertCurrent);
+  statusAuthorities.set(status, prepared.read);
   if (status.state !== "connected") {
     return status;
   }
@@ -126,14 +126,14 @@ export async function resolvePersonalGitHubStatus(
       ...revalidatePersonalGitHubStatus(action, status),
       ...(identity.stale ? { stale: true } : {}),
     };
-    statusAuthorities.set(result, prepared.assertCurrent);
+    statusAuthorities.set(result, prepared.read);
     return result;
   } catch {
     const result = {
       ...revalidatePersonalGitHubStatus(action, status),
       state: "unavailable" as const,
     };
-    statusAuthorities.set(result, prepared.assertCurrent);
+    statusAuthorities.set(result, prepared.read);
     return result;
   }
 }

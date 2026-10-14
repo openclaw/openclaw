@@ -96,18 +96,26 @@ inference routes, it replays the parent's last prepared instructions, tool schem
 and input prefix, including after parent completion, with tool choice set to `none`.
 Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
 and WebSocket continuation requests fall back to native thread reconstruction
-without guaranteed cache reuse. While declarations remain in the snapshot budget,
-tool schemas stay parent-identical even on that native reconstruction path.
+without guaranteed cache reuse. Native reconstructed history also takes precedence when
+its prefix no longer matches the recorded request. Completed parent responses and
+subsequent fork tool-denial outcomes remain before the side question or continuation.
+While the prepared request remains in the snapshot budget,
+instructions and tool schemas stay parent-identical even on that native reconstruction path.
 Denied forks always set tool choice to `none` on managed inference requests,
 while native hosted search remains disabled. The fork has its own thread,
 session, and current model authority.
 Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime replays the parent's recorded provider request
-with one appended user message, preserving its system prompt, tools, reasoning
+The built-in `openclaw` runtime replays the parent's recorded provider request,
+followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
 settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
 payload data without re-running the parent's one-shot continuation hooks.
+Completed asynchronous tool calls, their outcomes, and the final answer remain in
+conversation order.
+If a published tool call is still running when the fork starts, the built-in
+runtime includes a non-error placeholder saying its result is not available yet.
+This does not cancel the parent call or persist a result in the parent session.
 The replay uses the current prepared model's proxy and TLS policy. Session read
 authority is checked immediately before every network send, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
@@ -121,6 +129,9 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
 Read-only forks do not acquire workspace placement authority, so a parent's
 pending placement publication does not block them. Normal parent settlement and
 usage updates preserve the fork's read authority. Session reset or deletion
@@ -160,7 +171,7 @@ releasing request resources. Released opaque-requester and synchronous lifecycle
 methods remain deprecated compatibility routes; actual use shares one warning
 budget per plugin and publication family. See
 [GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
-for the method mapping, callback ordering, and next-major removal contract.
+for the method mapping, callback ordering, and ordinary stable removal contract.
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
@@ -234,6 +245,11 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
+
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
@@ -296,6 +312,14 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+Diagnostic subscriptions made while a managed plugin is loading, registering,
+or running belong to that instance. OpenClaw automatically unsubscribes them
+when the instance is disposed, including after a failed load or replacement.
+The unsubscribe handle still releases a subscription early and removes its
+cleanup registration. This covers `onDiagnosticEvent` and
+`onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
+as host-owned diagnostic subscriptions created on the plugin's behalf.
 
 ### Instance-bound background context
 
@@ -419,15 +443,31 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
+For independent data owners in one database,
+`readSqliteDatabaseScopedWriteTokenForPath(path, scope)` retains facts across
+unrelated scoped writes. The worker exports `readSqliteDatabaseScopedWriteToken`
+and `readSqliteDatabasePendingScopedWriteToken` from `sqlite-worker-runtime`;
+use the latter to attach the committed scope receipt to a transaction result.
+Each participating writer names its affected scopes with
+`withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
+all scope receipts. These tokens describe committed data, never effect authority.
+
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read
 the same database or do blocking work. Put same-database predicates in the paired
 worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
-missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+missing storage absent. `terminalSignal` aborts with the terminal failure reason
+after accepted publications settle. Retained consumers must stop reusing that
+store and acquire through their normal admission owner. Idle retirement and
+explicit `close()` do not abort the signal; an aborted signal never authorizes
+replaying an acknowledged or unknown-outcome write.
+The deprecated `withOpenClawAgentDatabaseRuntime` and
 `withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
-ordering, including the latter's post-integrity, pre-repair checkpoint, until
-the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
+ordering, including the latter's post-integrity, pre-repair checkpoint, through
+2026-12-31. Removal ships in the first January 2027 stable release; see the
+[SQLite migration guide](/plugins/sdk-migration/sqlite-async#debug-proxy-capture-and-raw-sqlite).
+Awaiting those callbacks does not move SQL off-thread.
 
 Transcript assertion composition preserves prepared source checks independently
 of opaque SDK callbacks. Cold restoration can recheck those prepared components
@@ -566,6 +606,16 @@ preparation record. After the attempt closes, the callback rejects retained work
 Teardown keeps its existing cleanup authority and must still settle an owned
 lease when the requesting run has ended.
 
+Project preparation can return optional `recipePreparation` diagnostics with the
+recipe source, ignored-property note, phase durations, and a failure reason plus
+an output tail of at most 16 KiB. The optional transport callback
+`recordRecipePreparation` records diagnostics before a declared recipe rejects.
+These records contain neither command definitions nor environment values.
+An optional `captureSkipped` reason means detected setup failed best effort:
+continue enrollment, but suppress checkpoint capture for that allocation,
+including later teardown. Keep these recorded facts under the same live
+provisioning authority; they do not grant new allocation or execution authority.
+
 The legacy optional parameter shape remains source-compatible until the next
 declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
@@ -652,6 +702,16 @@ after consumer retirement. See [decision models](/plugins/sdk-overview/capabilit
 for provider selection, lifecycle, failure handling, limits, and diagnostics.
 
 ## Setup secret egress
+
+Worker providers can optionally implement `runSetupCommand` to run repository
+binding lifecycle commands over their owned lease transport. The host supplies
+the prepared workspace and HOME, a script factory accepting only the bounded
+remote environment, and a live attached-environment/repository authority guard.
+The provider rechecks that guard after awaits and immediately before launch.
+Returning `undefined` retains the normal node tunnel; a protected transport error
+must reject instead of falling back. Project preparation's script factory accepts
+the same bounded prepared environment. Secrets and host proxy credentials remain
+owned by the setup-egress capability below.
 
 The private official-plugin entrypoint `openclaw/plugin-sdk/secret-egress-runtime`
 exports `withSetupSecretEgress(options, run)` alongside `withConfiguredModelEgress`.

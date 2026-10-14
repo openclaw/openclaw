@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,8 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
 } from "../plugins/control-ui-assets.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { resetPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
@@ -21,6 +24,7 @@ import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-contro
 const directories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetPluginCache();
   vi.unstubAllGlobals();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -34,7 +38,12 @@ async function fixture() {
     path.join(directory, "package.json"),
     JSON.stringify({ name: "ui-build-fixture", type: "module" }),
   );
-  await fs.symlink(path.resolve("node_modules"), path.join(directory, "node_modules"), "dir");
+  await fs.mkdir(path.join(directory, "node_modules"));
+  await fs.symlink(
+    path.resolve("node_modules/esbuild"),
+    path.join(directory, "node_modules/esbuild"),
+    "dir",
+  );
   await fs.writeFile(
     path.join(directory, "index.ts"),
     'import "./style.css"; export const message = "first";',
@@ -84,6 +93,54 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
+  it.each([true, false])(
+    "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
+    async (authoredUi) => {
+      const project = await fixture();
+      const packagePath = path.join(project.rootDir, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packagePath, "utf8"));
+      packageJson.openclaw = { controlUi: project.source };
+      await fs.writeFile(packagePath, JSON.stringify(packageJson));
+      const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
+      const authored = {
+        id: "fixture",
+        configSchema: { type: "object", properties: { token: { type: "string" } } },
+        activation: { onStartup: true },
+        ...(authoredUi ? { controlUi: { entry: "dist/control-ui/authored/index.js" } } : {}),
+      };
+      const original = JSON.stringify(authored, null, 2);
+      await fs.writeFile(manifestPath, original);
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/build-plugin-control-ui.mts"),
+          project.rootDir,
+        ],
+        { timeout: 10_000 },
+      );
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
+      const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
+      const generated = JSON.parse(await fs.readFile(generatedPath, "utf8"));
+      generated.id = "previous-name";
+      generated.configSchema = { type: "object", properties: {} };
+      generated.activation = { onStartup: false };
+      await fs.writeFile(generatedPath, JSON.stringify(generated));
+      const loaded = loadPluginManifest(project.rootDir);
+      expect(loaded).toMatchObject({
+        ok: true,
+        manifest: { ...authored, controlUi: generated.controlUi },
+      });
+      const assets = await readPluginControlUiAssets(project.rootDir, generated.controlUi);
+      expect(assets.entryName).toBe("index.js");
+      const built = await import(
+        pathToFileURL(path.join(project.rootDir, generated.controlUi.entry)).href
+      );
+      expect(built.message).toBe("first");
+    },
+  );
+
   it("preserves esbuild's existing non-Solid JSX compilation", async () => {
     const project = await fixture();
     await fs.writeFile(
@@ -103,7 +160,7 @@ describe("native plugin browser builds", () => {
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
     const project = await fixture();
     const dependencies = path.join(project.rootDir, "node_modules");
-    await fs.unlink(dependencies);
+    await fs.rm(dependencies, { recursive: true });
     await fs.mkdir(path.join(dependencies, "@solidjs"), { recursive: true });
     for (const name of ["esbuild", "solid-js", "@solidjs/web", "@solidjs/compiler"]) {
       const owner = name === "esbuild" ? "node_modules" : "ui/node_modules";
@@ -473,7 +530,12 @@ export { flush };
     expect(await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8")).toBe(
       manifest,
     );
-    expect(await fs.readFile(path.join(project.rootDir, first.entry), "utf8")).toContain("first");
+    const retained = await import(pathToFileURL(path.join(project.rootDir, first.entry)).href);
+    expect(retained.message).toBe("first");
+    expect(await retained.loadDependencies("value")).toEqual([
+      "literal dependency",
+      "glob dependency",
+    ]);
   });
 
   it("rejects source entries outside the authoring package", async () => {

@@ -13,6 +13,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
+  prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
@@ -36,14 +37,13 @@ import {
   listUnreportedPersonalGitHubPublicationsAsync,
   readGitHubPublicationRequestAsync,
 } from "./github-publication-store-async.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
-/** @deprecated Use GitHubPublicationClaimRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationClaimRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationClaimRequest = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
@@ -55,7 +55,7 @@ export type GitHubPublicationClaimRequest = {
   expectedPublisher?: GitHubPublicationPublisher;
 };
 
-/** @deprecated Use GitHubPublicationSessionRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationSessionRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
   agentId: string;
   expectedRunId?: string;
@@ -165,12 +165,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       throw new Error("GitHub publication requires an authoritative session.");
     }
     assertRequester();
-    const initialLoaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    using selectedSession = await prepareGitHubPublicationSession(input.sessionKey, {
       cfg: params.getCommittedRuntimeConfig(),
-      key: input.sessionKey,
       agentId: input.agentId,
-      assertActive: params.assertCurrent,
+      assertCurrent: params.assertCurrent,
     });
+    const initialLoaded = selectedSession.loaded;
     const sessionId = initialLoaded.entry?.sessionId;
     if (!sessionId) {
       throw new Error("GitHub publication session changed.");

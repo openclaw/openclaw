@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryState,
+} from "../../agents/reply-completion.js";
 import type {
   PreparedReplyTranscriptStart,
   ReplyDispatchRun,
@@ -14,6 +17,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
@@ -120,7 +124,12 @@ export function createChatSendReplyDispatch(params: {
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   const commentaryMedia = createAssistantCommentaryMediaCustody({
     requesterContext: params.requesterContext,
-    session,
+    session: {
+      ...session,
+      storePath:
+        session.storePath ??
+        resolveSessionStorePathCore(cfg.session?.store, { agentId: session.agentId }),
+    },
     accountId,
     getRunId: () => agentRunId,
     isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
@@ -128,9 +137,9 @@ export function createChatSendReplyDispatch(params: {
     logGateway,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   });
-  const resolveReplyDelivery = async (
+  const resolveReplyDeliveryFacts: ReplyDeliveryFactsObserver = async (
     minimumAssistantMessageIndex = 0,
-  ): Promise<ReplyDeliveryState> => {
+  ) => {
     const source = session.sessionTarget?.readSource;
     // Keep the selected database owner through the terminal disclosure snapshot.
     const retainedSource =
@@ -190,19 +199,20 @@ export function createChatSendReplyDispatch(params: {
         transcriptStart.sessionId !== admission.sessionId ||
         !(reader ? isInspectionCurrent() : await isCurrent())
       ) {
-        return "missing";
+        return { source: "missing", terminal: "missing" };
       }
       const scope = admission;
       // Inspection exposes no result until the final anchor snapshot rechecks the stored session.
       // Between reads, retain physical/run custody; each history operation keeps its own freshness.
       await waitForSessionTranscriptProjection(scope, params.abortSignal);
       if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
-        return "missing";
+        return { source: "missing", terminal: "missing" };
       }
       const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig(), undefined, [
         scope,
       ]);
       let decision: ReplyDeliveryState = "pending";
+      let sourceDecision: ReplyDeliveryState = "missing";
       await readSessionTranscriptAnchorsAsync(
         scope,
         {
@@ -278,13 +288,19 @@ export function createChatSendReplyDispatch(params: {
             });
             if (selected !== undefined) {
               decision = selected;
-              return;
+              const mirror = asOptionalRecord(message.openclawDeliveryMirror);
+              if (mirror?.kind === "message-tool-source-reply" && mirror.final === true) {
+                sourceDecision = selected;
+                return;
+              }
             }
           }
         },
       );
       assertRoutingCurrent(getRuntimeConfig());
-      return isInspectionCurrent() ? decision : "missing";
+      return isInspectionCurrent()
+        ? { source: sourceDecision, terminal: decision }
+        : { source: "missing", terminal: "missing" };
     } finally {
       retainedSource?.release();
     }
@@ -633,7 +649,9 @@ export function createChatSendReplyDispatch(params: {
     hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
     prepareAssistantTranscriptMessage: commentaryMedia.prepareAssistantTranscriptMessage,
-    resolveReplyDelivery,
+    resolveReplyDelivery: async (minimumAssistantMessageIndex?: number) =>
+      (await resolveReplyDeliveryFacts(minimumAssistantMessageIndex)).terminal,
+    resolveReplyDeliveryFacts,
     runAgentMediaTranscript,
   };
 }

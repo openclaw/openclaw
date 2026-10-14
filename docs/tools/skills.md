@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -769,15 +773,20 @@ bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
 enabled, it checks for passive on-disk changes about once per minute. Edits made
 outside OpenClaw may therefore take up to about a minute to appear, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace.
+workspace. Each discovery pass reads a shared root once for matching discovery
+limits and file policies, then applies each workspace's precedence separately.
+The next pass reads those roots again to observe changes.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
 and starting or restarting the Gateway. A new eligible remote node also refreshes
 skill eligibility. Remote workspace discovery stays with the host that owns
-those files.
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
-The worker publishes a complete snapshot after discovery. Existing sessions
+The worker publishes a complete snapshot after discovery. While a scan is running,
+turns reuse the last published skills without waiting for other workspaces. First
+discovery and explicit refresh actions still wait for publication. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective
 agent allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
 aligned.

@@ -45,6 +45,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
@@ -58,7 +59,7 @@ import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
-import * as gatewaySessionUtils from "../session-utils.js";
+import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentHandlers } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
@@ -269,10 +270,8 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: loadFixtureSessionEntry,
     loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
       loadFixtureSessionEntry(params.key, { agentId: params.agentId }),
-    loadGatewaySessionEntryReadOnly: loadFixtureSessionEntry,
   };
 });
 
@@ -287,6 +286,7 @@ vi.mock("../session-utils-store-worker.js", async () => {
     ) => {
       params.assertActive?.();
       const loaded = loadFixtureSessionEntry(params.key, { agentId: params.agentId });
+      params.onSelected?.(loaded);
       params.assertActive?.();
       return loaded;
     },
@@ -1127,13 +1127,14 @@ beforeEach(({ signal }) => {
   testSignal = signal;
 });
 
-beforeAll(() => {
+beforeAll(async () => {
   suiteResources = createChatDirectiveSuiteResources();
   suiteFixtureRoot = suiteResources.root;
   suiteDatabasePath = suiteResources.databasePath;
   suiteFixtureEnv = suiteResources.env;
   mockState.storePath = suiteDatabasePath;
   suiteResources.open();
+  await loadOrCreateProcessDeviceIdentityAsync();
 });
 
 afterEach(async () => {
@@ -3326,6 +3327,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           },
         };
         mockState.sessionEntry = { sessionRoot: worktree, spawnedCwd: worktree };
+        await seedSqliteSessionEntry(mockState.sessionEntry);
         mockState.finalPayload = createSlashCommandMediaReply("final", [audioPath], {
           text: "Command result with TTS.",
           spokenText: "Command result with TTS.",
@@ -3734,7 +3736,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       typeof import("../session-utils-store-worker.js")
     >("../session-utils-store-worker.js");
     const readSession = vi
-      .spyOn(gatewaySessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
+      .spyOn(gatewaySessionWorker, "loadGatewaySessionEntryReadOnlyInWorker")
       .mockImplementationOnce(async (params) =>
         loadGatewaySessionEntryReadOnlyInWorker({
           ...params,
@@ -3870,7 +3872,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (agentId) {
         await createGlobalTranscriptFixture("openclaw-chat-inject-selected-global-", agentId);
       } else {
-        await createTranscriptFixture("openclaw-chat-inject-canonical-key-");
+        await createTranscriptFixture("openclaw-chat-inject-canonical-key-", {
+          agentId: "main",
+          sessionKey: canonicalKey,
+        });
         mockState.config = { agents: { ownership: "explicit", entries: { main: {} } } };
       }
       mockState.sessionEntry = { canonicalKey };
@@ -4152,6 +4157,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       timestamp: expect.any(Number),
       idempotencyKey: "idem-system-provenance-acp:user",
       __openclaw: {
+        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
         senderIsOwner: true,
         transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
       },
@@ -4303,6 +4309,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
         idempotencyKey: "idem-user-transcript-acp-images:user",
         __openclaw: {
+          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
           transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
         },
       });

@@ -439,7 +439,8 @@ Stopping an active Codex run interrupts its turn. After a parent yields to nativ
 children, Stop waits for its admitted descendants to reach real terminal events
 and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
-session generation.
+session generation. After Stop settles, you can send another message in the same
+chat without reconnecting.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and

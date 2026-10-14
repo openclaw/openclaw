@@ -618,6 +618,19 @@ describe("managed media worker custody", () => {
               },
             });
           });
+        const dispatch = brokerReply.dispatchSqliteWorkerJob;
+        const insertRequests = new WeakSet<object>();
+        const dispatchSpy = vi
+          .spyOn(brokerReply, "dispatchSqliteWorkerJob")
+          .mockImplementation((slot, job, onRejected) => {
+            if (job.request.type === "execute") {
+              const command: unknown = deserialize(job.request.input);
+              if (isRecord(command) && command.type === "managedImages.insert") {
+                insertRequests.add(job.request);
+              }
+            }
+            return dispatch(slot, job, onRejected);
+          });
         const receive = brokerReply.receiveSqliteWorkerReply;
         const replySpy = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
@@ -628,8 +641,7 @@ describe("managed media worker custody", () => {
               !reply.transfer &&
               !reply.input
             ) {
-              const command: unknown = deserialize(slot.current.request.input);
-              if (isRecord(command) && command.type === "managedImages.insert") {
+              if (insertRequests.has(slot.current.request)) {
                 nativeReplies++;
                 if (failure === "revoked after commit") {
                   active = false;
@@ -653,6 +665,7 @@ describe("managed media worker custody", () => {
           );
           // Stop injecting transport faults before independently reading the persisted result.
           replySpy.mockRestore();
+          dispatchSpy.mockRestore();
           admissionSpy.mockRestore();
           const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
           const originals = state.statePath("media", "outgoing", "originals");
@@ -679,6 +692,7 @@ describe("managed media worker custody", () => {
           }
         } finally {
           replySpy.mockRestore();
+          dispatchSpy.mockRestore();
           admissionSpy.mockRestore();
         }
       },

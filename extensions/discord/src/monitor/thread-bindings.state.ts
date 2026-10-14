@@ -105,7 +105,7 @@ export function openThreadBindingsStore() {
 }
 
 export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });

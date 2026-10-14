@@ -6,18 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   createReplyOperation,
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -35,6 +34,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
 import {
   createGatewayCloseTestDepsFactory,
   createGatewayCloseTestHandlerFactory,
@@ -217,6 +217,7 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
+    memorySessionActorOwners.reset();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
@@ -225,56 +226,7 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([
-    { ownership: "owned", retained: false },
-    { ownership: "unowned", retained: false },
-    { ownership: "owned", retained: true },
-    { ownership: "unowned", retained: true },
-  ] as const)(
-    "reports $ownership queued cleanup failure and honors retained resources ($retained)",
-    async ({ ownership, retained }) => {
-      const resolveGatewayContext = () => undefined;
-      const cleanupError = new Error("queued engine disposal failed");
-      const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(async () => {
-        throw failure;
-      });
-      enqueueSwarmRun({
-        groupId: `failed-queued-cleanup-${ownership}`,
-        runId: `failed-queued-${ownership}`,
-        maxConcurrent: 1,
-        activeRunIds: [`failed-queued-blocker-${ownership}`],
-        lifecycleOwner: ownership === "owned" ? resolveGatewayContext : undefined,
-        start: async () => {},
-        onStartFailure: () => true,
-        onRemoved,
-      });
-      const retireRegistry = vi.fn(async () => ({ cleanupCount: 0, failures: [] }));
-      const closeSdkResources = vi.fn(async () => {});
-      const clearSecretsRuntimeSnapshot = vi.fn();
-      const close = createGatewayCloseHandler({
-        resolveGatewayContext,
-        closeSdkResources,
-        clearSecretsRuntimeSnapshot,
-        closePluginRegistry: async (onRetirement) => {
-          await onRetirement?.(retireRegistry);
-          return { memoryErrors: [], pluginFailures: [] };
-        },
-      });
-      try {
-        await expect(close()).rejects.toMatchObject({ errors: [failure] });
-        expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
-        expect(closeSdkResources).toHaveBeenCalledTimes(ownership === "owned" && retained ? 0 : 1);
-        expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
-        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
-      } finally {
-        releaseSwarmRun(`failed-queued-blocker-${ownership}`);
-        const { testing } =
-          await import("../agents/subagents/swarm/swarm-scheduler.test-support.js");
-        testing.reset();
-      }
-    },
-  );
+  registerGatewayResourceRetirementTests(createGatewayCloseHandler);
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",

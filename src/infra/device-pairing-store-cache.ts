@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DevicePairingStoreState, PairedDevice } from "./device-pairing.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "./sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 
 type DevicePairingStoreCache = {
-  connection: DatabaseSync;
+  connection: EngineConnection;
   path: string;
   state: DevicePairingStoreState;
   writeRevision: number;
@@ -20,7 +20,7 @@ const cache = resolveGlobalSingleton<{ value: DevicePairingStoreCache | undefine
 );
 
 export function invalidateDevicePairingStoreCache(database: {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
 }): void {
   if (cache.value?.connection === database.db && cache.value.path === database.path) {
@@ -43,7 +43,7 @@ export function resolveDevicePairingStoreRevision(paired: Record<string, PairedD
 
 /** Borrowed worker facts; projections must not mutate this revision's cached rows. */
 export function readCachedDevicePairingStoreSnapshot(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   read: () => DevicePairingStoreState,
 ): Pick<DevicePairingStoreCache, "state" | "revision"> {

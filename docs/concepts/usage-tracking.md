@@ -37,9 +37,16 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+Session reports have a 15-second data-read budget. If it expires, completed
+batches remain visible as a partial report, with a hint to narrow the date
+range or select a session. Partial totals are not complete billing totals.
+Disconnecting still cancels the request without publishing a response.
+
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
 store is unchanged.
+Retained SQLite transcripts with legacy colon-containing IDs remain included in
+usage totals and do not interrupt background refresh.
 
 Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
 **90d**, **1y**, **All**, or the date inputs change the reporting range. Historical
@@ -66,9 +73,17 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. A restart or pricing change can require background backfill;
+transcript changes. Background refresh waits for 30 seconds without new usage
+or an active agent turn. After five minutes of pending work, it can start in the
+next idle gap without another quiet period. Explicit cost and overview reads
+flush and await pending updates, so a completed turn does not need to wait for
+that timer. This display batching does not delay Goal budgets or provider billing
+limits. A restart or pricing change can require background backfill;
 the page shows partial totals while it advances. Sessions without a cached
-projection remain pending without waiting for transcript statistics. Transcripts
+projection remain pending without waiting for transcript statistics. Background
+backfill yields between completed transcripts after ten seconds of scanning or
+50 transcripts, whichever comes first. One large transcript or the initial
+inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions.
 
@@ -168,6 +183,8 @@ renders the richer footer described below.
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
 context window, and cost when those fields are available. No template file is
 required for the built-in footer.
+Context windows of one million tokens or more use `m` units, such as `1.0m` or
+`2.0m`; smaller windows keep `k` units, such as `200k`.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in

@@ -724,7 +724,12 @@ export class AgentsPageState
 
   private async refreshCron() {
     const cronState = this.cron;
-    if (!cronState.connected || !cronState.client || cronState.cronLoading) {
+    if (
+      !cronState.connected ||
+      !cronState.client ||
+      cronState.cronLoading ||
+      !this.canCall("cron.list", "operator.read")
+    ) {
       return;
     }
     await Promise.all([

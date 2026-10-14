@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -109,7 +110,7 @@ export function withPersonalAuthProfileStore<T>(
               usageStats: store.usageStats?.[profileId],
             });
             registerUserModelAuthProfileSecrets(next.credential);
-            const digest = createHash("sha256").update(JSON.stringify(next)).digest("hex");
+            const digest = createHash("sha256").update(stableStringify(next)).digest("hex");
             let nativeAdmission: SqliteWorkerOperationAdmission | undefined;
             const admission = createSqliteWorkerWriteAdmission(
               (request) => {

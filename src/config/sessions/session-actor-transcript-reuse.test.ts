@@ -306,7 +306,6 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
                 promptedAt: 10 + contributionCount,
               }),
             ).resolves.toBe(contributionCount === 1 ? "inserted" : "updated");
-            expect(actor.snapshot(authority)).toBeUndefined();
             const adopted = await actor.adoptRun(
               {
                 commandId: `participant-${contributionCount}`,

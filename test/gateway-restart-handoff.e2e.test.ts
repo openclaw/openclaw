@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -10,28 +10,26 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { resolveLoadedCommitHash } from "../src/infra/git-commit.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../src/state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
-import {
-  readBuildIdFromBuildInfoForModuleUrl,
-  resolveVersionFromModuleUrl,
-} from "../src/version.js";
+import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
+import { resolveVersionFromModuleUrl } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import {
+  GATEWAY_RESTART_TEST_KILL_MS,
+  GATEWAY_RESTART_TEST_SHUTDOWN_MS as APPLICATION_STOP_MS,
+  GATEWAY_RESTART_TEST_STOP_MS as NATIVE_STOP_MS,
+} from "./helpers/gateway-restart-budget.js";
 import { startGatewayRestartProvider } from "./helpers/gateway-restart-provider.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { awaitGateBeforeSettlement, withinTest } from "./helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const NATIVE_STOP_MS = 46_000;
-const APPLICATION_STOP_MS = 41_000;
 const SERVICE_ID = "restart-handoff-pending-service";
 const SERVICE_STOP = "RESTART_HANDOFF_SERVICE_STOP_ENTERED";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,7 +50,7 @@ function journal(logs: string) {
 
 // The real CLI process, model transport, exec subprocesses, and native deadline belong in E2E.
 it.skipIf(process.platform !== "linux")(
-  "hands six pending runs and two background execs to a fresh Gateway within five seconds of its receipt after plugin cleanup",
+  "resumes six interrupted turns after handing off within five seconds of its receipt after plugin cleanup",
   { timeout: 180_000 },
   async ({ signal }) => {
     const provider = await startGatewayRestartProvider(signal);
@@ -90,6 +88,7 @@ it.skipIf(process.platform !== "linux")(
           name: "restart-handoff",
           signal,
           startTimeoutMs: 120_000,
+          gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
           gatewayCommandPrefix: [
             process.execPath,
             "--import",
@@ -167,6 +166,12 @@ it.skipIf(process.platform !== "linux")(
         }
         const closed = once(child, "close");
         const gateway = instance;
+        const sessionKeys = Array.from(
+          { length: 6 },
+          (_, index) => `agent:main:restart-handoff-${index}`,
+        );
+        const recoveredTurns = new Map(sessionKeys.map((key) => [key, createDeferred<unknown>()]));
+        let observingRecovery = false;
         const connect = () =>
           acquireGatewayTestClient(
             {
@@ -182,6 +187,17 @@ it.skipIf(process.platform !== "linux")(
               deviceIdentity: loadOrCreateDeviceIdentity({
                 path: gateway.state.path("client-device.sqlite"),
               }),
+              onEvent: ({ event, payload }) => {
+                if (
+                  observingRecovery &&
+                  event === "sessions.changed" &&
+                  isRecord(payload) &&
+                  typeof payload.sessionKey === "string" &&
+                  (payload.phase === "end" || payload.phase === "error")
+                ) {
+                  recoveredTurns.get(payload.sessionKey)?.resolve(payload);
+                }
+              },
             },
             {
               timeoutMs: 30_000,
@@ -191,10 +207,6 @@ it.skipIf(process.platform !== "linux")(
             },
           );
         client = await connect();
-        const sessionKeys = Array.from(
-          { length: 6 },
-          (_, index) => `agent:main:restart-handoff-${index}`,
-        );
         for (const key of sessionKeys) {
           await client.request("sessions.create", { agentId: "main", key });
         }
@@ -320,18 +332,8 @@ it.skipIf(process.platform !== "linux")(
         if (!version) {
           throw new Error("Restart proof cannot identify its Gateway artifact version");
         }
-        // The child runs built artifacts; this source test has a different build identity.
-        // Bind the expected seal to the actual artifact and its canonical schema inputs.
-        const artifactSchema = createHash("sha256")
-          .update(version)
-          .update(
-            resolveLoadedCommitHash({ moduleUrl }) ??
-              readBuildIdFromBuildInfoForModuleUrl(moduleUrl) ??
-              "source",
-          )
-          .update(OPENCLAW_AGENT_SCHEMA_SQL)
-          .update(OPENCLAW_STATE_SCHEMA_SQL)
-          .digest("hex");
+        // The seal binds the running artifact's version to the production seal policy.
+        const artifactSchema = sqliteDatabaseSealSchemaFor(version);
         const seal = readSqliteCleanCloseSeal(
           agentPath,
           artifactSchema,
@@ -360,7 +362,7 @@ it.skipIf(process.platform !== "linux")(
           });
           expect(boot?.completed_at_ms).toBeGreaterThanOrEqual(signaledAt);
           expect(boot?.completed_at_ms).toBeLessThanOrEqual(exitedAt);
-          for (const sessionKey of sessionKeys) {
+          for (const [index, sessionKey] of sessionKeys.entries()) {
             const row = agent
               .prepare(
                 "SELECT current_session_id, entry_json FROM session_nodes WHERE session_key=?",
@@ -370,13 +372,17 @@ it.skipIf(process.platform !== "linux")(
               throw new Error(`Restart lost persisted session ${sessionKey}`);
             }
             const entry: unknown = JSON.parse(row.entry_json);
+            // Either shutdown marking or terminal persistence can retain the run.
+            // Startup creates a recovery cycle for an interrupted run without one.
             expect(entry).toMatchObject({
               status: "interrupted",
               abortedLastRun: true,
-              mainRestartRecovery: {
-                cycleId: expect.any(String),
-                revision: expect.any(Number),
-              },
+              restartRecoveryRuns: expect.arrayContaining([
+                expect.objectContaining({
+                  runId: runIds[index],
+                  lifecycleGeneration: expect.any(String),
+                }),
+              ]),
             });
             persistedSessions.set(sessionKey, row.current_session_id);
           }
@@ -396,6 +402,8 @@ it.skipIf(process.platform !== "linux")(
         }
         await client.stopAndWait({ timeoutMs: 1000 });
         client = undefined;
+        provider.beginRecovery();
+        observingRecovery = true;
         const successorStartedAt = Date.now();
         await instance.startGateway();
         const successorReadyAt = Date.now();
@@ -405,6 +413,19 @@ it.skipIf(process.platform !== "linux")(
         }
         expect(successor.pid).not.toBe(child.pid);
         client = await connect();
+        await client.request("sessions.subscribe", { agentId: "main" });
+        provider.releaseRecovery();
+        const recovered = await withinTest(
+          awaitGateBeforeSettlement(
+            Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
+            once(successor, "close"),
+            "Successor exited before all six interrupted turns completed",
+          ),
+          signal,
+        );
+        for (const turn of recovered) {
+          expect(turn, instance.logs()).toMatchObject({ phase: "end" });
+        }
         const restored = await client.request<SessionsListResult>("sessions.list", {
           agentId: "main",
         });
@@ -420,6 +441,13 @@ it.skipIf(process.platform !== "linux")(
               (message) =>
                 message.role === "user" &&
                 JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_${index}:`),
+            ),
+          ).toHaveLength(1);
+          expect(
+            history.messages.filter(
+              (message) =>
+                message.role === "assistant" &&
+                JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_RESUMED_${index}`),
             ),
           ).toHaveLength(1);
         }
@@ -438,6 +466,7 @@ it.skipIf(process.platform !== "linux")(
             successorReadyAfterExitMs: successorReadyAt - exitedAt,
             preservedSessions: persistedSessions.size,
             preservedUserTurns: sessionKeys.length,
+            completedRecoveryTurns: recovered.length,
           }),
         );
       },

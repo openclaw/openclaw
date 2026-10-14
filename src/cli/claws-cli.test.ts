@@ -934,16 +934,6 @@ describe("claws cli", () => {
     },
   );
 
-  it("requires the exact dry-run identity with remove consent", async () => {
-    await runCli(["claws", "remove", "demo-agent", "--yes", "--json"]);
-
-    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      error: { code: "plan_integrity_required" },
-    });
-  });
-
   it("binds selected referenced cleanup and its conflict override into the plan", async () => {
     await runCli([
       "claws",

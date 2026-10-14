@@ -9,6 +9,7 @@ import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { SpawnResult } from "../process/exec.js";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
@@ -367,6 +368,7 @@ export type WorkerProvider = {
           purpose: "session" | "reserve";
           demandAtMs: number;
         };
+        secretNames?: readonly string[];
         signal: AbortSignal;
         assertCurrent: () => void;
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
@@ -378,15 +380,40 @@ export type WorkerProvider = {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
           runScriptWithBudget?: (
-            createScript: (timeoutMs: number) => string,
+            createScript: (timeoutMs: number, setupEnv?: Record<string, string>) => string,
             signal: AbortSignal,
           ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+          /** Persist diagnostics before a declared recipe rejects preparation. */
+          recordRecipePreparation?: (value: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          }) => Promise<void>;
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
           /** New completed setup must enter the reusable image before enrollment. */
           captureRequired?: true;
+          /** Detected setup is best effort; this allocation must remain cold on failure. */
+          captureSkipped?: string;
+          recipePreparation?: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          };
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;
@@ -399,6 +426,18 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
+  runSetupCommand?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    command: {
+      createScript: (setupEnv?: Record<string, string>) => string;
+      workspaceDir: string;
+      homeDir: string;
+      timeoutMs: number;
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+    },
+  ) => Promise<SpawnResult | undefined>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.
@@ -417,7 +456,11 @@ export type WorkerProvider = {
    * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
    * proves teardown complete and lets core skip destroy.
    */
-  inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  inspect: (lease: {
+    leaseId: string;
+    profile: WorkerProfile;
+    signal?: AbortSignal;
+  }) => Promise<WorkerLeaseStatus>;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
    * SecretRef resolver; when present, failures are authoritative and never fall back.
@@ -462,7 +505,7 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
@@ -483,7 +526,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
@@ -501,12 +544,12 @@ export type RealtimeVoiceProviderPlugin = {
   voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
-  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. */
+  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. Final compatibility day: 2026-12-31. */
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   resolveConfigAsync?: (
     ctx: RealtimeVoiceProviderResolveConfigContext,
   ) => Promise<RealtimeVoiceProviderConfig>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;

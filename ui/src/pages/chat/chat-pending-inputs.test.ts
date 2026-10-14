@@ -81,6 +81,25 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it.each([
+    ["queued", "Agent update received · waiting for delivery."],
+    ["cancelled", "This agent update was cancelled before delivery."],
+    ["interrupted", "Delivery interrupted. This saved agent update is not scheduled to retry."],
+  ] as const)("describes a %s agent update without asking the user to resend it", (state, text) => {
+    const items = buildPendingInputItems([
+      {
+        ...input,
+        state,
+        message: {
+          role: "user",
+          content: "The mobile fixes are merged.",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      },
+    ]);
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([text]);
+  });
+
   it.each(["held", "failed", "waiting-reconnect"] as const)(
     "describes interrupted input with a %s browser owner accurately",
     (sendState) => {

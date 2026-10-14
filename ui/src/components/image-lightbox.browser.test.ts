@@ -109,7 +109,7 @@ describe("progressive image viewer geometry", () => {
       animation.pause();
       onTestFinished(() => animation.cancel());
       const hidden = new Promise<void>((resolve) => {
-        modal.addEventListener("wa-after-hide", () => resolve(), { once: true });
+        modal.addEventListener("overlay-after-hide", () => resolve(), { once: true });
       });
       modal.hide();
       expect(modal.open).toBe(false);

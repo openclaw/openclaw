@@ -22,7 +22,7 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readRecentSessionTranscriptHistoryEvents,
   readTranscriptDisplayDelta,
-} from "./session-accessor.sqlite-history-events.js";
+} from "./session-accessor.sqlite-history-events.test-support.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -310,6 +310,12 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
     expect(readTranscriptEventRows(database, scope.sessionId).map((row) => row.eventJson)).toEqual(
       canonical,
     );
+    expect(readTranscriptRawDelta(scope, { maxBytes: sizeBytes + events.length })).toMatchObject({
+      kind: "page",
+      events: events.map((event, seq) => ({ event, seq })),
+      hasMore: false,
+      serializedBytes: sizeBytes + 1,
+    });
 
     database.db
       .prepare(
@@ -324,6 +330,7 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
       requiredBytes: Buffer.byteLength(canonical[0]!) + 1,
       serializedBytes: 0,
     });
+    expect(() => readTranscriptRawDelta(scope, { maxBytes: sizeBytes + events.length })).toThrow();
     expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes - 1 })).toThrow(
       /transcript store is too large to export/u,
     );

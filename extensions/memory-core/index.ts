@@ -274,6 +274,24 @@ export default definePluginEntry({
       });
     }
     registerShortTermPromotionDreaming(api);
+    let stopIntentMaintenance: (() => void) | undefined;
+    api.registerService({
+      apiVersion: 2,
+      id: "memory-core-standing-intents",
+      reload: { configPrefixes: ["agents"] },
+      async start({ config, scheduler, logger }) {
+        const module = await loadStandingIntentsModule();
+        stopIntentMaintenance = module.startStandingIntentMaintenance({
+          agentIds: listAgentIds(config),
+          scheduler,
+          warn: (message) => logger.warn(message),
+        });
+      },
+      stop() {
+        stopIntentMaintenance?.();
+        stopIntentMaintenance = undefined;
+      },
+    });
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
       recallToolNames: ["memory_search", "memory_get"],
@@ -374,31 +392,6 @@ export default definePluginEntry({
         return undefined;
       }
     });
-
-    api.on(
-      "before_agent_reply",
-      async (_event, ctx) => {
-        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
-          return undefined;
-        }
-        try {
-          const module = await loadStandingIntentsModule();
-          const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const agentId = resolveSessionAgentIdStrict({
-            sessionKey: ctx.sessionKey,
-            config,
-            agentId: ctx.agentId,
-          });
-          await module.sweepStandingIntents({ agentId });
-        } catch (error) {
-          api.logger.warn?.(
-            `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        return undefined;
-      },
-      { eligibleTriggers: ["heartbeat", "cron"] },
-    );
 
     api.registerCommand({
       name: "dreaming",

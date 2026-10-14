@@ -204,9 +204,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:writer"]')
-      .click();
+    await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
     // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
@@ -223,7 +221,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
-      .locator("wa-dropdown-item[data-agent-option]")
+      .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .click();
     await waitForCronScope(null);
@@ -260,7 +258,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       const previousCount = await cronScopeRequestCount(agentId);
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
       await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(previousCount);

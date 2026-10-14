@@ -98,11 +98,22 @@ function createDispatcher(
 }
 
 describe("authenticated WebSocket request cancellation", () => {
-  it.each([undefined, true])(
-    "binds only explicit reload waits to disconnect (%s)",
-    async (waitForDrain) => {
+  it.each([
+    { method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] }, cancelled: false },
+    {
+      method: "plugins.reload",
+      params: { plugins: [{ pluginId: "demo" }], waitForDrain: true },
+      cancelled: true,
+    },
+    { method: "sessions.usage", params: { range: "all" }, cancelled: true },
+  ])(
+    "binds request-owned $method work to disconnect (cancelled=$cancelled)",
+    async ({ method, params, cancelled }) => {
       const socket = new EventEmitter();
-      const { client, dispatcher } = createDispatcher(socket);
+      const { client, dispatcher } = createDispatcher(socket, {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+      });
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let signal: AbortSignal | undefined;
@@ -114,19 +125,16 @@ describe("authenticated WebSocket request cancellation", () => {
       const dispatch = dispatcher.dispatch(
         {
           type: "req",
-          id: "plugin-wait",
-          method: "plugins.reload",
-          params: {
-            plugins: [{ pluginId: "demo" }],
-            ...(waitForDrain !== undefined ? { waitForDrain } : {}),
-          },
+          id: "disconnect-work",
+          method,
+          params,
         },
         client,
       );
       try {
         await entered.promise;
         socket.emit("close", 1000, Buffer.alloc(0));
-        if (waitForDrain) {
+        if (cancelled) {
           expect(signal?.aborted).toBe(true);
         } else {
           expect(signal).toBeUndefined();

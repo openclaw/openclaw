@@ -301,7 +301,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
       const manager = await createTestThreadBindingManager({ persist: true });
       await bindAcp(manager, "prepared");
       const runtime = getDiscordRuntime();
-      const open = runtime.state.openKeyedStore.bind(runtime.state);
+      const open = runtime.state.openKeyedStoreV2.bind(runtime.state);
       const persisted = open<ThreadBindingRecord>({
         namespace: "thread-bindings",
         maxEntries: 10_000,
@@ -321,7 +321,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
       const error = new IncognitoSessionEndedError();
       let current = true;
       const opened = vi
-        .spyOn(runtime.state, "openKeyedStore")
+        .spyOn(runtime.state, "openKeyedStoreV2")
         .mockImplementation(<T>(options: Parameters<typeof open>[0]) => {
           const store = open<T>(options);
           const remove = store.delete.bind(store);

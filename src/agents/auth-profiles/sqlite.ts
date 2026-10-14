@@ -36,6 +36,7 @@ import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { prepareFreshSharedAuthStoreWriteAsync } from "./shared-store-bootstrap-async.js";
 import {
@@ -83,6 +84,7 @@ export function resolveAuthProfileStoreOwner(
 }
 
 function prepareAuthProfileSharedOwner(env: NodeJS.ProcessEnv) {
+  prepareSharedAuthStoreOwnershipForNative(env);
   const preparedEnv = cloneEnvWithPlatformSemantics(env);
   preparedEnv.OPENCLAW_STATE_DIR = resolveStateDir(preparedEnv);
   return {
@@ -115,6 +117,9 @@ function resolveAuthProfileDatabaseOptions(
   agentDir?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AuthProfileDatabaseTarget {
+  if (!agentDir) {
+    prepareSharedAuthStoreOwnershipForNative(env);
+  }
   const pathname = agentDir
     ? resolveAuthProfileDatabasePath(agentDir)
     : resolveSharedAuthStorePath(env);

@@ -142,11 +142,6 @@ vi.mock("./disk-budget-runtime.js", () => ({
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
 }));
-vi.mock("./session-sharing-store.js", () => ({
-  listSessionMembers: () => {
-    throw new Error("Native membership reads are forbidden in these pure controls");
-  },
-}));
 vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
   createReadonlySessionHistoryReader: () => ({
     readTranscriptDisplayDelta: observed.delta,

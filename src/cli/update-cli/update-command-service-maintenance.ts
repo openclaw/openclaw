@@ -17,6 +17,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -51,6 +52,7 @@ import {
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
+import { windowsUpdateManualGuidance } from "./update-command-windows-preflight.js";
 import {
   createWindowsTaskAutoStartRecovery,
   UpdateCommandAbort,
@@ -122,7 +124,16 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   } catch (err) {
     await recovery.restore().catch(() => undefined);
     await recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
-    throw err;
+    throw hasErrnoCode(err, "EACCES")
+      ? new GatewayServiceUpdateOwnershipError(
+          createUpdatePreflightFailure(
+            "windows-task-elevation-required",
+            windowsUpdateManualGuidance(),
+            "managed-service",
+          ),
+          err,
+        )
+      : err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
   if (!suspended) {

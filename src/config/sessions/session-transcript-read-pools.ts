@@ -46,19 +46,23 @@ export function createSessionTranscriptHistoryPool(
   const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,
     SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers,
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      // Early workers stay conservative if native-close qualification was still pending.
-      canCloseNativeResources =
-        captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
-      return { options: {} };
+  >(
+    {
+      workerUrl,
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      maxWorkers,
+      idleTimeoutMs: 0,
+      burstIdleTimeoutMs: 30_000,
+      prepareWorker: () => {
+        ensureSqliteLibrarySelected();
+        // Early workers stay conservative if native-close qualification was still pending.
+        canCloseNativeResources =
+          captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
+        return { options: {} };
+      },
     },
-  });
+    { databaseAccess: "read-only" },
+  );
   return {
     ...pool,
     canCloseNativeResources: () => canCloseNativeResources === true,

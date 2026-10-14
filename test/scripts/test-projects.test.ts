@@ -54,6 +54,7 @@ import {
   isSharedVitestExcludedPath,
   matchesVitestCliSelection,
 } from "../vitest/vitest.pattern-file.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
@@ -80,12 +81,10 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling and infra own shared fixtures; the extension catch-all retains
-    // separate plugin processes. The other projects share setup within one part.
+    // Tooling and infra own shared fixtures. Other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.infra.config.ts",
-      "test/vitest/vitest.extensions.config.ts",
     ]);
   });
 });
@@ -142,7 +141,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
     ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
@@ -2058,7 +2058,6 @@ export const single = {
         "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
         "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
-        "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
         "src/gateway/server.cron.test.ts",
@@ -2212,7 +2211,7 @@ export const single = {
         {
           encoding: "utf8",
           // Keep the native help probe inside its invocation-owned temporary directory.
-          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          env: testRunnerFixtureEnv({ TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir }),
           timeout: 5_000,
         },
       );

@@ -5,8 +5,10 @@ import {
   readDeferredPluginSessionImport,
   readStaleDeferredPluginSessionImport,
 } from "../../infra/deferred-plugin-session-sources.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   createAgentDatabaseDeletionClassifier,
@@ -32,7 +34,7 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   listLegacySessionTranscriptFiles,
@@ -240,18 +242,22 @@ export async function runSessionStartupMigration(params: {
   assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
   const { assertAcpSessionKeysMigratedForStartup, assertEmbeddedAcpMetadataMigratedForStartup } =
     await import("../../acp/runtime/session-meta-startup.js");
-  if (!params.agentIds) {
-    await assertAcpSessionKeysMigratedForStartup(
-      params.cfg,
-      env,
-      targets.map((target) => target.agentId),
-      undefined,
-      params.assertCurrent,
-    );
-  }
   const migrateLegacyMain =
-    params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
-  const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" });
+    params.deps?.migrateLegacyMainSessionKeys ??
+    (await import("./legacy-main-session-migration.js")).migrateLegacyMainSessionKeys;
+  // Both inspections are read-only; join them before repair, including on refusal.
+  const [, result] = await settleCurrentReadPreparations([
+    params.agentIds
+      ? undefined
+      : assertAcpSessionKeysMigratedForStartup(
+          params.cfg,
+          env,
+          targets.map((target) => target.agentId),
+          undefined,
+          params.assertCurrent,
+        ),
+    migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" }),
+  ] as const);
   params.assertCurrent?.();
   if (result.warnings.length > 0) {
     params.log.warn(
@@ -260,6 +266,7 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
+  const coldCloses = new Set<string>();
   let interruptedSessions = 0;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
@@ -392,7 +399,7 @@ export async function runSessionStartupMigration(params: {
       }
     } finally {
       if (alreadyOpen === false && !handedOff) {
-        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+        coldCloses.add(databasePath);
       }
     }
   });
@@ -400,16 +407,32 @@ export async function runSessionStartupMigration(params: {
   // SQLite scans and worker heaps across the whole fleet. Drain active work on failure.
   const { withSqliteCanonicalValidationWorkerPool } =
     await import("./session-accessor.sqlite-canonical-worker-pool.js");
-  await withSqliteCanonicalValidationWorkerPool(env, async () => {
-    const { hasError, firstError } = await runTasksWithConcurrency({
-      tasks,
-      limit: AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
-      errorMode: "stop",
+  const errors = new Set<unknown>();
+  try {
+    await withSqliteCanonicalValidationWorkerPool(env, async () => {
+      const { hasError, firstError } = await runTasksWithConcurrency({
+        tasks,
+        limit: AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+        errorMode: "stop",
+      });
+      if (hasError) {
+        errors.add(firstError);
+        throw firstError;
+      }
     });
-    if (hasError) {
-      throw firstError;
+  } catch (error) {
+    errors.add(error);
+  }
+  // Native lease release writes shared state synchronously; sibling workers must
+  // finish their admission requests before cold handles close on the main thread.
+  for (const databasePath of coldCloses) {
+    try {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+    } catch (error) {
+      errors.add(error);
     }
-  });
+  }
+  throwSqliteLifecycleErrors([...errors], "Session startup migration and cleanup failed");
   if (interruptedSessions > 0) {
     params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
   }

@@ -58,11 +58,11 @@ const witnessSchema = z
 type OpenClawMigrationWitness = z.infer<typeof witnessSchema>;
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
 
-const predicateColumns = new Map<string, ReadonlySet<string>>(
-  Object.entries(AGENT_JSON_PREDICATE_COLUMNS).map(([table, columns]) => [
-    table,
-    new Set<string>(columns),
-  ]),
+const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
+  Object.entries({
+    ...AGENT_JSON_PREDICATE_COLUMNS,
+    session_windows: ["row_transcript_json", "row_transcript_updated_at"],
+  }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
 function assertUnique(values: readonly string[]): void {
@@ -94,7 +94,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
       !(
         witness.role === "agent" &&
         (["schema_meta", "session_key_contract"].includes(table.name) ||
-          predicateColumns.has(table.name))
+          derivedMigrationColumns.has(table.name))
       ) &&
       !(
         witness.role === "global" &&
@@ -145,7 +145,7 @@ function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, 
     ((table === "schema_meta" &&
       ["schema_version", "app_version", "updated_at"].includes(column)) ||
       (table === "session_key_contract" && column === "canonical_ready") ||
-      predicateColumns.get(table)?.has(column))
+      derivedMigrationColumns.get(table)?.has(column))
   );
 }
 
@@ -490,7 +490,7 @@ export function captureOpenClawMigrationWitness(
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" || predicateColumns.has(object.name))
+        (object.name === "session_key_contract" || derivedMigrationColumns.has(object.name))
       ) {
         const definition = parseSqliteTableDefinition(object.sql, object.name);
         for (const column of definition.columns.keys()) {

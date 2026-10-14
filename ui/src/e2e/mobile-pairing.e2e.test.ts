@@ -120,8 +120,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(".sidebar-identity-card").click();
-      const menu = page.locator("wa-dropdown.sidebar-identity-menu");
-      const pair = menu.locator('wa-dropdown-item[value="command:pair-mobile"]');
+      const menu = page.locator(".sidebar-identity-menu");
+      const pair = menu.locator('[data-value="command:pair-mobile"]');
       await pair.waitFor();
       if (captureUiProofEnabled) {
         const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [pair], {

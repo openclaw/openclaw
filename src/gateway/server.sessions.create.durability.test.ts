@@ -511,12 +511,12 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
   },
 );
 
-test("leaves idle chat input unaccepted when its durable commit is refused", async () => {
+test("retries idle chat input after its atomic commit is refused", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  const key = "agent:main:dashboard:idle-commit-refused";
-  const message = "Idle input is accepted only after its durable commit.";
-  const runId = "idle-commit-refused";
+  const key = "agent:main:dashboard:idle-commit-retry";
+  const message = "Idle input retries its original bytes.";
+  const runId = "idle-commit-retry";
   const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
@@ -541,15 +541,44 @@ test("leaves idle chat input unaccepted when its durable commit is refused", asy
     expect(dispatch.start).not.toHaveBeenCalled();
     const entry = expectDefined(loadSessionEntry(target), "idle session");
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
     const scope = { ...target, sessionId: entry.sessionId };
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+    expect(await loadTranscriptEvents(scope)).toEqual([
+      expect.objectContaining({ type: "session", id: entry.sessionId }),
+    ]);
+
+    refuse.mockRestore();
+    const retried = await rpcReq<{ status: string }>(ws, "chat.send", {
+      sessionKey: key,
+      message,
+      idempotencyKey: runId,
+    });
+    expect(retried.ok, JSON.stringify(retried)).toBe(true);
+    expect(retried.payload?.status).toBe("started");
+    expect(loadSessionEntry(target)).toMatchObject({
+      sessionId: entry.sessionId,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: runId,
+    });
     expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     expect(
       (await loadTranscriptEvents(scope)).filter((event) =>
         JSON.stringify(event).includes(message),
       ),
-    ).toHaveLength(0);
+    ).toMatchObject([
+      { message: { role: "user", content: message, idempotencyKey: `${runId}:user` } },
+    ]);
+    expect(dispatch.start).toHaveBeenCalledOnce();
   } finally {
     refuse.mockRestore();
+    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+    for (const [turn] of dispatch.start.mock.calls) {
+      turn.replyAdmissionTicket?.release();
+      turn.admission.cleanupAdmittedRun();
+      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+    }
+    await released;
     ws.close();
   }
 });

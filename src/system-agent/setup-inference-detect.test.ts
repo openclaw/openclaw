@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describePendingFakeTimers } from "../../test/helpers/fake-timer-diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { InferenceBackendCandidate } from "../commands/onboard-inference-ambient.js";
@@ -27,6 +28,10 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreWithoutExternalProfilesAsync: async () => fixture.loadAuthProfileStore(),
+}));
+// mock-isolation: Discovery deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
 }));
 vi.mock("./setup-provider-method.js", () => ({
   withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
@@ -171,7 +176,7 @@ describe("setup inference discovery concurrency", () => {
       "fixture/saved-model",
       "fixture/local-model",
     ]);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
 
   it("reports a provider discovery failure without waiting for CLI detection", async () => {
@@ -186,7 +191,7 @@ describe("setup inference discovery concurrency", () => {
       "main",
     );
     await expect(detection).rejects.toThrow("synthetic provider load failure");
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
 
   it("aborts pending provider probes when local detection fails", async () => {
@@ -203,7 +208,7 @@ describe("setup inference discovery concurrency", () => {
     );
     await expect(detection).rejects.toThrow("synthetic CLI detection failure");
     expect((await hookStarted.promise)?.aborted).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
 });
 
@@ -424,7 +429,7 @@ describe("setup inference discovery deadline", () => {
     hookResult.resolve({ modelRef: "fixture/late-model" });
     await vi.advanceTimersByTimeAsync(0);
     expect(result.candidates).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
 
   it("keeps manual setup available when loading a saved sign-in stalls", async () => {
@@ -445,7 +450,7 @@ describe("setup inference discovery deadline", () => {
     const result = await detection;
     expect(result.candidates).toEqual([]);
     expect(result.authOptions).toContainEqual(expect.objectContaining({ id: "custom-api-key" }));
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
 
   it.each([0, 20_000])(
@@ -464,7 +469,7 @@ describe("setup inference discovery deadline", () => {
       expect(result.candidates).toContainEqual(
         expect.objectContaining({ modelRef: "fixture/slow-model" }),
       );
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
     },
   );
 });

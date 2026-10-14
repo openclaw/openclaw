@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { Show, createMemo, createUniqueId } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../../../components/panel-toggle-contract.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
+import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
@@ -79,17 +80,39 @@ const HOSTED_TAB_REQUESTS = [
 ] as const;
 
 function TypeMenu(props: SidebarRegionHeaderProps) {
-  const [opened, setOpened] = createSignal(false);
-  const panelTypes = () => props.panelDefinitions.filter((definition) => definition.available);
+  const id = createUniqueId();
   const openSlots = () =>
     new Set((props.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
+  const items = createMemo<MenuItem[]>(() =>
+    props.panelDefinitions
+      .filter(
+        (type) =>
+          type.available &&
+          (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
+      )
+      .map((type) => ({
+        id: type.slot,
+        label: type.label,
+        class: "side-panel-type-menu__item session-menu__item",
+        attributes: { value: type.slot },
+        content: <PanelTypeOption type={type} />,
+      })),
+  );
   return (
-    <wa-dropdown
+    <Menu
+      id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
+      panelClass="side-panel-type-menu__panel"
+      triggerClass="rail-header__action side-panel-type-menu__trigger"
+      triggerAttributes={{ title: t("chat.sidePanel.addTab") }}
       placement="bottom-start"
-      onWa-show={() => setOpened(true)}
-      onWa-select={(event) => {
-        const slot = panelTypes().find((type) => type.slot === event.detail.item.value)?.slot;
+      label={t("chat.sidePanel.addTab")}
+      trigger={<Icon name="plus" />}
+      items={items()}
+      onSelect={(item) => {
+        const slot = props.panelDefinitions.find(
+          (type) => type.available && type.slot === item.id,
+        )?.slot;
         if (!slot) {
           return;
         }
@@ -103,36 +126,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
           );
         }
       }}
-    >
-      <button
-        slot="trigger"
-        class="rail-header__action side-panel-type-menu__trigger"
-        type="button"
-        aria-label={t("chat.sidePanel.addTab")}
-        title={t("chat.sidePanel.addTab")}
-      >
-        <Icon name="plus" />
-      </button>
-      <Show when={opened()}>
-        <For
-          each={panelTypes().filter(
-            (type) =>
-              HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) ||
-              !openSlots().has(type.slot),
-          )}
-          keyed={(type) => type.slot}
-        >
-          {(type) => (
-            <wa-dropdown-item
-              class="side-panel-type-menu__item session-menu__item"
-              prop:value={type().slot}
-            >
-              <PanelTypeOption type={type()} slotted />
-            </wa-dropdown-item>
-          )}
-        </For>
-      </Show>
-    </wa-dropdown>
+    />
   );
 }
 function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {

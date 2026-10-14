@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -238,31 +237,19 @@ describe("cron batch outcome finalization", () => {
     const job = dueJob("recover-advanced-clock");
     job.state.lastError = "previous failure";
     const startedAt = DUE_AT + 7;
-    let now = DUE_AT;
-    let reservationPersisted = false;
+    let now = startedAt;
     const events: CronEvent[] = [];
     const runIsolatedAgentJob = vi.fn(async () => {
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(startedAt);
       expect(state.store?.jobs[0]?.state.runningAtMs).toBe(startedAt);
       expect(state.store?.jobs[0]?.state.lastError).toBe("previous failure");
+      now = startedAt + 7;
       return { status: "ok" as const, summary: "finished before terminal store failure" };
     });
     const { state, storePath } = await fixture([job], {
       nowMs: () => now,
       runIsolatedAgentJob,
       onEvent: (event) => events.push(event),
-    });
-    const database = openOpenClawStateDatabase().db;
-    const stopObserving = observeCronStoreCommits(storePath, () => {
-      const queued = database
-        .prepare(
-          "SELECT 1 FROM cron_jobs WHERE store_key = ? AND job_id = ? AND json_extract(state_json, '$.queuedAtMs') = ?",
-        )
-        .get(cronStoreKey(storePath), job.id, DUE_AT);
-      if (!reservationPersisted && queued) {
-        reservationPersisted = true;
-        now = startedAt;
-      }
     });
     const allowWrites = rejectWrite(job.id);
     let recoveryState: CronServiceState | undefined;
@@ -309,7 +296,6 @@ describe("cron batch outcome finalization", () => {
       });
       expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
     } finally {
-      stopObserving();
       allowWrites();
       stop(state);
       if (recoveryState) {

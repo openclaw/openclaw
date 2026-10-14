@@ -20,31 +20,29 @@ import {
   removeOAuthRefreshGenerationPeers,
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
-import { resolveSharedAuthStorePath } from "./path-resolve.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { logDroppedAuthProfileBookkeeping } from "./state-observation.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   ensureAuthProfileStoreForLocalUpdateAsync,
-  loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
   saveAuthProfileStore,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
+import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
+import { runAuthProfileStoreUpdate } from "./store-update.js";
 import {
-  captureAuthProfileStorePersistenceSnapshot,
   isSharedMainAuthProfileAgentDir,
   resolveRuntimeAuthProfileAgentDir,
-  restoreAuthProfileStorePersistenceSnapshot,
   applyScopedAuthReadThrough,
   getScopedAuthProfileEnv,
+  getScopedSharedAuthStore,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
@@ -165,7 +163,7 @@ export async function promoteAuthProfileInOrder(params: {
   return updated === null ? err("lock-contention") : ok(updated);
 }
 
-/** @deprecated Use upsertAuthProfileAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. */
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
@@ -228,6 +226,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
   agentDir?: string;
   profileIds?: readonly string[];
 }): Promise<AuthProfileStore | null> {
+  await prepareSharedAuthStoreOwnership(getScopedAuthProfileEnv());
   const owners = providerAuthStoreOwners(params.agentDir);
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const targets = await Promise.all(
@@ -278,8 +277,8 @@ type AuthProfileRemovalTarget = {
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
 };
 
-function loadRemovalStore(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+function loadRemovalStore(agentDir?: string): Promise<AuthProfileStore> {
+  return loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
     allowKeychainPrompt: false,
     inheritedAuthDir: agentDir,
   });
@@ -405,7 +404,7 @@ async function readRemovalProfileState(
     }
   };
   for (const target of targets) {
-    const store = current ? loadRemovalStore(target.agentDir) : undefined;
+    const store = current ? await loadRemovalStore(target.agentDir) : undefined;
     for (const profileId of target.profileIds) {
       add(
         target,
@@ -453,13 +452,7 @@ async function removeAuthProfileTargetsWithLocks(
   }
   const catalogStores = credentials.size > 0 ? await listCandidateAuthProfileStores({ cfg }) : [];
   return await withOAuthProfileLocks(lockKeys, async () => {
-    for (const target of targets) {
-      const current = loadRemovalStore(target.agentDir);
-      if (!authProfileRemovalTargetMatches(target, current)) {
-        return { kind: "retry" };
-      }
-    }
-    const restoreRemovedStores: Array<() => void> = [];
+    const restoreRemovedStores: Array<() => Promise<void>> = [];
     const stores: AuthProfileStore[] = [];
     let result: AuthProfileRemovalResult = { kind: "updated", stores };
     let removalFailure: { error: unknown } | undefined;
@@ -468,44 +461,73 @@ async function removeAuthProfileTargetsWithLocks(
 
       for (const target of targets) {
         let stale = false;
-        let publishRemoval: (() => boolean) | undefined;
-        // The compensation owner captures and saves exact rows in its own transaction.
-        const updated = runAuthProfileWriteTransaction(
-          target.agentDir,
-          (database) => {
-            const store = applyScopedAuthReadThrough(
-              loadPersistedAuthProfileStore(target.agentDir, { database }) ?? {
-                version: 1,
-                profiles: {},
-              },
-            );
+        let updated: AuthProfileStore;
+        await runAuthProfileStoreUpdate({
+          agentDir: target.agentDir,
+          envOnly: false,
+          options: { env: getScopedAuthProfileEnv() },
+          update(prepared) {
+            const store = applyScopedAuthReadThrough(prepared.store);
+            updated = store;
             if (!authProfileRemovalTargetMatches(target, store)) {
               stale = true;
-              return store;
+              return { save: false };
             }
-            const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
             if (!removeProfileReferences(store, target.profileIds, target.provider)) {
-              return store;
+              return { save: false };
             }
-            const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+            return {
+              save: true,
               store,
-              snapshot: before,
-              agentDir: target.agentDir,
-            });
-            restoreRemovedStores.push(() =>
-              restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
-            );
-            publishRemoval = saved.publishRuntimeSnapshots;
-            return store;
+              captureCompensation: true,
+              externalProfiles: [],
+              scopedSharedStore: getScopedSharedAuthStore(),
+            };
           },
-          { env: getScopedAuthProfileEnv() },
-        );
+          async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
+            if (!committed) {
+              return;
+            }
+            const compensation = committed.compensation;
+            if (compensation) {
+              restoreRemovedStores.push(() =>
+                runAuthProfileStoreUpdate({
+                  agentDir: target.agentDir,
+                  envOnly: false,
+                  options: { env: owner.env },
+                  update(_prepared, currentOwner) {
+                    if (currentOwner.databasePath !== owner.databasePath) {
+                      throw new Error("auth profile rollback belongs to another database");
+                    }
+                    return { save: true, restore: compensation };
+                  },
+                  async publish(restored, restoreOwner, ...publicationArgs) {
+                    if (restored) {
+                      await publishAuthProfileStoreUpdate(
+                        restoreOwner,
+                        restored,
+                        ...publicationArgs,
+                      );
+                    }
+                  },
+                }),
+              );
+            }
+            updated = committed.store;
+            await publishAuthProfileStoreUpdate(
+              owner,
+              committed,
+              assertCurrent,
+              nativeCommits,
+              committedIsCurrent,
+            );
+          },
+        });
         if (stale) {
           result = { kind: "retry" };
           break;
         }
-        publishRemoval?.();
-        stores.push(updated);
+        stores.push(updated!);
       }
     } catch (error) {
       if (isSqliteLockError(error)) {
@@ -525,14 +547,18 @@ async function removeAuthProfileTargetsWithLocks(
       const failures: unknown[] = removalFailure ? [removalFailure.error, error] : [error];
       for (let index = restoreRemovedStores.length - 1; index >= 0; index -= 1) {
         try {
-          restoreRemovedStores[index]?.();
+          await restoreRemovedStores[index]?.();
         } catch (restoreError) {
           failures.push(restoreError);
         }
       }
-      const restored = targets.every((target) =>
-        authProfileRemovalTargetMatches(target, loadRemovalStore(target.agentDir)),
-      );
+      const restored = (
+        await Promise.all(
+          targets.map(async (target) =>
+            authProfileRemovalTargetMatches(target, await loadRemovalStore(target.agentDir)),
+          ),
+        )
+      ).every(Boolean);
       throw new AggregateError(
         failures,
         restored
@@ -573,6 +599,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
     );
   }
+  await prepareSharedAuthStoreOwnership(getScopedAuthProfileEnv());
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const owners =
       params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
@@ -667,6 +694,7 @@ export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
+  modelId?: string;
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
@@ -680,7 +708,12 @@ export async function markAuthProfileSuccess(params: {
     return;
   }
   const updated = await runAuthProfileUsage(async () => {
-    const reduction = { kind: "success" as const, expectedProfile: profile, lastUsed: Date.now() };
+    const reduction = {
+      kind: "success" as const,
+      expectedProfile: profile,
+      lastUsed: Date.now(),
+      modelId: params.modelId,
+    };
     if (isUserModelAuthProfileId(profileId)) {
       return preparePersonalAuthProfileUsage(store, profileId).record(reduction);
     }

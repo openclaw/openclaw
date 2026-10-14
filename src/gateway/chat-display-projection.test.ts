@@ -62,6 +62,18 @@ it("strips attachment capabilities even after another field changed", () => {
 });
 
 describe("transcript display metadata", () => {
+  it("omits private peer delivery bindings without changing the retained input", () => {
+    const message = {
+      role: "user",
+      content: "A peer update",
+      __openclaw: { id: "input-1", sessionSendDelivery: { source: "private-session" } },
+    };
+    expect(projectChatDisplayMessages([message])).toEqual([
+      { role: "user", content: "A peer update", __openclaw: { id: "input-1" } },
+    ]);
+    expect(message["__openclaw"].sessionSendDelivery.source).toBe("private-session");
+  });
+
   it("keeps display identity while omitting upstream prompt metadata", () => {
     const metadata = { id: "message-1", mirrorIdentity: "turn-1:prompt", replyToId: "message-0" };
     expect(

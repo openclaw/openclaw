@@ -204,6 +204,33 @@ describe("loadControlUiGitHubPreview", () => {
     },
   );
 
+  it("delivers a cached preview after one live credential read", async () => {
+    vi.useFakeTimers();
+    const identity = managedIdentity("slow-cached-credential");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (input) =>
+        requestUrl(input).endsWith("/repos/openclaw/openclaw")
+          ? publicRepository()
+          : githubJson(previewPayload({ user: { login: "octocat" } })),
+      );
+    const target = previewTarget(940004);
+    await loadControlUiGitHubPreview(target, identity, fetchMock);
+    const calls = fetchMock.mock.calls.length;
+    identity.revalidate.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 750);
+      });
+      identity.assertSelected();
+    });
+    const delivered = vi.fn();
+    const pending = loadControlUiGitHubPreview(target, identity, fetchMock).then(delivered);
+    await vi.advanceTimersByTimeAsync(750);
+    expect(delivered).toHaveBeenCalledWith(expect.objectContaining({ login: "octocat" }));
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    await pending;
+  });
+
   it("keeps selected identity caches separate and revalidates cached delivery", async () => {
     const fixtureTarget = previewTarget(88122);
     const firstIdentity = managedIdentity("first-preview-identity");

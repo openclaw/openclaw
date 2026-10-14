@@ -4,11 +4,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Keep this complete mock in the dedicated unit-mock-registry project.
-vi.mock("./chat-pane.ts", () => ({}));
+// mock-isolation: Observe page title publications without registering real panes that start session requests.
+vi.mock("./chat-pane.tsx", async () => {
+  const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
+  return { ChatPaneView: mockChatPagePane };
+});
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import {
+  settleChatPage,
   createSessionTitleSource,
   createSplitLayout,
   setLayout,
@@ -54,7 +59,7 @@ describe("chat page session refresh", () => {
     const foreignPane = expectDefined(layout.columns[1]?.panes[0], "foreign-agent pane");
     foreignPane.sessionKey = "agent:research:dashboard:retained";
     setLayout(page, layout);
-    await page.updateComplete;
+    await settleChatPage(page);
 
     const presentationTitles = () =>
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
@@ -96,8 +101,8 @@ describe("chat page session refresh", () => {
       }
       originalRequestUpdate(...args);
     });
-    const originalRender = page.render.bind(page);
-    vi.spyOn(page, "render").mockImplementation(() => {
+    const originalRender = ChatPageState.forHost(page).render.bind(ChatPageState.forHost(page));
+    vi.spyOn(ChatPageState.forHost(page), "render").mockImplementation(() => {
       if (!insideFrame) {
         offFrameUpdates.push("pane bindings");
       }
@@ -111,12 +116,13 @@ describe("chat page session refresh", () => {
     insideFrame = true;
     expectDefined(frames[0], "scheduled render frame")(0);
     insideFrame = false;
-    await page.updateComplete;
+    await settleChatPage(page);
 
     expect(presentationTitles()).toEqual(["Main desk", undefined]);
     expect(offFrameUpdates).toEqual([]);
 
     page.remove();
+    await settleChatPage(page);
     expect(source.listeners.size).toBe(0);
   });
 
@@ -140,14 +146,14 @@ describe("chat page session refresh", () => {
     page.data = { sessionKey: "main" };
     document.body.append(page);
     setLayout(page, createSplitLayout("main"));
-    await page.updateComplete;
+    await settleChatPage(page);
     const presentationTitles = () =>
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
         (pane) => pane.presentationTitle,
       );
     first.publish("agent:main:main", "First desk");
     await new Promise(requestAnimationFrame);
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(presentationTitles()).toEqual(["First desk", "First desk"]);
 
     second.publish("agent:main:main", "Second desk");
@@ -156,7 +162,7 @@ describe("chat page session refresh", () => {
       sessions: second.sessions,
     };
     page.requestUpdate();
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(first.listeners.size).toBe(0);
     expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
 
@@ -166,10 +172,11 @@ describe("chat page session refresh", () => {
     expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
     second.publish("agent:main:main", "Updated desk");
     await new Promise(requestAnimationFrame);
-    await page.updateComplete;
+    await settleChatPage(page);
     expect(presentationTitles()).toEqual(["Updated desk", "Updated desk"]);
 
     page.remove();
+    await settleChatPage(page);
     expect(second.listeners.size).toBe(0);
     requestUpdate.mockClear();
     second.publish("agent:main:main", "Disposed desk");

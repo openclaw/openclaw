@@ -17,11 +17,8 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
+import { IncognitoSessionMissingError } from "../../../state/incognito-session-error.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../../run-termination.js";
@@ -105,15 +102,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       try {
         await ownedTranscriptWriteContext.sessionActor?.actor.release();
       } finally {
-        try {
-          await releaseIncognito?.();
-        } finally {
-          generation?.release();
-        }
+        generation?.release();
       }
     },
   });
-  let releaseIncognito: (() => Promise<void>) | undefined;
   const assertAdmittedActive = attempt.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
     : undefined;
@@ -187,13 +179,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       if (reader) {
         assertSessionEntryCohortScope(reader, fencedSessionTarget);
       }
-      const options =
-        reader?.database ?? toDatabaseOptions(resolveSqliteReadScope(fencedSessionTarget));
-      const database = {
-        ...options,
-        env: Object.freeze({ ...(options.env ?? process.env) }),
-        path: resolveOpenClawAgentSqlitePath(options),
-      };
       // Execution cancellation does not revoke the actor needed to record its outcome.
       // Ordinary writes still pass assertCommitAllowed; terminal writes retain source and writer fences.
       const assertActorCurrent = terminalWriter ? assertTerminalCurrent : assertCurrent;
@@ -202,32 +187,23 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
         fencedSessionTarget,
         attempt.sessionManager,
       );
-      if (incognito && "kind" in incognito) {
+      if (incognito) {
+        const actor = await incognito.acquire(false, lifetime);
+        if (!actor) {
+          throw new IncognitoSessionMissingError();
+        }
         ownedTranscriptWriteContext.sessionActor = {
-          actor: await incognito.storage.acquire(sessionTarget.sessionKey, lifetime),
+          actor,
           database: incognito.database,
         };
-      } else if (incognito) {
-        const execution = await captureOpenClawAgentDatabaseExecution({
-          kind: "ephemeral",
-          agentId: incognito.actor.agentId,
-          env: database.env,
-          authority: lifetime,
-          existingOnly: true,
-        });
-        if (!execution) {
-          throw new Error("Attempt lost its captured incognito owner");
-        }
-        releaseIncognito = () => execution.release();
-        ownedTranscriptWriteContext.sessionActor = {
-          actor: await execution.sessionActors.acquire(
-            { database: incognito.actor.identity, sessionKey: sessionTarget.sessionKey },
-            lifetime,
-          ),
-          database,
+      } else {
+        const options =
+          reader?.database ?? toDatabaseOptions(resolveSqliteReadScope(fencedSessionTarget));
+        const database = {
+          ...options,
+          env: Object.freeze({ ...(options.env ?? process.env) }),
+          path: resolveOpenClawAgentSqlitePath(options),
         };
-      } else if (!isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
-        // Native incognito retains its existing transcript owner until the worker cutover.
         let identity = readDatabasePathIdentitySync(database.path);
         if (identity.key.startsWith("path:")) {
           await prepareSessionEntryReplacementDatabase(database, assertCurrent);

@@ -12,6 +12,7 @@ import { normalizeProgressCardWrite } from "./progress-card-values.js";
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
 
+// Reads run in the transcript/progress workers; the native reset path only clears rows.
 function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
@@ -132,6 +133,7 @@ export function prepareSessionProgressCardWrite(input: {
   };
 }
 
+/** The progress-card worker owns writes; native lifecycle reset uses the separate clearer. */
 export function writePreparedSessionProgressCard(
   db: DatabaseSync,
   sessionKey: string,

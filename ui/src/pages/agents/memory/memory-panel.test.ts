@@ -818,7 +818,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: name })
           .evaluate((item) => (item as HTMLElement).click());
       };

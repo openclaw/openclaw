@@ -316,3 +316,41 @@ Notes:
 
 - The macOS menubar app connects to the Gateway WS server as a node (so `openclaw nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.
+
+## Existing-folder session consent
+
+`nodeHost.workerRuns.folders` is a node-local array of existing directory roots.
+When unset, any existing directory is allowed, except filesystem roots and
+directories overlapping private worker storage. A non-empty list restricts access
+to those roots and their descendants; `[]` explicitly disables existing-folder
+sessions and capability advertising, even when `nodeHost.workerRuns.enabled` is
+true. Configure restrictions on the device, not the Gateway:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      folders: ["~/src/tries"],
+    },
+  },
+}
+```
+
+Roots and selected folders accept absolute paths or a leading `~`. The node
+resolves both through realpath on every operation. A selected directory must
+remain inside a configured root when restrictions are set; a symlink cannot
+escape that root. Files, missing directories, filesystem roots, and directories
+overlapping OpenClaw's private worker storage are rejected in every mode. Prefer
+narrow roots rather than your home directory when restricting access. Restart a foreground node process after changing its
+local configuration so it advertises the updated consent.
+
+The unrestricted default does not expand the existing session-host exec trust
+boundary: operators can already run agents with exec on this device. This list is
+a folder-selection guardrail for the Gateway's session requests, not an exec
+sandbox or a boundary against a compromised Gateway.
+
+An existing-folder session stays pinned to that device. OpenClaw does not copy,
+reconcile, reset, or remove the selected folder. Worker HOME and metadata use
+private node storage. See [Session hosting](/nodes/session-hosting) for runtime
+support and the New Session flow.

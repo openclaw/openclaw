@@ -239,6 +239,8 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
 
+    Per-agent session stores also retain their next cron-run expiry, so empty or unexpired stores do not require reads on every maintenance tick. Committed cron-run changes refresh that deadline; busy sessions and failed session-store sweeps retry after five minutes.
+
     Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
 
   </Accordion>

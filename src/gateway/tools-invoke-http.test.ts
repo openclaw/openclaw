@@ -508,7 +508,8 @@ describe("POST /tools/invoke", () => {
   });
 
   it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-operator-role" }, async () => {
+    const profileState = { label: "tools-invoke-operator-role", prepareProfileCatalog: true };
+    await withOpenClawTestState(profileState, async () => {
       const profile = ensureProfileForEmail("operator@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       cfg = {
@@ -560,7 +561,8 @@ describe("POST /tools/invoke", () => {
   it.each([{ toolName: "sessions_spawn", withProfile: true }])(
     "preserves system authority for $toolName with owner profile: $withProfile",
     async ({ toolName, withProfile }) => {
-      await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+      const profileState = { label: "tools-invoke-system-authority", prepareProfileCatalog: true };
+      await withOpenClawTestState(profileState, async () => {
         const owner = ensureGatewayOwnerProfile("Gateway Owner");
         const sessionKey = "agent:main:sysauth-primary";
         const entry = {
@@ -610,7 +612,8 @@ describe("POST /tools/invoke", () => {
   );
 
   it("rejects a nested sessions_send target that the operator cannot mutate", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-foreign-session" }, async () => {
+    const profileState = { label: "tools-invoke-foreign-session", prepareProfileCatalog: true };
+    await withOpenClawTestState(profileState, async () => {
       const owner = ensureProfileForEmail("owner@example.test");
       const guest = ensureProfileForEmail("guest@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -667,7 +670,11 @@ describe("POST /tools/invoke", () => {
   });
 
   it("rejects HTTP tool execution against another operator's primary session", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-foreign-primary-session" }, async () => {
+    const profileState = {
+      label: "tools-invoke-foreign-primary-session",
+      prepareProfileCatalog: true,
+    };
+    await withOpenClawTestState(profileState, async () => {
       const owner = ensureProfileForEmail("owner@example.test");
       ensureProfileForEmail("guest@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -917,7 +924,11 @@ describe("POST /tools/invoke", () => {
     expect(writeScopedBody.result).toEqual({ ok: true, result: "write-scoped" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
 
-    await withOpenClawTestState({ label: "tools-invoke-shared-secret-role-owner" }, async () => {
+    const profileState = {
+      label: "tools-invoke-shared-secret-role-owner",
+      prepareProfileCatalog: true,
+    };
+    await withOpenClawTestState(profileState, async () => {
       const owner = ensureProfileForEmail("role-owner@example.test");
       const sessionKey = "agent:main:shared-secret-owner-session";
       const entry = {

@@ -66,6 +66,10 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
 import {
+  readSessionActorRewriteFacts,
+  type SessionActorRewriteFacts,
+} from "./session-actor-transcript-publication.worker.js";
+import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
@@ -516,10 +520,28 @@ export function prepareSessionMessageRewrite(
   { open }: Pick<AgentWorkerOperationContext, "open">,
 ): SessionMessageRewriteSnapshot | null {
   const database = open();
+  return prepareMessageRewrite(
+    input,
+    database,
+    readSessionActorRewriteFacts(
+      database,
+      input.scope,
+      input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
+    ),
+  );
+}
+
+function prepareMessageRewrite(
+  input: SessionMessageRewriteSelection,
+  database: OpenClawAgentDatabase,
+  facts: SessionActorRewriteFacts | undefined,
+): SessionMessageRewriteSnapshot | null {
   const { scope, target, expectedEntry } = input;
-  assertSessionTranscriptHot(database.db, scope.sessionId);
+  if (!facts) {
+    assertSessionTranscriptHot(database.db, scope.sessionId);
+  }
   if (expectedEntry) {
-    const current = readSessionEntryRow(database, scope.sessionKey)?.entry;
+    const current = facts ? facts.entry : readSessionEntryRow(database, scope.sessionKey)?.entry;
     if (
       !transcriptWriteScopeIsCurrent(current, scope.sessionId, {
         sessionKey: scope.sessionKey,
@@ -536,11 +558,13 @@ export function prepareSessionMessageRewrite(
   if (target.kind === "anchor") {
     seq = target.anchor.rawSeq;
     if (target.active) {
-      const active = readActiveTranscriptEntryAnchorInTransaction({
-        database,
-        resolved: scope,
-        entryId: target.anchor.entryId,
-      });
+      const active = facts
+        ? facts.anchor
+        : readActiveTranscriptEntryAnchorInTransaction({
+            database,
+            resolved: scope,
+            entryId: target.anchor.entryId,
+          });
       if (
         target.active === "exact"
           ? !isDeepStrictEqual(active, target.anchor)
@@ -616,7 +640,12 @@ export function applySessionMessageRewrite<T>(
     "session.transcript.message-rewrite",
     "Transcript rewrite",
     (database: OpenClawAgentDatabase) => {
-      const current = prepareSessionMessageRewrite(input, { open: () => database });
+      const facts = readSessionActorRewriteFacts(
+        database,
+        input.scope,
+        input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
+      );
+      const current = prepareMessageRewrite(input, database, facts);
       if (
         !current ||
         current.seq !== input.expected.seq ||
@@ -627,15 +656,22 @@ export function applySessionMessageRewrite<T>(
       const changed = input.message !== undefined;
       let generation: string | undefined;
       if (changed) {
-        generation = rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, [
-          {
-            event: { ...current.event, message: input.message },
-            expectedEventJson: current.eventJson,
-            seq: current.seq,
-          },
-        ]);
+        generation = rewriteSqliteTranscriptEventRowsInTransaction(
+          database,
+          input.scope,
+          [
+            {
+              event: { ...current.event, message: input.message },
+              expectedEventJson: current.eventJson,
+              seq: current.seq,
+            },
+          ],
+          { projectionCurrent: facts !== undefined },
+        );
       }
-      generation ??= readTranscriptGenerationInTransaction(database, input.scope.sessionId);
+      generation ??= facts
+        ? facts.generation
+        : readTranscriptGenerationInTransaction(database, input.scope.sessionId);
       const candidate: SessionMessageRewriteCommitted = {
         kind: "session-message-rewrite",
         result:

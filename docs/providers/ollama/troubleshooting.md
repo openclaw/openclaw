@@ -124,6 +124,13 @@ sidebarTitle: "Troubleshooting"
     If a small local model still fails on tool schemas, set
     `compat.supportsTools: false` on that model entry and retest.
 
+    When a reply consists of a structured tool-call attempt naming an available
+    tool, OpenClaw asks the model once to call the tool natively when recovery
+    is safe. Earlier side effects can prevent that retry. A repeated text call
+    fails visibly instead of reporting success. Text calls are never executed
+    by this guard; examples in substantive answers remain text.
+    The original reply and corrective continuation remain in session history.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
@@ -166,7 +173,7 @@ sidebarTitle: "Troubleshooting"
     session and a fallback model:
 
     ```bash
-    openclaw infer model run --model ollama/kimi-k2.5:cloud --prompt "Reply with exactly: ok" --json
+    openclaw infer model run --model ollama/kimi-k2.6:cloud --prompt "Reply with exactly: ok" --json
     openclaw models set ollama/gemma4
     ```
 

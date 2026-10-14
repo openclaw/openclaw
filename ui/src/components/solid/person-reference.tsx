@@ -141,7 +141,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     );
     portal.markTrigger(trigger);
     card.addEventListener("pointerleave", portal.handleCardPointerLeave);
-    // The unported helper alone owns the portal's children; Solid owns the trigger.
     portal.mount(trigger, card, "vertical", true, () => updatePersonActivityCard(card));
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("focusin", outside, true);

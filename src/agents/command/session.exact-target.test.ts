@@ -4,14 +4,66 @@ import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-ow
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   isOpenClawAgentDatabaseOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveSession, resolveSessionKeyForRequestCore } from "./session.js";
+import {
+  resolveSession,
+  resolveSessionKeyForRequestCore,
+  resolveStoredSessionKeyForSessionId,
+} from "./session.js";
+
+it("resolves session IDs without loading unrelated saved snapshots", async () => {
+  await withOpenClawTestState({ label: "command-bounded-session-id" }, async (state) => {
+    const storePath = state.statePath("sessions.sqlite");
+    const sessionKey = "agent:main:selected";
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: { store: storePath },
+    };
+    await sessionAccessor.replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "selected-id",
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "selected prompt", skills: [] },
+      },
+    );
+    await sessionAccessor.replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
+      {
+        sessionId: "unrelated-id",
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "unrelated prompt", skills: [] },
+      },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    const database = openNodeSqliteDatabase(storePath);
+    try {
+      // A cold payload that cannot be parsed proves the lookup never materializes that row.
+      database
+        .prepare("UPDATE session_entry_snapshots SET value_json = ? WHERE session_key = ?")
+        .run("{", "agent:main:unrelated");
+    } finally {
+      database.close();
+    }
+    for (const resolve of [resolveStoredSessionKeyForSessionId, resolveSessionKeyForRequestCore]) {
+      expect(await resolve({ cfg, agentId: "main", sessionId: "selected-id" })).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        sessionEntry: { skillsSnapshot: { prompt: "selected prompt", skills: [] } },
+      });
+    }
+    await expect(
+      resolveStoredSessionKeyForSessionId({ cfg, agentId: "main", sessionId: "unrelated-id" }),
+    ).rejects.toThrow();
+  });
+});
 
 it("resolves a partitioned global session id with legacy ownership", async () => {
   const sessionKey = "global";
@@ -150,7 +202,11 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);
-          expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
+          expect(
+            fs.existsSync(
+              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            ),
+          ).toBe(false);
         }
       } finally {
         list.mockRestore();

@@ -28,6 +28,14 @@ not rewrite configuration. Restart preserves the installed service definition wh
 config needs repair; its health check still reports whether the Gateway came back.
 `gateway start` continues to validate configuration before starting the Gateway.
 
+If a Gateway holds state ownership for more than five minutes without recording
+that its listener bound, `openclaw gateway stop` can recover the stalled startup,
+including one frozen before publishing its owner identity. Recovery verifies the
+recorded PID and process start time before termination, then confirms process exit
+and state ownership release. A fresh worker heartbeat does not extend this startup
+budget. Ownership contention names the stalled PID, startup age, and stop command;
+you do not need to delete lock files manually.
+
 `gateway status` reports service process state separately from Gateway readiness.
 When its connection check fails, inspect the service logs even if the process is
 running. Recent log errors are matching evidence from the bounded log tail, may

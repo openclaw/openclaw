@@ -376,6 +376,9 @@ export async function authorizeGatewayConnectDevice(
             try {
               await pruneSupersededSilentPairingsAfterApproval({
                 deviceId: approved.device.deviceId,
+                connectedDeviceIds: [...context.handler.clients].flatMap((client) =>
+                  client.connect.device && !client.invalidated ? [client.connect.device.id] : [],
+                ),
                 context: requestContext,
               });
             } catch (error) {

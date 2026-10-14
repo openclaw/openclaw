@@ -190,6 +190,7 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
         reportedModelRef: { provider: "runtime-provider", model: "runtime-model" },
         finalAssistantVisibleText: undefined,
         finalAssistantRawText: undefined,
+        finalAssistantMessageRawText: undefined,
         timedOutDuringPrompt: true,
         recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
         hasSuccessfulFinalAssistantAfterPromptTimeout: false,

@@ -92,8 +92,8 @@ export type SessionEntryListScope = Partial<
   sessionKeys?: readonly string[];
   /** Set false for readers that do not consume derived participant identities or counts. */
   includeParticipants?: boolean;
-  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
-  cronRetention?: true;
+  /** Page full cron-run entries for exact deletion guards without hydrating the store. */
+  cronRetention?: { afterSessionKey?: string; limit: number };
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
 };
@@ -336,9 +336,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.source. Final compatibility day: 2026-12-31. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -400,14 +400,11 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
-
-/** Canonical transcript identity owned by the transaction. */
-export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 

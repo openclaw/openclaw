@@ -10,9 +10,8 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
 } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { listSessionTranscriptInstancesInWorker } from "../config/sessions/session-history.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   projectSessionMetadata,
   readMemorySessionTargets,
@@ -24,13 +23,14 @@ import type {
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type {
   MemorySessionSelectors,
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 
-/** @deprecated Use loadArchivedSessionsAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. */
 export function loadArchivedSessions(
   params: Parameters<typeof listSessionTranscriptArchivesReadOnly>[0],
 ) {
@@ -82,7 +82,7 @@ export type {
   SessionTranscriptCorpusEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
-/** @deprecated Use loadMemorySessionMetadataAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await loadMemorySessionMetadataAsync. Final compatibility day: 2026-12-31. */
 export function loadMemorySessionMetadata(params: {
   agentId: string;
   sessionId: string;
@@ -137,17 +137,22 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
   const agentId = normalizeAgentId(params.agentId);
   const scope = { agentId, storePath: params.storePath };
   const sessionIds = [...selectors.keys()];
-  const metadata =
-    getSessionActorStorageBinding(scope) || captureIncognitoSessionSource(scope)
-      ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
-          (entry) => entry.resolution === "live",
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  const metadata = memory
+    ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
+        (entry) => entry.resolution === "live",
+      )
+    : (
+        await listSessionTranscriptInstancesInWorker(
+          { ...scope, projection: "list" },
+          { includeAllWindows: true, sessionIds },
         )
-      : (
-          await listSessionTranscriptInstancesInWorker(
-            { ...scope, projection: "list" },
-            { includeAllWindows: true, sessionIds },
-          )
-        ).map((instance) => projectSessionMetadata(instance));
+      ).map((instance) => projectSessionMetadata(instance));
   return metadata.filter(
     (entry) =>
       entry.agentId === agentId &&
@@ -156,7 +161,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
   );
 }
 
-/** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await resolveMemorySessionTargetsAsync. Final compatibility day: 2026-12-31. */
 export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
   warnPluginSdkDeprecation({
     family: "memory-session-sync-inventory",

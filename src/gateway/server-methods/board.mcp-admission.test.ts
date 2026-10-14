@@ -19,8 +19,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import {
@@ -34,6 +32,8 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { RespondFn } from "./types.js";
+
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 afterEach(() => {
   mcpUiResourceTesting.clearViewStore();
@@ -50,9 +50,7 @@ describe("MCP App source authority at board write admission", () => {
   ])(
     "retains only current source tool authority after queueing (revoke=$revoke, cancel=$cancel, retire=$retire, sharing=$sharing)",
     async ({ revoke, cancel, retire, sharing }, { signal: testSignal }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ workspaceDir }) => {
-        ensureUserProfilesSchema({});
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await withOpenClawTestState(profileState, async ({ workspaceDir }) => {
         const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
@@ -87,7 +85,11 @@ describe("MCP App source authority at board write admission", () => {
         };
         await upsertSessionEntryCore(target, entry);
         if (sharing) {
-          addSessionMember(target, { identityId: clientProfileId, addedBy: creatorId, addedAt: 1 });
+          addSessionMember(target, {
+            identityId: clientProfileId,
+            addedBy: creatorId,
+            addedAt: 1,
+          });
         }
         const descriptor = {
           serverName: "server",

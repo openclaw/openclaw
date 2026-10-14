@@ -44,7 +44,9 @@ export function readCacheTtlProjectionPrefix(
           .case()
           .when(entryType, "=", "reset")
           // Preserve the classified kind when legacy JSON starts with another duplicate type.
-          .then(transcriptEventModelNavigationSql("event", sql.lit("reset")))
+          .then(
+            transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
+          )
           .else(transcriptEventJsonSql(projection.database.db, "event"))
           .end()
           .as("event_json"),

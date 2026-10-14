@@ -112,6 +112,7 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
     - `input exceeds the maximum number of tokens`
     - `input token count exceeds the maximum number of input tokens` (Bedrock)
     - `input is too long for the model`
+    - `` `inputs` must have less than N tokens `` and `` `inputs` tokens + `max_new_tokens` must be <= N `` (Hugging Face TGI; output-only `max_new_tokens` limits do not trigger compaction)
     - `ollama error: context length exceeded`
 
   </Accordion>
@@ -135,6 +136,11 @@ If a turn is active, `/compact` gives it up to 60 seconds to finish before
 cancelling it and waiting up to 15 more seconds for it to stop. When cancellation
 succeeds, the command's reply asks you to resend the interrupted request, including
 when the run is still stopping and compaction cannot proceed.
+
+On channels such as Telegram, `/compact` acknowledges the incoming command before
+interrupting an active run or starting compaction, so the channel's five-minute
+adoption watchdog does not abort and replay it. Compaction uses `agents.defaults.compaction.timeoutSeconds`
+and reports its result in a reply; cancellation still stops the work.
 
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 

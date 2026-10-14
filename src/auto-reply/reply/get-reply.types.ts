@@ -4,7 +4,10 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
-import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryObserver,
+} from "../../agents/reply-completion.js";
 import type { SessionEntryCreationCommit } from "../../config/sessions/session-entry-creation.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
@@ -79,6 +82,8 @@ type InternalReplySessionOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   /** Source-specific final delivery, e.g. a committed answer in the current WebChat history. */
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  /** Distinguishes committed source-tool custody from ordinary transcript presentation. */
+  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
   requireExplicitMessageTarget?: boolean;
   /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
@@ -89,6 +94,9 @@ type InternalReplySessionOptions = {
   /** Follow the admitted turn's own first-store registration in its retained request facts. */
   onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   onSessionCreated?: (created: SessionEntryCreationCommit) => void;
+
+  /** Receives the LLM's own final response text — pre-delivery-normalization, sentinels included. */
+  onRawLlmResponse?: (response: string) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

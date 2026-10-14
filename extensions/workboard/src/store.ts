@@ -595,17 +595,26 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
+    return (await this.readWithWorkerContext(id)).workerContext;
+  }
+
+  async readWithWorkerContext(id: string): Promise<{
+    card: WorkboardCard;
+    workerContext: string;
+  }> {
     const card = await this.requireCard(id);
-    return buildWorkerContext(
-      card,
-      await readCards(this.store, {
-        kind: "worker-context",
-        cardId: card.id,
-        boardId: cardBoardId(card),
-        agentId: card.agentId,
-        parentIds: cardParentIds(card),
-      }),
-    );
+    const parentIds = cardParentIds(card);
+    const relatedCards =
+      parentIds.length > 0 || card.agentId
+        ? await readCards(this.store, {
+            kind: "worker-context",
+            cardId: card.id,
+            boardId: cardBoardId(card),
+            agentId: card.agentId,
+            parentIds,
+          })
+        : [];
+    return { card, workerContext: buildWorkerContext(card, relatedCards) };
   }
 
   static openSqlite(

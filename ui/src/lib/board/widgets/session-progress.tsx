@@ -1,12 +1,8 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { SessionProgressCardController } from "../../../components/session-progress-card-controller.ts";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
@@ -144,18 +140,13 @@ function SessionProgressWidgetContent(
             }
           >
             {(card) => (
-              <LitContent
-                render={() =>
-                  renderSessionProgressCard(
-                    card(),
-                    "board",
-                    undefined,
-                    row()?.status,
-                    row()?.startedAt,
-                    row()?.endedAt,
-                    isSessionRunActive(row() ?? {}),
-                  )
-                }
+              <SessionProgressCard
+                card={card()}
+                placement="board"
+                sessionStatus={row()?.status}
+                startedAt={row()?.startedAt}
+                endedAt={row()?.endedAt}
+                hasActiveRun={isSessionRunActive(row() ?? {})}
               />
             )}
           </Show>
