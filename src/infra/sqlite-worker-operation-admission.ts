@@ -64,6 +64,7 @@ type DatabaseAuthority = {
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
+  readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
@@ -148,17 +149,6 @@ function createOperationAdmission(
   assertRelayCurrent?: () => void,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
-  if (attachment !== undefined) {
-    try {
-      // This message moves with port2; command payloads retain their v8 encoding.
-      port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
-      recordWorkerMessage("authority", "to_worker");
-    } catch (error) {
-      port1.close();
-      port2.close();
-      throw error;
-    }
-  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
   const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
@@ -538,6 +528,7 @@ function createOperationAdmission(
   };
   const admission: SqliteWorkerOperationAdmission = {
     port: port2,
+    attachment: attachment === undefined ? undefined : { value: attachment },
     observeRequests(observer) {
       if (closed || observeRequest) {
         throw new SqliteWorkerError(
@@ -710,22 +701,14 @@ export function requestSqliteWorkerSchemaMaintenance(databasePath: string): bool
   return true;
 }
 
-/** Require and cache owner-prepared data from this operation's private port. */
+/** Require owner-prepared data carried by this operation's command envelope. */
 export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   if (!scope.owner.attachment) {
-    const message: unknown = receiveMessageOnPort(scope.port)?.message;
-    if (
-      !isRecord(message) ||
-      message.kind !== "sqlite-operation-attachment" ||
-      message.value === undefined
-    ) {
-      throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
-    }
-    scope.owner.attachment = { value: message.value };
+    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
   }
   return scope.owner.attachment.value;
 }
