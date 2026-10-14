@@ -1,10 +1,10 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   sessionProgressCardsForGateway,
   type SessionProgressCardStore,
 } from "../lib/session-progress-cards.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 
 type SessionProgressCardControllerOptions = {
   gateway: () => ApplicationGateway | null | undefined;
@@ -13,7 +13,7 @@ type SessionProgressCardControllerOptions = {
 };
 
 /** Keeps one view on the gateway-scoped durable progress-card snapshot. */
-export class SessionProgressCardController implements ReactiveController {
+export class SessionProgressCardController implements SolidController {
   private connected = false;
   private store: SessionProgressCardStore | null = null;
   private stopUpdates: (() => void) | null = null;
@@ -23,7 +23,7 @@ export class SessionProgressCardController implements ReactiveController {
   private presentation?: ReturnType<SessionProgressCardController["readPresentation"]>;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly options: SessionProgressCardControllerOptions,
   ) {
     host.addController(this);

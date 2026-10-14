@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
@@ -16,6 +15,7 @@ import {
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   refreshSessionCatalogsLive,
   SessionCatalogLiveState,
@@ -41,7 +41,7 @@ import {
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
 
-export interface SessionDataControllerHost extends ReactiveControllerHost {
+export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
   readonly activeRouteId?: string;
