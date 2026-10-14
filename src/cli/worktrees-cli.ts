@@ -367,6 +367,9 @@ export function registerWorktreesCli(program: Command): void {
     .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
+      if (opts.job === "") {
+        throw new Error("--job must not be empty.");
+      }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
         "worktrees.gc",
