@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { validateClawsCatalogDetailResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
@@ -329,7 +330,9 @@ describe("official ClawHub Claw catalog", () => {
     mocks.skillCard.mockResolvedValueOnce(
       "---\nname: citation-check\ndescription: Metadata description\n---\n# Citation check\n",
     );
-    await expect(readClawHubClawDetail({ packageName })).resolves.toMatchObject({
+    const detail = await readClawHubClawDetail({ packageName });
+    expect(validateClawsCatalogDetailResult({ detail })).toBe(true);
+    expect(detail).toMatchObject({
       packageName,
       version,
       agentName: "Research Briefing",
