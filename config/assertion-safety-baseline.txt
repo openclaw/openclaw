@@ -555,7 +555,6 @@ extensions/microsoft-foundry/provider.ts	1
 extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
 extensions/migrate-hermes/auth.ts	1
-extensions/migrate-hermes/model.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
 extensions/minimax/oauth.ts	1
@@ -610,9 +609,9 @@ extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
-extensions/oc-path/src/oc-path/universal.ts	4
+extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
-extensions/oc-path/src/oc-path/yaml/resolve.ts	4
+extensions/oc-path/src/oc-path/yaml/resolve.ts	2
 extensions/ollama/index.ts	5
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
