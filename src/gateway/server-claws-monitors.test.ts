@@ -273,7 +273,6 @@ describe("Claw serving monitor cleanup", () => {
         claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
-          resolveAgentId: () => "worker",
         }),
       );
       const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

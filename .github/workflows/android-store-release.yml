@@ -29,13 +29,26 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
+  qualify:
+    if: >-
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/android-release-e2e.yml
+    with:
+      target_sha: ${{ github.sha }}
+
   release:
     name: Prepare and upload Android release
+    needs: qualify
     if: >-
+      !cancelled() &&
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
       ((github.event_name == 'schedule' && vars.ANDROID_INTERNAL_ENABLED == 'true') ||
       (github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'release' || inputs.operation == 'internal')))
+      (inputs.operation == 'internal' || (inputs.operation == 'release' && needs.qualify.result == 'success'))))
     permissions:
       contents: write
     runs-on: ubuntu-24.04
