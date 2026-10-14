@@ -10,6 +10,7 @@ import {
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
+import { resolveDoctorUpdateBudget } from "./doctor-update-budget.js";
 
 const observed = vi.hoisted(() => ({ now: 0, events: [] as string[] }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -113,6 +114,8 @@ it.each([
   { agentCount: 480, phase: "validation" },
   { agentCount: 3, phase: "activation" },
   { agentCount: 480, phase: "activation" },
+  // 2026.8.35 drivers have no update-run ledger and set no run id.
+  { agentCount: 480, phase: "legacy-driver" },
 ])(
   "completes required repairs and reports deferred inspection for $agentCount agents during $phase",
   async ({ agentCount, phase }) => {
@@ -136,12 +139,14 @@ it.each([
         OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
       };
       const startedAt = Date.now();
-      const run = createUpdateRun(
-        { trigger: "cli", target: { kind: "package" }, before: { version: "2026.9.4" } },
-        { env },
-      );
-      recordUpdateRunPhase(run.runId, "validating", {}, { env });
-      closeOpenClawStateDatabaseForTest();
+      if (phase !== "legacy-driver") {
+        const run = createUpdateRun(
+          { trigger: "cli", target: { kind: "package" }, before: { version: "2026.9.4" } },
+          { env },
+        );
+        recordUpdateRunPhase(run.runId, "validating", {}, { env });
+        closeOpenClawStateDatabaseForTest();
+      }
       // Activation has a fresh inspection window even when validation was long ago.
       const doctorStartedAt = startedAt + (phase === "validation" ? 20_000 : 600_000);
       observed.now = doctorStartedAt;
@@ -191,6 +196,9 @@ it.each([
             requirement: "update-validation-budget",
           }),
         ]);
+        if (phase === "legacy-driver") {
+          expect(ctx.updateBudget?.source).toBe("legacy-driver-policy");
+        }
         observed.events = [];
         await runDoctorHealthContributionList(
           createDoctorHealthFlowContext({ cfg, env: {} }),
@@ -201,3 +209,20 @@ it.each([
     });
   },
 );
+
+it("budgets ledgerless 2026.8.35-driver Doctor but not a run-id parent", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const env = {
+      ...state.env,
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: state.path("doctor-result.json"),
+    };
+    await expect(resolveDoctorUpdateBudget({ cfg: {}, env })).resolves.toMatchObject({
+      phase: "activation",
+      source: "legacy-driver-policy",
+    });
+    await expect(
+      resolveDoctorUpdateBudget({ cfg: {}, env: { ...env, OPENCLAW_UPDATE_RUN_ID: "run-1" } }),
+    ).resolves.toBeUndefined();
+  });
+});

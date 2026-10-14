@@ -116,7 +116,9 @@ skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check
 appears as an `update-inspection-deferred` warning in Doctor output and the
 update outcome, with the reason and remaining inspection allowance. A deferred
-check did not pass or fail; it was not run.
+check did not pass or fail; it was not run. The same limit applies when an
+older published updater without an update-run record (for example 2026.8.35)
+runs this Doctor, because that updater stops the whole step at a fixed timeout.
 
 Run `openclaw doctor --fix` after activation to complete those checks and review
 optional repairs. An ordinary Doctor run does not retain the update's inspection

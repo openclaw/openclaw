@@ -16,7 +16,11 @@ export type DoctorUpdateBudget = {
   readonly inspectionDeadlineMs: number;
   readonly disposalDeadlineMs?: number;
   readonly phase: "validation" | "activation";
-  readonly source: "validation-ledger" | "activation-policy" | "unavailable-validation-origin";
+  readonly source:
+    | "validation-ledger"
+    | "activation-policy"
+    | "legacy-driver-policy"
+    | "unavailable-validation-origin";
   readonly deferred: Map<string, HealthFinding>;
 };
 
@@ -46,8 +50,10 @@ export async function resolveDoctorUpdateBudget(params: {
   }
   const { listUpdateRunsAsync } = await import("../infra/update-run-reader.js");
   let validationStartedAt: number | undefined;
+  let activeRunCount: number | undefined;
   try {
     const runs = await listUpdateRunsAsync({ active: true, limit: 2 }, { env: params.env });
+    activeRunCount = runs.length;
     const run = runs.length === 1 ? runs[0] : undefined;
     validationStartedAt = run?.steps.find(
       (step) => step.step === "validating" && step.startedAtMs !== undefined,
@@ -56,7 +62,16 @@ export async function resolveDoctorUpdateBudget(params: {
     // Required schema/admission checks own unreadable state. Optional work
     // cannot consume an unknown old parent's remaining validation window.
   }
-  if (!rehearsal && validationStartedAt === undefined) {
+  // Published drivers before the update-run ledger (2026.8.35 and older) set
+  // only IN_PROGRESS plus the result path and kill the whole step at a fixed
+  // 30 minutes. With no ledger run and no run id, treat that as activation so
+  // optional inspections defer instead of stacking on required migrations.
+  const legacyDriver =
+    !rehearsal &&
+    validationStartedAt === undefined &&
+    !activeRunCount &&
+    !params.env.OPENCLAW_UPDATE_RUN_ID?.trim();
+  if (!rehearsal && validationStartedAt === undefined && !legacyDriver) {
     return undefined;
   }
   return {
@@ -70,11 +85,13 @@ export async function resolveDoctorUpdateBudget(params: {
         ? Date.now()
         : validationStartedAt + INSPECTION_WINDOW_MS
       : Date.now() + INSPECTION_WINDOW_MS,
-    source: !rehearsal
-      ? "activation-policy"
-      : validationStartedAt === undefined
-        ? "unavailable-validation-origin"
-        : "validation-ledger",
+    source: legacyDriver
+      ? "legacy-driver-policy"
+      : !rehearsal
+        ? "activation-policy"
+        : validationStartedAt === undefined
+          ? "unavailable-validation-origin"
+          : "validation-ledger",
     deferred: new Map(),
   };
 }
