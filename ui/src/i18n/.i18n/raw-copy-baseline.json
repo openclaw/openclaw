@@ -458,6 +458,20 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/model-providers/model-providers-login.test-support.ts",
+      "text": "Example API key"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/model-providers/model-providers-login.test-support.ts",
+      "text": "Example browser sign-in"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target-view.tsx",
