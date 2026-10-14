@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -349,7 +348,11 @@ describe("mutations", () => {
     callGateway.mockResolvedValueOnce(result);
     await run("clear", "--yes", ...(includePending ? ["--pending"] : []), "--json");
     expect(callGateway).toHaveBeenCalledOnce();
-    expectCall(0, { method: "device.pair.clear", params: { pending: includePending } });
+    expectCall(0, {
+      method: "device.pair.clear",
+      params: { pending: includePending },
+      requiredMethods: ["device.pair.clear"],
+    });
     expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
     expect(runtime.log).not.toHaveBeenCalled();
   });
@@ -375,15 +378,11 @@ describe("mutations", () => {
     },
   );
   it("does not fall back to partial mutations against an older Gateway", async () => {
-    callGateway.mockRejectedValueOnce(
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown method: device.pair.clear",
-      }),
+    const error = new Error(
+      'active gateway does not support required method "device.pair.clear" for "device.pair.clear". Update or restart the active gateway and try again.',
     );
-    const message = await refusal("clear", "--yes", "--pending", "--json");
-    expect(message).toContain("Update the Gateway, then retry.");
-    expect(message).toContain("No pairing records were changed.");
+    callGateway.mockRejectedValueOnce(error);
+    await expect(run("clear", "--yes", "--pending", "--json")).rejects.toBe(error);
     expect(callGateway).toHaveBeenCalledOnce();
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });

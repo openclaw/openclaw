@@ -10,6 +10,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { validateDevicePairClearResult } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -40,18 +41,16 @@ import {
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
 import { formatCliCommand } from "./command-format.js";
-import { failDevicesCommand } from "./devices-cli-errors.js";
 import {
   assertLocalFallbackMatchesGatewayRequest,
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
+import { ExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-
-export { runDevicesClearCommand } from "./devices-cli-clear.js";
 
 type DevicesRpcOpts = {
   url?: string;
@@ -84,12 +83,13 @@ const callGatewayCli = async (
   method: string,
   opts: DevicesRpcOpts,
   params?: unknown,
-  callOpts?: { scopes?: OperatorScope[] },
+  callOpts?: { scopes?: OperatorScope[]; requiredMethods?: string[] },
 ) =>
   callGatewayFromCliWithTransport(method, opts, params, {
     label: `Devices ${method}`,
     defaultTimeoutMs: DEFAULT_DEVICES_TIMEOUT_MS,
     scopes: callOpts?.scopes,
+    requiredMethods: callOpts?.requiredMethods,
     sharedStateMode: "read-only",
   });
 
@@ -627,6 +627,18 @@ function formatAuthFlagReminder(opts: DevicesRpcOpts): string {
   return `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`;
 }
 
+function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void {
+  // Throw JSON refusals to the root failure handler so stdout gets its one error document.
+  if (json) {
+    const message = lines.join("\n");
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  }
+  for (const line of lines) {
+    defaultRuntime.error(line);
+  }
+  defaultRuntime.exit(1);
+}
+
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
@@ -766,6 +778,42 @@ export async function runDevicesDeleteCommand(
   defaultRuntime.log(
     `${theme.warn(operation === "remove" ? "Removed" : "Rejected")} ${theme.command(deviceId ?? "ok")}`,
   );
+}
+
+export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void> {
+  if (!opts.yes) {
+    failDevicesCommand(opts.json, "Refusing to clear pairing table without --yes");
+    return;
+  }
+  const result = await callGatewayCli(
+    "device.pair.clear",
+    opts,
+    { pending: Boolean(opts.pending) },
+    { requiredMethods: ["device.pair.clear"] },
+  );
+  if (!validateDevicePairClearResult(result)) {
+    throw new Error("Gateway returned an invalid device clear result.");
+  }
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+  } else {
+    defaultRuntime.log(
+      `${theme.warn("Cleared")} ${result.removedDevices.length} paired device${result.removedDevices.length === 1 ? "" : "s"}`,
+    );
+    if (opts.pending) {
+      defaultRuntime.log(
+        `${theme.warn("Rejected")} ${result.rejectedPending.length} pending request${result.rejectedPending.length === 1 ? "" : "s"}`,
+      );
+    }
+    if (result.cleanupFailedDevices?.length) {
+      defaultRuntime.error(
+        `Pairing records were cleared, but worker cleanup failed for: ${result.cleanupFailedDevices.map(sanitizeForLog).join(", ")}. Check Gateway logs.`,
+      );
+    }
+  }
+  if (result.cleanupFailedDevices?.length) {
+    defaultRuntime.exit(1);
+  }
 }
 
 export async function runDevicesApproveCommand(

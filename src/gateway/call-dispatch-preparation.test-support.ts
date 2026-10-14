@@ -23,6 +23,13 @@ export function registerGatewayCallDispatchPreparationTests(
 ): void {
   it.each([
     {
+      method: "device.pair.clear",
+      requiredMethods: ["device.pair.clear"],
+      requiredCapabilities: undefined,
+      error:
+        /does not support required method "device\.pair\.clear".*update or restart the active gateway/i,
+    },
+    {
       method: "secrets.resolve",
       requiredMethods: ["secrets.resolve"],
       requiredCapabilities: undefined,
@@ -40,6 +47,7 @@ export function registerGatewayCallDispatchPreparationTests(
     const harness = setup();
     harness.setFeatures(["health"], []);
     await expect(harness.call(options)).rejects.toThrow(error);
+    expect(harness.request()).toBeNull();
   });
 
   it.each([
