@@ -155,9 +155,8 @@ See [the shared pin schema and regeneration](/platforms/mac/dev-setup#shared-bun
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary unit-fast lane partitions its existing file inventory: Node diagnostic
 reports, transferable pipe-handle contracts, and the native Node/SQLite history
-benchmark stay on Node; the compatible remainder runs on Bun. The stall monitor's
-four Promise-hook cases retain their explicit Node-only skips on Bun. Those Node
-files still execute; they are not excluded from CI. The isolated unit-fast lane
+benchmark stay on Node; the compatible remainder runs on Bun. Those Node files
+still execute; they are not excluded from CI. The isolated unit-fast lane
 runs completely on Bun.
 
 Bun test processes disable the Node-compatible bytecode cache because the pinned
