@@ -6,8 +6,13 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  clearOpenClawStateDatabaseOpenFailure,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "../state/openclaw-state-db-cache.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
@@ -21,6 +26,7 @@ import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
+import { resumeScheduling } from "./service/ops-lifecycle.js";
 import { drainCronRunQueue, stopCronRunQueue, waitForCronRunQueue } from "./service/run-queue.js";
 import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
@@ -613,6 +619,61 @@ it("contains recovered scheduled launch failures without an unhandled rejection"
     expect(persisted?.state.runningAtMs).toBeUndefined();
   } finally {
     process.off("unhandledRejection", observe);
+    state.stopped = true;
+    await stopCronRunQueue(state);
+    await waitForCronRunQueue(state);
+    await scheduler.stop();
+  }
+});
+
+it("consumes a resume-scheduling drain failure instead of tripping the fatal unhandled-rejection path", async () => {
+  const { storePath } = await makeStorePath();
+  const job = createDueIsolatedJob({ id: "resume-drain-failure", nowMs: NOW, nextRunAtMs: NOW });
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const scheduler = createTestGatewayScheduler();
+  const state = createCronServiceState({
+    scheduler,
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+  });
+  // A queued row makes resume's drain run its worker operation.
+  const loaded = await loadCronStore(storePath);
+  loaded.jobs[0]!.state.queuedAtMs = NOW;
+  state.store = loaded;
+  state.schedulerStarted = true;
+  state.schedulingPaused = true;
+  const databasePath = resolveOpenClawStateSqlitePath(process.env);
+  const failure = new Error("cron state database is damaged");
+  const unhandled: unknown[] = [];
+  const observe = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", observe);
+  // A damaged store latches every later open, so resume's drain rejects once.
+  recordOpenClawStateDatabaseOpenFailure(databasePath, failure);
+  try {
+    resumeScheduling(state);
+    // Join the drain completion: the observer logs once its rejection is consumed.
+    await vi.waitFor(() => {
+      expect(logger.warn).toHaveBeenCalledWith(
+        { err: String(failure) },
+        "cron: queue drain delayed",
+      );
+    });
+    // Yield once so a leaked rejection could surface before asserting.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", observe);
+    clearOpenClawStateDatabaseOpenFailure(databasePath);
     state.stopped = true;
     await stopCronRunQueue(state);
     await waitForCronRunQueue(state);
