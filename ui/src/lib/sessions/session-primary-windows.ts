@@ -86,7 +86,7 @@ export function createSessionPrimaryWindows(
 
   return {
     subscribe,
-    snapshot(scope: SessionListScope): SessionListSnapshot {
+    snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
       if (isPrimarySessionListQuery(scope)) {
         const { result, agentId, loading, error, startupPending } = readPrimary();
         return { result, agentId, loading, error, startupPending };
