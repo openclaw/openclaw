@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -249,8 +250,12 @@ describe("session sharing store", () => {
       await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      database.db.exec("DROP TABLE session_members;");
+      const databasePath = resolveOpenClawAgentSqlitePath(scope);
+      // Corrupt an offline fixture, not a store whose workers still hold admission receipts.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      using database = new DatabaseSync(databasePath);
+      database.exec("DROP TABLE session_members;");
 
       await expect(readSessionMembersInWorker(scope)).rejects.toThrow(
         expect.objectContaining({
@@ -263,7 +268,7 @@ describe("session sharing store", () => {
         }),
       );
       expect(
-        database.db
+        database
           .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")
           .get(),
       ).toBeUndefined();

@@ -14,6 +14,7 @@ import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CronPageController } from "./cron-page-controller.ts";
 import { reserveCronEditorClearance } from "./editor-clearance.ts";
+import { validateCronEventSelection } from "./event-source.ts";
 import {
   buildCronSuggestions,
   resolveConversationTargetSuggestions,
@@ -45,6 +46,11 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       ),
     });
     const canManage = page.canManageCron;
+    const eventSource = page.eventSource.view;
+    const fieldErrors = {
+      ...page.cron.cronFieldErrors,
+      ...validateCronEventSelection(page.cron.cronForm, eventSource),
+    };
     return {
       ...page.actions,
       loading: page.cron.cronLoading,
@@ -89,8 +95,9 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       runsDeliveryStatuses: page.cron.cronRunsDeliveryStatuses,
       runsQuery: page.cron.cronRunsQuery,
       runsSortDir: page.cron.cronRunsSortDir,
-      fieldErrors: page.cron.cronFieldErrors,
-      canSubmit: !hasCronFormErrors(page.cron.cronFieldErrors),
+      eventSource,
+      fieldErrors,
+      canSubmit: !hasCronFormErrors(fieldErrors),
       agentSuggestions: suggestions.agentSuggestions,
       modelSuggestions: suggestions.modelSuggestions,
       thinkingSuggestions: THINKING_SUGGESTIONS,

@@ -328,7 +328,7 @@ async function run(
         },
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {
-          if (input.kind === "exec") {
+          if (input.kind === "exec" && progress.deadline > 0) {
             timer = setTimeout(
               () => deadline.abort(new CodeModeHeadlessTimeoutError()),
               Math.max(0, progress.deadline - performance.timeOrigin - performance.now()),
@@ -371,10 +371,8 @@ async function run(
       retained = true;
       return { ...result, continuation: continuation(pool) };
     }
-    if (result.status === "completed") {
-      await releasePool(pool);
-      retained = true;
-    }
+    await releasePool(pool);
+    retained = true;
     return result;
   } catch (error) {
     inlineHost?.onFailure?.(error, "host", pool.id);

@@ -75,12 +75,13 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       const cold = await run("bootstrap");
       namespace = cold.namespace;
       expect(cold.threadId).not.toBe(0);
-      await client.query(`DROP TABLE "${namespace}".secret_store_entries`);
       const restart = await run("restart");
       expect(restart.namespace).toBe(cold.namespace);
       expect(restart.admissionId).not.toBe(cold.admissionId);
       await client.query(`UPDATE "${namespace}".schema_meta SET schema_version = 23`);
       await expect(run("restart")).rejects.toThrow("PostgreSQL state metadata mismatch");
+      await client.query(`DROP TABLE "${namespace}".secret_store_entries`);
+      await expect(run("restart")).rejects.toThrow("PostgreSQL schema drift detected");
     } finally {
       if (!namespace) {
         const anchor = openNodeSqliteDatabase(pathname);

@@ -16,6 +16,89 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("separates Code Mode isolate GC and replaces live heap gauges at each sample", () => {
+    const metrics = createMetricsHarness();
+    const memory = {
+      rssBytes: 1000,
+      heapTotalBytes: 500,
+      heapUsedBytes: 300,
+      externalBytes: 200,
+      arrayBuffersBytes: 100,
+    };
+    try {
+      for (const [workerSlot, durationMs] of [
+        [1, 8],
+        [2, 20],
+        [1, 12],
+      ] as const) {
+        metrics.record({
+          type: "diagnostic.gc",
+          kind: "mark_sweep_compact",
+          thread: "code-mode-node.worker.js",
+          workerSlot,
+          durationMs,
+        });
+      }
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 1,
+              heapUsed: 900,
+              heapTotal: 1000,
+              heapSizeLimitBytes: 1024,
+            },
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 2,
+              heapUsed: 100,
+              heapTotal: 200,
+              heapSizeLimitBytes: 1024,
+            },
+          ],
+        },
+      });
+      const before = metrics.render();
+      expect(before).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",slot="1",thread="code-mode-node.worker.js"} 2\n',
+      );
+      expect(before).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",slot="2",thread="code-mode-node.worker.js"} 1\n',
+      );
+      expect(before).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 900\n');
+      expect(before).toContain(
+        'openclaw_code_mode_worker_heap_bytes{kind="limit",slot="1"} 1024\n',
+      );
+      expect(before).toContain(
+        'openclaw_worker_heap_used_bytes{script="code-mode-node.worker.js"} 1000\n',
+      );
+      // Retirement or stale sampling removes gauges; slot reuse keeps cumulative GC counts.
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            { script: "code-mode-node.worker.js", workerSlot: 1, heapUsed: 50, heapTotal: 100 },
+          ],
+        },
+      });
+      const after = metrics.render();
+      expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
+      expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
+      expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
+      expect(after).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",slot="1",thread="code-mode-node.worker.js"} 2\n',
+      );
+      metrics.record({ type: "diagnostic.memory.sample", memory });
+      expect(metrics.render()).not.toContain("openclaw_code_mode_worker_heap_bytes");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("exports cumulative worker traffic without recounting repeated memory samples", () => {
     const metrics = createMetricsHarness();
     try {
@@ -269,7 +352,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      const firstWindow = {
+        type: "gateway.event_loop.sample",
+        intervalMs: 2_000,
+        delayMaxMs: 1_250,
+      } as const;
+      // Scrapes cannot publish a producer's window before diagnostics delivers it.
+      const beforeDelivery = await scrape();
+      expect(beforeDelivery).not.toContain("openclaw_gateway_event_loop_");
+      expect(await scrape()).toBe(beforeDelivery);
+      metrics.record(firstWindow);
       metrics.record({
         type: "diagnostic.gc",
         kind: "scavenge",
@@ -277,8 +369,9 @@ describe("diagnostics-prometheus runtime metrics", () => {
         durationMs: 1_250,
       });
       const first = await scrape();
-      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
-      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1\n");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.25\n");
+      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2\n");
       expect(first).toContain(
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
       );
@@ -312,9 +405,18 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
         'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
       ]) {
-        expect(second).toContain(expected);
+        expect(second).toContain(`${expected}\n`);
       }
       expect(await scrape()).toBe(second);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 });
+      const third = await scrape();
+      expect(third).toContain(
+        'openclaw_gateway_event_loop_delay_max_seconds_bucket{le="0.005"} 1\n',
+      );
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 3\n");
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.27\n");
+      expect(third).toContain("openclaw_gateway_event_loop_observed_seconds_total 11\n");
+      expect(await scrape()).toBe(third);
       metrics.record({
         type: "diagnostic.gc",
         kind: "mark_sweep_compact",

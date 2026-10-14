@@ -149,7 +149,10 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   return aliases;
 }
 
-export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifestRecord[]) {
+export function buildPluginMetadataProviderFacts(
+  plugins: readonly PluginManifestRecord[],
+  enabledPluginIds?: ReadonlySet<string>,
+) {
   const providerEndpoints = plugins.flatMap((plugin) =>
     prepareProviderEndpoints(plugin.providerEndpoints),
   );
@@ -160,7 +163,21 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     ]),
   );
   const providerAuthContributions: PluginProviderAuthContribution[] = [];
+  const providersManagingOwnAvailability = new Set<string>();
+  const selectedProviders = new Set<string>();
   for (const plugin of plugins) {
+    if (enabledPluginIds?.has(plugin.id)) {
+      for (const rawProvider of plugin.providers) {
+        const provider = normalizeProviderId(rawProvider);
+        if (!provider || selectedProviders.has(provider)) {
+          continue;
+        }
+        selectedProviders.add(provider);
+        if (plugin.managesOwnAvailability === true) {
+          providersManagingOwnAvailability.add(provider);
+        }
+      }
+    }
     // Package declarations are stable; readers still decide eligibility against current config.
     const envProviders = (plugin.setup?.providers ?? []).filter(
       (provider) => provider.envVars?.length,
@@ -188,6 +205,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     providerEndpoints,
     providerRequests,
     providerAuthContributions,
+    providersManagingOwnAvailability,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };
