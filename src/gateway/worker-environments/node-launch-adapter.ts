@@ -21,6 +21,7 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 import {
   nodeWorkerPlanHash,
   NODE_WORKER_STATUS_WAIT_MAX_MS,
+  parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
@@ -124,6 +125,16 @@ function isTerminalReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): receipt is TerminalNodeWorkerSupervisorReceipt {
   return receipt.state !== "pending" && receipt.state !== "running";
+}
+
+function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInput {
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(input);
+  } catch {
+    throw new Error("node worker launch input is not serializable");
+  }
+  return parseNodeWorkerLaunchInput(encoded);
 }
 
 function rearmNodeWorkerLaunchInput(
@@ -471,7 +482,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const restartSignal = getGatewayRestartDrainSignal();
-    const originalInput = structuredClone(request.input);
+    const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
