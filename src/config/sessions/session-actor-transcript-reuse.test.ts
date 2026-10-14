@@ -190,9 +190,15 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
             authority,
           );
           expect(appended.kind).toBe("committed");
-          const userAnchor = actor
-            .snapshot(authority)!
-            .transcript.anchors.find((anchor) => anchor.entryId === "next-question")!;
+          if (appended.kind !== "committed") {
+            throw new Error("Expected a committed user append");
+          }
+          const userAnchor = appended.receipt.transcript.appendedMessages.find(
+            (message) => message.messageId === "next-question",
+          )?.anchor;
+          if (!userAnchor) {
+            throw new Error("User append omitted its committed anchor");
+          }
           const committed = vi.fn();
           const captured = await capturePersistedModelPromptProjection({
             admission: { ...userAnchor, logicalTurnId: "next-turn", role: "user" },
@@ -208,7 +214,10 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
               __openclaw: { modelPromptProjection: { version: 1, text: "Next question" } },
             }),
           );
-          expect(actor.snapshot(authority)?.transcript.anchors).toContainEqual(userAnchor);
+          expect(
+            (await readSessionTranscriptAnchorsAsync(scope, { entryIds: ["next-question"] }))
+              .anchors,
+          ).toContainEqual(userAnchor);
           expect(
             (
               await actor.appendToolResult(
@@ -250,6 +259,8 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
             "next-question",
             "next-answer",
           ]);
+          historyReads.mockClear();
+          discoveryReads.mockClear();
           const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
           expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
           expect(summary?.snapshot.totalMessages).toBe(4);

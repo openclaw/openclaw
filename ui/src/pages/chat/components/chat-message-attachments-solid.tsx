@@ -156,35 +156,30 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
         />
       }
     >
-      {(item) => (
-        <Show
-          when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
-          fallback={
-            <AttachmentContent
-              item={item()}
-              options={props.options}
-              onOpenSidebar={props.onOpenSidebar}
-              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-              presentation={props.presentation}
-            />
-          }
-        >
-          <ChatAttachmentAdmission
-            attachments={[item().attachment]}
+      {(item) => {
+        const content = (admission?: AttachmentAdmission) => (
+          <AttachmentContent
+            item={item()}
             options={props.options}
-            render={(admission) => (
-              <AttachmentContent
-                item={item()}
-                options={props.options}
-                onOpenSidebar={props.onOpenSidebar}
-                onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-                presentation={props.presentation}
-                admission={admission}
-              />
-            )}
+            onOpenSidebar={props.onOpenSidebar}
+            onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+            presentation={props.presentation}
+            admission={admission}
           />
-        </Show>
-      )}
+        );
+        return (
+          <Show
+            when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
+            fallback={content()}
+          >
+            <ChatAttachmentAdmission
+              attachments={[item().attachment]}
+              options={props.options}
+              render={content}
+            />
+          </Show>
+        );
+      }}
     </Show>
   );
 }

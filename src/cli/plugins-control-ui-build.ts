@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
@@ -8,6 +7,7 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
   isPluginControlUiAssetPath,
+  pluginControlUiGenerationHash,
 } from "../plugins/control-ui-assets.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
@@ -77,11 +77,7 @@ export async function buildPluginControlUi(params: {
   validateControlUiFiles(rawFiles);
   const files = nameControlUiChunks(rawFiles);
   validateControlUiFiles(files);
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(`${file.name}\0${file.contents.length}\0`).update(file.contents);
-  }
-  const output = `dist/control-ui/${hash.digest("hex")}`;
+  const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
   const declaration = {
     entry: `${output}/index.js`,

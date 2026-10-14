@@ -1,3 +1,4 @@
+import { ACTIVATION_HINT_COMPAT_RECORDS } from "./activation-hint-records.js";
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
 import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
@@ -29,15 +30,6 @@ import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
-
-const ACTIVATION_HINT_METADATA = {
-  status: "active",
-  owner: "plugin-execution",
-  introduced: "2026-04-24",
-  docsPath: "/plugins/manifest",
-  diagnostics: ["activation plan compat reason"],
-  tests: ["src/plugins/activation-planner.test.ts"],
-} as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
@@ -599,51 +591,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["plugin status report"],
     tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
-  {
-    code: "activation-agent-harness-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement:
-      "top-level `cliBackends[]` for CLI aliases and future `agentRuntime` ownership metadata",
-    surfaces: ["activation.onAgentHarnesses", "activation planner"],
-  },
-  {
-    code: "activation-provider-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`providers[]` manifest ownership",
-    surfaces: ["activation.onProviders", "activation planner"],
-  },
-  {
-    code: "activation-channel-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`channels[]` manifest ownership",
-    surfaces: ["activation.onChannels", "activation planner"],
-  },
-  {
-    code: "activation-command-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`commandAliases` or command contribution metadata",
-    surfaces: ["activation.onCommands", "activation planner"],
-  },
-  {
-    code: "activation-route-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "HTTP route contribution metadata",
-    surfaces: ["activation.onRoutes", "activation planner"],
-  },
-  {
-    code: "activation-config-path-hint",
-    ...ACTIVATION_HINT_METADATA,
-    introduced: "2026-04-27",
-    replacement: "manifest contribution ownership for root config surfaces",
-    surfaces: ["activation.onConfigPaths", "startup plugin selection"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts"],
-  },
-  {
-    code: "activation-capability-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "manifest contribution ownership",
-    surfaces: ["activation.onCapabilities", "activation planner"],
-  },
+  ...ACTIVATION_HINT_COMPAT_RECORDS,
   {
     code: "embedded-pi-agent-sdk-aliases",
     status: "removed",

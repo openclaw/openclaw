@@ -158,10 +158,7 @@ export function seedSessionActorTranscriptContext(
       }
     }
     const candidates = [...known.values()].toSorted((a, b) => a.rawSeq - b.rawSeq);
-    const context = hot.transcript.modelContext;
     if (
-      context.kind === "resident" &&
-      context.entries.every((row) => known.has(row.rawSeq)) &&
       candidates.filter((row) => isRecord(row.event) && row.event.type !== "session").length ===
         prepared.snapshot.totalEvents &&
       simplePath(candidates) &&

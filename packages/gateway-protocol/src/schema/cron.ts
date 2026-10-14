@@ -57,6 +57,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("cron"),
   Type.Literal("on-exit"),
   Type.Literal("stream"),
+  Type.Literal("event"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -154,6 +155,11 @@ const CronRunLogJobIdSchema = Type.String({
 
 /** Schedule expression for one-time, interval, or cron-expression jobs. */
 const CronScheduleSchema = Type.Union([
+  closedObject({
+    kind: Type.Literal("event"),
+    source: Type.String({ minLength: 1, pattern: "^[a-z0-9][a-z0-9._-]*$" }),
+    options: Type.Record(Type.String(), Type.Unknown()),
+  }),
   closedObject({
     kind: Type.Literal("at"),
     at: NonEmptyString,
@@ -299,19 +305,13 @@ const CronFailureAlertPatchSchema = closedObject({
 });
 
 /** Delivery destination used when failure alerts need a separate target. */
-const CronFailureDestinationSchema = closedObject({
-  channel: Type.Optional(CronAnnounceChannelSchema),
-  to: Type.Optional(NonBlankString),
-  accountId: Type.Optional(NonEmptyString),
-  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
-});
-
-const CronFailureDestinationPatchSchema = closedObject({
-  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
-  to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
-  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()])),
-});
+const CronFailureDestinationFields = ["channel", "to", "accountId", "mode"] as const;
+const CronFailureDestinationSchema = closedObject(
+  Type.Pick(CronFailureAlertSchema, CronFailureDestinationFields).properties,
+);
+const CronFailureDestinationPatchSchema = closedObject(
+  Type.Pick(CronFailureAlertPatchSchema, CronFailureDestinationFields).properties,
+);
 
 const CronCompletionDestinationSchema = closedObject({
   mode: Type.Literal("webhook"),
@@ -466,32 +466,26 @@ export const CronJobStateSchema = closedObject({
   // reported for diagnostics but intentionally absent from the writable patch
   // schema so external callers cannot spoof source ownership.
   streamSourceIdentity: Type.Optional(Type.String()),
+  /** Store-owned event-source generation; excluded from job patches. */
+  sourceIdentity: Type.Optional(Type.String()),
   streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),
   streamLastExitAtMs: Type.Optional(CronDateTimestampMsSchema),
 });
 
-const CronJobStatePatchSchema = closedObject({
-  nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  runningAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunStatus: Type.Optional(CronRunStatusSchema),
-  lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
-  lastError: Type.Optional(Type.String()),
-  lastErrorReason: Type.Optional(FailoverReasonSchema),
-  lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
-  consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
-  lastDelivered: Type.Optional(Type.Boolean()),
-  lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
-  lastDeliveryError: Type.Optional(Type.String()),
-  ...CronJobRuntimeFeedbackProperties,
-  streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
-  streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
-  streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),
-  streamLastExitAtMs: Type.Optional(CronDateTimestampMsSchema),
-});
+const CronJobStatePatchSchema = closedObject(
+  Type.Omit(CronJobStateSchema, [
+    "scheduleActivatedAtMs",
+    "lastDiagnostics",
+    "lastDiagnosticSummary",
+    "scheduleErrorCount",
+    "autoDisabled",
+    "deliverySuppressionReason",
+    "streamSourceIdentity",
+    "sourceIdentity",
+  ]).properties,
+);
 
 /** Persisted cron job definition returned by scheduler list/get APIs. */
 export const CronJobSchema = closedObject({

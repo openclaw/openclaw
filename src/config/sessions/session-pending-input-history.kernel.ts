@@ -3,10 +3,10 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { parseSqliteTableDefinition } from "../../infra/sqlite-schema-contract-assembly.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasPendingInputConsumptionColumn } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PendingInputHistoryQuery,
@@ -27,19 +27,15 @@ export function readPendingInputHistoryInDatabase(
     if (!schema) {
       throw new Error("Pending input history requires admitted schema facts");
     }
-    const table = schema.tableSql.get("session_pending_inputs");
-    if (!table) {
+    if (!schema.tableSql.get("session_pending_inputs")) {
       return { rows: [], total: 0 };
     }
-    const hasConsumption = parseSqliteTableDefinition(table, "session_pending_inputs").columns.has(
-      "consumed_event_id",
-    );
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
       .where("session_id", "=", query.sessionId);
-    if (hasConsumption) {
+    if (hasPendingInputConsumptionColumn(database.db)) {
       base = base.where("consumed_event_id", "is", null);
     }
     const total =

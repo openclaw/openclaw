@@ -142,13 +142,12 @@ vi.mock("./subagent-followup-hints.js", () => ({
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("./subagent-followup.runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./subagent-followup.js")>("./subagent-followup.js");
+// mock-isolation: Keep Gateway transcript reads controlled; settlement cases opt into the real wait owner.
+vi.mock("./subagent-followup.runtime.js", () => {
   return {
     readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
     waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
-    waitForDescendantSubagentResult: actual.waitForDescendantSubagentResult,
+    waitForDescendantSubagentResult: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -177,6 +176,7 @@ import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-
 import * as realFollowup from "./subagent-followup.js";
 import {
   readDescendantSubagentFallbackReply,
+  waitForDescendantSubagentResult,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.runtime.js";
 
@@ -261,11 +261,12 @@ describe("dispatchCronDelivery", () => {
       status: undefined,
       pendingEntry: null,
     });
-    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockReset().mockResolvedValue(false);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(waitForDescendantSubagentResult).mockReset().mockResolvedValue({});
     vi.mocked(retireSessionMcpRuntime).mockResolvedValue(true);
     bindOutboundSessionEntryMock.mockResolvedValue({});
     readSessionEntryInWorkerMock.mockResolvedValue({
@@ -435,32 +436,24 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliveryError).toBe("cron descendants completed without a final reply");
   });
 
-  it.each([["active threaded best-effort", true, "42", true]] as const)(
+  it.each([["threaded best-effort", "42", true]] as const)(
     "delivers %s accepted child results without parent text",
-    async (_name, activeDescendants, threadId, deliveryBestEffort) => {
+    async (_name, threadId, deliveryBestEffort) => {
       const childReply = "AUTOMATION_FAILED\nNo shell tool is available in this run.";
-      if (activeDescendants) {
-        vi.mocked(hasUnsettledCronDescendants)
-          .mockResolvedValueOnce(true)
-          .mockResolvedValueOnce(false);
-      }
       const params = emptyParams(true, deliveryBestEffort);
       params.agentSessionKey = "agent:main:cron:daily-monitor";
       params.runSessionKey = "agent:main:cron:daily-monitor:run:test-session-id";
-      vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async ({ sessionKey }) =>
-        sessionKey === params.runSessionKey ? childReply : undefined,
-      );
+      vi.mocked(waitForDescendantSubagentResult).mockResolvedValue({ reply: childReply });
       params.resolvedDelivery = makeResolvedDelivery({ threadId });
 
       const state = await dispatchCronDelivery(params);
 
-      expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(activeDescendants ? 1 : 0);
-      expect(hasUnsettledCronDescendants).toHaveBeenCalledWith(params.runSessionKey);
-      expect(hasUnsettledCronDescendants).not.toHaveBeenCalledWith(params.agentSessionKey);
-      expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
-        sessionKey: params.runSessionKey,
-        runStartedAt: params.runStartedAt,
-      });
+      expect(waitForDescendantSubagentResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: params.runSessionKey,
+          runStartedAt: params.runStartedAt,
+        }),
+      );
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
       expectDeliveryCall(0, {
         channel: "telegram",
@@ -487,7 +480,9 @@ describe("dispatchCronDelivery", () => {
       error: "cron child-session handoff completed without a final assistant payload",
     },
   ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
-    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
+    vi.mocked(waitForDescendantSubagentResult).mockResolvedValue(
+      activeDescendants > 0 ? undefined : {},
+    );
     const params = emptyParams(true);
 
     const state = await dispatchCronDelivery(params);
@@ -500,7 +495,7 @@ describe("dispatchCronDelivery", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  describe("spawn-only handoff without delivery", () => {
+  describe("spawn-only handoff settlement", () => {
     const childReply = "[blocked] Unable to execute the command: no shell tool.";
     let runStartedAt = 0;
 
@@ -509,8 +504,10 @@ describe("dispatchCronDelivery", () => {
       // Production wait timings (5 s synthesis grace) under fake time.
       vi.stubEnv("OPENCLAW_TEST_FAST", "0");
       runStartedAt = Date.now();
-      // Announce settlement runs for real too, so a no-delivery run routed through it
-      // shows its parent-synthesis wait and dropped silence.
+      // Use production settlement; only registry and Gateway I/O are fixed.
+      vi.mocked(waitForDescendantSubagentResult).mockImplementation(
+        realFollowup.waitForDescendantSubagentResult,
+      );
       vi.mocked(waitForDescendantSubagentSummary).mockImplementation(
         realFollowup.waitForDescendantSubagentSummary,
       );
@@ -569,37 +566,44 @@ describe("dispatchCronDelivery", () => {
       return await state;
     }
 
-    it.each(["visible", "silent"] as const)(
-      "records a settled %s child without delivery",
-      async (kind) => {
-        const params = spawnOnlyJob({ mode: "none" });
-        const reply = childReply;
-        childSettlesAt(
-          kind === "visible" ? params.timeoutMs - 3_000 : 1_000,
-          kind === "silent"
-            ? { disposition: "silent" }
-            : {
-                disposition: "visible",
-                text: reply,
-              },
-        );
+    it.each([
+      ["none", "visible"],
+      ["none", "silent"],
+      ["announce", "silent"],
+    ] as const)("records a settled %s / %s child", async (mode, kind) => {
+      const params = spawnOnlyJob({ mode });
+      const reply = childReply;
+      childSettlesAt(
+        kind === "visible" ? params.timeoutMs - 3_000 : 1_000,
+        kind === "silent"
+          ? { disposition: "silent" }
+          : {
+              disposition: "visible",
+              text: reply,
+            },
+      );
 
-        const state = await dispatchUntilWatchdog(params);
+      const state = await dispatchUntilWatchdog(params);
 
-        expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-        if (kind === "silent") {
-          expect(state.summary).toBeUndefined();
-        } else {
-          expect(state).toMatchObject({
-            outputText: reply,
-            summary: reply,
-            deliveryState: { status: "not-requested" },
-          });
-        }
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      if (kind === "silent") {
+        expect(state.summary).toBeUndefined();
+      } else {
         expect(state.disposition).toBeUndefined();
-        expectSessionDeleted();
-      },
-    );
+        expect(state).toMatchObject({
+          outputText: reply,
+          summary: reply,
+          deliveryState: { status: "not-requested" },
+        });
+      }
+      if (mode === "announce") {
+        expect(state.disposition).toMatchObject({ kind: "suppressed" });
+        expect(state.deliverySuppressionReason).toBe("silent");
+      } else {
+        expect(state.disposition).toBeUndefined();
+      }
+      expectSessionDeleted();
+    });
 
     it.each([
       {

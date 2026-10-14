@@ -50,7 +50,11 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       }
       runtime.gcDurationHistogram.record(
         evt.durationMs,
-        { "openclaw.gc.kind": evt.kind ?? "unknown", "openclaw.gc.thread": evt.thread ?? "main" },
+        {
+          "openclaw.gc.kind": evt.kind ?? "unknown",
+          "openclaw.gc.thread": evt.thread ?? "main",
+          ...(evt.workerSlot === undefined ? {} : { "openclaw.gc.worker_slot": evt.workerSlot }),
+        },
         ROOT_CONTEXT,
       );
     },

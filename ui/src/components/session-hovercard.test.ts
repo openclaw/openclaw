@@ -299,6 +299,9 @@ describe("session hovercard", () => {
       const container = renderCard({
         row: row({ createdActor: undefined, workContext: undefined, ...facts }),
         automationLink: {
+          gateway: null,
+          sessionKey: "agent:main:work",
+          agentId: "main",
           href: "/automations?session=agent%3Amain%3Awork&agent=main",
           navigate: vi.fn(),
         },
@@ -322,7 +325,13 @@ describe("session hovercard", () => {
     const href = "/control/automations?session=agent%3Aops%3Anight+watch&agent=ops";
     const container = renderCard({
       row: row({ hasAutomation: true }),
-      automationLink: { href, navigate },
+      automationLink: {
+        href,
+        navigate,
+        gateway: null,
+        sessionKey: "agent:ops:night watch",
+        agentId: "ops",
+      },
     });
     const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__automation-link")!;
     expect(link?.getAttribute("href")).toBe(href);
@@ -333,6 +342,9 @@ describe("session hovercard", () => {
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     link.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    const open = container.querySelector<HTMLAnchorElement>(".session-hovercard__automation-open")!;
+    open.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(navigate).toHaveBeenCalledExactlyOnceWith();
   });
 
