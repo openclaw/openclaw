@@ -115,11 +115,13 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("revokes a borrowed encrypted flow before a paused guard reaches the replaced relay", async () => {
+    const guardEntered = createDeferred<void>();
     const guardPaused = createDeferred<void>();
     const firstAuthority = createReefRuntimeAuthority();
     const classifier = {
       ...guard(allow),
       classify: vi.fn(async () => {
+        guardEntered.resolve();
         await guardPaused.promise;
         return allow;
       }),
@@ -144,7 +146,8 @@ describe("reefOutboundAdapter", () => {
     });
     firstAuthority.activate({ flow, friends: {}, reviews: {} } as never);
     const stale = reefMessageAdapter.send.text({ cfg: {}, to: "reef:alice", text: "stale" });
-    await vi.waitFor(() => expect(classifier.classify).toHaveBeenCalledOnce());
+    await Promise.race([guardEntered.promise, stale]);
+    expect(classifier.classify).toHaveBeenCalledOnce();
 
     const replacementAuthority = createReefRuntimeAuthority();
     const replacement = { flow: {}, friends: {}, reviews: {} } as never;
