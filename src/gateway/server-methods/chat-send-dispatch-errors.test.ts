@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -693,69 +694,77 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   );
 
-  it("keeps a signal-only dispatch rejection as an error without an explicit abort", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("restart interrupted dispatch"));
-    const chatRunState = createChatRunState();
-    const dedupe = new Map();
-    const broadcast = vi.fn();
-    const lifecycle = createChatSendDispatchErrorLifecycle({
-      admission: {
-        sessionBinding: {
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          agentId: "main",
+  it.each([false, true])(
+    "classifies dispatch authority failure from typed restart=%s",
+    async (restart) => {
+      const controller = new AbortController();
+      controller.abort(
+        restart ? createAgentRunRestartAbortError() : new Error("restart interrupted dispatch"),
+      );
+      const chatRunState = createChatRunState();
+      const dedupe = new Map();
+      const broadcast = vi.fn();
+      const lifecycle = createChatSendDispatchErrorLifecycle({
+        admission: {
+          sessionBinding: {
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: "test-generation",
+          },
+          activeRunAbort: {
+            cleanup: vi.fn(),
+            controller,
+            entry: undefined,
+            registered: true,
+          } as never,
+          cleanupAdmittedRun: vi.fn(),
           lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
         },
-        activeRunAbort: {
-          cleanup: vi.fn(),
-          controller,
-          entry: undefined,
-          registered: true,
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState,
+          dedupe,
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
         } as never,
-        cleanupAdmittedRun: vi.fn(),
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState,
-        dedupe,
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(),
-      } as never,
-      isQueuedFollowupEnqueued: () => false,
-      isAgentRunStarted: () => false,
-      persistUserTurnTranscript: vi.fn(),
-      session: {
-        agentId: "main",
-        backingSessionId: "sess-main",
-        cfg: {},
-        clientRunId: "signal-only-dispatch-rejection",
-        now: 1,
-        rawSessionKey: "agent:main:main",
-        sessionKey: "agent:main:main",
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-      userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
-    });
+        isQueuedFollowupEnqueued: () => false,
+        isAgentRunStarted: () => false,
+        persistUserTurnTranscript: vi.fn(),
+        session: {
+          agentId: "main",
+          backingSessionId: "sess-main",
+          cfg: {},
+          clientRunId: "signal-only-dispatch-rejection",
+          now: 1,
+          rawSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+        userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
+      });
 
-    await lifecycle.handleError(new Error("dispatch rejected after restart"));
-    await lifecycle.finalize();
+      await lifecycle.handleError(new Error("operator source authority is no longer active"));
+      await lifecycle.finalize();
 
-    expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
-      ok: false,
-      payload: { runId: "signal-only-dispatch-rejection", status: "error" },
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId: "signal-only-dispatch-rejection", state: "error" }),
-      { sessionKeys: ["agent:main:main"] },
-    );
-  });
+      expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
+        ok: restart,
+        payload: { runId: "signal-only-dispatch-rejection", status: restart ? "timeout" : "error" },
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "signal-only-dispatch-rejection",
+          state: restart ? "aborted" : "error",
+        }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+    },
+  );
 
   it.each([true, false])(
     "does not overwrite a lifecycle terminal after persistence success=%s",
