@@ -225,10 +225,6 @@ function StreamingMessage(props: {
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
-export function renderSolidStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  return <StreamGroup parts={parts} options={opts} />;
-}
-
 export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGroupOptions }) {
   const starts = () =>
     props.parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
@@ -422,13 +418,6 @@ function WorkGroupSummaryBody(props: {
 }
 
 /** Completed work keeps elapsed time and outcomes above the expandable narration. */
-export function renderSolidWorkGroupSummary(
-  item: WorkGroupSummaryItem,
-  options: WorkGroupSummaryOptions,
-) {
-  return <WorkGroupSummary item={item} options={options} />;
-}
-
 export function WorkGroupSummary(props: {
   item: WorkGroupSummaryItem;
   options: WorkGroupSummaryOptions;

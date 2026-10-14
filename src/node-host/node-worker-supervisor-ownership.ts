@@ -28,7 +28,7 @@ export const NODE_WORKER_FORCE_STOP_WAIT_MS = 4_000;
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
 
-export type NodeWorkerLaunchRecovery = (
+type NodeWorkerLaunchRecovery = (
   receipt: NodeWorkerLaunchReceipt,
   notifyCapacity?: boolean,
   state?: NodeWorkerStopState,

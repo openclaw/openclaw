@@ -22,12 +22,14 @@ import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.j
 import type { GatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
+import type * as SetupExecution from "./system-agent-execution.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { wizardHandlers } from "./wizard.js";
 
 const hooks = vi.hoisted(() => ({
   login: vi.fn(),
   choice: vi.fn(),
+  activate: vi.fn<typeof SetupExecution.activateGatewaySetupInference>(),
   admission: vi.fn(),
   writeConfig: vi.fn<typeof import("../../commands/models/shared.js").updateConfig>(),
 }));
@@ -41,6 +43,10 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
     const choice = hooks.choice();
     return choice ? [choice] : [];
   },
+}));
+vi.mock("./system-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof SetupExecution>()),
+  activateGatewaySetupInference: hooks.activate,
 }));
 vi.mock("../../wizard/setup.migration-snapshot.js", () => ({
   SetupTargetLockedError: class extends Error {},
@@ -155,7 +161,7 @@ describe("models.authLogin ownership", () => {
   });
 
   it.each([
-    { ...choice, credentialOnly: false },
+    { ...choice, credentialOnly: false, appGuidedAuth: undefined },
     { ...choice, pluginId: "replacement" },
   ])("rejects an unavailable choice before login", async (unavailable) => {
     const h = harness();
@@ -189,25 +195,40 @@ describe("models.authLogin ownership", () => {
     expect(h.tracker.wizardSessions.size).toBe(0);
   });
 
-  it("acknowledges start before the provider produces any prompt", async () => {
-    const h = harness();
-    const finish = createDeferred();
-    hooks.login.mockImplementation(async () => {
-      await finish.promise;
-      return result;
-    });
-    try {
-      const respond = await h.start();
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { sessionId: "login", done: false, status: "running" },
-        undefined,
-      );
-      expect(h.tracker.wizardSessions.get("login")?.getStatus()).toBe("running");
-    } finally {
-      finish.resolve();
-    }
-  });
+  it.each([true, false])(
+    "dispatches login without waiting for a provider prompt (credentialOnly: %s)",
+    async (credentialOnly) => {
+      const h = harness();
+      const finish = createDeferred();
+      hooks.choice.mockReturnValue({ ...choice, credentialOnly });
+      hooks.login.mockImplementation(async () => {
+        await finish.promise;
+        return result;
+      });
+      hooks.activate.mockImplementation(async () => {
+        await finish.promise;
+        return { ok: true, modelRef: "fixture/model", latencyMs: 1, lines: [] };
+      });
+      try {
+        const respond = await h.start();
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { sessionId: "login", done: false, status: "running" },
+          undefined,
+        );
+        expect(h.tracker.wizardSessions.get("login")?.getStatus()).toBe("running");
+        expect(hooks.login).toHaveBeenCalledTimes(credentialOnly ? 1 : 0);
+        expect(hooks.activate).toHaveBeenCalledTimes(credentialOnly ? 0 : 1);
+        if (!credentialOnly) {
+          expect(hooks.activate).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "provider-auth", authChoice: "fixture-device" }),
+          );
+        }
+      } finally {
+        finish.resolve();
+      }
+    },
+  );
 
   it("returns the recovery message without the error class name through wizard.next", async () => {
     hooks.login.mockRejectedValueOnce(
