@@ -10,8 +10,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as avatarFile from "../agents/identity-avatar-file.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  stageSessionPendingInput,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -334,8 +338,26 @@ describe("saved message attachment response authority", () => {
       },
       {
         type: "message",
-        id: "text-only",
+        id: "legacy-media",
         parentId: "ordinary",
+        message: {
+          role: "assistant",
+          content: `Saved report\nMEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+        },
+      },
+      {
+        type: "message",
+        id: "user-directive",
+        parentId: "legacy-media",
+        message: {
+          role: "user",
+          content: `MEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+        },
+      },
+      {
+        type: "message",
+        id: "text-only",
+        parentId: "user-directive",
         message: {
           role: "user",
           content: source,
@@ -409,6 +431,7 @@ describe("saved message attachment response authority", () => {
     await fs.mkdir(state.statePath("media", "inbound"), { recursive: true });
     await fs.writeFile(state.statePath("media", "inbound", "selection-comment.txt"), text);
     await fs.writeFile(state.statePath("media", "inbound", "notes.txt"), "Ordinary attachment");
+    await fs.writeFile(path.join(state.workspaceDir, "report.txt"), "Saved assistant report");
     listener = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
@@ -540,6 +563,69 @@ describe("saved message attachment response authority", () => {
       expect((await request({ source: escapingSource })).status).toBe(404);
     } finally {
       await seed();
+    }
+  });
+
+  it("reads saved assistant media directives without treating user text as an attachment", async () => {
+    const query = {
+      source: path.join(state.workspaceDir, "report.txt"),
+      messageId: "legacy-media",
+    };
+    const mediaTicket = await metadata(query);
+    const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Saved assistant report");
+    expect((await request({ ...query, messageId: "user-directive", meta: "1" })).status).toBe(404);
+  });
+
+  it("reads queued and stopped inputs and withholds bytes after their attachment is withdrawn", async () => {
+    for (const stopped of [false, true]) {
+      const runId = `attachment-pending-${stopped}`;
+      const receipt = await stageSessionPendingInput(scope, {
+        runId,
+        assertCurrent: () => {},
+        message: {
+          role: "user",
+          content: "Saved pending comment",
+          timestamp: 1,
+          idempotencyKey: `${runId}:user`,
+          __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
+        },
+      });
+      expect(receipt).toBeDefined();
+      try {
+        if (stopped) {
+          receipt!.finish("cancelled");
+          await receipt!.settled?.();
+        }
+        const query = { messageId: `pending:${receipt!.inputId}` };
+        const mediaTicket = await metadata(query);
+        const preview = await request({ ...query, mediaTicket }, { ticketOnly: true });
+        expect(preview.status).toBe(200);
+        expect(await preview.text()).toBe(text);
+        const file = state.statePath("media", "inbound", "selection-comment.txt");
+        const open = fs.open;
+        let withdrawn = false;
+        const spy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+          const handle = await open(filePath, flags, mode);
+          if (filePath === file && !withdrawn) {
+            withdrawn = await discardSessionPendingInput(scope, runId, () => {});
+          }
+          return handle;
+        });
+        try {
+          const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
+          expect(withdrawn).toBe(true);
+          expect(response.status).toBe(404);
+          expect(await response.text()).not.toContain(text);
+          expect((await request({ ...query, meta: "1" })).status).toBe(404);
+        } finally {
+          spy.mockRestore();
+        }
+      } finally {
+        receipt!.finish("cancelled");
+        await receipt!.settled?.();
+      }
     }
   });
 
