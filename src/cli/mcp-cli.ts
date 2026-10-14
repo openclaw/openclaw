@@ -361,6 +361,7 @@ async function commandExists(
 async function collectMcpDoctorIssues(params: {
   name: string;
   server: Record<string, unknown>;
+  authoredServer?: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
 }): Promise<McpDoctorIssue[]> {
@@ -425,8 +426,8 @@ async function collectMcpDoctorIssues(params: {
     }
   }
   for (const [field, values] of [
-    ["headers", asRecord(server.headers)],
-    ["env", asRecord(server.env)],
+    ["headers", asRecord(params.authoredServer?.headers)],
+    ["env", asRecord(params.authoredServer?.env)],
   ] as const) {
     for (const [key, value] of Object.entries(values ?? {})) {
       if (hasSensitiveKey(key) && hasLiteralSensitiveValue(value)) {
@@ -898,6 +899,7 @@ export function registerMcpCli(program: Command) {
             const issues = await collectMcpDoctorIssues({
               name: serverName,
               server,
+              authoredServer: loaded.authoredConfig?.mcp?.servers?.[serverName],
               config: loaded.config,
               probe: Boolean(opts.probe),
             });

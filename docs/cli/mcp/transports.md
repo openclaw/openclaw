@@ -81,6 +81,8 @@ Example:
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
 
+Doctor checks the authored values, including values from `$include` files, before environment substitution. A `${MCP_TOKEN}` reference does not trigger the literal-value warning when the variable is set. Connection probes still use the resolved values.
+
 If a legacy SSE message endpoint returns HTTP 404, or a stateful Streamable HTTP
 session expires, OpenClaw retires that connection and reconnects on the next
 discovery. The failed call is reported without replaying it, because a tool may
