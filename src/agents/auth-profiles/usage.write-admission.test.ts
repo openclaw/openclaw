@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -19,6 +22,7 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -667,4 +671,100 @@ it("keeps the explicit auth stateDir override ahead of ambient owner paths", asy
       expect(fs.existsSync(ambientRoot)).toBe(false);
     },
   );
+});
+
+it("commits a competing write while a busy host delays initial auth usage admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {}, voice: {} } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    writeConfigMachineState(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { location: "state-db" },
+      { env: state.env },
+    );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+    const store = createStore();
+    saveAuthProfileStore(store, undefined, saveOptions);
+    setRuntimeAuthProfileStoreSnapshot(store);
+    const dbPath = resolveOpenClawStateSqlitePath();
+    const HOST_BUSY_MS = 800;
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    // The competing writer runs on its own thread so it can write while the host main thread is busy.
+    const competitor = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(workerData.path);
+      db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
+      const gate = new Int32Array(workerData.gate);
+      Atomics.wait(gate, 0, 0);
+      const start = Date.now();
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
+        db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
+        db.exec("COMMIT");
+        parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
+      } catch (error) {
+        parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
+      } finally {
+        db.close();
+      }
+    `,
+      {
+        eval: true,
+        workerData: { path: dbPath, busyTimeoutMs: 200, gate: gate.buffer },
+      },
+    );
+    const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((resolve) => {
+      competitor.once("message", resolve);
+    });
+    const trace: string[] = [];
+    let delayedOnce = false;
+    // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering the first
+    // usage admission, and run the competing write inside that busy window.
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction" && !delayedOnce) {
+        delayedOnce = true;
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
+        trace.push(`initial usage admission answered after ${HOST_BUSY_MS}ms of host delay`);
+      }
+      admit(request, grant);
+    });
+    try {
+      // Start the usage write without awaiting so the host can block inside its admission.
+      const recording = withAuthProfileUsage(store, profileId, undefined, ({ record }) =>
+        record({
+          kind: "failure",
+          expectedProfile: store.profiles[profileId],
+          observedAt: Date.now(),
+          reason: "auth",
+          whamResult: null,
+          probeEligible: false,
+        }),
+      );
+      const outcome = await competing;
+      trace.push(
+        `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
+          (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
+      );
+      await recording;
+      const persisted = loadPersistedAuthProfileStore();
+      trace.push(
+        `usage persisted after admission resumed: ${
+          persisted?.usageStats?.[profileId]?.errorCount === 1
+        }`,
+      );
+      console.log(`[busy-host usage proof]\n${trace.join("\n")}`);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
+      expect(persisted?.usageStats?.[profileId]?.errorCount).toBe(1);
+      expect(store.usageStats?.[profileId]?.errorCount).toBe(1);
+    } finally {
+      await competitor.terminate();
+    }
+  });
 });

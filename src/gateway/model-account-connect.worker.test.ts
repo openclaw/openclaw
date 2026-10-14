@@ -607,3 +607,89 @@ it("does not replay a committed account mutation whose worker reply is lost", ()
       emitted.mockRestore();
     }
   }));
+
+it("commits a competing write while a busy host delays initial account admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("busy-host-account@example.test").id;
+    const dbPath = resolveOpenClawStateSqlitePath();
+    const HOST_BUSY_MS = 800;
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    // The competing writer runs on its own thread so it can write while the host main thread is busy.
+    const competitor = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(workerData.path);
+      db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
+      const gate = new Int32Array(workerData.gate);
+      Atomics.wait(gate, 0, 0);
+      const start = Date.now();
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
+        db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
+        db.exec("COMMIT");
+        parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
+      } catch (error) {
+        parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
+      } finally {
+        db.close();
+      }
+    `,
+      {
+        eval: true,
+        workerData: { path: dbPath, busyTimeoutMs: 200, gate: gate.buffer },
+      },
+    );
+    const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((resolve) => {
+      competitor.once("message", resolve);
+    });
+    const trace: string[] = [];
+    let delayedOnce = false;
+    // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering the first
+    // account-link admission, and run the competing write inside that busy window.
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "transaction" &&
+        isRecord(request.facts) &&
+        request.facts.kind === "model-account-links" &&
+        !delayedOnce
+      ) {
+        delayedOnce = true;
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
+        trace.push(`initial account admission answered after ${HOST_BUSY_MS}ms of host delay`);
+      }
+      admit(request, grant);
+    });
+    try {
+      // Start the account connect without awaiting so the host can block inside its admission.
+      const connecting = connectUserModelAccountAsync({
+        ownerProfileId: owner,
+        credential,
+        ...authority,
+      });
+      const outcome = await competing;
+      trace.push(
+        `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
+          (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
+      );
+      const { authProfileId } = await connecting;
+      const stored = readUserModelAuthProfile(authProfileId);
+      trace.push(
+        `account persisted after admission resumed: ${stored?.credential.provider === "synthetic"}`,
+      );
+      console.log(`[busy-host account proof]\n${trace.join("\n")}`);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
+      expect(stored?.credential.provider).toBe("synthetic");
+      expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toContainEqual(
+        expect.objectContaining({ authProfileId }),
+      );
+    } finally {
+      await competitor.terminate();
+    }
+  });
+});

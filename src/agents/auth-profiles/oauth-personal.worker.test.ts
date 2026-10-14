@@ -14,6 +14,8 @@ import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withPersonalCredentialPublication } from "../../state/user-model-account-authority.js";
@@ -43,6 +45,7 @@ import {
 } from "./oauth-native-provider.test-support.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
+import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { reconcileWhamBlock, type WhamCooldownProbeResult } from "./usage-reduction.js";
 
@@ -631,3 +634,97 @@ it.for(["unacknowledged", "acknowledged"] as const)(
     }
   },
 );
+
+it("commits a competing write while a busy host delays initial auth authorization enrollment", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { profileId } = fixture();
+    const databasePath = resolveOpenClawStateSqlitePath();
+    const context = captureOpenClawStateWorkerContext();
+    // Enrollment is a CAS against the persisted auth store; carry the exact current snapshot.
+    const expected = runOpenClawStateWriteTransaction(
+      ({ db }) => inspectAuthProfileJsonCell(db, "store", "shared-state"),
+      {},
+    );
+    const HOST_BUSY_MS = 800;
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    // The competing writer runs on its own thread so it can write while the host main thread is busy.
+    const competitor = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(workerData.path);
+      db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
+      const gate = new Int32Array(workerData.gate);
+      Atomics.wait(gate, 0, 0);
+      const start = Date.now();
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
+        db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
+        db.exec("COMMIT");
+        parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
+      } catch (error) {
+        parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
+      } finally {
+        db.close();
+      }
+    `,
+      {
+        eval: true,
+        workerData: { path: databasePath, busyTimeoutMs: 200, gate: gate.buffer },
+      },
+    );
+    const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((done) => {
+      competitor.once("message", done);
+    });
+    const trace: string[] = [];
+    let delayedOnce = false;
+    // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering the first
+    // enrollment admission, and run the competing write inside that busy window.
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction" && !delayedOnce) {
+        delayedOnce = true;
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
+        trace.push(`initial enrollment admission answered after ${HOST_BUSY_MS}ms of host delay`);
+      }
+      admit(request, grant);
+    });
+    try {
+      // Start the enrollment without awaiting so the host can block inside its admission.
+      const enrolling = workerStore.runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          scope.execute({
+            type: "authProfiles.enrollAuthorization",
+            input: { profileId, expected },
+          }),
+        {
+          assertCurrent: () => {},
+          createAdmission: createSqliteWorkerWriteAdmission(() => {}, [databasePath]),
+        },
+      );
+      const outcome = await competing;
+      trace.push(
+        `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
+          (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
+      );
+      const enrolled = await enrolling;
+      const persisted = runOpenClawStateWriteTransaction(
+        ({ db }) => inspectAuthProfileJsonCell(db, "store", "shared-state"),
+        {},
+      );
+      trace.push(
+        `authorization persisted after admission resumed: ${persisted.status === "readable"}`,
+      );
+      console.log(`[busy-host enrollment proof]\n${trace.join("\n")}`);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
+      expect(persisted).toEqual({ status: "readable", raw: enrolled.raw });
+    } finally {
+      await competitor.terminate();
+    }
+  });
+});
