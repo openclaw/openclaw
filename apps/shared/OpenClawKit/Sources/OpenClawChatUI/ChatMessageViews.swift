@@ -292,7 +292,6 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
@@ -335,7 +334,7 @@ struct ChatMessageBubble: View {
                 .padding(.horizontal, 2)
         } else {
             HStack(alignment: .top, spacing: 8) {
-                if self.showsAssistantAvatar, !self.isRunContent {
+                if self.showsAssistantAvatar {
                     ChatAgentAvatar(
                         text: self.assistantAvatarText,
                         name: self.assistantName,
@@ -352,7 +351,7 @@ struct ChatMessageBubble: View {
                     .accessibilityIdentifier("chat-assistant-message-body")
                     .assistantSpeakerLabel(
                         self.assistantName,
-                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
+                        avatarHidden: !self.showsAssistantAvatar)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -583,7 +582,7 @@ extension ChatMessageBubble {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
         if self.isUser { return true }
-        return !self.isRunContent && (self.style == .onboarding || !self.isClean || self.assistantBubblesInClean)
+        return self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
     }
 
     private var shouldRenderBubble: Bool {
@@ -844,7 +843,6 @@ private struct AttachmentRow: View {
 
 @MainActor
 struct ChatTypingIndicatorBubble: View {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let style: OpenClawChatView.Style
     let assistantName: String?
     let assistantAvatarText: String?
@@ -857,7 +855,7 @@ struct ChatTypingIndicatorBubble: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            if self.showsAssistantAvatar, !self.isRunContent {
+            if self.showsAssistantAvatar {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -1022,7 +1020,6 @@ extension EnvironmentValues {
 // swiftformat:enable environmentEntry
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
 
@@ -1031,7 +1028,7 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         Group {
-            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+            if self.isClean, !self.bubblesInClean {
                 content
             } else {
                 content
@@ -1080,7 +1077,6 @@ struct ChatStreamingAssistantText {
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -1094,7 +1090,7 @@ struct ChatStreamingAssistantBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if self.showsAssistantAvatar, !self.isRunContent {
+            if self.showsAssistantAvatar {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -1117,7 +1113,7 @@ struct ChatStreamingAssistantBubble: View {
             .accessibilityIdentifier("chat-streaming-assistant-body")
             .assistantSpeakerLabel(
                 self.assistantName,
-                avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
+                avatarHidden: !self.showsAssistantAvatar)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
