@@ -50,8 +50,9 @@ describe("immutable plain data", () => {
       new Date(),
       new Map(),
       () => 1,
-      new Proxy({}, { getPrototypeOf: proxyTrap, ownKeys: proxyTrap }),
+      new Proxy({}, { getPrototypeOf: proxyTrap, ownKeys: proxyTrap, isExtensible: proxyTrap }),
     ]) {
+      expect(isDeeplyFrozenPlainData(opaque)).toBe(false);
       const snapshot = { child: { opaque }, valid: { value: 1 } };
       freezeJsonSnapshot(snapshot);
       expect(Object.isFrozen(snapshot.valid)).toBe(true);
