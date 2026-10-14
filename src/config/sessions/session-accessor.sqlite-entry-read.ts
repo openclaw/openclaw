@@ -390,6 +390,7 @@ export function prepareExactSessionEntryRowReads(
     includeBoardPresence?: boolean;
     includeMembership?: boolean;
     includeWindowFacts?: true;
+    includeRowTranscriptProjection?: true;
     /** Commit receipts retain canonical metadata but withhold failed display projections. */
     onParticipantProjectionError?: (sessionKey: string) => void;
     projectParticipants?: false;
@@ -398,6 +399,7 @@ export function prepareExactSessionEntryRowReads(
   const actor = readSessionActorTransactionState(database);
   if (
     actor &&
+    !options?.includeRowTranscriptProjection &&
     projection !== "delivery" &&
     sessionKeys.every(
       (key) =>
@@ -438,6 +440,7 @@ export function prepareExactSessionEntryRowReads(
         options?.includeBoardPresence ||
         options?.includeMembership ||
         options?.includeWindowFacts ||
+        options?.includeRowTranscriptProjection ||
         options?.onParticipantProjectionError ||
         options?.projectParticipants === false
       ) {

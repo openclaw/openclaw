@@ -193,7 +193,10 @@ export function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
-  options: { deferParticipants?: true } = {},
+  options: {
+    deferParticipants?: true;
+    captureCronRunUpdatedAt?: (oldestUpdatedAt: number | null) => void;
+  } = {},
 ): SessionEntrySummary[] {
   captureListingSource(database, scope);
   const deferParticipants =
@@ -210,14 +213,20 @@ export function listSqliteSessionEntriesFromDatabase(
         });
         // Sibling metadata and participants still cross complete listing validation.
         const entries = Array.from(iterateSessionEntriesForListing(snapshot));
-        const selected = entries.filter(
-          ({ sessionKey, entry }) =>
-            isCronRunSessionKey(sessionKey) &&
-            (scope.cronRetention ||
-              (expired !== undefined &&
-                normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
-                !((entry.updatedAt ?? 0) >= expired.updatedBefore))),
-        );
+        let oldestUpdatedAt: number | null = null;
+        const selected = entries.filter(({ sessionKey, entry }) => {
+          if (
+            !isCronRunSessionKey(sessionKey) ||
+            (expired &&
+              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) !== requestedOwner)
+          ) {
+            return false;
+          }
+          const updatedAt = entry.updatedAt ?? 0;
+          oldestUpdatedAt = Math.min(oldestUpdatedAt ?? updatedAt, updatedAt);
+          return !expired || updatedAt < expired.updatedBefore;
+        });
+        options.captureCronRunUpdatedAt?.(oldestUpdatedAt);
         // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
         const rows = selected.length
           ? executeSqliteQuerySync(

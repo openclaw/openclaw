@@ -153,6 +153,12 @@ cascade, while windows transferred to a surviving session retain their scopes.
 Shared retirement flags remove those scopes and exited workers' reference cells
 from later admission snapshots; stale transfers cannot restore them. Recreated
 scope keys receive a fresh receipt identity, so old cached reads remain invalid.
+Worker exit invalidates row receipts only for databases that worker still had
+open; retiring an unrelated idle worker preserves session and auth caches.
+Native close settles receipts before releasing its reference, so a later worker
+failure does not invalidate those committed facts again.
+Canonical validation compares admitted catalog facts with the pending-table DDL
+from the schema source; fresh workers do not bootstrap a comparison database.
 Receipt metadata follows retained session scopes rather than all deleted sessions;
 reads of absent keys can still register a scope. Replacement files still require
 admission through the same owner. Schemas, stored data, and update behavior are
@@ -424,9 +430,15 @@ receipt dirty once. A healthy close without a completed checkpoint leaves that
 receipt dirty, while failed disposal revokes it and the final checkpointed closer
 can certify it. These changes do not alter database formats or update behavior.
 
-Optional session-preview backfill retains its completed transcript watermark
-across generic notifications. Canonical transcript writes advance or invalidate
-that watermark, so a notification alone does not repeat the bounded history read.
+Optional session-preview backfill stores bounded preview and terminal-model facts
+on `session_windows`. The existing cohort read joins this cache and its source
+watermarks; completed rows need no transcript reads on later boots. Canonical
+appends publish and persist these facts in their existing mutation statement.
+Rewrites and unknown projections invalidate them through the transcript timestamp
+or index position. The index position also catches older imports that append while
+preserving the supplied mtime. A cache miss uses one existing writer command to
+read a bounded tail and store its result, including an empty result. Unavailable
+or cold projections remain incomplete and are not marked as successfully backfilled.
 Usage-cost refresh reads a stale rollup body and its monthly partitions in one
 worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
@@ -439,8 +451,8 @@ inputs; subsequent reports see the newer cache. Canonical replay retains its
 checkpoint-bounded transcript reads and anchor comparison.
 Participant writers likewise reuse their committed projection-change decision:
 counter-only contributions skip the display-projection read, preserve committed
-display facts, and invalidate exact aggregate records. These changes do not alter stored
-formats, retention, or update behavior.
+display facts, and invalidate exact aggregate records. The preview cache uses
+nullable additive columns; canonical transcript bytes and retention are unchanged.
 
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader
@@ -3101,7 +3113,8 @@ later native handles check physical file identity and reuse those facts without
 schema-marker queries or canonical table, index, trigger, and integrity scans.
 Session generation and transcript-index trackers declare their fixed connection-local
 tables, indexes, and triggers to the schema owner, which checks existing TEMP names
-and shapes once at installation. Installing those declared TEMP tracking objects
+and shapes once at installation. That snapshot also skips drops for absent
+triggers on a fresh connection. Installing those declared TEMP tracking objects
 does not cause another validation of the physical database. The migration or repair owner publishes
 replacement facts for committed local DDL; rollback cannot publish uncommitted
 facts. Host-handle eviction preserves process admission and never falls back to
@@ -5268,21 +5281,20 @@ Dirty resident row refreshes also prepare ACP metadata in the shared-state read
 worker. Explicit absence travels with the row facts, so presentation does not
 repeat ACP lookups or their schema admission checks. ACP publications invalidate
 the existing row revision, and entry lifecycle matching still rejects stale
-runtime metadata. Optional preview and terminal-message facts use the retained
-history worker, with foreground priority and row-generation checks before
-publication. Ordinary active-message appends also carry a bounded preview in the
-existing committed transcript receipt. Resident rows publish it immediately,
-without waiting for the background queue or rereading the transcript. A newer
-receipt supersedes an older pending preview read. Actor commands carry this
-publication through native settlement before installing their full replica.
-Complete participant receipts update resident participants while retaining
-unaffected transcript, Board, and runtime facts; their display-only lifecycle
-notice does not schedule another database read. The same 64 KiB message bound
-applies; an oversized newest message clears the preview. Cold rows, rewrites,
-non-display messages, and fallback-model facts retain the bounded worker reader.
-The host evaluates fallback notices using its current runtime plugin aliases;
-configuration and model policy do not travel to the read worker. This changes no
-stored bytes, schema, durability, retention, or update behavior.
+runtime metadata. Optional preview and terminal-message facts reuse the durable
+cache during cohort hydration. Missing facts use bounded background work through
+the agent writer, with foreground priority and a session identity check before
+publication. Ordinary active-message appends carry preview and terminal-model facts
+in the existing committed transcript receipt and persist them in the same mutation
+statement. Resident rows publish them immediately; newer receipt facts supersede
+an older pending backfill. Actor commands carry this publication through native
+settlement before installing their full replica. Complete participant receipts
+retain unaffected transcript, Board, and runtime facts. Preview reads retain the
+64 KiB bound; terminal-model reads retain the 256 KiB bound. An oversized newest
+message cannot expose an older preview. The host evaluates fallback notices using
+its current runtime plugin aliases; configuration and model policy do not travel
+to the worker. The nullable cache is compatible with older writers and does not
+change canonical transcript data or retention.
 
 Targeted Memory transcript notifications queue session identities directly. The
 indexing owner resolves their corpus and forgetting tombstones once when the
@@ -5920,6 +5932,13 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Awaited metadata and compaction retain the database executor without opening a
+native handle on the Gateway thread. The worker prepares storage and publishes
+its physical identity; transcript and session-entry hooks use that identity for
+the existing commit receipts. Manager ordering, live write authority, and committed
+view adoption remain unchanged. Released synchronous persistence methods retain
+their separate native adapter.
 
 Transcript rewrite preparation and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do

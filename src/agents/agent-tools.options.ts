@@ -1,3 +1,4 @@
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -143,3 +144,17 @@ export type OpenClawCodingToolsOptions = {
   AgentRunClientContext &
   AgentRunMessageContext &
   AgentRunChannelContext;
+
+export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
+  /** The host owns continuation policy when this factory builds only part of its tool surface. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
+};
+
+export type PluginCodingToolsOptions = Omit<
+  OpenClawCodingToolsOptions,
+  | "sessionReadScopeKey"
+  | "onProgressCardPlanSaved"
+  | "authProfileStoreSource"
+  | "onWebSearchConfiguration"
+>;

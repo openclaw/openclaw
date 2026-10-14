@@ -114,7 +114,7 @@ suite.define(() => {
       const selectResearchAgent = async () => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Research", exact: true })
           .click();
       };
@@ -282,7 +282,7 @@ suite.define(() => {
         await capture("after-pagination");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Main", exact: true })
           .click();
         if (operation === "rename") {
@@ -305,7 +305,7 @@ suite.define(() => {
           .length;
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         const returnedList = await gateway.waitForRequest("sessions.list", {

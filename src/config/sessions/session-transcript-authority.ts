@@ -17,6 +17,7 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { advanceSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { isSessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -243,7 +244,10 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
-        typeof row.lastMessagePreview !== "string")
+        typeof row.lastMessagePreview !== "string") ||
+      (row.terminalModel !== undefined &&
+        row.terminalModel !== null &&
+        !isSessionTranscriptTerminalModel(row.terminalModel))
     ) {
       return false;
     }

@@ -354,6 +354,8 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
   // reconcile owner fills it without parsing payloads during schema open.
   ensureColumn(db, "session_transcript_active_events", "context_eligible INTEGER");
   ensureColumn(db, "session_nodes", "project_id TEXT");
+  ensureColumn(db, "session_windows", "row_transcript_json TEXT");
+  ensureColumn(db, "session_windows", "row_transcript_updated_at INTEGER");
   ensureColumn(db, "session_conversations", "route_context_json TEXT");
   if (
     tableExists(db, "session_conversations") &&
@@ -386,6 +388,13 @@ export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync
 export function hasPendingSessionProjectColumn(db: DatabaseSync): boolean {
   const columns = readSqliteTableColumns(db, "session_nodes");
   return Boolean(columns && !columns.has("project_id"));
+}
+
+export function hasPendingSessionRowTranscriptColumns(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_windows");
+  return Boolean(
+    columns && (!columns.has("row_transcript_json") || !columns.has("row_transcript_updated_at")),
+  );
 }
 
 export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {

@@ -55,8 +55,6 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
     default:

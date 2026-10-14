@@ -579,7 +579,7 @@ export function trackSqliteDatabaseAdmissionWorker(worker: {
   once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
-  worker.once("exit", (code) => state.registry.releaseWorker(owner, code));
+  worker.once("exit", () => state.registry.releaseWorker(owner));
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {

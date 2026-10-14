@@ -643,6 +643,28 @@ export async function loadConversationRegistryOperations() {
   } satisfies Handlers;
 }
 
+export async function loadSessionRowBackfillOperations() {
+  const [{ backfillSessionRowTranscriptFieldsInDatabase }, { withSqliteDatabaseWriteScope }] =
+    await Promise.all([
+      import("../gateway/session-row-transcript-backfill.worker.js"),
+      import("../infra/sqlite-database-admission.js"),
+    ]);
+  return {
+    "session.rowTranscript.backfill": (
+      input: Parameters<typeof backfillSessionRowTranscriptFieldsInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.rowTranscript.backfill", "Session row backfill", (database) => {
+        // Derived cache bytes do not invalidate transcript snapshots or session metadata.
+        const fields = withSqliteDatabaseWriteScope(database.db, [], () =>
+          backfillSessionRowTranscriptFieldsInDatabase(database, input),
+        );
+        admit("commit");
+        return fields;
+      }),
+  } satisfies Handlers;
+}
+
 export async function loadUsageCacheOperations() {
   const [
     { pruneSessionCostUsageRollupsInDatabase, writeSessionCostUsageRollupInDatabase },
@@ -678,7 +700,8 @@ export async function loadUsageCacheOperations() {
 }
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+  Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
+    Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &

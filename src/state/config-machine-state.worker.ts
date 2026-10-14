@@ -1,4 +1,5 @@
 import { loadOrCreateConfigRevisionKeyInDatabase } from "../gateway/config-revision-key.worker.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeConfigMachineStateKey } from "./config-machine-state-row.js";
 import { writeConfigMachineStateInDatabase } from "./config-machine-state-write.js";
@@ -23,10 +24,11 @@ export const machineStateOperations = {
         if (key !== "authProfiles.store") {
           return writeConfigMachineStateInDatabase(db, key, input.value);
         }
-        const { result, receipt } = authProfileCredentialPublication.capture(db, () =>
-          writeConfigMachineStateInDatabase(db, key, input.value),
+        const { result, receipt } = authProfileCredentialPublication.capture(
+          sqlPublicationAnchor(db),
+          () => writeConfigMachineStateInDatabase(db, key, input.value),
         );
-        deferSqliteWorkerCommitReceipt(db, {
+        deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), {
           authCredentials: authProfileCredentialPublication.bound(receipt),
         });
         return result;

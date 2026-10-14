@@ -134,7 +134,7 @@ export function createChannelNativeOriginTargetResolver<TTarget>(
   });
 }
 
-/** Create a resolver for configured approver DM targets. */
+/** @deprecated Use createChannelApproverDmTargetResolverAsync with awaited account eligibility. */
 export function createChannelApproverDmTargetResolver<
   TApprover,
   TTarget extends NativeApprovalTarget = NativeApprovalTarget,
@@ -149,6 +149,17 @@ export function createChannelApproverDmTargetResolver<
   /** Maps one approver record to a native DM target; nullish results are skipped. */
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;
 }) {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createChannelApproverDmTargetResolver",
+    replacement: "createChannelApproverDmTargetResolverAsync",
+  });
+  return createApproverDmTargetResolver<TApprover, TTarget>(params);
+}
+
+function createApproverDmTargetResolver<TApprover, TTarget extends NativeApprovalTarget>(
+  params: Parameters<typeof createChannelApproverDmTargetResolver<TApprover, TTarget>>[0],
+): (input: ApprovalResolverParams) => TTarget[] {
   return (input: ApprovalResolverParams): TTarget[] => {
     if (params.shouldHandleRequest && !params.shouldHandleRequest(input)) {
       return [];
@@ -238,7 +249,7 @@ export function createChannelApproverDmTargetResolverAsync<
   }) => readonly TApprover[];
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;
 }) {
-  const resolveTargets = createChannelApproverDmTargetResolver({
+  const resolveTargets = createApproverDmTargetResolver<TApprover, TTarget>({
     ...params,
     shouldHandleRequest: undefined,
   });

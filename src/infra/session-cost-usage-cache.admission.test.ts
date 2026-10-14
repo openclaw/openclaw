@@ -140,7 +140,14 @@ it.each(["rollup", "prune"] as const)(
         expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
           operation === "prune"
             ? []
-            : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
+            : [
+                {
+                  key: "session.jsonl",
+                  valueJson: '{"totalTokens":2}',
+                  updatedAt: 2,
+                  bodyBytes: 0,
+                },
+              ],
         );
       } finally {
         await lock?.release();
@@ -257,7 +264,7 @@ it.each([
             expect(rows.map((row) => row.key)).toEqual([sessionFile]);
           } else {
             expect(rows).toEqual([
-              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
             ]);
           }
         }
@@ -722,7 +729,7 @@ it.each([
         const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toEqual(written);
         expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
         ]);
       } finally {
         await lock.release();
@@ -760,7 +767,7 @@ it("acquires a current usage writer after its captured executor retires", async 
         entry.sessionId,
       );
       expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
       ]);
     } finally {
       await lock.release();
