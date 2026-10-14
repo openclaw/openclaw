@@ -129,7 +129,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
       status: initialStatus,
       reason,
       recoverable: true,
-      declined: interactive === true,
+      declined: interactive,
     };
   }
 
