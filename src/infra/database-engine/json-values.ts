@@ -24,8 +24,9 @@ export function jsonArrayFrom<O>(
   if (!isPostgresSqlConnection(db)) {
     return sqliteJsonArrayFrom(rows);
   }
+  const eb = expressionBuilder<{ agg: O }, "agg">();
   const order = orderBy.length
-    ? sql`order by ${sql.join(orderBy.map((key) => sql`${sql.ref(`agg.${key}`)} asc nulls first`))}`
+    ? sql`order by ${sql.join(orderBy.map((key) => sql`${eb.ref(`agg.${key}`)} asc nulls first`))}`
     : sql``;
   // Keep text at the driver boundary; callers perform their existing JSON validation.
   return /* kysely-allow-raw: Engine-owned ordered row aggregation. */ sql<
