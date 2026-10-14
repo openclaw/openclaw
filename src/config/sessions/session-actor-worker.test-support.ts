@@ -1,7 +1,10 @@
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -73,15 +76,19 @@ function createFixture() {
     admit?: AgentWorkerOperationContext["admit"];
     withCommit?: (commit: () => void) => void;
     afterTransaction?: () => void;
+    transactionOptions?: SqliteTransactionOptions;
     transactions: number;
   } = { transactions: 0 };
   const context: AgentWorkerOperationContext = {
     open: () => database,
     options: { agentId: "main", path: database.path },
     admit: (stage, facts) => hooks.admit?.(stage, facts),
-    writeTransaction(_label, _owner, write) {
+    writeTransaction(operationLabel, _owner, write, diagnosticContext) {
       hooks.transactions += 1;
       const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
+        ...hooks.transactionOptions,
+        operationLabel,
+        diagnosticContext,
         withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
       });
       hooks.afterTransaction?.();

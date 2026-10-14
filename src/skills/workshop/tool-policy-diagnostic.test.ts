@@ -137,11 +137,34 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     });
   });
 
-  it("names an explicit deny and its removal", () => {
-    expect(detect({ tools: { deny: ["skill_workshop"] } })).toMatchObject({
-      source: "tools.deny",
-      detail: 'tools.deny denies "skill_workshop".',
-      fix: 'Remove the matching "skill_workshop" deny entry from tools.deny.',
-    });
+  it.each([
+    { tools: { deny: ["skill_workshop"] } },
+    { tools: { profile: "minimal", deny: ["skill_*"] } },
+    { tools: { byProvider: { openai: { deny: ["group:agents"] } } } },
+    { agents: { entries: { main: { tools: { profile: "minimal", deny: ["group:agents"] } } } } },
+    {
+      agents: {
+        entries: {
+          main: { tools: { byProvider: { openai: { deny: ["skill_workshop"] } } } },
+        },
+      },
+    },
+    {
+      agents: {
+        entries: {
+          main: { sandbox: { mode: "all" }, tools: { deny: ["skill_workshop"] } },
+        },
+      },
+    },
+  ] satisfies OpenClawConfig[])("treats a matching deny as an intentional opt-out: %j", (cfg) => {
+    expect(
+      detect({
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { model: { primary: "openai/gpt-5.5" } },
+        },
+      }),
+    ).toBeNull();
   });
 });
