@@ -4,6 +4,7 @@ import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
+import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
@@ -609,6 +610,8 @@ test("registered projects.list serves current session metadata without broad rea
       using _ = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation(() => {
         throw new Error("Session display refresh is unavailable");
       });
+      using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+      ownership.mockRejectedValue(new Error("Session runtime ownership is unavailable"));
       sessionChanges.emit({ all: true, scope: "catalog" });
       for (let round = 0; round < 2; round++) {
         if (round === 1) {

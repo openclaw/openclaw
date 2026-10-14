@@ -100,7 +100,6 @@ function respondError(respond: GatewayRespond, error: unknown) {
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
   config: ResolvedMemoryWikiConfig;
-  appConfig?: OpenClawConfig;
   getAppConfig?: () => OpenClawConfig | undefined;
   resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
@@ -168,10 +167,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     if (params.getAppConfig) {
       return params.getAppConfig();
     }
-    if (typeof api.runtime.config?.current === "function") {
-      return api.runtime.config.current() as OpenClawConfig;
-    }
-    return params.appConfig;
+    return api.runtime.config.current() as OpenClawConfig;
   };
   const resolveSourceSyncSignal = () => {
     const signal = params.resolveSourceSyncSignal?.();

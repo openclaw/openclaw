@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -381,7 +382,7 @@ export function readExactSessionEntriesWithLifecycle(
             }),
             lifecycleTimestamps: {},
           }
-        : withSqlitePostCommitPublications(database.db, () =>
+        : withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
             snapshot(database, () => {
               assertCanonicalRead(database, request.expectedIdentity);
               if (request.projection === "creation") {
@@ -666,7 +667,7 @@ export function readSessionRowDatabaseFacts(
             }),
           };
         };
-        return withSqlitePostCommitPublications(database.db, () =>
+        return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
         );
       }),

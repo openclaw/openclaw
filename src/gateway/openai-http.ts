@@ -607,7 +607,7 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
   writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
-  handled.onDisconnect = startOpenAiCompatibleStream({
+  startOpenAiCompatibleStream({
     protocol: "chat",
     res,
     runId,

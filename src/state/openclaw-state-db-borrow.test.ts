@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   createOpenClawStateDatabaseAsyncLifecycle,
@@ -97,7 +98,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
     try {
       await writer.releaseAsync();
       expect(stop).not.toHaveBeenCalled();
-      const owner = borrowers.get(database.db);
+      const owner = borrowers.get(requireNativeSqliteDatabase(database.db));
       if (!owner?.retirement) {
         throw new Error("Expected the writer's retained retirement request");
       }
@@ -170,7 +171,10 @@ it("keeps concurrent synchronous release fenced behind the same asynchronous WAL
     expect(retire).not.toHaveBeenCalled();
     expect(database.db.isOpen).toBe(true);
     expect(() =>
-      assertStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path),
+      assertStateDatabaseBorrowersReleased(
+        borrowers.get(requireNativeSqliteDatabase(database.db)),
+        database.path,
+      ),
     ).toThrow("active native borrowers");
     expect(() => retainer.retain(database)).toThrow("native owner is retiring");
     released.resolve();
@@ -219,7 +223,7 @@ describe("read pin custody", () => {
     const { database, borrowers, retainer, retire, scope } = fixture();
     const writer = scope.run(() => retainer.retain(database));
     const pin = retainer.borrowForRead(database.path);
-    const owner = borrowers.get(database.db);
+    const owner = borrowers.get(requireNativeSqliteDatabase(database.db));
     if (!owner || !pin) {
       throw new Error("Expected retained native owner");
     }
@@ -247,7 +251,7 @@ describe("read pin custody", () => {
       expect(isOpenClawDatabaseMaintenanceResourceOwned(database.db, scope)).toBe(true);
       pin?.release();
       pin?.release();
-      expect(borrowers.get(database.db)?.references.size).toBe(0);
+      expect(borrowers.get(requireNativeSqliteDatabase(database.db))?.references.size).toBe(0);
       expect(retire).not.toHaveBeenCalled();
     } finally {
       pin?.release();
@@ -259,7 +263,7 @@ describe("read pin custody", () => {
 it("pins an independent transaction without exposing a native snapshot source", async () => {
   const { database, borrowers, retainer, scope } = fixture(true);
   expect(() => retainer.borrowForRead(database.path)).toThrow("inside a native transaction");
-  expect(borrowers.has(database.db)).toBe(false);
+  expect(borrowers.has(requireNativeSqliteDatabase(database.db))).toBe(false);
   const pin = retainer.retainForIndependentRead(database.path);
   try {
     expect(pin).toBeDefined();

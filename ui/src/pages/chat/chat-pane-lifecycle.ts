@@ -95,7 +95,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   });
 
   private readonly mcpApps = new ChatPaneMcpAppController({
-    element: this,
+    element: this.element,
     current: () => {
       const state = this.state;
       return state
@@ -234,7 +234,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
 
-    focusChatComposerFromPrintableKeydown(this, event);
+    focusChatComposerFromPrintableKeydown(this.element, event);
 
     if (
       event.defaultPrevented ||
@@ -244,13 +244,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       return;
     }
-    if (closeChatPaneDetails(this)) {
+    if (closeChatPaneDetails(this.element)) {
       event.preventDefault();
     }
   };
 
   protected readonly handleDocumentPointerdown = (event: PointerEvent) => {
-    if (this.state && closeChatPaneDetails(this, event.composedPath())) {
+    if (this.state && closeChatPaneDetails(this.element, event.composedPath())) {
       this.state.requestUpdate();
     }
   };
@@ -274,7 +274,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.paneWidth = width;
         }
       });
-      this.paneResizeObserver.observe(this);
+      this.paneResizeObserver.observe(this.element);
     }
     this.addEventListener("pointerdown", this.handlePaneFocus);
     this.addEventListener("focusin", this.handlePaneFocus);
@@ -724,7 +724,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.headerBranches.clear();
     this.presencePayload = undefined;
     this.announceCommandPaletteTarget(null);
-    dismissConfirmedActionPopovers(this);
+    dismissConfirmedActionPopovers(this.element);
     resetChatViewState(this.presentationId);
     this.state = undefined;
     this.connectedClient = null;

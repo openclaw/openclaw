@@ -1,14 +1,8 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import {
-  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-} from "../../infra/node-commands.js";
-import {
-  createNodeRunnerInventoryIssueError,
-  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
@@ -16,6 +10,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { NodeWorkerLaunchInput } from "../../worker/node-supervisor-protocol.js";
 import {
+  NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -43,7 +38,12 @@ import {
   createNodeWorkerWorkspaceActions,
   type NodeWorkerWorkspaceBinding,
 } from "./node-worker-workspace-actions.js";
-import { drainNodeWorkerWorkspace } from "./node-worker-workspace-drain.js";
+import {
+  drainNodeWorkerWorkspace,
+  restoreNodeWorkerWorkspaceDrainOwner,
+  stopNodeWorkerWorkspaceEnvironment,
+  type NodeWorkerWorkspaceBindingResolver,
+} from "./node-worker-workspace-drain.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
@@ -66,11 +66,7 @@ const RETRY_DELAY_MS = 100;
 const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
-export type NodeWorkerWorkspaceBindingResolver = (binding: {
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-}) => Promise<NodeWorkerWorkspaceBinding | undefined>;
+export type { NodeWorkerWorkspaceBindingResolver };
 
 type NodeWorkerTunnelManagerOptions = {
   gatewayDeviceId: string;
@@ -96,6 +92,7 @@ type NodeEnvironmentOwner = Omit<NodeWorkerTunnelStartRequest, "expectedBuild" |
   stopPromise?: Promise<void>;
   stopReason?: WorkerTunnelStopReason;
   drainLocalWork?: () => Promise<void>;
+  deviceFolder?: string;
 };
 
 type NodeTunnelEntry = NodeEnvironmentOwner & {
@@ -167,7 +164,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
 
   const invokeWorkspaceCommand = async (
     entry: NodeTunnelEntry,
-    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
+    command: WorkerWorkspaceCommand & {
+      resetWorkspace?: boolean;
+      sessionKey?: string;
+      deviceFolder?: string;
+    },
     onDispatchReady: () => void,
   ): Promise<NodeWorkerWorkspaceExecResult> => {
     const assertCurrent = () => {
@@ -187,12 +188,14 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       signals.push(command.signal);
     }
     const signal = AbortSignal.any(signals);
-    const preparationKey = readPreparation(entry)?.key;
+    const deviceFolder = command.deviceFolder ?? entry.deviceFolder;
+    const preparationKey = deviceFolder === undefined ? readPreparation(entry)?.key : undefined;
     let nativeContractError: Error | undefined;
     const input: NodeWorkerWorkspaceExecInput = {
       gatewayNamespace,
       environmentId: entry.environmentId,
       sessionId: entry.sessionId,
+      ...(deviceFolder === undefined ? {} : { deviceFolder }),
       ...(preparationKey === undefined ? {} : { preparationKey, sessionKey: command.sessionKey }),
       generation: entry.ownerEpoch,
       argv: [...command.argv],
@@ -204,6 +207,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(command.process === undefined ? {} : { process: command.process }),
       ...(command.quiescence === undefined ? {} : { quiescence: command.quiescence }),
     };
+    if (
+      input.deviceFolder !== undefined &&
+      (input.transfer || input.seed || input.resetWorkspace)
+    ) {
+      throw new Error("Device folders cannot receive workspace transfers, seeds, or resets");
+    }
     while (true) {
       assertCurrent();
       const remainingMs = deadline - Date.now();
@@ -217,6 +226,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         const nativeOwnership =
           node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
         const assertNativeContract = () => {
+          if (deviceFolder !== undefined && node.workerHost.deviceFolders !== true) {
+            nativeContractError ??= new Error(
+              "Device folder support is unavailable; update and reconnect the node host",
+            );
+            throw nativeContractError;
+          }
           if ((input.quiescence || entry.nativeWorkspaceLeases.size > 0) && !nativeOwnership) {
             nativeContractError ??= new Error(
               "node workspace quiescence support changed; reconnect a compatible node host",
@@ -232,7 +247,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           !input.quiescence &&
           !input.process &&
           !input.transfer &&
-          !input.seed
+          !input.seed &&
+          input.argv[0] !== NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND
             ? { nativeProcessOwner: true }
             : {}),
         };
@@ -308,7 +324,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
 
   const runWorkspaceCommand = (
     entry: NodeTunnelEntry,
-    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
+    command: WorkerWorkspaceCommand & {
+      resetWorkspace?: boolean;
+      sessionKey?: string;
+      deviceFolder?: string;
+    },
   ): Promise<NodeWorkerWorkspaceExecResult> => {
     let dispatched = false;
     const operation = invokeWorkspaceCommand(entry, command, () => {
@@ -345,7 +365,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       gatewayNamespace,
       expectedBundleHash: entry.expectedBuild.bundleHash,
       placementGeneration: claim.placementGeneration,
-      ...(readPreparation(entry) ? { sessionKey: getSessionKey() } : {}),
+      ...(readPreparation(entry) || entry.deviceFolder ? { sessionKey: getSessionKey() } : {}),
       descriptor: plan,
     });
     const { validateRestoredWorkspace, getSessionKey, ...workspaceActions } =
@@ -353,6 +373,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         environmentId: entry.environmentId,
         ownerEpoch: entry.ownerEpoch,
         sessionId: entry.sessionId,
+        deviceId: entry.deviceId,
+        onDeviceFolderBound: (folder) => {
+          entry.deviceFolder = folder;
+        },
         ownerSignal: entry.abortController.signal,
         isOwnerCurrent: () => isLiveEntry(entry),
         restoredWorkspace,
@@ -465,37 +489,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         // Remote-exec runtimes own their processes separately; this is only the embedded
         // worker's environment lifetime, not a new requirement on the workspace transport.
         if (entry.executionMode === "worker-turn" && reason === undefined) {
-          const signal = AbortSignal.timeout(DEFAULT_COMMAND_TIMEOUT_MS);
-          const { transport, node } = await findNode(entry, signal);
-          if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
-            throw createNodeRunnerInventoryIssueError(
-              node.nodeId,
-              NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-            );
-          }
-          // Retirement retains only authority to stop this exact old scope, including after
-          // replacement. The node must match the tuple before touching any physical worker.
-          const operation = transport.invoke({
-            node,
-            command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-            params: {
-              gatewayNamespace,
-              environmentId: entry.environmentId,
-              sessionId: entry.sessionId,
-              ownerEpoch: entry.ownerEpoch,
-            },
+          await stopNodeWorkerWorkspaceEnvironment({
+            ...entry,
+            gatewayNamespace,
             timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
-            signal,
-            isDispatchAuthorized: () => stopping && retiredEntries.has(entry),
+            findNode: (signal) => findNode(entry, signal),
+            isAuthorized: () => stopping && retiredEntries.has(entry),
           });
-          const result = await raceNodeWorkerOperation(operation, signal);
-          if (!result.ok) {
-            const code = result.error?.code ?? "UNAVAILABLE";
-            const message = `node worker environment stop failed (${code})`;
-            throw RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(code)
-              ? new WorkerTunnelOwnerDisconnectedError(message)
-              : new Error(message);
-          }
         }
       } finally {
         stopping = false;
@@ -538,26 +538,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           // needed for local transfer cleanup; durable ownership remains until its proof.
           operations.push(options.workspaceTransfer.close(environmentId));
         } else {
-          if (record.attachedSessionIds.length > 1) {
-            throw new Error("node worker environment teardown has an ambiguous session owner");
-          }
-          const sessionId = record.attachedSessionIds[0];
-          if (sessionId) {
-            operations.push(
-              stopEnvironmentOwner(
-                {
-                  deviceId: record.nodeDeviceId,
-                  environmentId,
-                  ownerEpoch: record.ownerEpoch,
-                  sessionId,
-                  executionMode:
-                    record.profileSnapshot.executionMode === "remote-exec"
-                      ? "remote-exec"
-                      : "worker-turn",
-                },
-                reason,
-              ),
-            );
+          const owner = await restoreNodeWorkerWorkspaceDrainOwner(record, resolveWorkspaceBinding);
+          if (owner) {
+            operations.push(stopEnvironmentOwner(owner, reason));
           }
         }
       }
@@ -581,11 +564,20 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         !record ||
         record.ownerEpoch !== binding.ownerEpoch ||
         !record.nodeDeviceId ||
-        record.sharedHost !== false ||
         !record.bootstrapReceipt ||
         record.bootstrapReceipt.installKind !== "bundle"
       ) {
         throw new Error("Attached environment node workspace is unavailable");
+      }
+      if (record.sharedHost !== false) {
+        const workspace = await resolveWorkspaceBinding?.(binding);
+        authorize();
+        if (
+          workspace?.source.kind !== "device-folder" ||
+          workspace.source.deviceId !== record.nodeDeviceId
+        ) {
+          throw new Error("Attached environment node workspace is unavailable");
+        }
       }
       await this.start({
         environmentId: binding.environmentId,
@@ -681,6 +673,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         request.authorize?.();
         if (!isLiveEntry(entry)) {
           return;
+        }
+        if (restoredWorkspace?.source.kind === "device-folder") {
+          if (restoredWorkspace.source.deviceId !== entry.deviceId) {
+            throw new Error("Device folder does not belong to this workspace runner");
+          }
+          entry.deviceFolder = restoredWorkspace.remoteWorkspaceDir;
         }
         const created = createHandle(entry, restoredWorkspace);
         if (restoredWorkspace) {

@@ -114,21 +114,29 @@ async function readCommandHistory(
                 .filter((part) => part.type === "toolCall" && part.name === "node_exec")
             : [],
         );
-        return (
-          calls.length > 0 &&
-          (expectedReply === undefined ||
-            (messages.some(
-              (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
-            ) &&
-              messages.some(
-                (message) =>
-                  message.role === "assistant" && textContent(message).trim() === expectedReply,
-              )))
-        );
+        return {
+          nodeExecCallPresent: calls.length > 0,
+          ...(expectedReply === undefined
+            ? {}
+            : {
+                matchingToolResultPresent: messages.some(
+                  (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
+                ),
+                exactAssistantReplyPresent: messages.some(
+                  (message) =>
+                    message.role === "assistant" && textContent(message).trim() === expectedReply,
+                ),
+              }),
+        };
       },
       { timeout: 30_000, interval: 100 },
     )
-    .toBe(true);
+    .toEqual({
+      nodeExecCallPresent: true,
+      ...(expectedReply === undefined
+        ? {}
+        : { matchingToolResultPresent: true, exactAssistantReplyPresent: true }),
+    });
   expect(calls).toHaveLength(1);
   const call = calls[0];
   if (!isRecord(call) || typeof call.id !== "string") {

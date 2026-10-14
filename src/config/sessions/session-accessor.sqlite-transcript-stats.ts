@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql, type AliasableExpression } from "kysely";
 import {
   createSqliteQueryCache,
@@ -34,7 +35,7 @@ function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTra
   };
 }
 
-const transcriptStatsQuery = createSqliteQueryCache((database) => {
+const transcriptStatsQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   const prepare = (point: boolean, includeGeneration = false) =>
     prepareSqliteQuerySync<readonly string[], TranscriptStatsRow>(database, (parameter) => {

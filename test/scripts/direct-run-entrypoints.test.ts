@@ -458,6 +458,7 @@ process.exitCode = child.status ?? 1;
       const state = path.join(fixtureRoot, "state");
       const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
       mkdirSync(binDir);
+      mkdirSync(home);
       mkdirSync(state);
       // A failed version probe must fail before managed installation can download anything.
       writeFileSync(path.join(state, "tools"), "managed installation disabled for this fixture\n");

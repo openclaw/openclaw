@@ -271,13 +271,18 @@ describe("Sessions page typing ownership", () => {
     },
   );
 
-  it.each([
-    { timing: "queued", resubscribe: true, hidden: false },
-    { timing: "timer", resubscribe: false, hidden: false },
-    { timing: "unsubscribed", resubscribe: true, hidden: true },
-  ])(
-    "retires $timing event work while unobserved and catches up on resubscribe=$resubscribe hidden=$hidden",
-    async ({ timing, resubscribe, hidden }) => {
+  it.each(
+    [
+      { timing: "queued", resubscribe: true, hidden: false },
+      { timing: "timer", resubscribe: false, hidden: false },
+      { timing: "unsubscribed", resubscribe: true, hidden: true },
+    ].flatMap((scenario) => [
+      { ...scenario, reason: "update" },
+      { ...scenario, reason: "create" },
+    ]),
+  )(
+    "retires $timing $reason event work while unobserved and catches up on resubscribe=$resubscribe hidden=$hidden",
+    async ({ timing, resubscribe, hidden, reason }) => {
       vi.useFakeTimers();
       const visibility = vi.spyOn(document, "visibilityState", "get");
       const active = createDeferred<SessionsListResult>();
@@ -297,16 +302,18 @@ describe("Sessions page typing ownership", () => {
       let unsubscribe = sessions.subscribeList(query, vi.fn());
       const updatedObserved = createDeferred();
       const loading = sessions.refreshList(query);
+      const changed = sessionChangedEvent("agent:main:changed");
+      changed.payload = { ...(changed.payload as Record<string, unknown>), reason };
       try {
         if (timing !== "unsubscribed") {
-          emitEvent(sessionChangedEvent("agent:main:changed"));
+          emitEvent(changed);
           if (timing === "queued") {
             await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
         if (timing === "unsubscribed") {
-          emitEvent(sessionChangedEvent("agent:main:changed"));
+          emitEvent(changed);
         }
         visibility.mockReturnValue("hidden");
         document.dispatchEvent(new Event("visibilitychange"));
@@ -333,6 +340,9 @@ describe("Sessions page typing ownership", () => {
           expect(filteredCalls).toBe(1);
           visibility.mockReturnValue("visible");
           document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(0);
+        } else if (reason === "create" && resubscribe) {
+          // Creation retains its priority through the old read and resubscription.
           await vi.advanceTimersByTimeAsync(0);
         } else if (!resubscribe || timing === "queued") {
           await vi.advanceTimersByTimeAsync(4_999);

@@ -154,7 +154,7 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
-  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. */
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
@@ -300,7 +300,7 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
   };
 }
 
-/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. */
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. */
 export function resolveCapabilityModelCandidates(
   params: CapabilityModelCandidatesParams,
 ): ParsedProviderModelRef[] {

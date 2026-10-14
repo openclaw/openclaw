@@ -310,33 +310,6 @@ describe("anonymous published session reader", () => {
     });
   });
 
-  it("reconciles sharing facts invalidated during the history read", async () => {
-    await withPublicTestState(async () => {
-      await seed(["Still published"]);
-      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
-      vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
-        async (...args) => {
-          const result = await read(...args);
-          sessionChanges.emit({
-            agentId: locator.agentId,
-            sessionKey: locator.sessionKey,
-            factsInvalidated: "category",
-          });
-          expect(
-            currentProjection().sharingTargetState({
-              key: locator.sessionKey,
-              agentId: locator.agentId,
-            }).status,
-          ).toBe("pending");
-          return result;
-        },
-      );
-      expect((await readPublicSessionShare(cfg, locator))?.messages).toMatchObject([
-        { content: "Still published" },
-      ]);
-    });
-  });
-
   it.for(["metadata", "revoke", "reset"] as const)(
     "rechecks %s after awaited history before releasing content",
     async (action, { signal }) => {

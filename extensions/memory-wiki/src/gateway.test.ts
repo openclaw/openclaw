@@ -306,7 +306,12 @@ describe("memory-wiki gateway methods", () => {
       };
       const resolveConfig = vi.fn(() => agentConfig);
 
-      registerMemoryWikiGatewayMethods({ api, config, appConfig, resolveConfig });
+      registerMemoryWikiGatewayMethods({
+        api,
+        config,
+        getAppConfig: () => appConfig,
+        resolveConfig,
+      });
       const handler = requireGatewayHandler(registerGatewayMethod, method);
 
       await handler({
@@ -345,7 +350,7 @@ describe("memory-wiki gateway methods", () => {
     const { api, registerGatewayMethod } = createPluginApi();
     const appConfig = { agents: { entries: { support: {} } } };
 
-    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    registerMemoryWikiGatewayMethods({ api, config, getAppConfig: () => appConfig });
     const handler = requireGatewayHandler(registerGatewayMethod, "wiki.obsidian.search");
     const respond = vi.fn();
 
@@ -373,7 +378,7 @@ describe("memory-wiki gateway methods", () => {
 
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
       config,
-      appConfig: undefined,
+      appConfig: {},
       signal,
     });
     expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
@@ -427,7 +432,7 @@ describe("memory-wiki gateway methods", () => {
       agents: { entries: { support: {}, marketing: {} } },
     };
 
-    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    registerMemoryWikiGatewayMethods({ api, config, getAppConfig: () => appConfig });
     const handler = requireGatewayHandler(registerGatewayMethod, "wiki.status");
     const respond = vi.fn();
 
@@ -493,7 +498,7 @@ describe("memory-wiki gateway methods", () => {
       await handler({ params: {}, respond });
 
       expect(respond).toHaveBeenCalledOnce();
-      expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+      expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
       expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
       expect(readRespondPayload(respond)).toEqual(
         method === "wiki.importInsights" ? importInsights : overview,
@@ -583,7 +588,8 @@ describe("memory-wiki gateway methods", () => {
     expect(searchMemoryWiki).toHaveBeenCalledWith({
       memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
-      appConfig: undefined,
+      appConfig: {},
+      agentId: "main",
       query: "Teams Azure",
       maxResults: 3,
       searchBackend: "local",
@@ -605,7 +611,7 @@ describe("memory-wiki gateway methods", () => {
       },
     };
 
-    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    registerMemoryWikiGatewayMethods({ api, config, getAppConfig: () => appConfig });
     const handler = requireGatewayHandler(registerGatewayMethod, "wiki.search");
     const respond = vi.fn();
 
@@ -712,7 +718,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
     expect(applyMemoryWikiMutation).toHaveBeenCalledWith({
       config,
       mutation: {

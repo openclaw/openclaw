@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCrabboxBinary } from "./crabbox-binary.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
-import { CRABBOX_WORKER_PROVIDER_ID } from "./crabbox-worker-profile.js";
+import { CRABBOX_WORKER_PROVIDER_ID, parseCrabboxSetupSecrets } from "./crabbox-worker-profile.js";
 import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
   crabboxWarmImageRecoveryHint,
@@ -19,10 +19,20 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
+const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
 export type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
+  readonly inspectSetupSecrets: (
+    names: readonly string[],
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<
+    Array<{
+      name: string;
+      status: "ready" | "missing" | "missing-bindings" | "conflicting-value" | "unavailable";
+    }>
+  >;
   readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
   readonly listPluginStateEntries: <T>(
@@ -126,10 +136,129 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
   };
 }
 
+function createCrabboxSetupSecretsCheck(host: CrabboxDoctorRegistrationHost): HealthCheck {
+  const repairHint =
+    "Create or repair protected entries with explicit allowed hosts using openclaw secrets, then run openclaw doctor --fix. Store values and destination bindings are never inferred or overwritten.";
+  const inspect = async (ctx: Parameters<HealthCheck["detect"]>[0]) => {
+    const changes: string[] = [];
+    const findings: HealthFinding[] = [];
+    if (
+      !Object.values(ctx.cfg.cloudWorkers?.profiles ?? {}).some(
+        (profile) =>
+          profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID &&
+          readRecord(profile.settings)?.setupEnv !== undefined,
+      )
+    ) {
+      return { config: ctx.cfg, changes, findings };
+    }
+    const config = structuredClone(ctx.cfg);
+    for (const [profileId, profile] of Object.entries(config.cloudWorkers?.profiles ?? {})) {
+      const settings = readRecord(profile.settings);
+      if (
+        profile.provider.trim().toLowerCase() !== CRABBOX_WORKER_PROVIDER_ID ||
+        !settings ||
+        settings.setupEnv === undefined
+      ) {
+        continue;
+      }
+      const path = `cloudWorkers.profiles.${profileId}.settings.setupEnv`;
+      let reason: string | undefined;
+      const legacy = settings.setupEnv;
+      if (
+        !Array.isArray(legacy) ||
+        legacy.length > 16 ||
+        !legacy.every(
+          (name): name is string =>
+            typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name),
+        ) ||
+        new Set(legacy).size !== legacy.length
+      ) {
+        reason = "legacy setupEnv is not a bounded list of distinct environment names";
+      } else {
+        const facts = legacy.length ? await host.inspectSetupSecrets(legacy, ctx.env) : [];
+        const problems = facts.filter(({ status }) => status !== "ready");
+        if (facts.length !== legacy.length || problems.length) {
+          reason = problems.length
+            ? problems.map(({ name, status }) => `${name}: ${status}`).join(", ")
+            : "secret-store inspection is incomplete";
+        } else {
+          try {
+            const current = parseCrabboxSetupSecrets(settings.setupSecrets) ?? {};
+            const provider = ctx.cfg.secrets?.defaults?.store ?? "default";
+            const next = { ...current };
+            for (const name of legacy) {
+              const existing = current[name];
+              if (existing && (existing.provider !== provider || existing.id !== name)) {
+                throw new Error(
+                  `setupSecrets mapping ${name} conflicts with its same-name store entry`,
+                );
+              }
+              next[name] = { source: "store", provider, id: name };
+            }
+            settings.setupSecrets = parseCrabboxSetupSecrets(next);
+            delete settings.setupEnv;
+            changes.push(
+              `Migrated ${path} to setupSecrets using existing protected, destination-bound store entries.`,
+            );
+          } catch (error) {
+            reason =
+              error instanceof Error ? error.message : "setupSecrets mapping requires repair";
+          }
+        }
+      }
+      findings.push({
+        checkId: CRABBOX_SETUP_SECRETS_CHECK_ID,
+        severity: "warning",
+        source: "crabbox",
+        target: profileId,
+        ocPath: path,
+        message: `Crabbox profile ${profileId} uses retired plaintext setupEnv${reason ? ` and needs repair (${reason})` : "; protected store entries are ready to migrate"}.`,
+        fixHint: repairHint,
+      });
+    }
+    return { config, changes, findings };
+  };
+  return {
+    id: CRABBOX_SETUP_SECRETS_CHECK_ID,
+    kind: "plugin",
+    description: "Migrate retired setup environment forwarding to protected setup secrets.",
+    source: "crabbox",
+    async detect(ctx) {
+      return (await inspect(ctx)).findings;
+    },
+    async repair(ctx) {
+      const result = await inspect(ctx);
+      if (ctx.dryRun) {
+        return {
+          status: "skipped",
+          changes: [],
+          reason: "Run openclaw doctor --fix to persist setup secret migration.",
+        };
+      }
+      return {
+        status: result.changes.length ? "repaired" : "skipped",
+        config: result.changes.length ? result.config : ctx.cfg,
+        changes: result.changes,
+        warnings: result.findings
+          .filter(({ target }) => {
+            const settings = readRecord(
+              result.config.cloudWorkers?.profiles?.[target ?? ""]?.settings,
+            );
+            return settings?.setupEnv !== undefined;
+          })
+          .map(({ message }) => `${message} ${repairHint}`),
+      };
+    },
+  };
+}
+
 export function registerCrabboxWorkerProviderDoctorChecks(
   host: CrabboxDoctorRegistrationHost,
 ): void {
   // Lookup and registration must use the same host registry across artifact loaders.
+  if (!host.getHealthCheck(CRABBOX_SETUP_SECRETS_CHECK_ID)) {
+    host.registerHealthCheck(createCrabboxSetupSecretsCheck(host));
+  }
   if (!host.getHealthCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID)) {
     host.registerHealthCheck(createCrabboxCloudWorkerProfileCheck(host.openclawRoot));
   }

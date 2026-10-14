@@ -21,8 +21,13 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import {
+  StreamGroup,
+  UnplacedSubagentWait,
+  WorkGroupSummary,
+} from "./chat-message-stream-view.tsx";
 import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
@@ -51,6 +56,18 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
       </Match>
       <Match when={props.value.kind === "work" ? props.value : undefined}>
         {(view) => <WorkGroupSummary item={view().item} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "frame" ? props.value : undefined}>
+        {(view) => <AgentRunFrame frame={view().frame} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "wait" ? props.value : undefined}>
+        {(view) => (
+          <UnplacedSubagentWait
+            sessionKey={view().sessionKey}
+            wait={view().wait}
+            options={view().options}
+          />
+        )}
       </Match>
     </Switch>
   );

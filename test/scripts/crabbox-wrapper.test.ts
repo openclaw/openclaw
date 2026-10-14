@@ -1445,6 +1445,7 @@ function testCrabboxConfigDir(home: string): string {
 }
 
 function testHomeEnv(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
   return {
     APPDATA: path.join(home, "AppData", "Roaming"),
     HOME: home,
@@ -3120,7 +3121,7 @@ esac
       input: ["bun", "--version"],
       includes: [
         "openclaw_crabbox_bootstrap_macos_js",
-        "bun_version=1.4.2",
+        "bun_version=1.4.3",
         'bun_root="$tool_root/bun-v${bun_version}"',
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
@@ -3689,7 +3690,7 @@ esac
       name: "bootstraps Bun for AWS macOS script-stdin bun shebangs",
       input: ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n"),
       includes: [
-        "bun_version=1.4.2",
+        "bun_version=1.4.3",
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
       ],

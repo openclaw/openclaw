@@ -47,6 +47,12 @@ import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-dept
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
+  hasAnnounceSendEvidence,
+  isPermanentAnnounceDeliveryError,
+  SourceOwnerChangedError,
+  summarizeDeliveryError,
+} from "./subagent-announce-delivery-retry.js";
+import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
@@ -56,7 +62,10 @@ import {
   withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -181,6 +190,20 @@ async function runSubagentAnnounceFlowBound(
   params: SubagentAnnounceFlowParams,
 ): Promise<SubagentAnnounceFlowOutcome> {
   let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
+  let deliveryResultReported = false;
+  const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
+    if (deliveryResultReported) {
+      return;
+    }
+    deliveryResultReported = true;
+    // A receipt observer may fail after handoff. Keep the transport outcome
+    // authoritative so cleanup does not replay work the requester already consumed.
+    announceOutcome =
+      delivery.reason === "requester_turn_pending"
+        ? "requester_turn_pending"
+        : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
+    await params.onDeliveryResult?.(delivery);
+  };
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
   const childSessionEffectsAllowed = () =>
@@ -595,14 +618,6 @@ async function runSubagentAnnounceFlowBound(
           formatAgentInternalEventsForPrompt(internalEvents) ||
           "A background task finished. Process the completion update now.";
         const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-        let deliveryResultReported = false;
-        const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
-          if (deliveryResultReported) {
-            return;
-          }
-          deliveryResultReported = true;
-          await params.onDeliveryResult?.(delivery);
-        };
         const delivery = await deliverSubagentAnnouncement({
           requesterSessionKey: targetRequesterSessionKey,
           requesterAgentId: targetRequesterAgentId,
@@ -630,10 +645,6 @@ async function runSubagentAnnounceFlowBound(
           resolveGatewayContext: params.resolveGatewayContext,
         });
         await reportDeliveryResult(delivery);
-        announceOutcome =
-          delivery.reason === "requester_turn_pending"
-            ? "requester_turn_pending"
-            : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
       },
     );
   } catch (err) {
@@ -642,7 +653,21 @@ async function runSubagentAnnounceFlowBound(
       throw err;
     }
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
-    // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
+    if (!deliveryResultReported) {
+      await reportDeliveryResult(
+        err instanceof SourceOwnerChangedError
+          ? sourceOwnerChangedResult()
+          : {
+              delivered: false,
+              path: "none",
+              error: summarizeDeliveryError(err),
+              disposition:
+                hasAnnounceSendEvidence(err) || isPermanentAnnounceDeliveryError(err)
+                  ? "permanent_failure"
+                  : "retryable",
+            },
+      );
+    }
   } finally {
     if (
       shouldDeleteChildSession &&

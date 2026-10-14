@@ -1,8 +1,8 @@
-// Row access shared by worker commands and explicit native administration.
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+// Row access shared by worker commands and explicit native administration.
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
@@ -39,7 +39,7 @@ const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmissio
 
 /** Only this named key has complete writer coverage; other machine-state owners keep their reads. */
 export function publishConfigMachineStateRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   key: string,
   row: ConfigMachineStateRow | undefined,
 ): void {
@@ -66,7 +66,7 @@ export function normalizeConfigMachineStateKey(key: string): string {
   return normalized;
 }
 
-export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key: string) {
+export function readConfigMachineStateRowInDatabase(database: EngineConnection, key: string) {
   const stateKey = normalizeConfigMachineStateKey(key);
   const admitted =
     stateKey === "tts.prefsPath"

@@ -175,7 +175,7 @@ function readProjectionSource(
         (navigationOnly
           ? query
               .clearSelect()
-              .select([transcriptEventNavigationSql().as("event_json"), "seq", "created_at"])
+              .select([transcriptEventNavigationSql(db).as("event_json"), "seq", "created_at"])
           : query
         ).orderBy("seq", "asc"),
       ),

@@ -3,7 +3,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {

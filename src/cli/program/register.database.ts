@@ -141,6 +141,27 @@ export function registerDatabaseCommand(program: Command): void {
     });
 
   database
+    .command("restore-migration-backup")
+    .description("Restore a scoped migration backup's tables and schema version while offline")
+    .argument("<backup>", "table-scoped pre-migration SQLite backup")
+    .argument("<database>", "original SQLite database; undeclared tables are preserved")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (backupPath, sourcePath, options) => {
+      try {
+        const { restoreDoctorMigrationBackup } =
+          await import("../../commands/doctor-migration-backup-restore.js");
+        const result = await restoreDoctorMigrationBackup({ sourcePath, backupPath });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(defaultRuntime, `Restored scoped migration backup: ${backupPath}\n`);
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
     .command("preflight")
     .description("Compare one copied SQLite file with this release's state schema")
     .argument("<path>", "explicit copied SQLite database path")

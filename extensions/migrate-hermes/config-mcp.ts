@@ -33,44 +33,6 @@ function hasUnsupportedToolPattern(pattern: string): boolean {
   return pattern.includes("?") || pattern.includes("[");
 }
 
-function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unknown> | undefined {
-  const direct = asOptionalRecord(value.toolFilter) ?? asOptionalRecord(value.tool_filter);
-  if (direct) {
-    const include = readToolFilterList(direct.include);
-    const exclude = readToolFilterList(direct.exclude);
-    if (include && include.length > 0) {
-      return { include };
-    }
-    return exclude !== undefined && exclude.length > 0 ? { exclude } : undefined;
-  }
-
-  const tools = asOptionalRecord(value.tools);
-  if (!tools) {
-    return undefined;
-  }
-  const include = readToolFilterList(tools.include);
-  const exclude = readToolFilterList(tools.exclude);
-  const resourcesEnabled = parseBooleanValue(tools.resources) !== false;
-  const promptsEnabled = parseBooleanValue(tools.prompts) !== false;
-
-  if (include !== undefined) {
-    const allowed = [
-      ...include.filter((pattern) => !hasUnsupportedToolPattern(pattern)),
-      ...(resourcesEnabled ? MCP_RESOURCE_UTILITY_TOOLS : []),
-      ...(promptsEnabled ? MCP_PROMPT_UTILITY_TOOLS : []),
-    ];
-    // Hermes' explicit empty include disables native tools; OpenClaw's empty
-    // include is unrestricted, so deny everything when no utilities remain.
-    return allowed.length > 0 ? { include: allowed } : { exclude: ["*"] };
-  }
-  const translatedExclude = [
-    ...(exclude ?? []),
-    ...(!resourcesEnabled ? MCP_RESOURCE_UTILITY_TOOLS : []),
-    ...(!promptsEnabled ? MCP_PROMPT_UTILITY_TOOLS : []),
-  ];
-  return translatedExclude.length > 0 ? { exclude: translatedExclude } : undefined;
-}
-
 function mapHermesClientCertificate(value: Record<string, unknown>): {
   clientCert?: string;
   clientKey?: string;
@@ -97,18 +59,6 @@ const MCP_CONNECTION_FIELDS = [
   "requestTimeoutMs",
 ] as const;
 
-export function importsMcpSensitiveValues(
-  value: Record<string, unknown>,
-  includeSecrets: boolean,
-): boolean {
-  return (
-    includeSecrets &&
-    (value.env !== undefined ||
-      value.headers !== undefined ||
-      MCP_CONNECTION_FIELDS.some((key) => mcpValueHasEnvReferences(value[key])))
-  );
-}
-
 function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const oauth = asOptionalRecord(value.oauth);
   if (!oauth) {
@@ -124,29 +74,36 @@ function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unkno
   return Object.keys(mapped).length > 0 ? mapped : undefined;
 }
 
-export function mapMcpServer(
-  value: Record<string, unknown>,
-  includeSecrets: boolean,
-  env: Record<string, string>,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  for (const key of MCP_CONNECTION_FIELDS) {
-    const sourceValue = value[key];
+export function planHermesMcpServer(params: {
+  name: string;
+  raw: Record<string, unknown>;
+  includeSecrets: boolean;
+  env: Record<string, string>;
+  source: string;
+}): { server: Record<string, unknown>; sensitive: boolean; items: MigrationItem[] } {
+  const { name, raw, includeSecrets, env } = params;
+  let sensitive = raw.env !== undefined || raw.headers !== undefined;
+  let unresolved = false;
+  const resolvedFields: Record<string, unknown> = {};
+  for (const key of [...MCP_CONNECTION_FIELDS, "env", "headers"]) {
+    const sourceValue = raw[key];
     if (sourceValue === undefined) {
       continue;
     }
-    if (!mcpValueHasEnvReferences(sourceValue)) {
-      next[key] = sourceValue;
+    const requiresConsent =
+      key === "env" || key === "headers" || mcpValueHasEnvReferences(sourceValue);
+    sensitive ||= requiresConsent;
+    if (requiresConsent && !includeSecrets) {
       continue;
     }
-    if (includeSecrets) {
-      const resolved = resolveMcpEnvReferences(sourceValue, env);
-      if (!resolved.unresolved) {
-        next[key] = resolved.value;
-      }
+    const resolved = resolveMcpEnvReferences(sourceValue, env);
+    unresolved ||= resolved.unresolved;
+    if (!resolved.unresolved) {
+      resolvedFields[key] = resolved.value;
     }
   }
-  const transport = normalizeOptionalString(value.transport) ?? normalizeOptionalString(value.type);
+  const { env: resolvedEnv, headers: resolvedHeaders, ...next } = resolvedFields;
+  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.type);
   if (transport === "http" || transport === "streamable-http") {
     next.transport = "streamable-http";
   } else if (transport === "sse" || transport === "stdio") {
@@ -157,8 +114,8 @@ export function mapMcpServer(
   // Canonical timeout fields are finite().positive(); drop non-positive or
   // overflowing source values instead of importing config that fails validation.
   for (const [key, seconds] of [
-    ["connectionTimeoutMs", value.connectTimeout ?? value.connect_timeout],
-    ["requestTimeoutMs", value.timeout],
+    ["connectionTimeoutMs", raw.connectTimeout ?? raw.connect_timeout],
+    ["requestTimeoutMs", raw.timeout],
   ] as const) {
     if (
       next[key] === undefined &&
@@ -170,48 +127,55 @@ export function mapMcpServer(
     }
   }
   next.supportsParallelToolCalls = asBoolean(
-    value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
+    raw.supportsParallelToolCalls ?? raw.supports_parallel_tool_calls,
   );
-  next.sslVerify = asBoolean(value.sslVerify ?? value.ssl_verify);
-  next.auth = normalizeOptionalString(value.auth) === "oauth" ? "oauth" : undefined;
-  next.oauth = mapHermesMcpOauth(value);
-  Object.assign(next, mapHermesClientCertificate(value));
-  next.toolFilter = mapHermesToolFilter(value);
-  const tools = asOptionalRecord(value.tools);
-  if (
-    tools &&
-    readToolFilterList(tools.include) === undefined &&
-    readToolFilterList(tools.exclude)?.some(hasUnsupportedToolPattern)
-  ) {
+  next.sslVerify = asBoolean(raw.sslVerify ?? raw.ssl_verify);
+  const auth = normalizeOptionalString(raw.auth);
+  next.auth = auth === "oauth" ? "oauth" : undefined;
+  next.oauth = mapHermesMcpOauth(raw);
+  const certificate = mapHermesClientCertificate(raw);
+  Object.assign(next, certificate);
+  const tools = asOptionalRecord(raw.tools);
+  const include = tools ? readToolFilterList(tools.include) : undefined;
+  const exclude = tools ? readToolFilterList(tools.exclude) : undefined;
+  const resources = parseBooleanValue(tools?.resources);
+  const prompts = parseBooleanValue(tools?.prompts);
+  const direct = asOptionalRecord(raw.toolFilter) ?? asOptionalRecord(raw.tool_filter);
+  if (direct) {
+    const directInclude = readToolFilterList(direct.include);
+    const directExclude = readToolFilterList(direct.exclude);
+    next.toolFilter = directInclude?.length
+      ? { include: directInclude }
+      : directExclude?.length
+        ? { exclude: directExclude }
+        : undefined;
+  } else if (tools) {
+    if (include !== undefined) {
+      const allowed = [
+        ...include.filter((pattern) => !hasUnsupportedToolPattern(pattern)),
+        ...(resources !== false ? MCP_RESOURCE_UTILITY_TOOLS : []),
+        ...(prompts !== false ? MCP_PROMPT_UTILITY_TOOLS : []),
+      ];
+      // Hermes' empty include disables native tools; OpenClaw's is unrestricted.
+      next.toolFilter = allowed.length > 0 ? { include: allowed } : { exclude: ["*"] };
+    } else {
+      const denied = [
+        ...(exclude ?? []),
+        ...(resources === false ? MCP_RESOURCE_UTILITY_TOOLS : []),
+        ...(prompts === false ? MCP_PROMPT_UTILITY_TOOLS : []),
+      ];
+      next.toolFilter = denied.length > 0 ? { exclude: denied } : undefined;
+    }
+  }
+  if (include === undefined && exclude?.some(hasUnsupportedToolPattern)) {
     // An untranslated exclusion would expose tools Hermes withheld.
     next.enabled = false;
   }
-  if (includeSecrets) {
-    for (const key of ["env", "headers"]) {
-      if (value[key] !== undefined) {
-        const resolved = resolveMcpEnvReferences(value[key], env);
-        if (!resolved.unresolved) {
-          next[key] = resolved.value;
-        }
-      }
-    }
-  }
+  next.env = resolvedEnv;
+  next.headers = resolvedHeaders;
   const mapped = Object.fromEntries(
     Object.entries(next).filter(([, entry]) => entry !== undefined),
   );
-  return normalizeOptionalString(mapped.command) || normalizeOptionalString(mapped.url)
-    ? mapped
-    : {};
-}
-
-export function mcpManualItems(params: {
-  name: string;
-  raw: Record<string, unknown>;
-  includeSecrets: boolean;
-  env: Record<string, string>;
-  source: string;
-}): MigrationItem[] {
-  const { name, raw } = params;
   const safeName = sanitizeName(name);
   const items: MigrationItem[] = [];
   const add = (suffix: string, message: string, recommendation: string): void => {
@@ -225,29 +189,14 @@ export function mcpManualItems(params: {
     );
   };
 
-  const interpolatedValues = [
-    ...MCP_CONNECTION_FIELDS.map((key) => raw[key]),
-    raw.env,
-    raw.headers,
-  ];
-  if (
-    !params.includeSecrets &&
-    (raw.env !== undefined ||
-      raw.headers !== undefined ||
-      interpolatedValues.some(mcpValueHasEnvReferences))
-  ) {
+  if (!includeSecrets && sensitive) {
     add(
       "secrets",
       `Hermes MCP server "${name}" has environment-backed values that were not imported without secret consent.`,
       "Re-run with --include-secrets or configure these values manually.",
     );
   }
-  if (
-    params.includeSecrets &&
-    interpolatedValues.some(
-      (value) => value !== undefined && resolveMcpEnvReferences(value, params.env).unresolved,
-    )
-  ) {
+  if (includeSecrets && unresolved) {
     add(
       "unresolved-secrets",
       `Hermes MCP server "${name}" references environment values that were not found in its .env file.`,
@@ -263,10 +212,7 @@ export function mcpManualItems(params: {
       `Hermes MCP server "${name}" uses a password-protected client key, which OpenClaw cannot represent in MCP config.`,
       "Configure an unencrypted protected key path or an equivalent TLS proxy manually.",
     );
-  } else if (
-    (cert !== undefined || key !== undefined) &&
-    !mapHermesClientCertificate(raw).clientCert
-  ) {
+  } else if ((cert !== undefined || key !== undefined) && !certificate.clientCert) {
     add(
       "client-cert",
       `Hermes MCP server "${name}" uses a combined or invalid client-certificate shape that was not imported.`,
@@ -281,7 +227,6 @@ export function mcpManualItems(params: {
     );
   }
 
-  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.type);
   if (transport && !["http", "streamable-http", "sse", "stdio"].includes(transport)) {
     add(
       "transport",
@@ -290,7 +235,6 @@ export function mcpManualItems(params: {
     );
   }
 
-  const auth = normalizeOptionalString(raw.auth);
   if (auth && auth !== "oauth") {
     add(
       "auth",
@@ -320,9 +264,7 @@ export function mcpManualItems(params: {
     );
   }
 
-  const tools = asOptionalRecord(raw.tools);
-  const include = tools ? readToolFilterList(tools.include) : undefined;
-  const activePatterns = include ?? (tools ? readToolFilterList(tools.exclude) : undefined);
+  const activePatterns = include ?? exclude;
   if (activePatterns?.some(hasUnsupportedToolPattern)) {
     add(
       "tool-patterns",
@@ -337,10 +279,10 @@ export function mcpManualItems(params: {
     (Object.keys(tools).some(
       (keyName) => !["include", "exclude", "resources", "prompts"].includes(keyName),
     ) ||
-      (tools.include !== undefined && !readToolFilterList(tools.include)) ||
-      (tools.exclude !== undefined && !readToolFilterList(tools.exclude)) ||
-      (tools.resources !== undefined && parseBooleanValue(tools.resources) === undefined) ||
-      (tools.prompts !== undefined && parseBooleanValue(tools.prompts) === undefined))
+      (tools.include !== undefined && !include) ||
+      (tools.exclude !== undefined && !exclude) ||
+      (tools.resources !== undefined && resources === undefined) ||
+      (tools.prompts !== undefined && prompts === undefined))
   ) {
     add(
       "tool-policy",
@@ -372,5 +314,10 @@ export function mcpManualItems(params: {
       );
     }
   }
-  return items;
+  return {
+    server:
+      normalizeOptionalString(mapped.command) || normalizeOptionalString(mapped.url) ? mapped : {},
+    sensitive: includeSecrets && sensitive,
+    items,
+  };
 }

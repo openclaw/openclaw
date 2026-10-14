@@ -125,6 +125,8 @@ it.each(["retry", "deadline", "shutdown"] as const)(
   async (ending) => {
     const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-contention-")) };
     const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+    const terminal = vi.fn();
+    execution.onTerminal(terminal);
     const attempts = Atomics.load(new Int32Array(fault.enabled), 2);
     Atomics.store(new Int32Array(fault.enabled), 0, ending === "deadline" ? 4 : 3);
     const clock = vi.spyOn(performance, "now");
@@ -145,6 +147,7 @@ it.each(["retry", "deadline", "shutdown"] as const)(
       expect(Atomics.load(new Int32Array(fault.enabled), 2)).toBeGreaterThan(attempts);
       Atomics.store(new Int32Array(fault.enabled), 0, 0);
       if (ending !== "shutdown") {
+        expect(terminal).not.toHaveBeenCalled();
         execution.assertCurrent();
         await execution.prepare(source);
         const operation = vi.fn(async () => "recovered");

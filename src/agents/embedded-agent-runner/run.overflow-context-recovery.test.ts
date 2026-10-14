@@ -302,6 +302,25 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
   });
 
+  it("recovers a DashScope input-length range overflow as context overflow", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage:
+        "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    });
+    // The provider body also carries these structured fields; the text wording
+    // must outrank them so validation-shaped wrappers still recover.
+    assistantOverflowCandidate.errorType = "invalid_request_error";
+    assistantOverflowCandidate.errorCode = "invalid_parameter_error";
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
   it("does not compact a validation rejection naming context_length_exceeded", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",

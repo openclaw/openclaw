@@ -11,8 +11,10 @@ Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules appl
 
 ## Rules that keep the UI correct
 
+For new code or a Solid audit, read [idioms](references/idioms.md) and [lessons](references/lessons.md). Check `node_modules/solid-js/CHEATSHEET.md`, its `types/client/flow.d.ts`, and the installed `@solidjs/signals` / `@solidjs/web` types when choosing an API. Solid 2 is not Solid 1: rc.14 has no `createAsync`; asynchronous values are ordinary computations returning promises or async iterables.
+
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
-2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context.
+2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
 3. **Host tags and classes survive.** A component renders its existing `openclaw-*` tag as a plain host element in light DOM; CSS and E2E select it. Never rename a tag or a class. → [components](references/components.md)
 4. **One implementation per registered tag.** A Solid component must never render a tag that a Lit class still registers. When you port a custom element, delete its Lit class; remaining Lit callers reach the Solid version through `defineSolidBridge`. → [Lit interop](references/lit-interop.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
@@ -49,6 +51,7 @@ Use `jsxImportSource: "@solidjs/web"` and its JSX types, not Solid 1's `solid-js
 
 - `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` are gone in Solid 2; they compile to literal attributes or no-ops (lint flags them). `prop:` is the only namespace left.
 - Events are **camelCase** (`onClick`). `onWaSelect` listens to `waselect`; dashed custom events need `onWa-select` or a `listen(...)` ref factory.
+- Native event bindings bind once: dispatch through a stable callback that reads the current handler prop. Runtime spreads, including dynamic elements, can update handlers.
 - A read right after a write sees the **old** value until `flush()`. Don't write-then-read in handlers; derive.
 - Reactive reads after the first `await` in an async memo are untracked, and async memos get no `AbortSignal`.
 - Ref callbacks run **unowned**: `onCleanup` inside them does nothing.
@@ -59,12 +62,13 @@ More, each with its root cause: [lessons learned](references/lessons.md).
 
 ## Testing
 
-`mountSolid`, `waitForSolid`/`flush`, `renderSolidRef`, and the Solid application-context provider live in `ui/src/test-helpers/`. `.test.tsx` files are discovered. Keep assertions when you replace a harness. Visual changes need `pnpm ui:parity` or inspected before/after screenshots. → [testing](references/testing.md)
+`mountSolid`, `waitForSolid`/`flush`, `renderSolidRef`, and the Solid application-context provider live in `ui/src/test-helpers/`. `.test.tsx` files are discovered. Keep assertions when you replace a harness. Visual changes need inspected, sanitized before/after screenshots. Follow the assigned campaign's compute budget. → [testing](references/testing.md)
 
 ## References
 
 | Topic                                                    | Read when                                                                            |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [idioms](references/idioms.md)                           | derivations, props, lifecycle, local stores, keys, async values, and lint decisions  |
 | [components](references/components.md)                   | porting or writing components: Lit → Solid table, JSX bindings, events, refs, styles |
 | [state and ownership](references/state-and-ownership.md) | touching owners, projections, async reads, lifetimes, parking, chat render lifecycle |
 | [Lit interop](references/lit-interop.md)                 | a Lit caller uses your component, or your component hosts unported Lit               |

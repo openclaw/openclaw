@@ -10,7 +10,6 @@ import "../../components/link-reader-hovercard-registration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -95,48 +94,47 @@ function PullRequest(props: { value: ControlUiSessionPullRequest }) {
 
 type ActivitySessionGitProps = {
   context: ApplicationContext;
-  sessionKey: string;
-  agentId: string;
+  sessionKey?: string;
+  agentId?: string;
 };
 
-export const ActivitySessionGit = defineSolidBridge<ActivitySessionGitProps>(
-  "openclaw-activity-session-git",
-  (props) => {
-    const token = {};
-    const initial = untrack(() => ({ gateway: props.context.gateway, key: props.sessionKey }));
-    const gatewayProjection = projectGateway(initial.gateway);
-    const projection = projectSource(initial, {
-      read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
-      subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
-      equality: "revision",
-    });
-    createEffect(
-      () => ({ gateway: props.context.gateway, key: props.sessionKey }),
-      ({ gateway, key }) => {
-        gatewayProjection.replaceSource(gateway);
-        projection.replaceSource({ gateway, key });
-        const store = sessionPullRequestsForGateway(gateway);
-        store.watch(token, [key], { foreground: true });
-        return () => store.unwatch(token);
-      },
-    );
-    const connection = () => gatewayProjection.read().snapshot;
-    const snapshot = () => projection.read();
-    const branch = createMemo(() => {
-      const current = snapshot();
-      return current?.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft")
-        ? undefined
-        : current?.branch;
-    });
-    const pullRequests = () => snapshot()?.pullRequests ?? [];
-    const visible = () => Boolean(branch() || pullRequests().length);
-    const stale = () => snapshot()?.status !== "ready" || connection().phase !== "connected";
-    return (
+export function ActivitySessionGit(props: ActivitySessionGitProps) {
+  const token = {};
+  const currentGateway = createMemo(() => props.context.gateway);
+  const sessionKey = createMemo(() => props.sessionKey ?? "");
+  const source = () => ({ gateway: currentGateway(), key: sessionKey() });
+  const initial = untrack(source);
+  const gatewayProjection = projectGateway(initial.gateway);
+  const projection = projectSource(initial, {
+    read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
+    subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
+    equality: "revision",
+  });
+  createEffect(source, ({ gateway, key }) => {
+    gatewayProjection.replaceSource(gateway);
+    projection.replaceSource({ gateway, key });
+    const store = sessionPullRequestsForGateway(gateway);
+    store.watch(token, [key], { foreground: true });
+    return () => store.unwatch(token);
+  });
+  const connection = () => gatewayProjection.read().snapshot;
+  const snapshot = () => projection.read();
+  const branch = createMemo(() => {
+    const current = snapshot();
+    return current?.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft")
+      ? undefined
+      : current?.branch;
+  });
+  const pullRequests = () => snapshot()?.pullRequests ?? [];
+  const visible = () => Boolean(branch() || pullRequests().length);
+  const stale = () => snapshot()?.status !== "ready" || connection().phase !== "connected";
+  return (
+    <openclaw-activity-session-git>
       <Show when={visible()}>
         <openclaw-link-reader-hovercard-provider
           prop:client={connection().phase === "connected" ? connection().client : null}
           prop:readers={availableLinkPreviewReaders(connection())}
-          prop:agentId={props.agentId}
+          prop:agentId={props.agentId ?? ""}
           prop:previewSeeds={pullRequests().map(pullRequestPreview)}
         >
           <div class="activity-feed__git">
@@ -170,13 +168,14 @@ export const ActivitySessionGit = defineSolidBridge<ActivitySessionGitProps>(
           </div>
         </openclaw-link-reader-hovercard-provider>
       </Show>
-    );
-  },
-  {
-    properties: {
-      context: { default: undefined!, attribute: false },
-      sessionKey: { default: "" },
-      agentId: { default: "" },
-    },
-  },
-);
+    </openclaw-activity-session-git>
+  );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-activity-session-git": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

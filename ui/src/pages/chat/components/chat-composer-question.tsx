@@ -1,5 +1,4 @@
 import { createAsyncQuestionPanelProps } from "./chat-async-question.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import {
   createGatewayQuestionPanelProps,
@@ -133,8 +132,4 @@ export function resolveComposerQuestionPanel(
     onPreviousRequest: () => selectRequest((index - 1 + requests.length) % requests.length),
     onNextRequest: () => selectRequest((index + 1) % requests.length),
   });
-}
-
-export function renderComposerQuestionDock(panel: QuestionPanelProps | null) {
-  return solidTemplate(ComposerQuestionDock, { panel });
 }

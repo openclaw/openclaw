@@ -32,6 +32,7 @@ import {
   readSessionTranscriptAnchorsAsync,
 } from "./session-transcript-anchor-read.js";
 import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
+import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
@@ -459,6 +460,75 @@ it("returns a reply tail and its current watermark from one projection snapshot"
     } finally {
       statements.restore();
     }
+  });
+});
+
+it("reuses bounded message payloads for presence without treating an omitted message as absent", async () => {
+  await withOpenClawTestState({ label: "bounded-transcript-message-presence" }, async (state) => {
+    const scope = transcriptScope(state);
+    const metadata = {
+      type: "custom",
+      id: "metadata",
+      parentId: null,
+      customType: "fixture",
+      data: {},
+      message: { role: "user", content: "metadata is not a message event" },
+    };
+    await replaceTranscriptEvents(scope, [events[0], metadata]);
+    const read = async (maxBytes = 4096) => {
+      const sql = observeHostDataSql();
+      try {
+        const result = await readSessionTranscriptHydrationRequest(
+          {
+            kind: "transcript-hydration",
+            database: { agentId: scope.agentId, path: scope.storePath },
+            target: scope,
+            resolvedScope: { ...scope, path: scope.storePath },
+            limits: { maxBytes, maxEvents: 10 },
+            transcript: {
+              sessionKey: scope.sessionKey,
+              entryIds: [],
+              includeMessagePresence: true,
+            },
+          },
+          undefined,
+          { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+        );
+        if (result.kind !== "bounded") {
+          throw new Error("Expected bounded transcript hydration");
+        }
+        return {
+          result,
+          probed: sql.queries.some((query) =>
+            query.startsWith('select "seq" from "transcript_event_identities"'),
+          ),
+        };
+      } finally {
+        sql.restore();
+      }
+    };
+    expect((await read()).result.transcript?.messagePresence).toBe(false);
+    await replaceTranscriptEvents(scope, [
+      events[0],
+      metadata,
+      {
+        type: "message",
+        id: "question",
+        parentId: "metadata",
+        message: { role: "user", content: "message ".repeat(128) },
+      },
+    ]);
+    const included = await read();
+    expect(included.result.transcript?.messagePresence).toBe(true);
+    expect(included.probed).toBe(false);
+    const omitted = await read(256);
+    expect(omitted.result.snapshot.events).not.toContainEqual(
+      expect.objectContaining({ type: "message" }),
+    );
+    expect(omitted.result.transcript?.messagePresence).toBe(true);
+    expect(omitted.probed).toBe(true);
+    await replaceTranscriptEvents(scope, [events[0]]);
+    expect((await read()).result.transcript?.messagePresence).toBe(false);
   });
 });
 

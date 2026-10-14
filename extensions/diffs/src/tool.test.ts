@@ -8,6 +8,7 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaywrightDiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
@@ -84,7 +85,12 @@ describe("diffs tool", () => {
   it("uses current public origin for retained tools after config reload", async () => {
     let config: OpenClawConfig = { gateway: { publicOrigin: "https://first.example" } };
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    const api = createTestPluginApi({ id: "diffs", config, registerTool });
+    const api = createTestPluginApi({
+      id: "diffs",
+      config,
+      registerTool,
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+    });
     api.runtime.state = {
       ...api.runtime.state,
       openBlobStore: vi.fn().mockReturnValue(blobStore),

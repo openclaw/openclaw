@@ -15,7 +15,7 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -201,9 +201,11 @@ suite.define(() => {
         const gateway = await installGuestGateway(page, hasWorkspace, null);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText(historyText, { exact: true }).waitFor();
-        await openDetailsPullRequests(page);
+        const details = await openChatDetails(page);
         await gateway.waitForRequest("sessions.github.options");
-        await openDetailsPullRequests(page);
+        await expect
+          .poll(() => details.locator('[data-details-group="pull-requests"]').count())
+          .toBe(0);
         expect(await page.getByRole("button", { name: "Publish PR", exact: true }).count()).toBe(0);
         await expectNoPersonalActions(page);
         expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);

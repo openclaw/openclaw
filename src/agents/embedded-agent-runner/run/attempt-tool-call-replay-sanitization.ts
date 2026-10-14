@@ -2,10 +2,7 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  normalizeOpenAIResponsesToolCallIds,
-} from "../../embedded-agent-helpers/openai.js";
+import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
@@ -330,7 +327,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
+  return normalizeOpenAIResponsesToolCallIds(repaired);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(

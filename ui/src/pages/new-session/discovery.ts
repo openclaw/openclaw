@@ -25,6 +25,7 @@ export type DraftRepositoryState =
   // Selected GitHub projects offer isolation before checkout exists. Local first
   // turns prepare after admission; remote placement clones on its selected runner.
   | { kind: "pending-clone"; cloneUrl: string }
+  | { kind: "pending-project"; projectId: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -48,6 +49,7 @@ export type DraftEnvironment = {
   status: EnvironmentStatus;
   platform?: string;
   sessionHost?: boolean;
+  workerHost?: { deviceFolders: boolean };
   workerSlots?: WorkerSlotSummary;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
@@ -309,6 +311,9 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             ? { sessionHost: environment.sessionHost }
             : {}),
           ...(workerSlots ? { workerSlots } : {}),
+          ...(isRecord(environment.workerHost)
+            ? { workerHost: { deviceFolders: environment.workerHost.deviceFolders === true } }
+            : {}),
           ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
           ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
           ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),

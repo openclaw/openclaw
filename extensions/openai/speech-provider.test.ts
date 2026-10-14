@@ -412,7 +412,7 @@ describe("buildOpenAISpeechProvider", () => {
       voice: "alloy",
     };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(false);
     await expect(
       provider.synthesize({
         text: "hello",
@@ -446,7 +446,7 @@ describe("buildOpenAISpeechProvider", () => {
       voice: "alloy",
     };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(true);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(true);
     await provider.synthesize({
       text: "hello",
       cfg: {} as never,

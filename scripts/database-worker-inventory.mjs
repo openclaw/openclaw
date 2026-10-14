@@ -928,12 +928,6 @@ const reviewedOperations = new Map([
     "src/config/sessions/session-accessor.sqlite-maintenance-transaction.ts",
     [
       {
-        tier: "W",
-        operations: ["readSessionMaintenanceInWorker"],
-        evidence:
-          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Metadata transactions have separate reviewed worker/maintenance ownership.",
-      },
-      {
         tier: "T3",
         operations: ["runSessionMaintenanceMetadataInTransaction"],
         evidence:
@@ -1850,7 +1844,7 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["hasPendingCanonicalSessionValidation"],
         evidence:
-          "Native readiness is startup-migration.ts:359 via session-canonical-validation-readiness.ts:91. Runtime request-authorization.ts:461 and session-row-prepared-read.ts:240 pass captured PendingCanonicalValidation.source and skip that probe; the other caller is the mutation worker's has-pending operation.",
+          "Native readiness serves startup and Doctor maintenance through startup-migration.ts and session-canonical-validation-readiness.ts. Prepared Gateway row reads consume worker-admitted facts without a native readiness probe; the other caller is the mutation worker's has-pending operation.",
       },
     ],
   ],

@@ -36,8 +36,8 @@ suite.define(() => {
       };
       const gateway = await installMockGateway(page, {
         sessionKey,
+        sessions: [active],
         methodResponses: {
-          "sessions.list": { sessions: [active], count: 1, path: "", ts: now },
           "chat.startup": history,
           "chat.history": history,
         },

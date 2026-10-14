@@ -17,6 +17,12 @@ import {
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+/** Existing directory on a paired session host; never a Gateway-owned checkout. */
+export const SessionDeviceFolderSchema = closedObject({
+  deviceId: NonEmptyString,
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+});
+
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
   Type.Literal("guarded"),
@@ -197,6 +203,7 @@ export const SessionRowSchema = Type.Object(
     swarmGroupId: Type.Optional(Type.String()),
     /** Requester-owned execution counts; never child content or parent synthesis status. */
     swarm: Type.Optional(SessionSwarmSummarySchema),
+    deviceFolder: Type.Optional(SessionDeviceFolderSchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),

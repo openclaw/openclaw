@@ -233,14 +233,16 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+The complete agents-support, CLI, commands, embedded-agent-run, and gateway-methods leaf
 configs also support Bun. Their existing pools, exclusions, and worker limits
 remain in effect. CLI-process and other agent and Gateway owners keep their
-separate qualification policies. Agents-support and gateway-methods include
+separate qualification policies. Agents-support, commands, and gateway-methods include
 overrides use Bun only for canonical owner patterns or literal files proven to
 belong to that owner; broad or uncertain patterns keep the complete Node
 selection. Dual validation runs each complete selected owner on Node before Bun
 in the same worker slot.
+Commands keeps commands-light, database-worker, and unit-fast files in their
+existing owners; its admission does not change their runtime policies.
 
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
@@ -470,6 +472,14 @@ separate package graphs previously ran before the app build in one job; a hosted
 baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilation
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
+
+Full nonpublishing manual validation also stages the exact candidate runtime and runs
+ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
+The existing launcher owns their private home, Keychain, selected service, and process
+settlement. Both phase event streams are retained in `macos-bundled-recovery-proof`.
+Only this full-tier test phase has a 75-minute budget for the runtime build, staging,
+and native composition; ordinary tests and independent packages retain 30 minutes.
+The proof does not sign or publish an app.
 
 App tests run in three sequential launcher invocations: the default-profile suite,
 rendered Quick Chat in a fresh default-profile process, then named-profile fixtures.
@@ -730,6 +740,12 @@ of one, two, and four seconds, within the original 30-second request timeout.
 These retries exclude writes, caller cancellation, certificate errors, invalid
 JSON, oversized responses, and unrecognized errors. HTTP, connection, and
 response-body errors identify the request method and endpoint.
+
+GitHub can persistently fail a 100-job page of a CI attempt while smaller pages
+succeed. The review reads CI jobs at page sizes of 100, then 50, then 25. A size
+above 25 skips the server-error retries and immediately requests the same job
+range at half size. Pages at 25 jobs use the normal read retries, timeout, and
+recovery. Enumeration must still reach the reported job count.
 
 If a read-only request reaches its 30-second deadline, including while reading
 its response body, the script restarts the complete evaluation with fresh PR,

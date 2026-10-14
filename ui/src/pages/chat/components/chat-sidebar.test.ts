@@ -419,6 +419,7 @@ describe("markdown sidebar", () => {
   });
 
   it.each([
+    ["bundle.zip", "https://files.example/bundle.zip", "application/zip"],
     ["external.html", "https://files.example/external.html", "text/html"],
     ["external.pdf", "https://files.example/external.pdf", "application/pdf"],
   ] as const)(
@@ -445,6 +446,7 @@ describe("markdown sidebar", () => {
       expect(download?.getAttribute("href")).toBe(src);
       expect(download?.target).toBe("_blank");
       expect(download?.rel).toBe("noreferrer");
+      expect(download?.textContent).toContain("Download");
       expect(fetchMock).not.toHaveBeenCalled();
       panel.remove();
     },

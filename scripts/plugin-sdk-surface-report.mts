@@ -271,7 +271,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
-      3758,
+      // +1: async auth-provider preparation for Codex and voice model-session patches.
+      // +1: isHostNoticePayload for agent-to-agent reply filtering.
+      3760,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -304,7 +306,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: shared database-engine host and worker operations.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: the same lexical database-engine admission scope.
-      2193,
+      // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
+      // +1: the same host-notice classifier on reply-payload.
+      2195,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -18,7 +18,8 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import "./chat-pane.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { createPaneTestHost } from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -77,8 +78,8 @@ type TestChatPane = HTMLElement & {
   confirmConversationReset: () => Promise<boolean>;
   commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
-  updated: () => void;
-  willUpdate: (changes: Map<PropertyKey, unknown>) => void;
+  prepareRender: () => void;
+  commitRender: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
   resolveBoardProvider: () => BoardProvider;
@@ -95,20 +96,26 @@ type TestChatPane = HTMLElement & {
 let theme: ReturnType<typeof createApplicationTheme>;
 
 function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
   const client = {
     request: vi.fn(async () => ({ session: { key: "agent:main:current", kind: "direct" } })),
   } as unknown as GatewayBrowserClient;
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   connectionBootstrap.synchronize({ client, connected: true });
   onTestFinished(() => connectionBootstrap.reset());
-  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
-  pane.context = {
+  const context = {
     theme,
     connectionBootstrap,
     sessions,
     gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
+  // SAFETY: The test host forwards the protected Board controller contract to its runtime.
+  const pane = createPaneTestHost(
+    "openclaw-chat-board-runtime-test",
+    ChatPaneRuntime,
+    () => context,
+  ) as unknown as TestChatPane;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+  pane.context = context;
   pane.state = {
     ...createInitialChatRealtimeState(),
     chatError: null,
@@ -293,8 +300,8 @@ describe("chat pane board shell", () => {
     second.boardProvider = provider;
     const changed = vi.fn();
     first.addEventListener("openclaw-chat-pane-lifecycle-changed", changed);
-    first.updated();
-    second.updated();
+    first.commitRender();
+    second.commitRender();
     expect(first.conversationPresented).toBe(true);
     expect(second.conversationPresented).toBe(true);
     expect(changed).toHaveBeenCalledOnce();
@@ -306,7 +313,7 @@ describe("chat pane board shell", () => {
     first.presented = false;
     first.visuallyPresented = true;
     expect(first.conversationPresented).toBe(false);
-    first.updated();
+    first.commitRender();
     expect(second.conversationPresented).toBe(true);
     expect(changed).toHaveBeenCalledTimes(2);
   });
@@ -327,8 +334,8 @@ describe("chat pane board shell", () => {
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
-      pane.willUpdate(new Map());
-      pane.updated();
+      pane.prepareRender();
+      pane.commitRender();
       expect(pane.conversationPresented).toBe(false);
       expect(pane.state.sidebarLayout.expanded).toBe(true);
       expect(pane.state.sidebarLayout.open).toBe(true);
@@ -338,8 +345,8 @@ describe("chat pane board shell", () => {
       );
 
       pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
-      pane.willUpdate(new Map());
-      pane.updated();
+      pane.prepareRender();
+      pane.commitRender();
       expect(pane.state.sidebarLayout.expanded).toBe(false);
       expect(pane.conversationPresented).toBe(slot === "dashboard");
     },
@@ -548,7 +555,7 @@ describe("chat pane board shell", () => {
     const pending = pane.createSession();
     await Promise.resolve();
     pane.state.sessionKey = "agent:main:other";
-    pane.updated();
+    pane.commitRender();
 
     await expect(pending).resolves.toBe(false);
     expect(Boolean(pane.resetConfirmation)).toBe(false);
@@ -586,10 +593,10 @@ describe("chat pane board shell", () => {
       const provider = pane.resolveBoardProvider();
       await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
       const pending = pane.confirmConversationReset();
-      pane.updated();
+      pane.commitRender();
       expect(Boolean(pane.resetConfirmation)).toBe(true);
       pane.state.assistantAgentId = "main";
-      pane.updated();
+      pane.commitRender();
       await expect(pending).resolves.toBe(false);
       expect(Boolean(pane.resetConfirmation)).toBe(false);
     } finally {
@@ -728,6 +735,30 @@ describe("chat pane board shell", () => {
     configureGatewayMainSession(pane, "work", "primary");
 
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
+  });
+
+  it("keeps the board and its iframe connected when a retained pane hides and returns", () => {
+    const pane = createTestPane();
+    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
+    const container = document.body.appendChild(document.createElement("div"));
+    const layout = openSlot({ columns: [] }, "dashboard");
+    const draw = () => render(pane.renderBoardPanel(pane.resolveBoardView(), layout), container);
+    try {
+      pane.visuallyPresented = true;
+      draw();
+      const board = container.querySelector("openclaw-board-view")!;
+      const frame = board.appendChild(document.createElement("iframe"));
+      for (const visible of [false, true]) {
+        pane.visuallyPresented = visible;
+        draw();
+        expect(container.querySelector("openclaw-board-view")).toBe(board);
+        expect(frame.isConnected).toBe(true);
+        expect(board.active).toBe(visible);
+      }
+    } finally {
+      render(html``, container);
+      container.remove();
+    }
   });
 
   it.each([{ key: "notes", acknowledged: "agent:research:notes", globalScope: false }])(

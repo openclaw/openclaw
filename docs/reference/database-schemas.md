@@ -76,6 +76,20 @@ internal maintenance against subsequent revocation; it is never retained across
 asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
 and update behavior are unchanged.
 
+Update-history workers bound commit-admission waits to one second. On timeout,
+the transaction rolls back before the same worker command retries, preserving
+FIFO ordering and rereading the current rows. Fresh admission waits outside
+`BEGIN IMMEDIATE`, leaving the serving Gateway's writer free while the updater
+host is busy. Authority refusals and uncertain rollback outcomes are not retried;
+required update and recovery records retain their existing durability.
+
+Channel-identity writes use the same one-second admission budget at transaction
+entry and commit, with at most three attempts. Entry admission waits before
+`BEGIN`; a commit timeout rolls back before retrying with fresh authority and
+current rows. Exhaustion names the failed operation and directs the operator to
+`openclaw gateway status --deep` before retrying. Final commit authorization stays
+inside the transaction until the remaining authority owners can transfer their checks.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
@@ -163,6 +177,12 @@ retains the physical database's completed validation facts for later opens in th
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
 
+Shared-state commands load their registered domain directly. The remaining command
+runtime loads only when an operation needs it, so workers serving registered
+operations alone do not retain unrelated command modules. Preparation still
+finishes before synchronous database execution; writer admission and receipts
+stay with their existing owners.
+
 The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
 Retirement uses the pool's existing task and native-resource settlement so an
@@ -232,7 +252,10 @@ transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the published facts. Missing objects use the existing installation
 transaction, which publishes the new schema facts on commit; rollback cannot
-publish a schema that did not commit. Ordinary connection replacement and data
+publish a schema that did not commit. Admission publications use the active
+connection’s transaction state and the store’s shared publication anchor, so
+PostgreSQL transactions also defer facts until commit and discard them on rollback.
+Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
 

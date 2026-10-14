@@ -12,7 +12,7 @@ import {
   ChatActivityHeadline,
   type ChatActivityHeadlineProps,
 } from "./chat-activity-headline.solid.tsx";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,

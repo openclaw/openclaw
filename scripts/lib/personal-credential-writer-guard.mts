@@ -29,7 +29,7 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
-const authKernel = "src/agents/auth-profiles/store-update-kernel.ts";
+const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
 const catalogWorker = "src/agents/prepared-model-catalog.worker.ts";
@@ -132,6 +132,8 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     key(authUpdate, "runAuthProfileStoreUpdate"),
     [
       key(authUpdate, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
+      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
+      key(authProfiles, "removeAuthProfileTargetsWithLocks/publish"),
       key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch"),
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
       key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/updateAsync"),
@@ -207,10 +209,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(authStore, "restoreAuthProfileStorePersistenceSnapshot"),
-    [
-      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
-      key("src/secrets/apply.ts", "runSecretsApply"),
-    ],
+    [key("src/secrets/apply.ts", "runSecretsApply")],
   ],
   [
     key(authRuntime, "saveAuthProfileStore"),
@@ -232,10 +231,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(authRuntime, "saveAuthProfileStoreIfPersistenceSnapshotMatches"),
-    [
-      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
-      key("src/secrets/apply.ts", "runSecretsApply"),
-    ],
+    [key("src/secrets/apply.ts", "runSecretsApply")],
   ],
   [
     key(authProfiles, "upsertAuthProfile"),

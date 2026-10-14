@@ -5,6 +5,8 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-strict.ts",
   // Canonical owner of SQLite user_version read/write.
   "src/infra/sqlite-user-version.ts",
+  // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
+  "src/infra/sqlite-migration-scoped-snapshot.ts",
 ];
 export type DialectMatch = {
   construct: string;

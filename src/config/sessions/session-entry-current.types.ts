@@ -11,6 +11,7 @@ export type SessionEntryCurrentFacts = {
   initializationPending?: SessionEntry["initializationPending"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
+  deviceFolder?: SessionEntry["deviceFolder"];
   sandbox?: SessionEntry["sandbox"];
   sandboxMode?: SessionEntry["sandboxMode"];
   permissionMode?: SessionEntry["permissionMode"];

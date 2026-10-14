@@ -126,6 +126,7 @@ function projectBlock(block: AssistantMessage["content"][number]): ProjectedBloc
 
 export async function runFixture(
   events: readonly Record<string, unknown>[],
+  options?: Parameters<typeof processTransportStream>[4],
 ): Promise<ProcessResult> {
   const output = createOutput();
   const captured: AssistantMessageEvent[] = [];
@@ -136,6 +137,7 @@ export async function runFixture(
       output,
       { push: (event) => captured.push(event as AssistantMessageEvent) },
       model,
+      options,
     );
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);

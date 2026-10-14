@@ -615,7 +615,7 @@ describe("cron method validation", () => {
           elapsedMs: fails ? 1301 : 1302,
           phaseDurationsMs: fails
             ? { setup: 0, listing: 1301 }
-            : { setup: 0, listing: 1302, projection: 0, response: 0, handlerExit: 0 },
+            : { setup: 0, listing: 1301, projection: 1, response: 0, handlerExit: 0 },
           sourcePageMs: 1301,
           sourcePageCount: 1,
           scopeAttemptCount: 1,
@@ -625,7 +625,7 @@ describe("cron method validation", () => {
           previewsRequested: false,
           scopeApplied: true,
           ...(!fails ? { returnedCount: 1 } : {}),
-          scopeProcessingMs: fails ? 0 : 1,
+          scopeProcessingMs: 0,
         });
       },
     );

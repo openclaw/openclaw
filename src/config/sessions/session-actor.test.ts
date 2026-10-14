@@ -7,6 +7,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import { observeSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -27,6 +28,68 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+
+it("publishes actor initialization from its absent transaction preimage", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const fixture = createSessionCompoundWorkerFixture();
+    const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Fixture requires durable storage");
+    }
+    const scope = {
+      ...fixture.scope,
+      sessionKey: "agent:main:actor-first-maintenance",
+      sessionId: "actor-first-maintenance",
+    };
+    const actor = await createDurableSessionActorFactory({
+      agentId: "main",
+      path: fixture.database.path,
+      env,
+    }).acquire(
+      {
+        sessionKey: scope.sessionKey,
+        database: {
+          kind: "file",
+          physicalIdentity: identity.identity,
+          birthtime: identity.birthtime,
+          nativeLocation: fixture.database.path,
+        },
+      },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const ageChanges = vi.fn();
+    const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(identity.identity, ageChanges);
+    try {
+      const result = await appendSessionManagerActor({
+        actor,
+        toolResult: false,
+        assertCurrent() {},
+        append: {
+          kind: "message",
+          input: {
+            scope,
+            cwd: "/synthetic",
+            messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
+          },
+          initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
+        },
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.committed).toMatchObject({
+        kind: "message",
+        value: { snapshot: { ok: true } },
+      });
+      expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: scope.sessionKey,
+        entry: expect.objectContaining({ sessionId: scope.sessionId }),
+        previousEntry: undefined,
+      });
+    } finally {
+      stopAgeChanges();
+      await actor.release();
+    }
+  });
+});
 
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -100,6 +163,11 @@ it.each([false, true])(
       if ("kind" in actor) {
         throw new Error("Durable session must be actor-owned");
       }
+      const ageChanges = vi.fn();
+      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
+        identity.identity,
+        ageChanges,
+      );
       try {
         const beforeEntry = fixture.read();
         const revoked = await actor.patch(
@@ -122,6 +190,7 @@ it.each([false, true])(
           error: { message: "synthetic live authority revocation" },
         });
         expect(fixture.read()).toEqual(beforeEntry);
+        expect(ageChanges).not.toHaveBeenCalled();
 
         const retained = retainPreparedSessionEntryPredicate({
           databaseIdentity: `file:${identity.identity}`,
@@ -137,7 +206,16 @@ it.each([false, true])(
             reducers: [{ kind: "activity", updatedAt: 543 }],
           },
           authority,
-          { committed: () => expect(retained.isCurrent()).toBe(false) },
+          {
+            committed: () => {
+              expect(retained.isCurrent()).toBe(false);
+              expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+                sessionKey: fixture.scope.sessionKey,
+                entry: expect.objectContaining({ updatedAt: 543 }),
+                previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
+              });
+            },
+          },
         );
         expect(result.kind).toBe("committed");
         if (result.kind !== "committed") {
@@ -176,6 +254,7 @@ it.each([false, true])(
           sequence: before.version.sequence + 1,
         });
       } finally {
+        stopAgeChanges();
         await actor.release();
       }
     });
@@ -505,7 +584,7 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("shares immutable actor revisions and isolates explicit policy copies", async () => {
+it("shares actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
     expect(actor.snapshot(authority)).toBe(initial);
@@ -521,11 +600,6 @@ it("shares immutable actor revisions and isolates explicit policy copies", async
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          expect(Object.isFrozen(snapshot)).toBe(true);
-          expect(Object.isFrozen(snapshot.entry)).toBe(true);
-          expect(() => {
-            snapshot.dependencySessionIds.length = 0;
-          }).toThrow(TypeError);
           const copy = structuredClone(snapshot);
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";

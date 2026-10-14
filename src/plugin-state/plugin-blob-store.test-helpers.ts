@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -22,7 +22,7 @@ export function createPluginBlobKernelStore<TMetadata>(
 ): PluginBlobStore<TMetadata> {
   const { namespace, env } = options;
   const scope = { pluginId, namespace, env };
-  const write = <T>(operation: (db: DatabaseSync) => T): T =>
+  const write = <T>(operation: (db: EngineConnection) => T): T =>
     runOpenClawStateWriteTransaction(({ db }) => operation(db), { env });
   const prepared = (
     key: string,

@@ -217,6 +217,29 @@ describe("memory manager agent database lifecycle", () => {
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
   });
 
+  it("re-admits a worker-only manager after terminal database revocation", async () => {
+    const cfg = createConfig();
+    const seed = await fixture.getFreshManager(cfg, "cli");
+    await seed.sync({ reason: "baseline", force: true });
+    await seed.close();
+
+    const first = await fixture.getFreshManager(cfg);
+    const database = Reflect.get(first, "publishedDatabase") as MemoryIndexDatabase;
+    expect(database.isOpen).toBe(true);
+    expect(await fixture.getFreshManager(cfg)).toBe(first);
+
+    // Keep this path worker-only: opening the compatibility reader would mask stale liveness.
+    await closeOpenClawAgentDatabasesAsync(fixture.paths.stateDir);
+    expect(database.isOpen).toBe(false);
+
+    const replacement = await fixture.getFreshManager(cfg);
+    expect(replacement).not.toBe(first);
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+    await first.close();
+    await replacement.sync({ reason: "after-revocation", force: true });
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
   it("rejects queued maintenance without reopening its retired source connection", async () => {
     const cfg = createConfig();
     const source = await fixture.getFreshManager(cfg, "cli");

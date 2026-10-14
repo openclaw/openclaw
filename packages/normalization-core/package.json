@@ -119,6 +119,11 @@
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
     },
+    "./session-key-comparison": {
+      "types": "./dist/session-key-comparison.d.mts",
+      "import": "./dist/session-key-comparison.mjs",
+      "default": "./dist/session-key-comparison.mjs"
+    },
     "./stable-node-path": {
       "types": "./dist/stable-node-path.d.mts",
       "import": "./dist/stable-node-path.mjs",

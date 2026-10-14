@@ -23,25 +23,42 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
   await element.updateComplete;
   return element;
 }
-it("retains disclosure state across revisions and resets it for another session", async () => {
+it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
   const element = await mount();
-  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details-session")!;
-  expect(disclosure.open).toBe(true);
-  disclosure.open = false;
-  disclosure.dispatchEvent(new Event("toggle"));
-  flush();
-
-  element.props = { ...element.props!, detailsWorkspace: { root: "/workspace", label: "Updated" } };
-  await element.updateComplete;
-  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(false);
-
+  expect(element.querySelector("[data-details-group]")).toBeNull();
   element.props = {
     ...element.props!,
-    sessionKey: "agent:main:other",
-    selectedSession: { key: "agent:main:other", kind: "direct", sessionId: "other" },
+    pullRequests: [
+      {
+        number: 7,
+        owner: "example",
+        repo: "project",
+        branch: "feature",
+        title: "A pull request arriving after the panel opens",
+        url: "https://github.com/example/project/pull/7",
+        state: "open",
+      },
+    ],
   };
   await element.updateComplete;
-  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(true);
+  const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
+  expect(group.open).toBe(true);
+  group.open = false;
+  group.dispatchEvent(new Event("toggle"));
+  flush();
+  element.props = { ...element.props! };
+  await element.updateComplete;
+  expect(group.open).toBe(false);
+  const pullRequests = element.props!.pullRequests;
+  element.props = { ...element.props!, pullRequests: [] };
+  await element.updateComplete;
+  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(element.querySelector(".chat-details-session > summary")).toBeNull();
+  element.props = { ...element.props!, pullRequests };
+  await element.updateComplete;
+  expect(
+    element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')?.open,
+  ).toBe(true);
 });
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
@@ -97,7 +114,7 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   }
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
-  expect(automation).toHaveProperty("presented", false);
+  expect(automation).toHaveProperty("presented", true);
   element.querySelector<HTMLButtonElement>(".chat-pr__dismiss")!.click();
   expect(dismiss).toHaveBeenCalledWith(element.props!.pullRequests![0]);
   const branch = {

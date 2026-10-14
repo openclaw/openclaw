@@ -335,7 +335,7 @@ suite.define(() => {
     );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",

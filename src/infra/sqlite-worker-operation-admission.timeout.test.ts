@@ -189,3 +189,30 @@ it("refuses a host grant whose policy preparation crosses the deadline", () => {
     admission.finish();
   }
 });
+
+it("grants a deadline admission while the host thread runs fake timers ahead of the worker clock", () => {
+  // Fake hrtime starts at zero; run it past the real clock the worker used for its deadline.
+  const aheadOfRealClockMs = Number(process.hrtime.bigint() / 1_000_000n) + 60_000;
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(aheadOfRealClockMs);
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "commit",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    admission.finish();
+  }
+});

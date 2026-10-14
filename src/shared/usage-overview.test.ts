@@ -575,6 +575,7 @@ it.each(["tokens", "cost"] as const)(
     expect(compact.overview.selectedRows[0]?.usage?.dailyBreakdown).toBeUndefined();
     expect(canonical.overview.selectedRows[0]?.usage?.dailyBreakdown).toHaveLength(2);
     expect(compact.overview).toMatchObject({
+      selectedUsageComplete: true,
       tableSessionCount: 2,
       tableTotals: { tokens: 91, cost: 9.1, errors: 0 },
     });

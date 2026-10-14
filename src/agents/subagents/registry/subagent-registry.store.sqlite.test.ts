@@ -14,6 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import {
   createSubagentStoreRunFixture as createRun,
   loadSubagentRegistryFromSqlite,
@@ -243,7 +244,8 @@ describe("subagent registry sqlite store", () => {
     const run = createRun({ model: "original-model" });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     const database = openOpenClawStateDatabase();
-    const { db, path: databasePath } = database;
+    const { path: databasePath } = database;
+    const db = requireNativeSqliteDatabase(database.db);
     const read = (keys: readonly string[]) =>
       loadSubagentRunsForSessionsInDatabase(database, keys, []);
     const writer = new DatabaseSync(databasePath);

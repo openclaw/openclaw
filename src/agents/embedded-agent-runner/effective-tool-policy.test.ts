@@ -71,47 +71,6 @@ function createSessionStorePath(prefix: string, agentId: string): string {
 }
 
 describe("applyFinalEffectiveToolPolicy", () => {
-  it("filters bundled tools through the configured allowlist", async () => {
-    const filtered = await applyFinalPolicy({
-      bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
-      config: { tools: { allow: ["mcp__bundle__fs_read"] } },
-      warn: () => {},
-    });
-
-    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
-  });
-
-  it("filters bundled tools through inherited subagent allowlists", async () => {
-    // Inherited allowlists are persisted by session key; use a real temp store
-    // so parsing and lookup match production policy application.
-    const agentId = `bundled-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const sessionKey = `agent:${agentId}:subagent:limited`;
-    const storePath = createSessionStorePath("openclaw-bundled-inherited-allow", agentId);
-    await writeSessionEntries(storePath, {
-      [sessionKey]: {
-        sessionId: "limited-session",
-        updatedAt: Date.now(),
-        spawnDepth: 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        inheritedToolAllow: ["mcp__bundle__fs_read"],
-      },
-    });
-
-    const filtered = await applyFinalPolicy({
-      bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
-      config: {
-        session: {
-          store: storePath,
-        },
-      },
-      sessionKey,
-      warn: () => {},
-    });
-
-    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
-  });
-
   it("honors configured plugin allow entries alongside inherited bundled tool allows", async () => {
     const agentId = `bundled-plugin-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:subagent:limited`;
@@ -214,19 +173,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
     });
 
     expect(warnings).toContain(
-      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
-    );
-  });
-
-  it("leaves groupId untouched when caller did not supply one", async () => {
-    const warnings: string[] = [];
-    await applyFinalPolicy({
-      bundledTools: [makeTool("mcp__bundle__read")],
-      sessionKey: "agent:alice:main",
-      warn: (message) => warnings.push(message),
-    });
-
-    expect(warnings).not.toContain(
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   });

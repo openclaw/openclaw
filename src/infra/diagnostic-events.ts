@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
@@ -57,6 +58,7 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 
@@ -1241,6 +1243,22 @@ function emitDiagnosticEventWithTrust(
   }
 
   const enriched = enrichDiagnosticEvent(state, event);
+  if (trusted && enriched.type === "diagnostic.gc") {
+    // SDK producers cross this boundary; native samples already carry bounded attribution.
+    switch (enriched.kind) {
+      case "scavenge":
+      case "mark_sweep_compact":
+      case "incremental":
+      case "weak_processing":
+        break;
+      default:
+        enriched.kind = undefined;
+    }
+    enriched.thread =
+      enriched.thread === undefined || enriched.thread === "main"
+        ? "main"
+        : normalizeDiagnosticWorkerScript(enriched.thread);
+  }
   const { hostPluginId, internal = false, privateData } = options;
   const trustedTraceContext = options.trustedTraceContext === true;
   const metadata: InternalDiagnosticEventMetadata = {
@@ -1457,6 +1475,29 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
   });
 }
 
+/** SDK subscriptions belong to the registering instance, even if it drops the handle. */
+function ownDiagnosticSubscription(unsubscribe: () => void): () => void {
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  if (!instance) {
+    return unsubscribe;
+  }
+  let cleanup: (() => void) | undefined = unsubscribe;
+  let unregister: (() => void) | undefined;
+  const release = () => {
+    unregister?.();
+    unregister = undefined;
+    cleanup?.();
+    cleanup = undefined;
+  };
+  try {
+    unregister = instance.lifecycle.onDispose(release);
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
+}
+
 function registerDiagnosticEventListener<
   T,
   Interest extends InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
@@ -1472,13 +1513,13 @@ function registerDiagnosticEventListener<
   listeners.set(listener, filter);
   updateInternalDiagnosticEventInterest(filter, 1);
   setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  return () => {
+  return ownDiagnosticSubscription(() => {
     const interest = listeners.get(listener);
     if (listeners.delete(listener)) {
       updateInternalDiagnosticEventInterest(interest, -1);
     }
     setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  };
+  });
 }
 
 /** Subscribes to diagnostic events with dispatcher metadata. */
@@ -1507,7 +1548,9 @@ export function onTrustedInternalDiagnosticEvent(
 export function onTrustedToolExecutionEvent(
   listener: TrustedToolExecutionEventListener,
 ): () => void {
-  return registerListener(getDiagnosticEventsState().toolExecutionListeners, listener);
+  return ownDiagnosticSubscription(
+    registerListener(getDiagnosticEventsState().toolExecutionListeners, listener),
+  );
 }
 
 /** Checks currently queued async diagnostic events without draining the queue. */

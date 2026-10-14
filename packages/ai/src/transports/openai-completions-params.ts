@@ -65,6 +65,10 @@ import {
   supportsModelTools,
 } from "./transport-utils.js";
 
+type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
+  openclawThinkingExplicit?: boolean;
+};
+
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
     return true;
@@ -272,7 +276,7 @@ export function resolveCompletionsContextOutputBudget(
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: Context,
-  options: OpenAICompletionsOptions | undefined,
+  options: OpenAIThinkingProvenanceOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
   let contextOutputCap: number | undefined;
@@ -448,11 +452,14 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(
-    model,
-    requestedEffort,
-    compat.reasoningEffortForOff,
-  );
+  // Keep raw selection separate from the managed effort fallback.
+  const thinkingExplicit =
+    options?.openclawThinkingExplicit ??
+    (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
+  const reasoning = {
+    ...resolveOpenAIRequestReasoning(model, requestedEffort, compat.reasoningEffortForOff),
+    thinkingExplicit,
+  };
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =

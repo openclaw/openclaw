@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -37,6 +38,7 @@ export function readSessionEntryList(
   let revision: string | undefined;
   let unchanged: true | undefined;
   let nextCronRunUpdatedAt: number | null = null;
+  let nextCronRunSessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -48,7 +50,10 @@ export function readSessionEntryList(
               database,
               resolveSqliteScope({ ...scope, sessionKey: "" }),
               scope,
-              { captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value) },
+              {
+                captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value),
+                captureCronRunSessionKey: (value) => (nextCronRunSessionKey = value),
+              },
             );
           if (
             scope.projection !== "list" ||
@@ -83,7 +88,7 @@ export function readSessionEntryList(
           }
           return entries;
         }
-        return withSqlitePostCommitPublications(database.db, () =>
+        return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           runSqliteDeferredTransactionSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,
@@ -121,5 +126,6 @@ export function readSessionEntryList(
     revision,
     unchanged,
     ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
+    ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
   };
 }

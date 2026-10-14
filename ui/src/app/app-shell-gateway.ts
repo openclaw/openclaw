@@ -220,9 +220,9 @@ export class ShellGatewayOwner {
       });
     }
     const modelInvalidation = modelCatalogEventInvalidation(event);
-    const commandsChanged =
-      event.event !== "chat.metadata.changed" ||
-      asNullableRecord(event.payload)?.commandsChanged !== false;
+    const metadataChange =
+      event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
+    const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
       invalidateModelAuthStatusRequests(client);
     }
@@ -232,7 +232,9 @@ export class ShellGatewayOwner {
     ) {
       invalidateChatMetadataStore(
         client,
-        undefined,
+        typeof metadataChange?.agentId === "string"
+          ? { agentId: metadataChange.agentId }
+          : undefined,
         undefined,
         modelInvalidation ?? "preserve",
         commandsChanged,
@@ -319,6 +321,9 @@ export class ShellGatewayOwner {
         {
           detail: {
             open: command.open,
+            ...(command.panel === "portal" && commandParams.requestId
+              ? { requestId: commandParams.requestId }
+              : {}),
             ...(command.panel === "plugin"
               ? {
                   pluginId: command.pluginId,

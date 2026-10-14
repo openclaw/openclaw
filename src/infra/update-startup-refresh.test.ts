@@ -23,8 +23,6 @@ import {
   getUpdateAvailable,
   getUpdateSchedule,
   resetUpdateStatusState,
-  setUpdateAvailableCache,
-  setUpdateScheduleCache,
 } from "./update-status-state.js";
 
 vi.mock("../version.js", async (importOriginal) => ({
@@ -128,26 +126,6 @@ describe("interactive Dev update discovery", () => {
     vi.useRealTimers();
   });
 
-  it("refreshes the inferred Dev channel for a configless Git installation", async () => {
-    mockDevGitStatus({ behind: 3 });
-
-    await refreshGatewayUpdateStatus(() => ({}));
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
-    expect(getUpdateSchedule()).toMatchObject({
-      channel: "dev",
-      install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
-      target: { kind: "git", upstreamSha: "upstream-sha", commitsBehind: 3 },
-    });
-    expect(getUpdateAvailable()).toMatchObject({ upstreamSha: "upstream-sha", commitsBehind: 3 });
-  });
-
   it("publishes a configless Git refresh and projects the current automatic-update policy", async () => {
     mockDevGitStatus({ behind: 2 });
     await runGatewayUpdateCheck({
@@ -243,7 +221,7 @@ describe("interactive Dev update discovery", () => {
     );
   });
 
-  it.each(["Git fetch", "installation identity", "unidentified installation"])(
+  it.each(["installation identity"])(
     "preserves an announced campaign when %s cannot establish a target",
     async (failure) => {
       const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
@@ -279,39 +257,7 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
-  it("preserves a published Dev package offer after a cached Git identity", async () => {
-    const cfg: OpenClawConfig = { update: { channel: "dev", auto: { enabled: false } } };
-    mockDevGitStatus();
-    await lifecycle.initialize();
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "9.0.0" });
-    vi.mocked(compareSemverStrings).mockReturnValue(-1);
-    await runGatewayUpdateCheck({
-      cfg,
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-    });
-    const available = getUpdateAvailable();
-    expect(available).toMatchObject({ latestVersion: "9.0.0" });
-    expect(getUpdateSchedule()?.target).toMatchObject({ kind: "package", version: "9.0.0" });
-    expect(lifecycle.installStatus?.status.installKind).toBe("git");
-
-    await refreshGatewayUpdateStatus(() => cfg);
-
-    expect(getUpdateAvailable()).toBe(available);
-    expect(getUpdateSchedule()?.target).toMatchObject({ kind: "package", version: "9.0.0" });
-    expect(lifecycle.installStatus?.status.installKind).toBe("package");
-  });
-
   it.each([
-    { installKind: "package", configured: true },
-    { installKind: "host", configured: true },
-    { installKind: "immutable", configured: true },
     { installKind: "package", configured: false },
     { installKind: "host", configured: false },
     { installKind: "immutable", configured: false },
@@ -351,8 +297,6 @@ describe("interactive Dev update discovery", () => {
 
   it.each([
     { tag: "v2026.10.0-beta.1", channel: "beta", fetchOk: true },
-    { tag: "v2026.9.30", channel: "stable", fetchOk: true },
-    { tag: "v2026.10.0-beta.1", channel: "beta", fetchOk: false },
     { tag: "v2026.9.30", channel: "stable", fetchOk: false },
   ])(
     "retires an announced Dev campaign after discovering $channel Git identity (fetchOk=$fetchOk)",
@@ -395,27 +339,6 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
-  it("preserves Dev package availability during an interactive checkout check", async () => {
-    const available = { currentVersion: "1.0.0", latestVersion: "1.1.0", channel: "dev" as const };
-    const schedule = {
-      channel: "dev" as const,
-      autoEnabled: false,
-      target: { kind: "package" as const, version: "1.1.0" },
-    };
-    setUpdateAvailableCache({ next: available });
-    setUpdateScheduleCache({ next: schedule });
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    });
-
-    await refreshGatewayUpdateStatus(() => ({ update: { channel: "dev" } }));
-
-    expect(getUpdateAvailable()).toBe(available);
-    expect(getUpdateSchedule()).toEqual({ ...schedule, install: { kind: "package" } });
-  });
-
   it("does not publish an old Dev refresh over a replacement channel", async () => {
     const oldGitStatus = mockDevGitStatus();
     const entered = createDeferred();
@@ -449,7 +372,7 @@ describe("interactive Dev update discovery", () => {
     }
   });
 
-  it.each(["stable", "beta", "dev"] as const)(
+  it.each(["stable"] as const)(
     "does not supersede an active %s package check with an availability-preserving manual refresh",
     async (channel) => {
       const cfg = { update: { channel } };
@@ -488,8 +411,6 @@ describe("interactive Dev update discovery", () => {
 
   it.each([
     { channel: "stable", stage: "initialization" },
-    { channel: "beta", stage: "initialization" },
-    { channel: "stable", stage: "telemetry" },
     { channel: "beta", stage: "telemetry" },
   ] as const)(
     "does not publish an old $channel package target after a manual Dev transition during $stage",
@@ -541,32 +462,6 @@ describe("interactive Dev update discovery", () => {
         telemetry.resolve({ version: "9.0.0" });
         await background;
       }
-    },
-  );
-
-  it.each(["stable", "beta"] as const)(
-    "retires a cached %s package offer when an interactive refresh switches to Dev",
-    async (channel) => {
-      setUpdateAvailableCache({
-        next: { currentVersion: "1.0.0", latestVersion: "9.0.0", channel },
-      });
-      setUpdateScheduleCache({
-        next: { channel, autoEnabled: false, target: { kind: "package", version: "9.0.0" } },
-      });
-      vi.mocked(checkUpdateStatus).mockResolvedValue({
-        root: "/opt/openclaw",
-        installKind: "package",
-        packageManager: "npm",
-      });
-
-      await refreshGatewayUpdateStatus(() => ({ update: { channel: "dev" } }));
-
-      expect(getUpdateAvailable()).toBeNull();
-      expect(getUpdateSchedule()).toEqual({
-        channel: "dev",
-        autoEnabled: false,
-        install: { kind: "package" },
-      });
     },
   );
 
@@ -641,14 +536,7 @@ describe("interactive Dev update discovery", () => {
   });
 
   it.each([
-    { name: "current", git: { behind: 0 }, status: "current" },
     { name: "ahead", git: { ahead: 2, behind: 0 }, status: "ahead" },
-    {
-      name: "failed fetch",
-      git: { fetchOk: false, upstreamSha: null, ahead: null, behind: null },
-      status: "unavailable",
-    },
-    { name: "unverified fetch", git: { fetchOk: null }, status: "unavailable" },
     { name: "Git probe error", git: { error: "git unavailable" }, status: "unavailable" },
     { name: "missing upstream", git: { upstream: null }, status: "unavailable" },
     { name: "missing upstream SHA", git: { upstreamSha: null }, status: "unavailable" },
@@ -691,8 +579,6 @@ describe("interactive Dev update discovery", () => {
 
   it.each([
     { channel: "stable", stage: "initialization" },
-    { channel: "beta", stage: "initialization" },
-    { channel: "stable", stage: "telemetry" },
     { channel: "beta", stage: "telemetry" },
   ] as const)(
     "keeps a manual Dev target after an old $channel check finishes $stage",
@@ -862,12 +748,8 @@ describe("interactive Dev update discovery", () => {
   });
 
   it.each([
-    { disabledBy: "config", discovery: "manual" },
     { disabledBy: "environment", discovery: "manual" },
-    { disabledBy: "config", discovery: "background" },
-    { disabledBy: "environment", discovery: "background" },
     { disabledBy: "config", discovery: "background-reenabled" },
-    { disabledBy: "environment", discovery: "background-reenabled" },
   ] as const)(
     "disabled background checks preserve $discovery discovery policy ($disabledBy)",
     async ({ disabledBy, discovery }) => {

@@ -524,6 +524,51 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.to).toBe("-1001234567890");
   });
 
+  it.each([
+    { error: "requester lookup unavailable", disposition: "retryable" },
+    {
+      error: "Session transcript keyed user is outside the current turn: old-input",
+      disposition: "permanent_failure",
+    },
+  ] as const)(
+    "reports thrown announce failures to the delivery owner ($disposition)",
+    async ({ error, disposition }) => {
+      vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
+        new Error(error),
+      );
+      const onDeliveryResult = vi.fn();
+
+      expect(
+        await runAnnounceFlow({
+          roundOneReply: "finished result",
+          expectsCompletionMessage: true,
+          onDeliveryResult,
+        }),
+      ).toBe(disposition);
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+        delivered: false,
+        path: "none",
+        error,
+        disposition,
+      });
+    },
+  );
+
+  it("does not replace a confirmed delivery when its receipt callback throws", async () => {
+    const onDeliveryResult = vi
+      .fn()
+      .mockRejectedValue(new Error("receipt persistence unavailable"));
+    expect(
+      await runAnnounceFlow({
+        roundOneReply: "finished result",
+        expectsCompletionMessage: true,
+        onDeliveryResult,
+      }),
+    ).toBe("delivered");
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(expect.objectContaining({ delivered: true }));
+  });
+
   it("does not treat ambiguous direct completion failures as announced", async () => {
     let deliveryResult:
       | {

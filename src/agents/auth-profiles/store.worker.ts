@@ -22,8 +22,8 @@ import type { WorkerOperationHandlers } from "../../state/worker-operation-regis
 import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
-import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
 import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
+import { updateAuthProfileStoreInDatabase } from "./store-update.worker.js";
 import type {
   AuthProfileUsageInput,
   AuthProfileUsageResult,
@@ -138,10 +138,14 @@ export const authProfileOperations = {
         const previous = profile.usageStats;
         const next =
           input.reduction.kind === "success"
-            ? resetAuthProfileFailureState(previous ?? {}, {
-                lastUsed: input.reduction.lastUsed,
-                lastProbeAt: now,
-              })
+            ? resetAuthProfileFailureState(
+                previous ?? {},
+                {
+                  lastUsed: input.reduction.lastUsed,
+                  lastProbeAt: now,
+                },
+                input.reduction.modelId,
+              )
             : reduceAuthProfileFailure(profile.credential, previous, input.reduction, now);
         if (!next) {
           return false;

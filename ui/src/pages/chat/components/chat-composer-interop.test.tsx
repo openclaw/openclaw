@@ -1,10 +1,24 @@
 import { html, nothing, render } from "lit";
-import { createSignal, onCleanup } from "solid-js";
+import { createContext, createSignal, onCleanup, useContext } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
+
+it("keeps the composer owner when lazy content creates native children", () => {
+  const Label = createContext<string>();
+  function NativeLabel() {
+    return <span>{useContext(Label)}</span>;
+  }
+  const view = mountSolid(() => (
+    <Label value="Composer footer">
+      <LitContent value={html`${<NativeLabel />}`} />
+    </Label>
+  ));
+  expect(view.getByText("Composer footer")).toBeTruthy();
+  view.unmount();
+});
 
 it("retains the input through prop updates and retires each disconnected Solid owner", () => {
   const mounted = vi.fn();

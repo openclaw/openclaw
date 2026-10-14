@@ -229,6 +229,7 @@ function emitHello(
   id: string | undefined,
   auth: Partial<NonNullable<GatewayHelloOk["auth"]>> = {},
   policy?: GatewayHelloOk["policy"],
+  features?: GatewayHelloOk["features"],
 ) {
   ws.emitMessage({
     type: "res",
@@ -239,6 +240,7 @@ function emitHello(
       protocol: 4,
       auth: { role: "operator", scopes: [], ...auth },
       policy,
+      features,
     },
   });
 }
@@ -329,6 +331,24 @@ describe("GatewayBrowserClient", () => {
       expect(connectFrame.params).not.toHaveProperty("modelCatalog");
       expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
     }
+  });
+
+  it("clears advertised capabilities before connecting to another Gateway", async () => {
+    useNodeFakeTimers();
+    const client = createClient();
+    const first = await startConnect(client);
+    emitHello(first.ws, first.connectFrame.id, {}, undefined, {
+      capabilities: [GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toEqual(["talk-session-close-disposition"]);
+    client.stop();
+    expect(client.hello).toBeNull();
+    const second = await startConnect(client);
+    emitHello(second.ws, second.connectFrame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toBeUndefined();
+    client.stop();
   });
 
   it("does not publish hello when a response observer closes the browser socket", async () => {

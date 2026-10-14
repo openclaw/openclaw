@@ -241,6 +241,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
+          placementRow: row,
+          requiredProfile:
+            this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
           session: { ...row, pinnable },
         })
       : {};
@@ -438,6 +441,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       : [];
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
+      requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
       movingKey: this.headerPlacementMovingKey,
       reclaimingKey: this.headerPlacementReclaimingKey,
       restartingKey: this.headerPlacementRestartingKey,

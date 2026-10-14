@@ -12,8 +12,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { projectCronRunHistoryPage } from "../run-history.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
 import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { saveCronStoreInDatabase } from "./save.kernel.js";
@@ -134,12 +136,15 @@ function storedScheduler(label: string, jobs: CronJob[]) {
           "SELECT job_id, receipt_id FROM cron_run_receipts WHERE store_key = ? ORDER BY job_id",
         )
         .all(storeKey),
-    restart: async (atMs: number) => {
+    restart: async (
+      atMs: number,
+      options: Partial<CronSchedulerOperations["cron.schedulerStart"]["input"]> = {},
+    ) => {
       stopCronSchedulerInWorker({ storeKey, channelName });
       active.delete(channelName);
       await closeOpenClawStateDatabaseAsync();
       database = openOpenClawStateDatabase();
-      return start(atMs);
+      return start(atMs, options);
     },
   };
 }
@@ -215,6 +220,67 @@ it("activates scheduled requests in FIFO capacity order and observes a queued ed
     resumed.launches[0]?.job.state,
   );
 });
+
+it.each(["every", "cron"] as const)(
+  "advances a cancelled %s slot across scheduler and database restart",
+  async (kind) => {
+    const target = job(`cancelled-${kind}`, now, {
+      schedule:
+        kind === "cron"
+          ? { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 }
+          : { kind: "every", everyMs: minute, anchorMs: now },
+    });
+    const jobs = [
+      ...Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+        job(`blocker-${kind}-${index}`, now, {
+          schedule: { kind: "every", everyMs: 60 * minute, anchorMs: now },
+        }),
+      ),
+      target,
+    ];
+    const scheduler = storedScheduler(`cancelled-slot-${kind}`, jobs);
+    const options = {
+      snapshot: {
+        ...snapshot,
+        config: { ...snapshot.config, maxMissedJobsPerRestart: jobs.length },
+      },
+    };
+    const started = scheduler.start(now, options);
+    const receipt = started.accepted.find(({ job: entry }) => entry.id === target.id)!.runReceipt;
+    expect(started.launches.some(({ job: entry }) => entry.id === target.id)).toBe(false);
+    expect(scheduler.read().find(({ id }) => id === target.id)?.state.queuedAtMs).toBe(now);
+    withinWorker(() =>
+      cancelCronRequestsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        receiptIds: started.accepted.map(({ runReceipt }) => runReceipt.receiptId),
+        nowMs: now + 1,
+        reason: "cron service stopped",
+      }),
+    );
+    const cancelled = scheduler.read().find(({ id }) => id === target.id)!;
+    expect(cancelled.state.nextRunAtMs).toBe(now);
+    expect(cancelled.state.queuedAtMs).toBeUndefined();
+    const restarted = await scheduler.restart(now + 2, options);
+    expect(restarted.rejected.find(({ jobId }) => jobId === target.id)?.reason).toBe(
+      "already-requested",
+    );
+    scheduler.tick(now + 3, 1);
+    expect(scheduler.read().find(({ id }) => id === target.id)?.state.nextRunAtMs).toBe(
+      now + minute,
+    );
+    const resumed = scheduler.tick(now + minute, minute - 2);
+    const launch = resumed.launches.find(({ job: entry }) => entry.id === target.id);
+    expect(launch?.job.state.runningAtMs).toBe(now + minute);
+    expect(launch?.runReceipt.receiptId).not.toBe(receipt.receiptId);
+    const history = projectCronRunHistoryPage(
+      readCronRunRecordsInDatabase(database.db, target.id),
+      {
+        storeKey: scheduler.storeKey,
+      },
+    );
+    expect(history.entries).toMatchObject([{ status: "skipped", error: "cron service stopped" }]);
+  },
+);
 
 it("keeps startup work pending while its subscriber is paused", () => {
   const scheduler = storedScheduler("paused-start", [job("pending", now - minute)]);

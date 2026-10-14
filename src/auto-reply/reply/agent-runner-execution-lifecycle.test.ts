@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -927,13 +927,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
-    let resolveImages: (() => void) | undefined;
-    state.resolveCurrentTurnImagesMock.mockImplementationOnce(
-      () =>
-        new Promise<Record<string, never>>((resolve) => {
-          resolveImages = () => resolve({});
-        }),
-    );
+    const imagesStarted = createDeferred();
+    const releaseImages = createDeferred();
+    state.resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
+      imagesStarted.resolve();
+      await releaseImages.promise;
+      return {};
+    });
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -942,17 +942,24 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
-    expect(registerAgentRunContext).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        sessionKey: "main",
-        sessionId: "session",
-      }),
-    );
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-
-    resolveImages?.();
-    await runPromise;
+    try {
+      await awaitGateBeforeSettlement(
+        imagesStarted.promise,
+        runPromise,
+        "image preflight did not start",
+      );
+      expect(registerAgentRunContext).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          sessionKey: "main",
+          sessionId: "session",
+        }),
+      );
+      expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+    } finally {
+      releaseImages.resolve();
+      await runPromise;
+    }
   });
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {

@@ -120,6 +120,52 @@ function savedPrompts(prompt: string) {
   };
 }
 
+describe("pre-device-folder session entries", () => {
+  it("reopens pre-device-folder entries through the codec, full accessor, and list cache", async () => {
+    const scope = createSessionScope("pre-device-folder");
+    const previousEntry: SessionEntry = {
+      sessionId: "previous-session",
+      label: "Existing local session",
+      updatedAt: 123,
+      worktree: { id: "previous-worktree", branch: "main", repoRoot: "/repo" },
+      modelOverride: "previous-model",
+    };
+    const database = openOpenClawAgentDatabase(scope);
+    // Persist the previous writer's shape, not a current upsert that could add defaults.
+    insertRaw(database.db, scope.sessionKey, previousEntry);
+    await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
+    parseSessionEntryCalls.mockClear();
+
+    const full = loadSessionEntry(scope);
+    expect(full).toMatchObject(previousEntry);
+    expect(full?.deviceFolder).toBeUndefined();
+    const listed = listingEntries(scope).get(scope.sessionKey);
+    expect(listed).toMatchObject({
+      sessionId: previousEntry.sessionId,
+      label: previousEntry.label,
+      worktree: previousEntry.worktree,
+    });
+    expect(listed?.deviceFolder).toBeUndefined();
+    expect(listed?.skillsSnapshot).toBeUndefined();
+    expect(parseSessionEntryCalls).toHaveBeenCalled();
+    parseSessionEntryCalls.mockClear();
+    expect(listingEntries(scope).get(scope.sessionKey)).toBe(listed);
+    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    expect(openSessionEntryReadView(scope).get(scope.sessionKey)).toEqual(listed);
+
+    await upsertSessionEntryCore(scope, { ...full!, label: "Continued after upgrade" });
+    await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
+    const continued = loadSessionEntry(scope);
+    expect(continued).toMatchObject({
+      sessionId: previousEntry.sessionId,
+      label: "Continued after upgrade",
+      modelOverride: previousEntry.modelOverride,
+      worktree: previousEntry.worktree,
+    });
+    expect(continued!.updatedAt).toBeGreaterThanOrEqual(previousEntry.updatedAt);
+    expect(continued?.deviceFolder).toBeUndefined();
+  });
+});
 describe("SQLite retained session window references", () => {
   it("reads retained candidate windows freshly and honors owner exclusions", () => {
     const scope = createSessionScope("reference-window-candidates");
@@ -286,6 +332,7 @@ describe("SQLite session entry cache", () => {
     const prompt = "large skill prompt".repeat(8192);
     const scope = await seed("lazy-list-projection", {
       label: "projected",
+      deviceFolder: { deviceId: "device-one", path: "/home/example/project" },
       worktree: { id: "worktree-1", branch: "main", repoRoot: "/repo" },
       ...savedPrompts(prompt),
     });
@@ -300,6 +347,7 @@ describe("SQLite session entry cache", () => {
 
       expect(first).not.toBe(fullEntry);
       expect(first?.worktree).toEqual(fullEntry.worktree);
+      expect(first?.deviceFolder).toEqual(fullEntry.deviceFolder);
       expect(first?.skillsSnapshot).toBeUndefined();
       expect(first?.systemPromptReport).toBeUndefined();
       expect(second).toBe(first);
@@ -324,6 +372,8 @@ describe("SQLite session entry cache", () => {
       expect(view.get(scope.sessionKey)).toStrictEqual(copiedListEntry);
       expect(view.entries()[0]?.entry).toStrictEqual(copiedListEntry);
       copiedListEntry!.worktree!.branch = "mutated list copy";
+      copiedListEntry!.deviceFolder!.path = "/mutated-copy";
+      expect(first?.deviceFolder?.path).toBe("/home/example/project");
       expect(first?.worktree?.branch).toBe("main");
       expect(listingEntries(scope).get(scope.sessionKey)).toBe(first);
     } finally {

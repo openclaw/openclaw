@@ -201,7 +201,8 @@ function parseYamlFrontmatterOnce(
     }
 
     for (const [key, value] of Object.entries(fallback)) {
-      if (!Object.hasOwn(result, key)) {
+      // `key: # note` is a YAML comment; `key: #1 pick` is authored text the line parser rescues.
+      if (!Object.hasOwn(result, key) && !/^#(?:\s|$)/.test(value)) {
         result[key] = value;
       }
     }

@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
@@ -56,12 +56,12 @@ function ensureProfileForEmailWithInitialName(
   const normalizedEmail = normalizeEmail(email);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const assertBinding = (database: DatabaseSync) => {
+  const assertBinding = (database: EngineConnection) => {
     if (options.expectedGitHubAccountId !== undefined) {
       assertGitHubEmailIdentityBinding(database, normalizedEmail, options.expectedGitHubAccountId);
     }
   };
-  const selectExistingProfile = (database: DatabaseSync) => {
+  const selectExistingProfile = (database: EngineConnection) => {
     assertBinding(database);
     const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
@@ -109,7 +109,7 @@ function ensureProfileForProviderIdentity(params: {
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
   const { db: reader } = openOpenClawStateDatabase(params.options);
-  const selectExistingIdentity = (database: DatabaseSync) => {
+  const selectExistingIdentity = (database: EngineConnection) => {
     let query = userProfilesDb(database)
       .selectFrom("user_profile_identities")
       .select(["profile_id", "subject"])

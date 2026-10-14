@@ -13,6 +13,7 @@ import { LitContent } from "../../../lit/solid-content.tsx";
 
 export function ChatPullRequestChecks(props: {
   label: string;
+  showLabel?: boolean;
   checksState: string;
   presented: PresentationValue;
   content: unknown;
@@ -86,7 +87,7 @@ export function ChatPullRequestChecks(props: {
         title={props.label}
       >
         <span class="chat-pr__checks-dot" aria-hidden="true" />
-        {t("chat.pullRequests.checks")}
+        {props.showLabel ? props.label : t("chat.pullRequests.checks")}
         <span class="chat-pr__checks-chevron" aria-hidden="true">
           <Icon name="chevronDown" />
         </span>

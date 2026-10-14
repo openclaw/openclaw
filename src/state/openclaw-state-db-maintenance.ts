@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
@@ -154,7 +157,7 @@ type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
 /** Require canonical shared-state ownership without requiring the latest schema. */
 export function assertOpenClawStateDatabaseOwner(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: { pathname: string },
 ): { schema_version?: unknown } {
   const admitted = getStateSchemaVersionAdmission(database);
@@ -190,10 +193,13 @@ export function assertOpenClawStateDatabaseOwner(
 
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
   readTable?: SqliteTableContractReader,
 ): void {
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   const userVersion = assertSupportedStateSchemaVersion(
     database,
     options.pathname,

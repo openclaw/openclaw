@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -18,6 +19,7 @@ import {
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
+import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { canAccessWizardSession } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -82,6 +84,9 @@ function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: 
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
+type WizardRequestScope = ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+const wizardRequestScopes = new WeakMap<WizardSession, WizardRequestScope>();
+
 function wizardSessionHandler<T extends { sessionId: string }>(
   method: string,
   validate: Validator<T>,
@@ -115,8 +120,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const flow = params.flow ?? "setup";
     const createSession = () =>
       new WizardSession((prompter, _signal, wizardSession) =>
-        runHostedWizard((runtime) =>
-          flow === "channels"
+        runHostedWizard((runtime) => {
+          wizardRequestScopes.set(wizardSession, getPluginRuntimeGatewayRequestScope());
+          return flow === "channels"
             ? context.channelWizardRunner(
                 {
                   channel: params.channel,
@@ -138,8 +144,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 },
                 runtime,
                 prompter,
-              ),
-        ),
+              );
+        }),
       );
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
@@ -161,6 +167,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
     validateWizardNextParams,
     async ({ params, respond, context }, session) => {
       const { sessionId } = params;
+      const scope = wizardRequestScopes.get(session);
+      if (scope && params.answer) {
+        // The suspended runner needs the answering RPC's authority, including after progress replies.
+        const { client, signal, hasCurrentClientAuthority } =
+          getPluginRuntimeGatewayRequestScope() ?? {};
+        const release = retainGatewayDeviceRevocation(hasCurrentClientAuthority);
+        void session.whenSettled().then(release);
+        Object.assign(scope, { client, signal, hasCurrentClientAuthority });
+      }
       const answer = params.answer;
       if (answer) {
         if (session.getStatus() !== "running") {

@@ -47,12 +47,10 @@ import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
-  CHAT_HISTORY_TOUCH_INTENT_PX,
-  CHAT_HISTORY_UPWARD_KEYS,
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { isTranscriptScrollKey } from "./chat-scroll-input.ts";
+import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -79,6 +77,8 @@ import { maybeResetToolStream } from "./stream-reconciliation.ts";
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
+  private historyViewportFillPages = 0;
+  private readonly historyInput = new TranscriptHistoryInput();
   // Staged prefetch: after a consumed older page, the next page is fetched in
   // the background and parked here, so the following boundary crossing
   // prepends without a visible round trip. One slot per pane; the claim is
@@ -185,12 +185,13 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   protected resetOlderMessagesViewport(): void {
     this.olderLoadGeneration += 1;
     this.activeOlderLoad = null;
+    this.historyViewportFillPages = 0;
     this.stagedOlder = { page: null, load: null };
     this.resetReplyNavigation();
     this.loadingOlder = false;
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
-    this.historyTouchY = null;
+    this.historyInput.reset();
     if (this.historyIntentTimer !== null) {
       window.clearTimeout(this.historyIntentTimer);
       this.historyIntentTimer = null;
@@ -220,11 +221,14 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       typeof IntersectionObserver !== "function" ||
       !this.presented ||
       !this.visuallyPresented ||
+      document.visibilityState === "hidden" ||
       !this.state?.connected ||
-      !this.historyObserverArmed ||
+      (!this.historyObserverArmed && this.historyViewportFillPages >= 3) ||
       !this.transcript.isPositionSettled ||
       this.transcript.isProgrammaticScroll ||
+      this.transcript.isMaintenanceScroll ||
       this.loadingOlder ||
+      this.historyAutoLoadBlocked ||
       !this.hasOlderMessages()
     ) {
       this.clearHistoryObserver();
@@ -237,10 +241,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     this.transcriptScrollTop ??= root.scrollTop;
-    if (this.historyAutoLoadBlocked) {
-      this.clearHistoryObserver();
-      return;
-    }
     if (
       this.historyObserver &&
       this.historyObserver.root === root &&
@@ -257,15 +257,32 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           this.historyObserver !== observer ||
           !this.presented ||
           !this.visuallyPresented ||
+          document.visibilityState === "hidden" ||
           !this.transcript.isPositionSettled ||
           this.transcript.isProgrammaticScroll ||
+          this.transcript.isMaintenanceScroll ||
           !entries.some((entry) => entry.isIntersecting)
         ) {
           return;
         }
+        const readerIntent = this.historyObserverArmed;
+        if (!readerIntent) {
+          // Start only with a genuinely short settled window. Subsequent pages
+          // fill the prefetch margin too, without staging a fourth boot request.
+          const edge = this.historyViewportFillPages > 0 ? CHAT_HISTORY_PREFETCH_EDGE_PX : 0;
+          if (
+            this.historyViewportFillPages >= 3 ||
+            root.clientHeight <= 0 ||
+            root.scrollHeight > root.clientHeight + edge
+          ) {
+            this.clearHistoryObserver();
+            return;
+          }
+          this.historyViewportFillPages += 1;
+        }
         this.clearHistoryObserver();
         this.historyObserverArmed = false;
-        void this.loadOlderMessages();
+        void this.loadOlderMessages(readerIntent);
       },
       // Fire well before the wall: a page fetch takes long enough that a short
       // margin guarantees the user hits the top before the prepend lands. The
@@ -341,29 +358,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
 
   protected handleTranscriptHistoryIntent(event: Event): void {
     const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    let upward =
-      (event instanceof WheelEvent && event.deltaY < 0) ||
-      (event instanceof KeyboardEvent &&
-        CHAT_HISTORY_UPWARD_KEYS.has(event.key) &&
-        isTranscriptScrollKey(event));
-    if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
-      const touchY = event.touches[0]?.clientY ?? null;
-      if (event.type === "touchstart") {
-        this.historyTouchY = touchY;
-        return;
-      }
-      if (event.type === "touchend" || event.type === "touchcancel") {
-        this.historyTouchY = null;
-        return;
-      }
-      const previousTouchY = this.historyTouchY;
-      if (touchY !== null && previousTouchY !== null) {
-        upward = touchY - previousTouchY >= CHAT_HISTORY_TOUCH_INTENT_PX;
-        if (upward || touchY < previousTouchY) {
-          this.historyTouchY = touchY;
-        }
-      }
-    }
+    const upward = this.historyInput.isUpward(event);
     if (
       !root ||
       !this.presented ||
@@ -387,11 +382,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.syncHistoryObserver();
   }
 
-  protected async loadOlderMessages(): Promise<boolean> {
+  protected async loadOlderMessages(prefetch = true): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;
     }
-    const load = this.performOlderMessagesLoad();
+    const load = this.performOlderMessagesLoad(prefetch);
     this.activeOlderLoad = load;
     try {
       return await load;
@@ -402,7 +397,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
   }
 
-  private async performOlderMessagesLoad(): Promise<boolean> {
+  private async performOlderMessagesLoad(prefetch: boolean): Promise<boolean> {
     const state = this.state;
     const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
     if (!state || this.loadingOlder || !this.hasOlderMessages()) {
@@ -517,7 +512,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
-        if (!exhausted) {
+        if (!exhausted && prefetch) {
           this.stageNextOlderPage(state);
         }
       }
@@ -747,7 +742,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         bubbles: true,
         composed: true,
         detail: {
-          owner: this,
+          owner: this.element,
           onSlashCommand,
         },
       }),

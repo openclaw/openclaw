@@ -38,6 +38,12 @@ export async function retainTalkClientRunAuthority(
   let released = false;
   return {
     operatorAuthority: captured?.authority,
+    assertCurrent() {
+      if (released || sourceCurrent?.() === false) {
+        throw new Error("Talk caller source authority is no longer active");
+      }
+      captured?.authority.assertCurrent();
+    },
     accept() {
       // Retention during provider setup is not acceptance. The logical voice
       // owner calls this only after its final request/target commit checks.

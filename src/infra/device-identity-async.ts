@@ -1,7 +1,9 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   cacheProcessDeviceIdentity,
+  getChatRequestIdentityKey,
   readProcessDeviceIdentity,
 } from "./device-identity-process-cache.js";
 import {
@@ -10,6 +12,9 @@ import {
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
 } from "./device-identity-store.js";
+
+const log = createSubsystemLogger("gateway/chat");
+let warnedUnavailableChatIdentity = false;
 
 /** Bootstrap through the identity owner before the shared actor opens a missing database. */
 export async function loadOrCreateDeviceIdentityAsync(
@@ -40,6 +45,31 @@ export async function loadOrCreateProcessDeviceIdentityAsync(
     identityKey,
   });
   return cacheProcessDeviceIdentity(cacheKey, identity);
+}
+
+/** Chat admission consumes an existing identity without creating or replacing one. */
+export async function loadChatRequestIdentityKeyAsync(
+  options: DeviceIdentityStoreOptions = {},
+): Promise<Buffer | null> {
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  const cacheKey = `${databasePath}\0${identityKey}`;
+  try {
+    const identity =
+      readProcessDeviceIdentity(cacheKey) ??
+      (await loadDeviceIdentityIfPresentAsync({ ...options, path: databasePath, identityKey }));
+    if (identity) {
+      return getChatRequestIdentityKey(cacheProcessDeviceIdentity(cacheKey, identity));
+    }
+  } catch {
+    // Optional retry fingerprints must not turn identity read failures into a chat outage.
+  }
+  if (!warnedUnavailableChatIdentity) {
+    warnedUnavailableChatIdentity = true;
+    log.warn(
+      `Gateway device identity "${identityKey}" is missing or unreadable; chat.send will continue without a keyed request fingerprint.`,
+    );
+  }
+  return null;
 }
 
 /** Read the captured identity on the shared worker without creating SQLite state. */

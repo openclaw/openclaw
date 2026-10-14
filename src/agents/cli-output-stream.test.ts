@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
+import {
+  createClaudeParser,
+  joinJsonlFrames,
+  claudeStreamEvent,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
 type ParserOptions = Parameters<typeof createCliJsonlStreamingParser>[0];
 const claudeBackend: ParserOptions["backend"] = {
@@ -14,13 +19,6 @@ function createParser(overrides: Partial<ParserOptions> = {}) {
     backend: { ...claudeBackend, command: "local-cli" },
     providerId: "local-cli",
     onAssistantDelta: () => {},
-    ...overrides,
-  });
-}
-function createClaudeParser(overrides: Partial<ParserOptions> = {}) {
-  return createParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
     ...overrides,
   });
 }

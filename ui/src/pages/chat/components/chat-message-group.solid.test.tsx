@@ -14,7 +14,7 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
 it.each([false, true])(

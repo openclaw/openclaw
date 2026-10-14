@@ -25,6 +25,7 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-runtime-boundary.mjs!",
   "apps/linux/scripts/stage-runtime.mjs!",
   "apps/linux/scripts/test-stage-runtime.mjs!",
+  "apps/linux/scripts/test-stage-package.mjs!",
   // The Python onboarding driver installs this synthetic CLI by path.
   "apps/linux/tests/fixtures/onboarding-cli.mjs!",
   // The Linux onboarding proof builds its card fixture through Vite's --config option.
@@ -66,6 +67,7 @@ const repositoryScriptEntries = [
   // The team-shaped fixture README invokes these measurement CLIs by path.
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
+  "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -661,15 +663,22 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
-function compileNativeProtocolConsumer(source: string, filePath: string): string {
-  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
-    return source;
+function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
+    // The trusted manifest resolves this planner from the target checkout by file URL.
+    return source.replace(
+      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
+      '$1import("./lib/ci-changed-node-test-plan.mts");',
+    );
   }
-  // The temporary esbuild bundle exports this source module's unchanged API.
-  return source.replace(
-    "import(pathToFileURL(bundlePath).href)",
-    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
-  );
+  if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
+    // The temporary esbuild bundle exports this source module's unchanged API.
+    return source.replace(
+      "import(pathToFileURL(bundlePath).href)",
+      'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+    );
+  }
+  return source;
 }
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
@@ -741,7 +750,7 @@ const config = {
   compilers: {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
-    mjs: compileNativeProtocolConsumer,
+    mjs: compileDynamicMjsConsumers,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree

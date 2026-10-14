@@ -392,7 +392,7 @@ test("slow writer failure separates waiting and execution", async () => {
     let second: Promise<never> | undefined;
     let queuedSuccessor: Promise<string> | undefined;
     try {
-      await entered.promise;
+      await Promise.race([entered.promise, first]);
       expect(order).toEqual(["first:start"]);
       clock = 100;
       const failure = new Error("synthetic writer failure");

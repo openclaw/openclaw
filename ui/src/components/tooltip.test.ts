@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { renderKbd } from "./kbd.ts";
+import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
@@ -688,19 +689,24 @@ describe("title tooltips", () => {
     provider.append(link);
     parent.append(provider, control);
     document.body.append(parent);
-    dispatchMousePointer(link, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(0);
-    expect(parent.title).toBe("");
-    expect(link.hasAttribute("aria-expanded")).toBe(false);
-    dispatchMousePointer(control, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(1);
-    expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
-      "Shared context hint",
-    );
-    dispatchMousePointer(parent, "pointerleave");
-    expect(parent.title).toBe("Shared context hint");
+    try {
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(0);
+      expect(parent.title).toBe("");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      dispatchMousePointer(control, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(1);
+      expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
+        "Shared context hint",
+      );
+      dispatchMousePointer(parent, "pointerleave");
+      expect(parent.title).toBe("Shared context hint");
+    } finally {
+      parent.remove();
+      await linkReaderHovercardBootstrap.define();
+    }
   });
 
   it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {

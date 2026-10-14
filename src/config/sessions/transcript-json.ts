@@ -4,6 +4,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Keep only immutable payload roots across appends, not every retained descendant.
 const ownedTranscriptRoots = new WeakSet<object>();
 
+/** Normalization seals these payload roots before they can be shared across views. */
+export function isOwnedTranscriptPayload(value: object): boolean {
+  return ownedTranscriptRoots.has(value);
+}
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
   const visited = new Set<object>();

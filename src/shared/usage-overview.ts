@@ -336,6 +336,21 @@ export function buildUsageOverview(params: {
     options,
     calendar,
   );
+  const selectedSources = new Map(
+    sessions
+      .filter((session) => selected.has(session.key))
+      .map((session) => [session.key, session]),
+  );
+  const selectedUsageComplete = selected.size
+    ? selectedSources.size === selected.size &&
+      [...selectedSources.values()].every(
+        (session) =>
+          session.usage &&
+          !session.computing &&
+          session.usage.staleSince === undefined &&
+          !session.usage.refreshing,
+      )
+    : undefined;
   const selectedRows = new Map(
     selected.size ? scoped.map((session) => [session.key, session]) : [],
   );
@@ -347,6 +362,7 @@ export function buildUsageOverview(params: {
     unfilteredSessionCount: sessions.length,
     selectedSessionCount: 0,
     selectedRowCount: scoped.length,
+    selectedUsageComplete,
     selectedRows: [...selected].flatMap((key) => {
       const session = selectedRows.get(key);
       return session ? [toRow(session)] : [];

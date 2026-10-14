@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
@@ -129,6 +129,20 @@ describe("shared proof capture", () => {
     const session = Object.assign(new EventEmitter(), {
       send: async (method: string) => {
         sent.push(method);
+        if (method === "Debugger.enable") {
+          session.emit("Debugger.scriptParsed", {
+            scriptId: "bundle",
+            url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
+          });
+          session.emit("Debugger.scriptParsed", {
+            scriptId: "blob",
+            url: "blob:https://private.invalid/id",
+          });
+          session.emit("Debugger.scriptParsed", {
+            scriptId: "private-path",
+            url: "https://private.invalid/private-session/report.js?token=private",
+          });
+        }
         if (method === "Performance.getMetrics") {
           samples += 1;
           const elapsed = samples === 1 ? 0 : 0.5;
@@ -146,13 +160,18 @@ describe("shared proof capture", () => {
               callFrames: [
                 {
                   functionName: "layoutPins",
-                  url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
-                  location: { lineNumber: 9, columnNumber: 3 },
+                  url: "",
+                  location: { scriptId: "bundle", lineNumber: 9, columnNumber: 3 },
                 },
                 {
                   functionName: "",
                   url: "blob:https://private.invalid/id",
-                  location: { lineNumber: 0, columnNumber: 0 },
+                  location: { scriptId: "blob", lineNumber: 0, columnNumber: 0 },
+                },
+                {
+                  functionName: "privatePath",
+                  url: "",
+                  location: { scriptId: "private-path", lineNumber: 0, columnNumber: 0 },
                 },
               ],
             }),
@@ -201,13 +220,15 @@ describe("shared proof capture", () => {
                 column: 4,
               },
               { functionName: "(anonymous)", script: "", line: 1, column: 1 },
+              { functionName: "privatePath", script: "", line: 1, column: 1 },
             ]
           : null,
       },
     });
-    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid/u);
+    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
     expect(sent).toContain("Debugger.pause");
     expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+    expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     stalled.resolve(null);
   });
@@ -796,6 +817,29 @@ describe("resolvePlaywrightChromiumExecutablePath", () => {
       ).toBe(expected);
     },
   );
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("prefers the newest installed Chromium revision over system browsers", () => {
+    const browsersRoot = tempDirs.make("control-ui-playwright-browsers-");
+    const installed = [
+      path.join(browsersRoot, "chromium-1100", "chrome-linux", "chrome"),
+      path.join(browsersRoot, "chromium-1194", "chrome-linux", "chrome"),
+    ];
+    for (const executable of installed) {
+      mkdirSync(path.dirname(executable), { recursive: true });
+      writeFileSync(executable, "");
+    }
+
+    expect(
+      resolvePlaywrightChromiumExecutablePath(
+        path.join(browsersRoot, "chromium-1243", "chrome-linux64", "chrome"),
+        {},
+        (candidate) =>
+          existsSync(candidate) || candidate === systemChromiumExecutableCandidates.at(-1),
+      ),
+    ).toBe(installed[1]);
+  });
 });
 
 describe("waitForControlUiRoute", () => {

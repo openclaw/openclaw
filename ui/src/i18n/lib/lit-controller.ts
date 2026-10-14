@@ -1,10 +1,10 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { i18n } from "./translate.ts";
 
-export class I18nController implements ReactiveController {
+export class I18nController implements SolidController {
   private unsubscribe?: () => void;
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(private readonly host: SolidControllerHost) {
     host.addController(this);
   }
 

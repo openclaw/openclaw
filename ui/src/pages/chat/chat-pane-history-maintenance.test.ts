@@ -41,7 +41,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     // Independent scenarios must not restore the previous case's cached reader.
     pane.paneId = `maintenance-history-${movement}`;
     pane.initialize(context);
-    document.body.append(pane);
+    document.body.append(pane.element);
     await pane.updateComplete;
     // Connect normally: the pane lifecycle must supply the scroll-policy owners.
     const state = (pane as unknown as TestChatPane).state;

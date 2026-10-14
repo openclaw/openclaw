@@ -12,6 +12,7 @@ import {
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -99,7 +100,10 @@ export function isRunnableJob(params: {
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
     // The recovery owner recorded pending work after checking the exact task
     // identity. Its scheduled slot remains due even when the old run started later.
-    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+    if (
+      hasScheduledNextRunAtMs(next) &&
+      (job.state.startupCatchupAtMs === next || resolveForcePreservedOneShotAtMs(job) === next)
+    ) {
       return nowMs >= next;
     }
     const lastRun = job.state.lastRunAtMs;

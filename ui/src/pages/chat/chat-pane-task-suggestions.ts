@@ -32,6 +32,7 @@ type TaskSuggestionOperation =
       canDisplay: () => boolean;
       isCurrent: () => boolean;
       outcome: TaskSuggestionAcceptance;
+      clearError?: () => void;
     };
 
 export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
@@ -371,6 +372,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             canDisplay,
             isCurrent: ownsScope,
             outcome: { phase: "starting" },
+            clearError: previous?.clearError,
           }
         : { action, resolved: false };
     const originalIndex = this.taskSuggestions.findIndex((item) => item.id === suggestion.id);
@@ -401,6 +403,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           throw new Error(t("chat.taskSuggestions.startUnconfirmed"));
         }
         operation.outcome = { phase: "started" };
+        operation.clearError?.();
+        operation.clearError = undefined;
       } else {
         await scope.client.request("taskSuggestions.dismiss", { taskId: suggestion.id });
         if (!isCurrent()) {
@@ -454,8 +458,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             });
         }
       }
-      scope.state.lastError = formatUiError(error);
-      scope.state.chatError = scope.state.lastError;
+      if (operation.action === "accept") {
+        operation.clearError = scope.state.setRecoverableChatError(formatUiError(error));
+      } else {
+        scope.state.lastError = formatUiError(error);
+        scope.state.chatError = scope.state.lastError;
+      }
     } finally {
       if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
         if (operation.action === "dismiss") {

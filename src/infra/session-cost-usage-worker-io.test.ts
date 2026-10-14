@@ -222,7 +222,7 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
-  it("reuses receipt-covered usage inputs and refreshes after append, rewrite, and rollup replacement", async () => {
+  it("reuses discovered inputs and rollups across append, rewrite, and rollup replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const probe = await observeUsageWorkerReads(state.stateDir, []);
       await probe.run(async () => {
@@ -280,13 +280,28 @@ describe("session cost usage worker I/O", () => {
           });
         await refresh();
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+        let discovered = await discoverAllSessions({ agentId: "main" });
+        const expectDiscovered = async (
+          sessions: Awaited<ReturnType<typeof discoverAllSessions>>,
+          summaries: Array<{ totalTokens: number } | null>,
+          status: "fresh" | "partial" | "stale",
+        ) => {
+          await probe.clear();
+          expect(
+            await loadSessionCostSummariesFromCache({
+              agentId: "main",
+              sessions,
+              requestRefresh: false,
+            }),
+          ).toMatchObject({ summaries, cacheStatus: { status } });
+          expect((await probe.read()).filter((entry) => entry.kind === "transcript-stats")).toEqual(
+            [],
+          );
+        };
+        await expectDiscovered(discovered, [{ totalTokens: 3 }], "fresh");
         await probe.clear();
         await refresh();
-        expect(
-          (await probe.read()).filter(
-            (entry) => entry.kind === "transcript-stats" || entry.kind === "cache",
-          ),
-        ).toEqual([]);
+        expect((await probe.read()).filter((entry) => entry.kind === "cache")).toEqual([]);
         const generation = runOpenClawAgentWriteTransaction(
           (owner) => {
             const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
@@ -304,6 +319,8 @@ describe("session cost usage worker I/O", () => {
           { agentId: scope.agentId, path: database.path },
         );
         expect(generation).toEqual(expect.any(String));
+        const rewrittenDiscovery = await discoverAllSessions({ agentId: "main" });
+        await expectDiscovered(rewrittenDiscovery, [null], "stale");
         await probe.clear();
         await refresh();
         expect(await cached()).toMatchObject({
@@ -320,6 +337,8 @@ describe("session cost usage worker I/O", () => {
         const reads = await probe.read();
         expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
         expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
+        await expectDiscovered(discovered, [null], "partial");
+        discovered = rewrittenDiscovery;
         runOpenClawAgentWriteTransaction(
           (owner) =>
             appendTranscriptEventsInTransaction(owner, scope, [message("fourth", "third", 5)], {
@@ -332,9 +351,10 @@ describe("session cost usage worker I/O", () => {
         const appendReads = await probe.read();
         expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
+        await expectDiscovered(discovered, [{ totalTokens: 19 }], "fresh");
 
         // Another in-process writer replaces the derived row. Its receipt must
-        // invalidate the retained rollup, while unchanged transcript stats survive.
+        // invalidate the retained rollup before refresh rebuilds it from canonical stats.
         runOpenClawAgentWriteTransaction(
           (owner) =>
             writeSessionCostUsageRollupInDatabase(owner.db, {

@@ -7,7 +7,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
-import { renderMessageGroup } from "./components/chat-message-group.ts";
+import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
 import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
 import { agentEvent, createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";

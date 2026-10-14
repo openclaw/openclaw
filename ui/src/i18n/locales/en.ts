@@ -2213,6 +2213,9 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    usersTitle: "Users",
+    allUsers: "All users",
+    directoryFailed: "Could not load all users. Retry",
     filters: {
       label: "Filter & sort people",
       noMatches: "No people match this filter",
@@ -2812,7 +2815,6 @@ export const en: TranslationMap & {
       failedTitle: "Unable to finish this reply",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
-      changeModel: "Change model",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -3350,12 +3352,15 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary:
-          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+        summary: "Gateway restarted. Resuming your interrupted request.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
           "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
+      },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "An automation failed — asked the agent to investigate and continue if needed.",
       },
       gatewayRestarted: {
         label: "System · gateway restarted",
@@ -3751,6 +3756,11 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
+      agentUpdate: {
+        queued: "Agent update received · waiting for delivery.",
+        cancelled: "This agent update was cancelled before delivery.",
+        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
+      },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
@@ -3858,7 +3868,6 @@ export const en: TranslationMap & {
         clear: "Clear session overrides",
       },
       contextUsage: {
-        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
@@ -3951,6 +3960,7 @@ export const en: TranslationMap & {
       allowImage: "Allow image",
       attachedFile: "Attached file",
       audio: "Audio",
+      download: "Download",
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
@@ -4178,6 +4188,12 @@ export const en: TranslationMap & {
       branchName: "Branch name",
       uncommittedStay: "Uncommitted changes stay in the session checkout.",
       viewOptions: "Change view options",
+      collapseCode: "Collapse Code",
+      collapseFunctions: "Collapse Functions and Classes",
+      expandCode: "Expand Code",
+      collapseCodeRegion: "Collapse code at line {line}",
+      expandCodeRegion: "Expand code at line {line}",
+      foldedLines: "{count} folded lines",
       collapseAll: "Collapse All",
       expandAll: "Expand All",
       enableWrapping: "Enable Wrapping",
@@ -4270,6 +4286,7 @@ export const en: TranslationMap & {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+    sv: "Svenska (Swedish)",
   },
   secretsStore: {
     name: "Name",

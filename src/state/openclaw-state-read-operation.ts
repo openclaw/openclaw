@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { RetainedOperation, RetainedOutcome } from "@openclaw/worker-runtime/lifecycle";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
@@ -514,6 +516,9 @@ export function startOpenClawStateReadOperation(
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         finishProducer();
       } else if (native && !independentWarmSource) {
+        if (isPostgresSqlConnection(native.database.db)) {
+          requireNativeDatabaseFile("postgres", "file-snapshot");
+        }
         awaitedOnly = true;
         waitAwaited(
           prepareSqliteReadOnlyLocationFromOwnedDatabase(

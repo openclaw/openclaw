@@ -13,7 +13,8 @@ import type { SidebarSessionMutationScope } from "../../components/app-sidebar-s
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
-import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
+import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
+import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -127,6 +128,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return this.headerSessionDataMemo.read(
       [
         label,
+        sessionPlacementAction(row),
         row.key,
         row.agentId,
         row.sessionId,
@@ -147,6 +149,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        placementAction: sessionPlacementAction(row),
         target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
@@ -168,9 +171,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     );
   }
 
-  private headerSessionOperationsLoad: Promise<
-    typeof import("../../components/session-organizer-operations.runtime.ts")
-  > | null = null;
+  private headerSessionOperationsLoad: Promise<typeof SessionOperations> | null = null;
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -192,8 +193,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
       return;
     }
-    if (action.kind === "stop-cloud-worker") {
-      return this.changeHeaderPlacement(row, "reclaim");
+    if (action.kind === "move-session" || action.kind === "stop-cloud-worker") {
+      return this.changeHeaderPlacement(row, action.kind === "move-session" ? "move" : "reclaim");
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;
@@ -304,7 +305,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     try {
       const operations = await (this.headerSessionOperationsLoad ??=
         import("../../components/session-organizer-operations.runtime.ts"));
-      const host: SessionActionHost & { knownSessionGroups(): string[] } = {
+      const host: SessionOperations.SessionActionHost & { knownSessionGroups(): string[] } = {
         sessionData: {
           isSessionMutationScopeCurrent: (candidate) =>
             this.isHeaderSessionActionCurrent(candidate, owner),
@@ -342,9 +343,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           category,
           scope,
           {},
-          {
-            resolveSession: resolveCurrentSession,
-          },
+          { resolveSession: resolveCurrentSession },
         );
       switch (action.kind) {
         case "toggle-involving-me":
@@ -599,6 +598,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
+      row.deviceFolder?.path ||
       (row.execNode ? row.execCwd?.trim() : undefined) ||
       row.spawnedWorkspaceDir?.trim() ||
       row.spawnedCwd?.trim() ||
@@ -722,8 +722,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        const error = result.error ?? "Failed to reveal session workspace.";
-        this.publishHeaderError(error, owner);
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.", owner);
       }
     } catch (error) {
       this.publishHeaderError(error, owner);

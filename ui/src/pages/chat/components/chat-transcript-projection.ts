@@ -8,7 +8,6 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -24,11 +23,10 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
 import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
-import { renderUnplacedSubagentWait, type StreamGroupOptions } from "./chat-message-stream.ts";
+import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {
@@ -51,8 +49,10 @@ import {
 } from "./chat-transcript-message-index.ts";
 import { pruneTranscriptExpansions } from "./chat-transcript-recovery.ts";
 import {
+  GuardedTranscriptItem,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
+  transcriptReplyDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
@@ -387,6 +387,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       userAvatar: props.userAvatar ?? null,
       channelAvatar: props.channelAvatar,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
+      connected: props.connected,
       onDiscardQueuedMessage: props.onDiscardQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
       personActivity: props.personActivity,
@@ -441,21 +442,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       : "";
     return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
   };
-  const rowPresentationDependencies = (item: ChatRenderItem): readonly unknown[] => {
-    const dependencies: unknown[] = [liveStatusSignature(item)];
-    for (const group of chatItemGroups(item)) {
-      for (const source of group.messages) {
-        if (source.replyTarget?.kind === "id") {
-          const loaded = loadedReplySources.get(source.replyTarget.id);
-          dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
-        }
-      }
-    }
-    return dependencies;
-  };
   const renderItem = guardChatRenderItems(
     state,
-    rowPresentationDependencies,
+    (item) => [liveStatusSignature(item), ...transcriptReplyDependencies(item, loadedReplySources)],
     (item) => {
       if (item.kind === "group") {
         return { kind: "group", group: item, options: renderGroupOptions(item) };
@@ -492,6 +481,21 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
               presentation: "standalone",
             };
       }
+      if (item.kind === "agent-run-frame") {
+        return {
+          kind: "frame",
+          frame: item,
+          options: {
+            basePath: props.basePath,
+            sessionPublicOrigin: props.sessionPublicOrigin,
+            streamOptions: streamGroupOptions,
+            renderGroupOptions,
+            isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+            onToggleWork: toggleToolCardExpanded,
+            turnRecap: recapForGroup(item.key),
+          },
+        };
+      }
       return undefined;
     },
     (item) => {
@@ -500,18 +504,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       }
       if (item.kind === "notice") {
         return () => renderChatNotice(item, props.onPermissionRetry, props);
-      }
-      if (item.kind === "agent-run-frame") {
-        return () =>
-          renderAgentRunFrame(item, {
-            basePath: props.basePath,
-            sessionPublicOrigin: props.sessionPublicOrigin,
-            streamOptions: streamGroupOptions,
-            renderGroupOptions,
-            isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-            onToggleWork: toggleToolCardExpanded,
-            turnRecap: recapForGroup(item.key),
-          });
       }
       return undefined;
     },
@@ -543,7 +535,12 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   if (subagents.wait && !subagents.placedWait && !searchFiltering) {
     appendContent(
       "waiting-subagents",
-      renderUnplacedSubagentWait(props.sessionKey, subagents.wait, streamGroupOptions),
+      new GuardedTranscriptItem([subagents.wait, streamGroupOptions], {
+        kind: "wait",
+        sessionKey: props.sessionKey,
+        wait: subagents.wait,
+        options: streamGroupOptions,
+      }),
     );
   }
   const typingIndicator = renderChatTypingIndicator(
@@ -604,7 +601,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.startupLabel,
     props.retryAt,
     props.onRetryRun,
-    props.onChangeFailureModel,
     props.failureActionsRunId,
     Boolean(props.waitingApproval),
     props.questionPrompts,
@@ -643,6 +639,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     Boolean(props.onReact),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
+    props.connected,
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
     props.queuedMessageAction?.label,

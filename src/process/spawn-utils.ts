@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import { brokerSpawnOptions } from "./spawn-broker/host.js";
@@ -16,6 +17,7 @@ export function spawnProcess(
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
 ): ChildProcess {
+  assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
@@ -54,6 +56,8 @@ function shouldRetry(err: unknown): boolean {
 export async function spawnWithFallback(
   params: SpawnWithFallbackParams,
 ): Promise<SpawnWithFallbackResult> {
+  // Custom Windows transports can add launcher IPC even when the target inherits stdio.
+  assertAppContainerSpawnSupported(params.spawnImpl ? undefined : params.options.stdio);
   const spawnImpl = params.spawnImpl ?? spawnProcess;
   const baseOptions = { ...params.options };
   const fallbacks = params.fallbacks ?? [];

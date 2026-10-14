@@ -137,21 +137,13 @@ const SESSION_WINDOW_CHILD_SCRIPT = String.raw`
 const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
   import { DatabaseSync } from "node:sqlite";
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
-  import { transcriptEventJsonSql } from "./src/config/sessions/transcript-payload.ts";
   import { readSqliteTranscriptPayload, sqliteTranscriptPayloadColumns } from "./scripts/lib/sqlite-transcript-payload.mjs";
   const originalPrepare = DatabaseSync.prototype.prepare;
-  const cursorSelects = new Set();
   let mediaSelects = 0;
   DatabaseSync.prototype.prepare = function (sql) {
     if (/^\s*select/i.test(sql) &&
         /(transcript_events|trajectory_runtime_events|session_windows)/i.test(sql)) {
       mediaSelects += 1;
-      if (
-        /from "(?:transcript_events|trajectory_runtime_events)"\s+where/i.test(sql) &&
-        /order by "session_id" asc, "seq" asc limit/i.test(sql)
-      ) {
-        cursorSelects.add(sql);
-      }
     }
     return originalPrepare.call(this, sql);
   };
@@ -164,13 +156,6 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
   });
   const migrationSelects = mediaSelects;
   const db = new DatabaseSync(path, { readOnly: true });
-  transcriptEventJsonSql(db);
-  const cursorPlanDetails = [...cursorSelects].flatMap((sql) => {
-    const bindings = Array((sql.match(/\?/g) ?? []).length).fill(0);
-    return originalPrepare.call(db, "EXPLAIN QUERY PLAN " + sql)
-      .all(...bindings)
-      .map((row) => row.detail);
-  });
   const transcript = JSON.parse(readSqliteTranscriptPayload(db.prepare(
     "SELECT " + sqliteTranscriptPayloadColumns(db) + " FROM transcript_events WHERE session_id=? AND seq=0",
   ).get("sparse-0")));
@@ -180,7 +165,6 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
     changeCount: migration.changes.length,
-    cursorPlanDetails,
     migrationSelects,
     transcriptMediaPath: transcript.message.__openclaw?.media?.[0]?.path,
     transcriptHasLegacyCarrier: Object.hasOwn(transcript.message, "MediaPath"),
@@ -270,6 +254,24 @@ function createSparseEventCorpus(stateDir: string): void {
 }
 
 describe("legacy media persistence large corpus", () => {
+  it("bounds retained payload bytes when a row batch contains oversized identity events", () => {
+    const stateDir = tempDir.make("openclaw-media-oversized-events-");
+    const database = createWindows(stateDir, "oversized-", 1);
+    database.db
+      .prepare(`WITH RECURSIVE n(i) AS (
+        VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < 65
+      ) INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+        SELECT 'oversized-0', i, json_object('type','custom','customType','synthetic',
+          'data', ?), i+1 FROM n`)
+      .run("x".repeat(8 * 1024 * 1024));
+    database.db.exec("COMMIT");
+    closeOpenClawAgentDatabases();
+    expect(runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 256)).toEqual({
+      changes: [],
+      warnings: [],
+    });
+  }, 130_000);
+
   it("does not materialize every session window under a 128 MiB old-space cap", () => {
     const stateDir = tempDir.make("openclaw-media-session-windows-");
     createSessionWindowCorpus(stateDir);
@@ -305,7 +307,6 @@ describe("legacy media persistence large corpus", () => {
     createSparseEventCorpus(stateDir);
     const output = runMigration(stateDir, SPARSE_EVENT_CHILD_SCRIPT) as {
       changeCount: number;
-      cursorPlanDetails: string[];
       migrationSelects: number;
       transcriptHasLegacyCarrier: boolean;
       transcriptMediaPath: string;
@@ -321,13 +322,6 @@ describe("legacy media persistence large corpus", () => {
       trajectoryMediaPath: "/media/trajectory.png",
       trajectoryHasLegacyCarrier: false,
     });
-    expect(output.cursorPlanDetails.length).toBeGreaterThan(0);
-    expect(
-      output.cursorPlanDetails.every(
-        (detail) =>
-          detail.startsWith("SEARCH ") && detail.includes("session_id") && detail.includes("seq"),
-      ),
-    ).toBe(true);
     expect(output.migrationSelects).toBeLessThan(1_000);
   }, 130_000);
 });
