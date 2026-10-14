@@ -1,11 +1,32 @@
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
-const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const { preExistingCandidate: createCandidate } = createPriorCiCandidateFactory(fixture);
+const snapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
+let prepared: { candidate: ReturnType<typeof createCandidate>; snapshot: string } | undefined;
+
+function preExistingCandidate() {
+  if (!prepared) {
+    const candidate = createCandidate();
+    const snapshot = snapshots.make("pr-main-drift-setup-");
+    copyTreeCloseOnExec(candidate.root, snapshot);
+    prepared = { candidate, snapshot };
+  } else {
+    // Keep absolute worktree and evidence paths valid while resetting every case's refs and state.
+    rmSync(prepared.candidate.root, { recursive: true, force: true });
+    copyTreeCloseOnExec(prepared.snapshot, prepared.candidate.root);
+    restoredRoots.add(prepared.candidate.root);
+  }
+  return prepared.candidate;
+}
 
 function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
   expect(f.state().mutations).toBe(0);
@@ -128,6 +149,8 @@ describePosix("prior-CI forward main admission", () => {
     "final GraphQL recalculation",
     "remote-only final main",
     "remote-only recalculation",
+    "known status",
+    "final known status",
   ] as const)("lands the pinned head when main advances during %s", (stage) => {
     const f = preExistingCandidate();
     const remoteOnly = stage.startsWith("remote-only");
@@ -135,7 +158,10 @@ describePosix("prior-CI forward main admission", () => {
     let main = remoteOnly ? f.base : f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
-    const settled = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+    const settled = {
+      mergeable: "MERGEABLE",
+      mergeStateStatus: stage.includes("known status") ? "CLEAN" : "BLOCKED",
+    };
     if (remoteOnly) {
       state.observations = [
         {},
@@ -146,8 +172,12 @@ describePosix("prior-CI forward main admission", () => {
         ...(recalculating ? [{ pr: unknown }, { pr: settled }] : []),
       ];
     } else {
-      state.observations =
-        stage === "settlement"
+      state.observations = stage.includes("known status")
+        ? [
+            ...Array.from({ length: stage === "known status" ? 1 : 4 }, () => ({})),
+            { main, pr: settled },
+          ]
+        : stage === "settlement"
           ? [{ pr: unknown }]
           : recalculating
             ? [
@@ -208,7 +238,6 @@ describePosix("prior-CI forward main admission", () => {
     ["same main", "PR or main changed during observation"],
     ["persistent", "mergeability recalculation remained UNKNOWN after 3 observations"],
     ["conflict", "PR or main changed during observation"],
-    ["known status", "PR or main changed during observation"],
     ["head", "PR or main changed during observation"],
     ["rewind", "both observed and verified main"],
     ["final revoked admin", "writer must be an active organization admin"],
@@ -231,7 +260,7 @@ describePosix("prior-CI forward main admission", () => {
               ...(fault === "rewind" ? { main: f.base } : {}),
               pr: {
                 mergeable: fault === "conflict" ? "CONFLICTING" : "MERGEABLE",
-                mergeStateStatus: fault === "known status" ? "CLEAN" : "BLOCKED",
+                mergeStateStatus: "BLOCKED",
                 ...(fault === "head" ? { headRefOid: f.base } : {}),
               },
               ...(fault === "final revoked admin" ? { priorCi: { membership: "member" } } : {}),
@@ -262,9 +291,12 @@ describePosix("prior-CI forward main admission", () => {
     ["conflict", "reread", "cannot establish prepared-head merge tree"],
     ["empty change", "reread", "NO NET CHANGE"],
     ["unavailable main", "reread", "cannot fetch authoritative main"],
+    ["strict", "reread", "OPENCLAW_PR_STRICT_DRIFT=1"],
+    ["strict", "first observation", "OPENCLAW_PR_STRICT_DRIFT=1"],
   ] as const)("refuses %s at %s before intent or merge I/O", (fault, stage, message) => {
     const f = preExistingCandidate();
     const state = f.state();
+    state.strictDrift = fault === "strict";
     const main = f.commit(
       f.tree(
         fault === "conflict"
@@ -357,7 +389,6 @@ describePosix("prior-CI forward main admission", () => {
 
   it.each([
     ["head", "reread"],
-    ["status", "reread"],
     ["head", "rematerialization"],
     ["rewind", "rematerialization"],
   ] as const)("refuses changed %s during %s", (fault, stage) => {
@@ -374,10 +405,7 @@ describePosix("prior-CI forward main admission", () => {
       ];
     } else {
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      state.observations = [
-        {},
-        { main, pr: fault === "head" ? { headRefOid: f.base } : { mergeStateStatus: "BEHIND" } },
-      ];
+      state.observations = [{}, { main, pr: { headRefOid: f.base } }];
     }
     f.save(state);
     const result = f.adminPriorCi(f.path);
@@ -394,24 +422,13 @@ describePosix("prior-CI forward main admission", () => {
     expectNoDispatch(f);
   });
 
-  it("keeps Crabbox admin main stability strict", () => {
-    const f = fixture();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    f.save({ ...f.state(), admin: true, gates: "fail", observations: [{}, { main }] });
-    const result = f.run();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("PR or main changed during observation");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
   it("keeps retained prior-CI outcomes fenced after main moves", () => {
     const f = preExistingCandidate();
     f.save({ ...f.state(), mode: "unapplied" });
     f.adminPriorCi(f.path);
     expect(f.record()).toMatchObject({ phase: "intent", route: "admin" });
     expect(f.state().mutations).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const outcome = f.git(["rev-parse", "refs/openclaw/pr-merge-outcomes/123"]);
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     f.save({ ...f.state(), observations: [{}, { main }] });

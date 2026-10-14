@@ -64,11 +64,9 @@ export async function clickViaPlaywright(
         await locator.hover({ timeout, signal });
         throwIfInteractionAborted(opts.signal);
         await sleepWithAbort(delayMs, opts.signal);
-        if (opts.assertCurrent) {
-          const assertion = assertInteractionCurrent(opts);
-          if (assertion) {
-            await assertion;
-          }
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
         }
         throwIfInteractionAborted(opts.signal);
       }
@@ -251,11 +249,9 @@ export async function typeViaPlaywright(
   await runElementInteraction(opts, resolved, async (locator, { timeout, signal }) => {
     if (opts.slowly) {
       await locator.click({ timeout, signal });
-      if (opts.assertCurrent) {
-        const assertion = assertInteractionCurrent(opts);
-        if (assertion) {
-          await assertion;
-        }
+      const assertion = assertInteractionCurrent(opts);
+      if (assertion) {
+        await assertion;
       }
       throwIfInteractionAborted(opts.signal);
       await locator.type(text, { timeout, signal, delay: 75 });
@@ -263,11 +259,9 @@ export async function typeViaPlaywright(
       await locator.fill(text, { timeout, signal });
     }
     if (opts.submit) {
-      if (opts.assertCurrent) {
-        const assertion = assertInteractionCurrent(opts);
-        if (assertion) {
-          await assertion;
-        }
+      const assertion = assertInteractionCurrent(opts);
+      if (assertion) {
+        await assertion;
       }
       throwIfInteractionAborted(opts.signal);
       await locator.press("Enter", { timeout, signal });

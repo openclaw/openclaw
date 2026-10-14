@@ -25,6 +25,7 @@ export type DraftRepositoryState =
   // Selected GitHub projects offer isolation before checkout exists. Local first
   // turns prepare after admission; remote placement clones on its selected runner.
   | { kind: "pending-clone"; cloneUrl: string }
+  | { kind: "pending-project"; projectId: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -48,6 +49,7 @@ export type DraftEnvironment = {
   status: EnvironmentStatus;
   platform?: string;
   sessionHost?: boolean;
+  workerHost?: { deviceFolders: boolean };
   workerSlots?: WorkerSlotSummary;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
@@ -70,6 +72,10 @@ function normalizeMachineSize(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 65_536
     ? value
     : undefined;
+}
+
+function normalizeTrust(value: unknown): DraftCloudProfile["trust"] {
+  return value === "persistent" || value === "disposable" ? value : undefined;
 }
 
 function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefined {
@@ -131,12 +137,9 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       if (!id || !providerId) {
         return [];
       }
-      const trust: DraftCloudProfile["trust"] =
-        profile.trust === "persistent" || profile.trust === "disposable"
-          ? profile.trust
-          : undefined;
-      const machines = readDraftMachineOptions(profile.machines);
-      const operatingSystems = readDraftOperatingSystems(profile.operatingSystems);
+      const trust = normalizeTrust(profile.trust);
+      const machines = readDraftCloudOptions(profile.machines, "machine");
+      const operatingSystems = readDraftCloudOptions(profile.operatingSystems, "os");
       return [
         {
           id,
@@ -159,55 +162,42 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function readDraftMachineOptions(value: unknown): WorkerMachineOption[] {
-  const options = new Map<string, WorkerMachineOption>();
-  for (const raw of (Array.isArray(value) ? value : []).slice(0, 64)) {
+function readDraftCloudOptions(value: unknown, kind: "machine"): WorkerMachineOption[];
+function readDraftCloudOptions(value: unknown, kind: "os"): WorkerOperatingSystem[];
+function readDraftCloudOptions(value: unknown, kind: "machine" | "os") {
+  const machine = kind === "machine";
+  const options = new Map<string, WorkerMachineOption | WorkerOperatingSystem>();
+  const maxOptions = machine ? 64 : 8;
+  const maxTextLength = machine ? 128 : 64;
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, maxOptions)) {
     if (!isRecord(raw)) {
       continue;
     }
     const id = normalizeOptionalString(raw.id);
     const label = normalizeOptionalString(raw.label);
-    const os = normalizeOptionalString(raw.os);
-    const key = JSON.stringify([os, id]);
+    const os = machine ? normalizeOptionalString(raw.os) : undefined;
+    const disabledReason = machine
+      ? undefined
+      : normalizeOptionalString(raw.disabledReason)?.slice(0, 256);
+    const key = machine ? JSON.stringify([os, id]) : (id ?? "");
     if (
       !id ||
-      id.length > 128 ||
+      id.length > maxTextLength ||
       !label ||
-      label.length > 128 ||
+      label.length > maxTextLength ||
       options.has(key) ||
-      (raw.os !== undefined && (!os || os.length > 64))
+      (machine && raw.os !== undefined && (!os || os.length > 64))
     ) {
       continue;
     }
-    const cpu = normalizeMachineSize(raw.cpu);
-    const memoryGb = normalizeMachineSize(raw.memoryGb);
+    const cpu = machine ? normalizeMachineSize(raw.cpu) : undefined;
+    const memoryGb = machine ? normalizeMachineSize(raw.memoryGb) : undefined;
     options.set(key, {
       id,
       label,
       ...(os ? { os } : {}),
       ...(cpu === undefined ? {} : { cpu }),
       ...(memoryGb === undefined ? {} : { memoryGb }),
-      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
-    });
-  }
-  return [...options.values()];
-}
-
-function readDraftOperatingSystems(value: unknown): WorkerOperatingSystem[] {
-  const options = new Map<string, WorkerOperatingSystem>();
-  for (const raw of (Array.isArray(value) ? value : []).slice(0, 8)) {
-    if (!isRecord(raw)) {
-      continue;
-    }
-    const id = normalizeOptionalString(raw.id);
-    const label = normalizeOptionalString(raw.label);
-    const disabledReason = normalizeOptionalString(raw.disabledReason)?.slice(0, 256);
-    if (!id || id.length > 64 || !label || label.length > 64 || options.has(id)) {
-      continue;
-    }
-    options.set(id, {
-      id,
-      label,
       ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
       ...(disabledReason ? { disabledReason } : {}),
     });
@@ -228,26 +218,38 @@ export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): Work
   return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
 }
 
-/** Providers that omit a marked default still present their first catalog choice as the default. */
+/** Preserve configured defaults; prefer smaller reported hardware only when unambiguous. */
 export function defaultCloudMachine(
   profile: DraftCloudProfile,
   os = defaultCloudOs(profile),
 ): WorkerMachineOption | undefined {
   const machines = cloudMachinesForOs(profile, os);
-  return machines.find((machine) => machine.default) ?? machines[0];
+  return (
+    machines.find((machine) => machine.default) ??
+    // Class names do not rank capacity across providers or operating systems.
+    // Unknown dimensions or CPU/RAM tradeoffs retain the provider's catalog order.
+    machines.find((machine) =>
+      machines.every(
+        (other) =>
+          machine.cpu !== undefined &&
+          machine.memoryGb !== undefined &&
+          other.cpu !== undefined &&
+          other.memoryGb !== undefined &&
+          machine.cpu <= other.cpu &&
+          machine.memoryGb <= other.memoryGb,
+      ),
+    ) ??
+    machines[0]
+  );
 }
 
-const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([
+const ENVIRONMENT_STATUSES: readonly EnvironmentStatus[] = [
   "available",
   "unavailable",
   "starting",
   "stopping",
   "error",
-]);
-
-function isEnvironmentStatus(value: unknown): value is EnvironmentStatus {
-  return typeof value === "string" && ENVIRONMENT_STATUSES.has(value);
-}
+];
 
 function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
   if (
@@ -278,20 +280,13 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       }
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
-      if (
-        !id ||
-        (type !== "local" && type !== "node" && type !== "worker") ||
-        !isEnvironmentStatus(environment.status)
-      ) {
+      const status = ENVIRONMENT_STATUSES.find((candidate) => candidate === environment.status);
+      if (!id || (type !== "local" && type !== "node" && type !== "worker") || !status) {
         return [];
       }
-      const status = environment.status;
       const label = normalizeOptionalString(environment.label);
       const platform = normalizeOptionalString(environment.platform);
-      const trust: DraftEnvironment["trust"] =
-        environment.trust === "persistent" || environment.trust === "disposable"
-          ? environment.trust
-          : undefined;
+      const trust = normalizeTrust(environment.trust);
       const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
       const invocableCommands = Array.isArray(environment.invocableCommands)
         ? normalizeSortedUniqueTrimmedStringList(environment.invocableCommands)
@@ -316,6 +311,9 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             ? { sessionHost: environment.sessionHost }
             : {}),
           ...(workerSlots ? { workerSlots } : {}),
+          ...(isRecord(environment.workerHost)
+            ? { workerHost: { deviceFolders: environment.workerHost.deviceFolders === true } }
+            : {}),
           ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
           ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
           ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),

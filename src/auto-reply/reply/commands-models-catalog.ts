@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import {
@@ -30,7 +31,6 @@ import {
 } from "../../agents/openai-model-routes.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -170,11 +170,15 @@ export async function loadModelsProviderData(
     profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   };
-  const decisions = createModelCatalogDecisions(decisionParams);
+  const decisions = await prepareModelCatalogDecisions(decisionParams);
   // Selecting the default clears the session runtime pin; other model callbacks retain it.
   const defaultDecisions =
     decisionParams.runtimeOverride && resolveModelRuntimeRoute(resolvedDefault.provider)
-      ? createModelCatalogDecisions({ ...decisionParams, runtimeOverride: undefined })
+      ? createModelCatalogDecisions({
+          ...decisionParams,
+          preparedPersonalCatalog: decisions.preparedPersonalCatalog,
+          runtimeOverride: undefined,
+        })
       : decisions;
   const decisionsForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     normalizeProviderId(entry.provider) === resolvedDefault.provider &&
@@ -392,12 +396,15 @@ export async function loadModelsProviderData(
     }
   }
 
+  // Selection needs the prepared capabilities, with selected physical routes
+  // ahead of other inventory rows for the same logical model.
+  const selectionCatalog = [...visibleCatalog, ...catalog];
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
   for (const [provider, models] of byProvider) {
     const providerChoices = new Map<string, ModelsRuntimeChoice>();
     for (const model of models) {
-      const entry = [...visibleCatalog, ...catalog].find(
+      const entry = selectionCatalog.find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
       const authEntry = entry ?? { provider, id: model, name: model };
@@ -438,11 +445,6 @@ export async function loadModelsProviderData(
     runtimeChoicesByProvider.set(provider, [...providerChoices.values()]);
   }
 
-  // Auth and visibility cross awaits. Retired owners must restart the whole projection.
-  if (!owner.isCurrent()) {
-    throw new PreparedModelRuntimePublicationSupersededError("model browse owner was superseded");
-  }
-
   return {
     byProvider,
     pendingProviders,
@@ -459,9 +461,7 @@ export async function loadModelsProviderData(
     refreshWarning: snapshot.refreshFailed
       ? "Some models could not be refreshed. You can still choose from the available models."
       : undefined,
-    // Selection needs the prepared capabilities, with selected physical routes
-    // ahead of other inventory rows for the same logical model.
-    modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
+    modelCatalog: dedupeModelCatalogEntries(selectionCatalog),
     runtimeChoicesByProvider,
     runtimeChoicesByModel,
     isCurrent: decisions.isCurrent,

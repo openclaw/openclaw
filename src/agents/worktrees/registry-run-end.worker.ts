@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import {
@@ -6,10 +5,8 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
@@ -19,12 +16,16 @@ import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
   WorktreeRemovalContentionError,
-  WorktreeRemovalLockError,
+  registryAuthorityChanged,
 } from "./errors.js";
 import {
   publishPendingWorktreeInDatabase,
   recoverPendingWorktreesInDatabase,
 } from "./pending-slots.worker.js";
+import {
+  worktreeRegistryPublication,
+  withWorktreeRegistryWorkerReceipt,
+} from "./registry-publication.js";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
@@ -42,7 +43,8 @@ import type {
   WorktreeRegistryPredicate,
 } from "./types.js";
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
+const query = (db: EngineConnection) =>
+  getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
 
 export type WorktreeRegistryPatch = Partial<
   Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
@@ -53,7 +55,7 @@ export type WorktreeRegistryPatch = Partial<
 };
 
 export function insertRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   {
     record,
     provisionedPaths,
@@ -68,7 +70,7 @@ export function insertRegistryWorktreeInDatabase(
   if (pendingId !== undefined) {
     publishPendingWorktreeInDatabase(db, pendingId, record, leases);
   }
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     db,
     query(db)
       .insertInto("worktrees")
@@ -90,12 +92,14 @@ export function insertRegistryWorktreeInDatabase(
           provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
         run_end_cleanup_json:
           record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
-      }),
-  );
+      })
+      .returningAll(),
+  ).rows;
+  worktreeRegistryPublication.rows(db, inserted);
 }
 
 export function updateRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     id: string;
     patch: WorktreeRegistryPatch;
@@ -137,7 +141,7 @@ export function updateRegistryWorktreeInDatabase(
   if (input.onlyIfActiveAt !== undefined) {
     update = update.where("last_active_at", "=", input.onlyIfActiveAt);
   }
-  executeSqliteQuerySync(db, update);
+  worktreeRegistryPublication.rows(db, executeSqliteQuerySync(db, update.returningAll()).rows);
 }
 
 export type WorktreeRunEndInput<T> = {
@@ -147,7 +151,7 @@ export type WorktreeRunEndInput<T> = {
   predicates?: readonly WorktreeRegistryPredicate[];
 };
 
-function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
+function assertRemovalToken(db: EngineConnection, id: string, token: string) {
   const row = executeSqliteQuerySync(
     db,
     query(db)
@@ -164,7 +168,7 @@ function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
   }
 }
 
-function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate) {
+function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredicate) {
   if (predicate.kind === "snapshot-retirement") {
     return assertSnapshotRetirementInDatabase(db, predicate.record);
   }
@@ -224,10 +228,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current &&
         (current.ownerKind !== "session" || current.ownerId !== predicate.sessionKey)
       ) {
-        throw new SessionWorktreeLifecycleError(
-          "Session worktree ownership changed; retry cleanup.",
-          "owner-mismatch",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "binding":
@@ -248,22 +249,17 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
           ] as const
         ).some((key) => current[key] !== predicate.record[key])
       ) {
-        throw new WorktreeRemovalContentionError(
-          "busy",
-          "Worktree owner or binding changed; checkout preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "activity":
       if (current?.lastActiveAt !== predicate.lastActiveAt) {
-        throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "record":
       if (JSON.stringify(current) !== JSON.stringify(predicate.record)) {
-        throw new Error(
-          "Worktree registry changed during recovery; remaining source and original snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "exact-snapshot": {
@@ -281,9 +277,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.branch !== record.branch ||
         current.snapshotRef !== record.snapshotRef
       ) {
-        throw new Error(
-          "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     }
@@ -297,7 +291,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.createdAt !== record.createdAt ||
         current.lastActiveAt !== record.lastActiveAt
       ) {
-        throw new Error("Worktree exact-state owner or lifecycle changed; checkout preserved");
+        throw registryAuthorityChanged(predicate.kind);
       }
       if (
         current.path !== record.path ||
@@ -316,7 +310,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.path !== predicate.path ||
         current.repoRoot !== predicate.repoRoot
       ) {
-        throw new Error("Managed projection owner changed during settlement");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-owner":
@@ -325,9 +319,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.repoRoot !== predicate.repoRoot ||
         current.path !== predicate.path
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Spawn parent managed worktree changed; retry from its current session",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-record":
@@ -336,15 +328,13 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current?.repoRoot !== predicate.repoRoot ||
         current?.repoFingerprint !== predicate.repoFingerprint
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Accepted managed source changed during preparation",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
   }
 }
 
 export function assertWorktreeRegistryPredicates(
-  db: DatabaseSync,
+  db: EngineConnection,
   predicates: readonly WorktreeRegistryPredicate[] = [],
 ): void {
   for (const predicate of predicates) {
@@ -354,7 +344,7 @@ export function assertWorktreeRegistryPredicates(
 
 /** Git equality cannot release provisioned bytes or a live lifecycle's recovery custody. */
 function assertSnapshotRetirementInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   observed: ManagedWorktreeRecord,
   reapStaleLeases = false,
 ): void {
@@ -384,7 +374,7 @@ function assertSnapshotRetirementInDatabase(
     !row ||
     JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
   ) {
-    throw new Error("Worktree snapshot retirement identity changed");
+    throw registryAuthorityChanged("snapshot-retirement");
   }
   const provisioned = safeParseJson(row.provisioned_paths_json ?? "");
   if (!Array.isArray(provisioned) || provisioned.length !== 0 || row.has_chunks) {
@@ -397,7 +387,7 @@ function assertSnapshotRetirementInDatabase(
 }
 
 export function deleteRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { id: string; removalToken?: string; expectedRetired?: ManagedWorktreeRecord },
 ): void {
   if (input.expectedRetired) {
@@ -415,12 +405,20 @@ export function deleteRegistryWorktreeInDatabase(
     db,
     k.deleteFrom("worktree_provisioned_file_chunks").where("worktree_id", "=", input.id),
   );
-  executeSqliteQuerySync(db, k.deleteFrom("worktrees").where("id", "=", input.id));
+  worktreeRegistryPublication.deleted(
+    db,
+    executeSqliteQuerySync(db, k.deleteFrom("worktrees").where("id", "=", input.id).returningAll())
+      .rows,
+  );
 }
 
 export function worktreeRunEndMutation<Input>(
   operationLabel: string,
-  mutate: (db: DatabaseSync, input: Input, leases?: readonly OpenClawStateLeaseIdentity[]) => void,
+  mutate: (
+    db: EngineConnection,
+    input: Input,
+    leases?: readonly OpenClawStateLeaseIdentity[],
+  ) => void,
 ) {
   return (input: WorktreeRunEndInput<Input>, context: WorkerOperationContext): void => {
     const database = context.open();
@@ -435,9 +433,14 @@ export function worktreeRunEndMutation<Input>(
         };
         admit("transaction");
         assertWorktreeRegistryPredicates(db, input.predicates);
-        mutate(db, input.value, input.leases);
-        admit("commit");
-        deferSqliteWorkerCommitReceipt(db, input.receipt);
+        withWorktreeRegistryWorkerReceipt(
+          db,
+          () => {
+            mutate(db, input.value, input.leases);
+            admit("commit");
+          },
+          input.receipt,
+        );
       },
       { ...context.stateOptions(), database },
       { operationLabel },
@@ -460,7 +463,7 @@ export type WorktreeRemovalRowInput = {
   retiredRemoval?: true;
 };
 export function claimWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorktreeRemovalRowInput,
 ): void {
   const k = query(db);
@@ -499,7 +502,7 @@ export function claimWorktreeRemovalInDatabase(
     throw new WorktreeRemovalContentionError("busy", "worktree removal is already in progress");
   }
   const payloadJson = JSON.stringify({ pid: params.pid, starttime: params.startTime ?? undefined });
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     db,
     k
       .insertInto("state_leases")
@@ -517,8 +520,10 @@ export function claimWorktreeRemovalInDatabase(
         conflict
           .columns(["scope", "lease_key"])
           .doUpdateSet({ owner: params.token, payload_json: payloadJson, updated_at: params.now }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  worktreeRegistryPublication.rows(db, inserted);
 }
 
 export type WorktreeRemovalFinalization = {
@@ -528,7 +533,7 @@ export type WorktreeRemovalFinalization = {
   token?: string;
 };
 export function finalizeWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorktreeRemovalFinalization,
 ): void {
   const record = getRegistryWorktreeInDatabase(db, input.worktreeId);
@@ -542,24 +547,28 @@ export function finalizeWorktreeRemovalInDatabase(
   if (input.token) {
     assertRemovalToken(db, input.worktreeId, input.token);
   }
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     db,
     query(db)
       .deleteFrom("state_leases")
-      .where("scope", "=", worktreeRunLeaseScope(input.worktreeId)),
-  );
+      .where("scope", "=", worktreeRunLeaseScope(input.worktreeId))
+      .returning(["scope", "lease_key"]),
+  ).rows;
+  worktreeRegistryPublication.deleted(db, removed);
 }
 
 export function abortWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { worktreeId: string; token: string },
 ): void {
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     db,
     query(db)
       .deleteFrom("state_leases")
       .where("scope", "=", worktreeRunLeaseScope(input.worktreeId))
       .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
-      .where("owner", "=", input.token),
-  );
+      .where("owner", "=", input.token)
+      .returning(["scope", "lease_key"]),
+  ).rows;
+  worktreeRegistryPublication.deleted(db, removed);
 }

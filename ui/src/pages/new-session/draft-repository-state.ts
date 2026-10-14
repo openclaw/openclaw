@@ -39,9 +39,15 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
   if (snapshot.remoteProject) {
     return { kind: "pending-clone", cloneUrl: snapshot.remoteProject.cloneUrl };
   }
+  if (snapshot.selectedProject && !snapshot.selectedProject.repoRoot) {
+    // Path-redacted registered projects use creation-time validation by project ID.
+    return snapshot.selectedProject.source === "workspace"
+      ? { kind: "idle" }
+      : { kind: "pending-project", projectId: snapshot.selectedProject.id };
+  }
   const repoRoot =
     snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
-  if (!repoRoot || (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)) {
+  if (!repoRoot) {
     return { kind: "idle" };
   }
   return !snapshot.selectedProject && repoRoot === snapshot.workspace && !snapshot.workspaceGit
@@ -51,15 +57,13 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
 
 export class DraftRepositoryController {
   private worktreeValue = false;
-  private worktreeNameValue = "";
-  private baseRefOverride: string | undefined;
+  private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
   private selectionRevision = 0;
   private preferredWorktreeRestore = false;
   private worktreeSelectedByUser = false;
-  private baseRefSelectedByUser = false;
-  private nameSelectedByUser = false;
+  private readonly selectedDetails = new Set<"baseRef" | "worktreeName">();
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -75,12 +79,12 @@ export class DraftRepositoryController {
   }
 
   get worktreeName(): string {
-    return this.worktreeNameValue;
+    return this.details.worktreeName;
   }
 
   get baseRef(): string {
     // An omitted ref lets the Gateway fetch its default; discovery is only a suggestion.
-    return this.baseRefOverride ?? "";
+    return this.details.baseRef ?? "";
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {
@@ -101,7 +105,7 @@ export class DraftRepositoryController {
   }
 
   get hasUserSelection(): boolean {
-    return this.worktreeSelectedByUser || this.baseRefSelectedByUser || this.nameSelectedByUser;
+    return this.worktreeSelectedByUser || this.selectedDetails.size > 0;
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
@@ -111,19 +115,19 @@ export class DraftRepositoryController {
       this.preferredWorktreeRestore =
         preference?.worktree === true && (!preference.where || preference.where.kind === "local");
     }
-    if (!this.baseRefSelectedByUser) {
+    if (!this.selectedDetails.has("baseRef")) {
       const baseRef = preference?.baseRef || undefined;
-      if (this.baseRefOverride !== baseRef) {
+      if (this.details.baseRef !== baseRef) {
         this.selectionRevision += 1;
       }
-      this.baseRefOverride = baseRef;
+      this.details.baseRef = baseRef;
     }
-    if (!this.nameSelectedByUser) {
+    if (!this.selectedDetails.has("worktreeName")) {
       const worktreeName = preference?.worktreeName ?? "";
-      if (this.worktreeNameValue !== worktreeName) {
+      if (this.details.worktreeName !== worktreeName) {
         this.selectionRevision += 1;
       }
-      this.worktreeNameValue = worktreeName;
+      this.details.worktreeName = worktreeName;
     }
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
@@ -143,10 +147,9 @@ export class DraftRepositoryController {
 
   clearDetails(persist = false) {
     this.selectionRevision += 1;
-    this.baseRefOverride = undefined;
-    this.worktreeNameValue = "";
-    this.baseRefSelectedByUser = false;
-    this.nameSelectedByUser = false;
+    this.details.baseRef = undefined;
+    this.details.worktreeName = "";
+    this.selectedDetails.clear();
     if (persist) {
       this.callbacks.persistPreference({ baseRef: "", worktreeName: "" });
     }
@@ -190,25 +193,14 @@ export class DraftRepositoryController {
     return true;
   }
 
-  setBaseRef(baseRef: string, submitting: boolean) {
+  setDetail(key: "baseRef" | "worktreeName", value: string, submitting: boolean) {
     if (submitting) {
       return;
     }
     this.selectionRevision += 1;
-    this.baseRefOverride = baseRef;
-    this.baseRefSelectedByUser = true;
-    this.callbacks.persistPreference({ baseRef });
-    this.callbacks.requestUpdate();
-  }
-
-  setWorktreeName(worktreeName: string, submitting: boolean) {
-    if (submitting) {
-      return;
-    }
-    this.selectionRevision += 1;
-    this.worktreeNameValue = worktreeName;
-    this.nameSelectedByUser = true;
-    this.callbacks.persistPreference({ worktreeName });
+    this.details[key] = value;
+    this.selectedDetails.add(key);
+    this.callbacks.persistPreference({ [key]: value });
     this.callbacks.requestUpdate();
   }
 
@@ -231,7 +223,7 @@ export class DraftRepositoryController {
     const currentAgent = owner.agentId === snapshot.agentId;
     const persist = this.callbacks.capturePreferenceConsumption(owner, {
       worktreeName: name,
-      ...(!submission.recovered ? { selectedBaseRef: this.baseRefOverride?.trim() ?? "" } : {}),
+      ...(!submission.recovered ? { selectedBaseRef: this.details.baseRef?.trim() ?? "" } : {}),
       folder:
         params.cwd ?? (currentAgent ? snapshot.folder.trim() || owner.workspace : owner.workspace),
       baseRef: params.worktreeBaseRef ?? (currentAgent ? this.baseRef : undefined),
@@ -244,14 +236,14 @@ export class DraftRepositoryController {
           if (
             owner.agentId !== this.read().agentId ||
             revision !== this.selectionRevision ||
-            name !== this.worktreeNameValue.trim()
+            name !== this.details.worktreeName.trim()
           ) {
             return;
           }
           // A custom name belongs to one accepted draft; keep the checkout defaults.
           this.selectionRevision += 1;
-          this.worktreeNameValue = "";
-          this.nameSelectedByUser = true;
+          this.details.worktreeName = "";
+          this.selectedDetails.add("worktreeName");
           this.callbacks.requestUpdate();
         }))
     );
@@ -259,13 +251,22 @@ export class DraftRepositoryController {
 
   available(): boolean {
     const state = this.repositoryValue;
-    // A saved path or .git marker cannot prove that Git has a usable HEAD.
-    return state.kind === "git" || state.kind === "pending-clone";
+    // Paths need discovery; project IDs and clones are validated when creating the session.
+    return (
+      state.kind === "git" || state.kind === "pending-clone" || state.kind === "pending-project"
+    );
   }
 
   matchesCurrentRepo(): boolean {
     const snapshot = this.read();
     const state = this.repositoryValue;
+    if (state.kind === "pending-project") {
+      return (
+        !snapshot.remoteProject &&
+        !snapshot.selectedProject?.repoRoot &&
+        snapshot.selectedProject?.id === state.projectId
+      );
+    }
     if (state.kind === "pending-clone") {
       return snapshot.remoteProject?.cloneUrl === state.cloneUrl;
     }

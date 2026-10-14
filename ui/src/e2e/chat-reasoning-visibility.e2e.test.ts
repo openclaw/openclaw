@@ -94,7 +94,7 @@ suite.define(() => {
       }
 
       const menuTrigger = pane.locator(".chat-header-session-menu__trigger");
-      const menu = pane.locator("wa-dropdown.chat-header-session-menu");
+      const menu = pane.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
       const localReasoning = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       for (const showReasoning of [false, true]) {
         await menuTrigger.click();

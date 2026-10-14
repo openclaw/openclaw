@@ -16,7 +16,7 @@ import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type RuntimeRoutePeer = { peer: { kind: string; id: string } };
+type RuntimeRoutePeer = { accountId?: string | null; peer: { kind: string; id: string } };
 
 type MSTeamsTestRuntimeOptions = {
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
@@ -31,7 +31,7 @@ type MSTeamsTestRuntimeOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
+  resolveStorePath?: () => string | undefined;
   runPrepared?: typeof runPreparedInboundReply;
 };
 
@@ -173,11 +173,6 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       reply: {
         dispatchReplyWithBufferedBlockDispatcher:
           dispatchReplyWithBufferedBlockDispatcher as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        createReplyDispatcherWithTyping: () => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-        }),
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
         resolveHumanDelayConfig: () => undefined,
@@ -228,6 +223,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   return {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
+    accountId: "default",
     appId: "test-app-id",
     app,
     tokenProvider: {

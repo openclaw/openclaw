@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -24,28 +23,10 @@ import {
 } from "./docx-markdown.js";
 import { cleanBlocksForDescendant, patchTable } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
-import { resolveDocxUploadInput } from "./docx-upload-input.js";
+import { resolveDocToolLocalRoots, resolveDocxUploadInput } from "./docx-upload-input.js";
 import { createFeishuToolClient, resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
-
-function resolveDocToolLocalRoots(ctx: {
-  workspaceDir?: string;
-  fsPolicy?: { workspaceOnly: boolean };
-}): string[] | undefined {
-  if (ctx.fsPolicy?.workspaceOnly !== true) {
-    return undefined;
-  }
-  const workspaceDir = ctx.workspaceDir?.trim();
-  // Fail closed: workspace-only with no resolved workspace must not fall back
-  // to default managed roots.
-  if (!workspaceDir) {
-    return [];
-  }
-  // Workspace paths are expected to be absolute; resolve() normalizes any
-  // accidental relative input before passing roots to loadWebMedia.
-  return [resolve(workspaceDir)];
-}
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
   1: "Page",
@@ -208,54 +189,47 @@ async function insertBlocks(
   return allInserted;
 }
 
-async function convertMarkdownWithFallback(
+type ConvertedMarkdown = {
+  blocks: FeishuDocxBlock[];
+  firstLevelBlockIds: string[];
+  images: DocxMarkdownImage[];
+};
+
+/** Convert markdown in chunks to avoid document.convert content size limits. */
+async function chunkedConvertMarkdown(
   client: Lark.Client,
-  chunk: DocxMarkdownChunk,
+  chunks: readonly DocxMarkdownChunk[],
   depth = 0,
-) {
-  try {
-    return { ...(await convertMarkdown(client, chunk.markdown)), images: chunk.images };
-  } catch (error) {
-    if (depth >= MAX_CONVERT_RETRY_DEPTH || chunk.markdown.length < 2) {
-      throw error;
-    }
-
-    const splitTarget = Math.max(256, Math.floor(chunk.markdown.length / 2));
-    const chunks = splitDocxMarkdownBySize(chunk.markdown, splitTarget).map(
-      createDocxMarkdownChunk,
-    );
-    if (chunks.length <= 1) {
-      throw error;
-    }
-
-    const blocks: FeishuDocxBlock[] = [];
-    const firstLevelBlockIds: string[] = [];
-    const images: DocxMarkdownImage[] = [];
-
-    for (const fallbackChunk of chunks) {
-      const converted = await convertMarkdownWithFallback(client, fallbackChunk, depth + 1);
-      blocks.push(...converted.blocks);
-      firstLevelBlockIds.push(...converted.firstLevelBlockIds);
-      images.push(...converted.images);
-    }
-
-    return { blocks, firstLevelBlockIds, images };
-  }
-}
-
-/** Convert markdown in chunks to avoid document.convert content size limits */
-async function chunkedConvertMarkdown(client: Lark.Client, chunks: readonly DocxMarkdownChunk[]) {
-  const allBlocks: FeishuDocxBlock[] = [];
-  const allRootIds: string[] = [];
-  const allImages: DocxMarkdownImage[] = [];
+): Promise<ConvertedMarkdown> {
+  const result: ConvertedMarkdown = { blocks: [], firstLevelBlockIds: [], images: [] };
   for (const chunk of chunks) {
-    const { blocks, firstLevelBlockIds, images } = await convertMarkdownWithFallback(client, chunk);
-    const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
-    allBlocks.push(...orderedBlocks);
-    allRootIds.push(...rootIds);
-    allImages.push(...images);
+    let converted: ConvertedMarkdown;
+    try {
+      converted = { ...(await convertMarkdown(client, chunk.markdown)), images: chunk.images };
+    } catch (error) {
+      if (depth >= MAX_CONVERT_RETRY_DEPTH || chunk.markdown.length < 2) {
+        throw error;
+      }
+      const splitTarget = Math.max(256, Math.floor(chunk.markdown.length / 2));
+      const fallbackChunks = splitDocxMarkdownBySize(chunk.markdown, splitTarget).map(
+        createDocxMarkdownChunk,
+      );
+      if (fallbackChunks.length <= 1) {
+        throw error;
+      }
+      converted = await chunkedConvertMarkdown(client, fallbackChunks, depth + 1);
+    }
+    const { blocks, firstLevelBlockIds, images } = converted;
+    // Normalize once per original chunk, after combining its fallback conversions.
+    const { orderedBlocks, rootIds } =
+      depth === 0
+        ? normalizeConvertedBlockTree(blocks, firstLevelBlockIds)
+        : { orderedBlocks: blocks, rootIds: firstLevelBlockIds };
+    result.blocks.push(...orderedBlocks);
+    result.firstLevelBlockIds.push(...rootIds);
+    result.images.push(...images);
   }
-  return { blocks: allBlocks, firstLevelBlockIds: allRootIds, images: allImages };
+  return result;
 }
 
 type Logger = { info?: (msg: string) => void };
@@ -310,23 +284,25 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
   return childIds.length;
 }
 
-async function uploadImageToDocx(
+type DocxUpload = Awaited<ReturnType<typeof resolveDocxUploadInput>>;
+
+async function uploadDocxMedia(
   client: Lark.Client,
-  blockId: string,
-  imageBuffer: Buffer,
-  fileName: string,
-  docToken: string,
+  kind: "image" | "file",
+  parentNode: string,
+  upload: DocxUpload,
+  docToken?: string,
 ): Promise<string> {
   const res = await client.drive.media.uploadAll({
     data: {
-      file_name: fileName,
-      parent_type: "docx_image",
-      parent_node: blockId,
-      size: imageBuffer.length,
+      file_name: upload.fileName,
+      parent_type: kind === "image" ? "docx_image" : "docx_file",
+      parent_node: parentNode,
+      size: upload.buffer.length,
       // Pass Buffer directly so form-data can calculate Content-Length correctly.
       // Readable.from() produces a stream with unknown length, causing Content-Length
       // mismatch that silently truncates uploads for images larger than ~1KB.
-      file: imageBuffer,
+      file: upload.buffer,
       // Required when the document block belongs to a non-default datacenter:
       // tells the drive service which document the block belongs to for routing.
       // Per API docs: certain upload scenarios require the cloud document token.
@@ -336,8 +312,18 @@ async function uploadImageToDocx(
 
   const fileToken = res?.file_token;
   if (!fileToken) {
-    throw new Error("Image upload failed: no file_token returned");
+    throw new Error(`${kind === "image" ? "Image" : "File"} upload failed: no file_token returned`);
   }
+  return fileToken;
+}
+
+async function uploadImageToDocx(
+  client: Lark.Client,
+  blockId: string,
+  upload: DocxUpload,
+  docToken: string,
+): Promise<string> {
+  const fileToken = await uploadDocxMedia(client, "image", blockId, upload, docToken);
   const patchRes = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
     data: { replace_image: { token: fileToken } },
@@ -374,7 +360,7 @@ async function processImages(
         maxBytes,
         remoteReadTimeoutMs: imageReadTimeoutMs,
       });
-      await uploadImageToDocx(client, blockId, upload.buffer, upload.fileName, docToken);
+      await uploadImageToDocx(client, blockId, upload, docToken);
 
       processed++;
     } catch (err) {
@@ -460,7 +446,7 @@ async function uploadImageBlock(
     parent_block_id: parentBlockId,
     index,
   }: Extract<FeishuDocParams, { action: "upload_image" }>,
-  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
+  upload: DocxUpload,
 ) {
   // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
@@ -477,13 +463,7 @@ async function uploadImageBlock(
     throw new Error("Failed to create image block");
   }
 
-  const fileToken = await uploadImageToDocx(
-    client,
-    imageBlockId,
-    upload.buffer,
-    upload.fileName,
-    docToken, // drive_route_token for multi-datacenter routing
-  );
+  const fileToken = await uploadImageToDocx(client, imageBlockId, upload, docToken);
 
   return {
     success: true,
@@ -496,45 +476,10 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  {
-    doc_token: docToken,
-    parent_block_id: parentBlockId,
-  }: Extract<FeishuDocParams, { action: "upload_file" }>,
-  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
+  { doc_token: docToken }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  upload: DocxUpload,
 ) {
-  const blockId = parentBlockId ?? docToken;
-
-  // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const placeholderMd = "[file](https://example.com/placeholder)";
-  const converted = await convertMarkdown(client, placeholderMd);
-  const { orderedBlocks } = normalizeConvertedBlockTree(
-    converted.blocks,
-    converted.firstLevelBlockIds,
-  );
-  const inserted = await insertBlocks(client, docToken, orderedBlocks, blockId);
-
-  const placeholderBlock = inserted[0];
-  if (!placeholderBlock?.block_id) {
-    throw new Error("Failed to create placeholder block for file upload");
-  }
-
-  const parentId = placeholderBlock.parent_id ?? blockId;
-  await deleteChildBlock(client, docToken, parentId, placeholderBlock.block_id);
-
-  const fileRes = await client.drive.media.uploadAll({
-    data: {
-      file_name: upload.fileName,
-      parent_type: "docx_file",
-      parent_node: docToken,
-      size: upload.buffer.length,
-      file: upload.buffer,
-    },
-  });
-
-  const fileToken = fileRes?.file_token;
-  if (!fileToken) {
-    throw new Error("File upload failed: no file_token returned");
-  }
+  const fileToken = await uploadDocxMedia(client, "file", docToken, upload);
 
   return {
     success: true,
@@ -603,28 +548,23 @@ async function createDoc(
   const requesterPermType = "edit" as const;
 
   let requesterPermissionAdded = false;
-  let requesterPermissionSkippedReason: string | undefined;
   let requesterPermissionError: string | undefined;
 
-  if (shouldGrantToRequester) {
-    if (!requesterOpenId) {
-      requesterPermissionSkippedReason = "trusted requester identity unavailable";
-    } else {
-      try {
-        const permissionRes = await client.drive.permissionMember.create({
-          path: { token: docToken },
-          params: { type: "docx", need_notification: false },
-          data: {
-            member_type: "openid",
-            member_id: requesterOpenId,
-            perm: requesterPermType,
-          },
-        });
-        assertFeishuApiSuccess(permissionRes);
-        requesterPermissionAdded = true;
-      } catch (err) {
-        requesterPermissionError = formatErrorMessage(err);
-      }
+  if (shouldGrantToRequester && requesterOpenId) {
+    try {
+      const permissionRes = await client.drive.permissionMember.create({
+        path: { token: docToken },
+        params: { type: "docx", need_notification: false },
+        data: {
+          member_type: "openid",
+          member_id: requesterOpenId,
+          perm: requesterPermType,
+        },
+      });
+      assertFeishuApiSuccess(permissionRes);
+      requesterPermissionAdded = true;
+    } catch (err) {
+      requesterPermissionError = formatErrorMessage(err);
     }
   }
 
@@ -636,8 +576,8 @@ async function createDoc(
       requester_permission_added: requesterPermissionAdded,
       ...(requesterOpenId && { requester_open_id: requesterOpenId }),
       requester_perm_type: requesterPermType,
-      ...(requesterPermissionSkippedReason && {
-        requester_permission_skipped_reason: requesterPermissionSkippedReason,
+      ...(!requesterOpenId && {
+        requester_permission_skipped_reason: "trusted requester identity unavailable",
       }),
       ...(requesterPermissionError && { requester_permission_error: requesterPermissionError }),
     }),
@@ -848,6 +788,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {
     family: "doc",
     name: "feishu_doc",
+    workspaceAccess: "execute",
     label: "Feishu Doc",
     description:
       "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",

@@ -5,7 +5,8 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import { isGatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import {
@@ -110,7 +111,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
           import("./server-methods.js"),
         ]);
       assertLifetime();
-      const { error } = await authorizeGatewayRequestPreDispatch({
+      const authorization = await authorizeGatewayRequestPreDispatch({
         method: "agent",
         requestParams: { agentId: params.agentId },
         client,
@@ -118,9 +119,11 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
         methodRegistry:
           resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
       });
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
       assertLifetime();
-      if (error) {
-        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+      if (authorization.error) {
+        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error: authorization.error });
       }
       operatorSource ??= await captureGatewayOperatorRunAuthority({
         client,
@@ -131,7 +134,9 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     },
     run<T>(run: () => Promise<T>): Promise<T> {
       assertCurrent();
-      return runOutsideOperatorToolGatewayAuthority(run);
+      return runWithoutOwnedSessionTranscriptWrites(() =>
+        runOutsideOperatorToolGatewayAuthority(run),
+      );
     },
   };
 }
@@ -169,10 +174,12 @@ async function withInProcessGatewayDispatch<T>(
         );
       }
     }
-    // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
-    // leak the human authority into later model-selected work after closure.
-    return method === "agent" && readOperatorToolGatewayAuthority()
-      ? await runOutsideOperatorToolGatewayAuthority(() => run(resolved))
+    // Autonomous turns establish their own transcript writer and must not retain
+    // the caller's tool authority after that invocation closes.
+    return method === "agent"
+      ? await runWithoutOwnedSessionTranscriptWrites(() =>
+          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+        )
       : await run(resolved);
   } finally {
     releaseOperatorAuthority?.();
@@ -184,7 +191,8 @@ export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch
 
 export function withInProcessGatewayRead<T>(
   params: {
-    method: "sessions.list" | "users.list";
+    method: "sessions.list" | "users.list" | "sessions.get";
+    requestParams?: { key: string };
     scope: PluginRuntimeGatewayRequestScope | undefined;
     resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
     callerAuthorityError: string;
@@ -194,7 +202,7 @@ export function withInProcessGatewayRead<T>(
   const { method, scope } = params;
   return withInProcessGatewayDispatch(
     method,
-    {},
+    params.requestParams ?? {},
     {
       forceSyntheticClient: true,
       pluginRuntimeOwnerId: scope?.pluginId,
@@ -219,7 +227,7 @@ export function withInProcessGatewayRead<T>(
       assertLifetime();
       const authorization = await authorizeGatewayRequestPreDispatch({
         method,
-        requestParams: {},
+        requestParams: params.requestParams ?? {},
         client: resolved.client,
         context: resolved.context,
         methodRegistry:
@@ -237,8 +245,16 @@ export function withInProcessGatewayRead<T>(
           authorization.sessionMutationAuthorization?.assertCurrent();
         };
         assertCurrent();
-        return await run(resolved, assertCurrent);
+        const assertReadCurrent =
+          method === "sessions.get" && params.requestParams
+            ? await (
+                await import("./server-plugin-in-process-session-read.js")
+              ).prepareInProcessSessionRead(resolved, params.requestParams.key, assertCurrent)
+            : assertCurrent;
+        assertReadCurrent();
+        return await run(resolved, assertReadCurrent);
       } finally {
+        authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();
       }
     },
@@ -302,6 +318,7 @@ export async function runWithInProcessGatewaySessionMutation<T>(
         assertCurrent();
         return await run(assertCurrent);
       } finally {
+        authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();
       }
     },
@@ -342,7 +359,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       assertExplicitRequestCurrent,
     ]);
     if (
-      isGatewayNativeApprovalMethod(method) &&
+      isGatewayWorkerApprovalMethod(method) &&
       (!options?.sessionMutationCommitGuard ||
         isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
       (!resolved.hasCurrentClientAuthority ||

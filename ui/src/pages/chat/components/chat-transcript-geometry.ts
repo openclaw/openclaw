@@ -121,10 +121,24 @@ export function initialTranscriptRect() {
   };
 }
 
-export function measureConnectedTranscriptRows(
-  scrollElement: HTMLDivElement | null,
+export function isTranscriptRangeCommitted(
+  inner: HTMLElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
+  return virtualizer.getVirtualItems().every((row) => {
+    const node = virtualizer.elementsCache.get(row.key);
+    return (
+      node !== undefined &&
+      inner?.contains(node) === true &&
+      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+    );
+  });
+}
+
+export function readConnectedTranscriptRows(
+  scrollElement: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
     !scrollElement ||
@@ -132,7 +146,7 @@ export function measureConnectedTranscriptRows(
     !rect?.width ||
     !rect.height
   ) {
-    return false;
+    return null;
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
@@ -144,14 +158,16 @@ export function measureConnectedTranscriptRows(
     const height = Number.parseFloat(getComputedStyle(row).height);
     measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
   }
-  let changed = false;
-  for (const { index, height } of measurements) {
-    const key = virtualizer.options.getItemKey(index);
-    const previousSize = virtualizer.itemSizeCache.get(key);
-    virtualizer.resizeItem(index, height);
-    changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
-  }
-  return changed;
+  return () => {
+    let changed = false;
+    for (const { index, height } of measurements) {
+      const key = virtualizer.options.getItemKey(index);
+      const previousSize = virtualizer.itemSizeCache.get(key);
+      virtualizer.resizeItem(index, height);
+      changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
+    }
+    return changed;
+  };
 }
 
 export function measureTranscriptRow(
@@ -180,27 +196,6 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
   return element && element.clientHeight > 0
     ? Math.max(0, element.scrollHeight - element.clientHeight)
     : null;
-}
-
-export function reconcileInitialTranscriptOffset(
-  element: HTMLDivElement | null,
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-): "pending" | "settled" | "corrected" {
-  const maxOffset = maxTranscriptScrollOffset(element);
-  const offset = virtualizer.scrollOffset;
-  if (maxOffset === null || offset === null) {
-    return "pending";
-  }
-  if (offset >= 0 && offset <= maxOffset) {
-    return "settled";
-  }
-  if (maxOffset !== 0) {
-    return "pending";
-  }
-  // An underfilled end anchor clamps to zero without a native scroll event.
-  virtualizer.scrollOffset = 0;
-  virtualizer.scrollToOffset(0);
-  return "corrected";
 }
 
 export class PositionRailGutterController implements ReactiveController {

@@ -95,7 +95,7 @@ export class CodexCatalogWorker {
       }
       this.pool = new WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult>({
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
-        maxWorkers: 1,
+        workerClass: "singleton",
         maxPendingTasks: 1,
         // Framing admits one line at a time. Completed native messages have no size cap;
         // only incomplete recovery is subject to the decoder's PARSE_BUFFER_MAX.

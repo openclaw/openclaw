@@ -365,9 +365,14 @@ describe("runNodeHost", () => {
       );
     });
 
-    it("restarts a paired service without sending the source Gateway password", async () => {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "  ");
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "\t");
+    it.each([
+      ["whitespace", "  ", "\t"],
+      ["ambient token", "unrelated-gateway-token", undefined],
+      ["ambient password", undefined, "unrelated-gateway-password"],
+      ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
+    ])("restarts a paired service without %s", async (_source, token, password) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", password);
       await expectStartupTimeout(runOptions);
 
       const auth = buildGatewayConnectAuth(
@@ -380,6 +385,23 @@ describe("runNodeHost", () => {
       });
       expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
       expect(lastCapturedOptions()?.deviceToken).toBeUndefined();
+    });
+
+    it("uses explicitly requested environment auth instead of the paired token", async () => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "explicit-gateway-token");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await expectStartupTimeout({ ...runOptions, gatewayAuthFromEnv: true });
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: "paired-node-token" }),
+        );
+        expect(auth).toMatchObject({ token: "explicit-gateway-token", deviceToken: undefined });
+        const warning = stderr.mock.calls.map(([message]) => String(message)).join("");
+        expect(warning).toContain("--auth-from-env selects OPENCLAW_GATEWAY_TOKEN");
+        expect(warning).not.toContain("explicit-gateway-token");
+      } finally {
+        stderr.mockRestore();
+      }
     });
 
     it("keeps remote-mode credentials when selecting another Gateway", async () => {

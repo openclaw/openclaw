@@ -102,7 +102,7 @@ delivery failures are terminal data in `completion`, not retryable HTTP
 failures. `deliveryError`, when present, is the fixed categorical value
 `"delivery-failed"`; provider, runtime, model, target, session, and diagnostic
 details remain private. The response never includes model output or summaries.
-Use an idempotency key so a lost response can replay the same admitted run and
+Use an `Idempotency-Key` header so a lost response can replay the same admitted run and
 completion result without dispatching again.
 
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
@@ -143,7 +143,7 @@ limits, routing policy, and error responses.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a trusted notification for the selected agent's main session and optionally request an immediate heartbeat:
+    Enqueue a trusted notification for the selected agent's main session. Immediate wakes use ordinary session execution:
 
     ```bash
     curl --include http://127.0.0.1:18789/hooks/wake \
@@ -152,7 +152,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on heartbeat cadence or active hours. Use `mode: "next-heartbeat"` to retain the event for the next heartbeat.
 
     A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
 
@@ -162,7 +162,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="POST /hooks/agent">
-    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
+    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and duplicate-request protection fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
@@ -189,7 +189,7 @@ limits, routing policy, and error responses.
 
 | Observation                | Check or next action                                                                                                                                                                    |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401`                      | Check the hook token, not Gateway auth; ensure the proxy forwards the auth header.                                                                                                      |
+| `401`                      | Check the hook token, not Gateway auth; check that the proxy forwards the auth header.                                                                                                  |
 | `404`                      | Check `hooks.enabled`, `hooks.path`, and whether the custom path matches a mapping.                                                                                                     |
 | `400`                      | Read the response error: JSON, agent selection, session policy, or delivery coordinates may be invalid. Correct the request before retrying.                                            |
 | `405`, `408`, or `413`     | Use `POST`; send the body promptly; stay within the documented body limit.                                                                                                              |

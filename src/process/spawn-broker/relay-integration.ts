@@ -3,12 +3,14 @@ import type { Duplex } from "node:stream";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
+import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
 import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildControlMessage,
+  type ServiceChildControlPayload,
 } from "../supervisor/service-child-protocol.js";
 import { BrokerChild } from "./child.js";
 
@@ -18,8 +20,14 @@ export function createServiceChildControlSender(params: {
   useWindowsJobAnchor: boolean;
   startup: Promise<void>;
   cleanup: Promise<void>;
+  generation: string;
+  nextSequence: () => number;
 }) {
-  return (message: ServiceChildControlMessage, initiate?: SpawnInitiation): Promise<void> => {
+  return (payload: ServiceChildControlPayload, initiate?: SpawnInitiation): Promise<void> => {
+    const message: ServiceChildControlMessage = Object.assign(
+      { type: payload.type, generation: params.generation, sequence: params.nextSequence() },
+      payload,
+    );
     // Failed startup releases launch custody only after confirmed containment cleanup.
     const settlement = initiate ? params.startup.catch(() => params.cleanup) : undefined;
     void settlement?.catch(() => {});
@@ -91,12 +99,17 @@ export function spawnServiceChildRelay(params: {
   transportReady: Promise<void> | undefined;
 } {
   const executable = resolveLaunchableNodePath();
-  const child = spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
-    stdio: params.stdio,
-    detached: params.detached,
-    windowsHide: true,
-    env: params.env,
-  });
+  const child = withChildProcessOperation(
+    "service.relay",
+    () =>
+      spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+        stdio: params.stdio,
+        detached: params.detached,
+        windowsHide: true,
+        env: params.env,
+      }),
+    "default",
+  );
   const cleanup = createServiceChildCleanup();
   params.onSpawnCleanup?.(cleanup.promise);
   let transportReady: Promise<void> | undefined;

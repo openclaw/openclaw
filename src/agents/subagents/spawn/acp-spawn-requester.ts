@@ -1,8 +1,4 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { readAcpResumeSessionOwner } from "../../../acp/runtime/session-meta-resume.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
@@ -77,18 +73,29 @@ export async function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
   requesterAgentId: string;
-  targetAgentId: string;
+  ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
+  assertActive?: () => void;
 }): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
-  const hasActiveSubagentBinding =
+  const [hasActiveSubagentBinding, heartbeatRelayRouteUsable] = await Promise.all([
     isSubagentSession && params.parentSessionKey
-      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
-          (record) => record.targetKind === "subagent" && record.status !== "ended",
+      ? listSessionBindingsBySessionAsync(params.parentSessionKey).then((records) =>
+          records.some((record) => record.targetKind === "subagent" && record.status !== "ended"),
         )
-      : false;
+      : false,
+    params.parentSessionKey && params.requesterAgentId
+      ? hasSessionLocalHeartbeatRelayRoute({
+          cfg: params.cfg,
+          parentSessionKey: params.parentSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          assertActive: params.assertActive,
+        })
+      : false,
+  ]);
+  params.assertActive?.();
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
       ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
@@ -102,17 +109,10 @@ export async function resolveAcpSpawnRequesterState(params: {
       requesterAgentId: params.requesterAgentId,
       sessionKey: params.parentSessionKey,
     }),
-    heartbeatRelayRouteUsable:
-      params.parentSessionKey && params.requesterAgentId
-        ? hasSessionLocalHeartbeatRelayRoute({
-            cfg: params.cfg,
-            parentSessionKey: params.parentSessionKey,
-            requesterAgentId: params.requesterAgentId,
-          })
-        : false,
+    heartbeatRelayRouteUsable,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
+      targetAgentId: params.ownerAgentId,
       requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,
@@ -141,48 +141,4 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.heartbeatRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
-}
-
-export async function validateAcpResumeSessionOwnership(params: {
-  cfg: OpenClawConfig;
-  targetAgentId: string;
-  backendId?: string;
-  requesterSessionKey?: string;
-  resumeSessionId?: string;
-  assertCurrent?: () => void;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
-  if (!resumeSessionId) {
-    return { ok: true };
-  }
-  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
-  if (!requesterSessionKey) {
-    return {
-      ok: false,
-      error: "sessions_spawn resumeSessionId requires an active requester session context.",
-    };
-  }
-
-  const owner = await readAcpResumeSessionOwner({
-    cfg: params.cfg,
-    agentId: params.targetAgentId,
-    backendId: normalizeOptionalLowercaseString(params.backendId),
-    resumeSessionId,
-    assertCurrent: params.assertCurrent,
-  });
-  params.assertCurrent?.();
-  if (
-    owner &&
-    (owner.sessionKey === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
-  ) {
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    error:
-      "sessions_spawn resumeSessionId is only allowed for ACP sessions previously recorded for this requester. Omit resumeSessionId to start a fresh ACP session.",
-  };
 }

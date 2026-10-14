@@ -10,11 +10,10 @@ import {
   resolveRuntimeWorkerUrl,
   WorkerTaskPool,
 } from "openclaw/plugin-sdk/process-runtime";
-import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import {
-  runCodexHistoryWorkerInput,
-  type CodexHistoryWorkerInput,
-  type CodexHistoryWorkerResult,
+import { codexHistoryWorkerEntrypoint } from "./session-history-worker-entrypoint.js";
+import type {
+  CodexHistoryWorkerInput,
+  CodexHistoryWorkerResult,
 } from "./session-history.worker.js";
 import {
   codexHistoryRejectionReason,
@@ -29,35 +28,21 @@ import {
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
 import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
 
-const codexHistoryWorkerEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "session-history.worker",
-  distWorkerPath: "extensions/codex/session-history.worker.js",
-  package: {
-    name: "@openclaw/codex",
-    distWorkerPath: "session-history.worker.js",
-  },
-} as const;
-
-function resolveCodexHistoryWorkerUrl(): URL {
-  const sourceUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
-  const sourceNeedsBuiltFallback =
-    /\.[cm]?ts$/u.test(sourceUrl.pathname) &&
-    (typeof process.versions.bun === "string" || resolveRuntimeWorkerArgv(sourceUrl).length === 1);
-  if (!sourceNeedsBuiltFallback) {
-    return sourceUrl;
-  }
-  // oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
-  // TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
-  return resolveRuntimeWorkerUrl({
-    ...codexHistoryWorkerEntrypoint,
-    root: fileURLToPath(new URL("../..", import.meta.url)),
-  });
-}
-
+const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
+const sourceNeedsBuiltFallback =
+  /\.[cm]?ts$/u.test(sourceWorkerUrl.pathname) &&
+  (typeof process.versions.bun === "string" ||
+    resolveRuntimeWorkerArgv(sourceWorkerUrl).length === 1);
+// oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
+// TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
 const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWorkerResult>({
-  workerUrl: resolveCodexHistoryWorkerUrl(),
-  maxWorkers: 1,
+  workerUrl: sourceNeedsBuiltFallback
+    ? resolveRuntimeWorkerUrl({
+        ...codexHistoryWorkerEntrypoint,
+        root: fileURLToPath(new URL("../..", import.meta.url)),
+      })
+    : sourceWorkerUrl,
+  workerClass: "reader",
 });
 
 export async function projectCodexSettledHistoryInWorker(
@@ -66,13 +51,10 @@ export async function projectCodexSettledHistoryInWorker(
   contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  if (contextReader && !target.sessionTarget) {
-    throw new Error("Actor history requires a captured sessionTarget");
-  }
-  const resolved = resolveCodexHistoryTarget(target);
+  const resolved = await resolveCodexHistoryTarget(target);
   const reader =
     contextReader ??
-    (target.sessionTarget && resolved.kind === "sqlite"
+    (resolved.kind === "sqlite"
       ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
       : undefined);
   if (reader) {
@@ -121,10 +103,7 @@ export async function projectCodexSettledHistoryInWorker(
             physicalSource,
             evidence,
           };
-          // Legacy process-held incognito cannot be reopened in another worker.
-          const result = isIncognitoSessionKey(captured.sessionKey)
-            ? await runCodexHistoryWorkerInput(input)
-            : await historyReads.run(input, { timeoutMs: 60_000, signal });
+          const result = await historyReads.run(input, { timeoutMs: 60_000, signal });
           return { value: result.result, version: result.version };
         },
         signal,

@@ -2,7 +2,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import baseCss from "../../../styles/base.css?inline";
 import groupedCss from "../../../styles/chat/grouped.css?inline";
 import messageCss from "../../../styles/chat/message-layout.css?inline";

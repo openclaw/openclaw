@@ -1,29 +1,20 @@
 import { createRouter } from "@openclaw/uirouter";
+import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import {
-  createGatewayHarness,
-  createTestSessionCapability,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import type { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
+import "./chat-page.ts";
 
-export function createChatPageSessions(
-  gateway: Parameters<typeof createTestSessionCapability>[0] = {
-    snapshot: { client: null, phase: "stopped", hello: null },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  },
-) {
-  const sessions = createTestSessionCapability(gateway);
-  onTestFinished(() => sessions.dispose());
-  return sessions;
-}
+export { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 
 export function createChatPageNavigationContext() {
   const router = createRouter({ routes: [] });
@@ -148,7 +139,8 @@ export function createSplitLayout(sessionKey: string): ChatSplitLayout {
 }
 
 export function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
-  (page as unknown as { layout: ChatSplitLayout | undefined }).layout = layout;
+  (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout | undefined }).layout =
+    layout;
 }
 
 export function stubMatchMedia(matches: boolean) {
@@ -184,8 +176,18 @@ export function createChatPageStateContext() {
         embedSandboxMode: "scripts",
       },
     },
-    gateway,
+    gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
     chatSubmissions: createChatSubmissions(),
     sessions: {},
   } as unknown as ApplicationContext;
+}
+
+/** Settles the bridge and the page-owned Solid projection without a browser timer. */
+export async function settleChatPage(page: ChatPage): Promise<void> {
+  const state = ChatPageState.forHost(page);
+  await page.updateComplete;
+  await state.updateComplete;
+  flush();
+  await Promise.resolve();
+  flush();
 }

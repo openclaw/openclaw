@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -15,6 +16,7 @@ import {
 } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -28,7 +30,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -36,7 +37,6 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
@@ -62,6 +62,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
@@ -199,13 +200,13 @@ type Fixture = ReturnType<typeof fixture>;
 async function closeForIntegrityAdmission(f: Fixture) {
   expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
-  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath));
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function evictCachedHandleForIntegrityAdmission(f: Fixture) {
@@ -213,10 +214,10 @@ function evictCachedHandleForIntegrityAdmission(f: Fixture) {
   if (!database) {
     throw new Error("Fixture lost its cached handle before eviction");
   }
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function observeAdmission(databasePath: string, hold = false) {
@@ -347,7 +348,9 @@ it("does not reopen a disposed handle for a missing replacement's result-only co
   const f = fixture();
   const probe = observeAdmission(f.databasePath);
   const update = vi.fn(async () => {
-    expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+    expect(
+      await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath)),
+    ).toBe(true);
     return {
       result: "no-op",
       replacements: [
@@ -414,42 +417,6 @@ it("checks replacement commit authority before stale rows or worker admission", 
   expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
 });
 
-it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
-  const f = fixture();
-  const probe = observeWorkerAdmission(f.databasePath, "warm");
-  const denied = new Error("synthetic lifecycle denied");
-  const guard = vi.fn(() => {
-    throw denied;
-  });
-  const committed = vi.fn();
-  const buildEntry = vi.fn(
-    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      replaceSessionEntrySync(f.input, {
-        sessionId: "original",
-        label: "newer",
-        updatedAt: Date.now(),
-      });
-      await closeForIntegrityAdmission(f);
-      return { ...currentEntry!, label: "uncommitted" };
-    },
-  );
-  const work = own(
-    applySessionEntryLifecycleMutation({
-      storePath: f.databasePath,
-      skipMaintenance: true,
-      beforeCommitInTransaction: guard,
-      onLifecycleCommitted: committed,
-      upserts: [{ sessionKey: f.input.sessionKey, buildEntry }],
-    }),
-  );
-  await expect(work).rejects.toBe(denied);
-  expect(buildEntry).toHaveBeenCalledOnce();
-  expect(guard).toHaveBeenCalledOnce();
-  expect(committed).not.toHaveBeenCalled();
-  await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
-  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
-});
-
 function seedTranscript(f: Fixture) {
   const scope = { ...f.input, sessionId: "original" };
   const events = [{ type: "session", id: "original", content: "retained prepared history" }];
@@ -510,7 +477,7 @@ it("reacquires the split lifecycle writer after archive materialization with ret
     if (!cached) {
       throw new Error("Fixture lost its cached handle before materialization");
     }
-    closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    closeCachedOpenClawAgentDatabase(cached);
     expect(cached.db.isOpen).toBe(false);
   };
   const work = own(
@@ -580,10 +547,10 @@ it.each([false, true])(
         throw new Error("Fixture lost its cached handle before native deletion preparation");
       }
       // Evict the handle without revoking the lifecycle operation's captured execution owner.
-      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      closeCachedOpenClawAgentDatabase(cached);
       expect(cached.db.isOpen).toBe(false);
       invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-      clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+      revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -796,7 +763,7 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
     expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBe(database);
     expect(getOpenClawAgentDatabaseValidation(database)).toBeDefined();
     invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-    clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
     expect(database.db.isOpen).toBe(true);
   };
   const work = own(

@@ -1,4 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -14,17 +16,61 @@ export function projectChatSystemNotice(
   normalized?: NormalizedMessage | null,
   pending?: { status: PendingInputStatus; key: string; timestamp: number },
 ): ChatItem[] {
-  const pendingItems: ChatItem[] = pending
-    ? [
-        {
-          kind: "notice",
-          key: pending.key,
-          timestamp: pending.timestamp,
-          text: t(`chat.pendingInputs.${pending.status}`),
-        },
-      ]
-    : [];
-  const provenance = asRecord(asRecord(item.message)?.provenance);
+  const raw = asRecord(item.message);
+  if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+        icon: "cpu",
+        text: extractTextCached(item.message) ?? "",
+      },
+    ];
+  }
+  const provenance = asRecord(raw?.provenance);
+  const agentUpdate = provenance?.kind === "inter_session";
+  const pendingText =
+    pending &&
+    agentUpdate &&
+    (pending.status === "queued" ||
+      pending.status === "cancelled" ||
+      pending.status === "interrupted")
+      ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
+      : pending && pending.status !== "queued"
+        ? t(`chat.pendingInputs.${pending.status}`)
+        : undefined;
+  const pendingItems: ChatItem[] =
+    pending && pendingText
+      ? [
+          {
+            kind: "notice",
+            key: pending.key,
+            timestamp: pending.timestamp,
+            text: pendingText,
+          },
+        ]
+      : [];
+  const skillChanges = readSkillWorkshopChangeNotice(item.message);
+  const runError = readRunFailureNotice(item.message);
+  if (runError) {
+    const message = normalized ?? safeNormalizeMessage(item.message);
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        text: runError.summary,
+        timestamp: message?.timestamp ?? 0,
+        runError,
+      },
+      ...pendingItems,
+    ];
+  }
+  const skillNoticeMessage = skillChanges && (normalized ?? safeNormalizeMessage(item.message));
+  if (skillChanges && skillNoticeMessage) {
+    const { timestamp } = skillNoticeMessage;
+    return [{ kind: "notice", key: item.key, text: "", timestamp, skillChanges }, ...pendingItems];
+  }
   if (provenance?.kind !== "internal_system") {
     return [item, ...pendingItems];
   }

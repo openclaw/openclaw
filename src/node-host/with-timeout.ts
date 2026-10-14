@@ -1,4 +1,3 @@
-/** Timeout wrapper for node-host operations using AbortSignal cancellation. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 

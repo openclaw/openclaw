@@ -64,6 +64,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     id: "session-companion-sweep",
     atMs: scheduler.now() + SESSION_COMPANION_SWEEP_INTERVAL_MS,
     everyMs: SESSION_COMPANION_SWEEP_INTERVAL_MS,
+    phase: "maintenance",
     run: sweep,
   });
   const unsubscribeReset = onGatewaySessionReset((sessionKey, suppliedAgentId) => {

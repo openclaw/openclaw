@@ -366,6 +366,8 @@ export function registerYieldedRequesterSettlementCase(
         await registerSubagentRun({
           runId: previousRunId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "spawned-child-session" },
           requesterSessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: requesterSessionKey,
@@ -376,6 +378,8 @@ export function registerYieldedRequesterSettlementCase(
         await addSubagentRunForTests({
           runId: workerRunId,
           childSessionKey: workerSessionKey,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "settled-worker-session" },
           requesterSessionKey: childSessionKey,
           requesterAgentId: "main",
           requesterTurnRunId: previousRunId,

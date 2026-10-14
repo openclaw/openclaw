@@ -2,7 +2,7 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 
@@ -26,14 +26,8 @@ export function sanitizePendingFinalDeliveryText(text: string): string {
   if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
     return "";
   }
-  if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    // Remove stray silent tokens only after confirming the payload is not entirely silent.
-    stripped = stripMixedSilentReplyTokens(stripped) ?? stripped;
-  }
-  if (!stripped.trim()) {
-    return "";
-  }
-  return isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)
+  stripped = stripMixedSilentReplyTokens(stripped) ?? stripped;
+  return !stripped.trim() || isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)
     ? ""
     : trimTextPreservingCode(stripped);
 }

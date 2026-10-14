@@ -15,13 +15,16 @@ pub(crate) const READY_EVENT: &str = "updater://ready";
 pub(crate) const ERROR_EVENT: &str = "updater://error";
 
 const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/latest";
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 // Test desktop builds need a channel that Linux-only releases never replace.
 const DESKTOP_TEST_UPDATE_ENDPOINT: &str =
     "https://github.com/openclaw/openclaw/releases/download/desktop-test/latest-desktop-test.json";
+#[cfg(target_os = "windows")]
+const WINDOWS_UPDATE_ENDPOINT: &str =
+    "https://github.com/openclaw/openclaw/releases/download/windows-stable/latest-windows.json";
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(3);
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     // Keep recognition and safe integer bounds aligned with scripts/lib/release-version.mjs.
     const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -58,7 +61,7 @@ fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     Some((year, month, patch, rank, sequence))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn release_is_newer<T: Ord + std::fmt::Display>(current: &T, candidate: &T) -> bool {
     match (
         calendar_release_key(&current.to_string()),
@@ -377,12 +380,20 @@ async fn run_check(app: AppHandle, manual: bool) {
         .updater_builder()
         .version_comparator(|current, candidate| release_is_newer(&current, &candidate.version))
         .build();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let updater = app
         .updater_builder()
         .endpoints(vec![DESKTOP_TEST_UPDATE_ENDPOINT
             .parse()
             .expect("desktop test updater endpoint is valid")])
+        .and_then(|builder| builder.build());
+    #[cfg(target_os = "windows")]
+    let updater = app
+        .updater_builder()
+        .version_comparator(|current, candidate| release_is_newer(&current, &candidate.version))
+        .endpoints(vec![WINDOWS_UPDATE_ENDPOINT
+            .parse()
+            .expect("Windows updater endpoint is valid")])
         .and_then(|builder| builder.build());
     let update = match async { updater?.check().await }.await {
         Ok(Some(update)) => update,
@@ -416,8 +427,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
-        let version = info.version.clone();
-        let notification_body = manual_notification_body(&version);
+        let notification_body = manual_notification_body(&info.version);
         deliver_result(
             &app,
             manual_requested(),
@@ -433,8 +443,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let result = update.download(progress_callback(app.clone()), || {}).await;
-    let result = match result {
+    let result = match update.download(progress_callback(app.clone()), || {}).await {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
             let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
@@ -458,8 +467,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(()) => {
-            let version = info.version.clone();
-            let notification_body = ready_notification_body(&version);
+            let notification_body = ready_notification_body(&info.version);
             deliver_result(
                 &app,
                 manual_requested(),

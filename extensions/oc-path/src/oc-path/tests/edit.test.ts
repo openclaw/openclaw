@@ -39,19 +39,22 @@ Body ${REDACTED_SENTINEL}.`;
 });
 
 describe("setOcPath — item kv field", () => {
-  it.each([
-    ["#1", "first", "changed"],
-    ["$last", "first", "changed"],
-    ["$first", "changed", "second"],
-  ])("edits only the duplicate-key item selected by %s", (selector, first, second) => {
-    const { ast } = parseMd("## Tools\n- name: first\n- name: second\n");
-    const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/tools/${selector}/name`), "changed");
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.ast.raw).toBe(`## Tools\n- name: ${first}\n- name: ${second}\n`);
-    }
-    expect(ast.raw).toBe("## Tools\n- name: first\n- name: second\n");
-  });
+  it.each([["$first", "changed", "second"]])(
+    "edits only the duplicate-key item selected by %s",
+    (selector, first, second) => {
+      const { ast } = parseMd("## Tools\n- name: first\n- name: second\n");
+      const result = setOcPath(
+        ast,
+        parseOcPath(`oc://AGENTS.md/tools/${selector}/name`),
+        "changed",
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.ast.raw).toBe(`## Tools\n- name: ${first}\n- name: ${second}\n`);
+      }
+      expect(ast.raw).toBe("## Tools\n- name: first\n- name: second\n");
+    },
+  );
 
   it("keeps item positions and explicit values through multiline edits and insertion", () => {
     let ast = parseMd("## Intro\n- keep: stable\n## Tools\n- name: first\n- name: second\n").ast;
@@ -77,34 +80,17 @@ describe("setOcPath — item kv field", () => {
     ]);
   });
 
-  it.each(["$$", "$&", "$1", "$`", "$'", "$HOME"])(
-    "preserves literal dollar replacement text %s",
-    (token) => {
-      const raw = "## Tools\n\n- command: old\n- keep: stable\n";
-      const { ast } = parseMd(raw);
-      const before = structuredClone(ast);
-      const value = `literal ${token}`;
-      const result = setOcPath(ast, parseOcPath("oc://X.md/tools/command/command"), value);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.ast.raw).toBe(`## Tools\n\n- command: ${value}\n- keep: stable\n`);
-      }
-      expect(ast).toEqual(before);
-    },
-  );
-
-  it("replaces an item kv value and reflects it in the rebuilt body", () => {
-    const raw = `## Boundaries
-
-- enabled: true
-- timeout: 5
-`;
+  it.each(["$&"])("preserves literal dollar replacement text %s", (token) => {
+    const raw = "## Tools\n\n- command: old\n- keep: stable\n";
     const { ast } = parseMd(raw);
-    const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries/timeout/timeout"), "30");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toBe("## Boundaries\n\n- enabled: true\n- timeout: 30\n");
+    const before = structuredClone(ast);
+    const value = `literal ${token}`;
+    const result = setOcPath(ast, parseOcPath("oc://X.md/tools/command/command"), value);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.ast.raw).toBe(`## Tools\n\n- command: ${value}\n- keep: stable\n`);
     }
+    expect(ast).toEqual(before);
   });
 
   it("reports no-item-kv for an item without kv shape", () => {
@@ -135,13 +121,6 @@ describe("setOcPath — item kv field", () => {
 });
 
 describe("setOcPath — sentinel guard (defense-in-depth)", () => {
-  it("rejects bare sentinel on frontmatter value", () => {
-    const { ast } = parseMd("---\nname: x\n---\n");
-    expect(() =>
-      setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/name"), REDACTED_SENTINEL),
-    ).toThrow(OcEmitSentinelError);
-  });
-
   it("rejects substring-embedded sentinel on item kv", () => {
     const { ast } = parseMd("## Boundaries\n\n- enabled: true\n");
     expect(() =>

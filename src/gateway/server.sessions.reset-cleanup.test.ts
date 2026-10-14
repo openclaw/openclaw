@@ -7,12 +7,17 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { RESET_PARENT_GRANT_FIXTURE } from "../config/sessions/session-lineage.test-support.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -23,6 +28,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -90,6 +96,37 @@ function installAcpRuntimeBackendWithFreshSession() {
   return prepareFreshSession;
 }
 
+test("sessions.reset retires an unbound memory session without host session SQL", async () => {
+  await createSessionStoreDir();
+  const location = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+  };
+  const sessionKey = "agent:main:dashboard:incognito-reset-source";
+  const scope = { agentId: "main", storePath: location.path, sessionKey };
+  try {
+    await upsertSessionEntryCore(scope, {
+      sessionId: "reset-source",
+      lifecycleRevision: "reset-source-lifecycle",
+      updatedAt: 1,
+      incognito: true,
+    });
+    const sql = observeHostDataSql();
+    try {
+      const result = await directSessionReq<{ deleted: boolean }>("sessions.reset", {
+        key: sessionKey,
+      });
+      expect(result).toMatchObject({ ok: true, payload: { deleted: true } });
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  } finally {
+    memorySessionActorOwners.closeDatabase(location);
+  }
+});
+
 test("sessions.reset aborts active runs and clears queues", async () => {
   const { storePath } = await seedWaitingActiveMainSession();
   const parentGrant = RESET_PARENT_GRANT_FIXTURE;
@@ -149,7 +186,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   const closeTabsCall = browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock
     .calls[0] as unknown as [{ sessionKeys?: string[]; onWarn?: unknown }] | undefined;
   const closeTabsParams = closeTabsCall?.[0];
-  expect(closeTabsParams?.sessionKeys).toEqual(["main", "agent:main:main", "sess-main"]);
+  expect(closeTabsParams?.sessionKeys).toEqual(["agent:main:main", "agent:main:sess-main"]);
   expect(typeof closeTabsParams?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
@@ -467,7 +504,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   });
 
   expect(reset.ok).toBe(true);
-  expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+  expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
   expect(prepareFreshSession).not.toHaveBeenCalled();
 });
 

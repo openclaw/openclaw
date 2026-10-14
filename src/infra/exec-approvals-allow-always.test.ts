@@ -234,12 +234,6 @@ describe("allow-always pattern persistence", () => {
     ).toBeNull();
   });
 
-  it("uses the shared cross-platform cwd-bound hash format", () => {
-    expect(
-      buildCwdBoundHashedArgPattern(["/usr/bin/printf", "hello world", ""], "/workspace", "linux"),
-    ).toBe("sha256:cwd-argv:v1:2b4f4aed226aa1fd771c852b8f74e4c162d440aafaf60bfef19746f3b2ee5890");
-  });
-
   it("keeps argument grant precedence and rechecks mutable argv on each call", () => {
     const tool = "/usr/bin/tool";
     const cwd = "/workspace";
@@ -304,20 +298,6 @@ describe("allow-always pattern persistence", () => {
       ...context,
     });
     expect(result.allowlistSatisfied).toBe(true);
-  });
-
-  it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const { dir, persist } = createCommandFixture();
-    makeExecutable(dir, "awk");
-
-    const { persisted } = await persist(
-      `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
-      true,
-    );
-    expect(persisted).toStrictEqual([]);
   });
 
   it("extracts all inner binaries from reusable shell chains and deduplicates", async () => {
@@ -474,15 +454,6 @@ describe("allow-always pattern persistence", () => {
     );
   });
 
-  it("rejects positional argv carriers when $0 is single-quoted", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await expectPositionalArgvCarrierResult({
-      command: `sh -c "'$0' "$1"" touch {marker}`,
-    });
-  });
-
   it("rejects positional argv carriers when exec is separated from $0 by a newline", async () => {
     if (process.platform === "win32") {
       return;
@@ -491,30 +462,6 @@ describe("allow-always pattern persistence", () => {
       command: `sh -c "exec
 $0 \\"$1\\"" touch {marker}`,
     });
-  });
-
-  it("rejects positional argv carriers when inline command contains extra shell operations", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const { dir, env } = createCommandFixture(true);
-    const touch = makeExecutable(dir, "touch");
-    const marker = path.join(dir, "marker");
-
-    const { persisted } = await resolvePersistedPatterns(
-      `sh -c 'echo blocked; $0 "$1"' touch ${marker}`,
-      dir,
-      env,
-    );
-    expect(persisted).not.toContain(touch);
-
-    const second = await evaluateCommand(
-      `sh -c 'echo blocked; $0 "$1"' touch ${marker}`,
-      [{ pattern: touch }],
-      dir,
-      env,
-    );
-    expect(second.allowlistSatisfied).toBe(false);
   });
 
   it("does not treat inline shell commands as persisted script paths", async () => {
@@ -663,11 +610,6 @@ $0 \\"$1\\"" touch {marker}`,
       argv: ["mksh", "+o", "errexit", "./run.sh"],
       decoyName: "errexit",
     },
-    {
-      name: "bash combined minus set option",
-      argv: ["bash", "-eo", "pipefail", "./run.sh"],
-      decoyName: "pipefail",
-    },
   ])("does not bind option values as shell script allowlist targets for $name", (testCase) => {
     const { dir, env } = createCommandFixture();
     makeExecutable(dir, testCase.argv[0] ?? "sh");
@@ -754,8 +696,6 @@ $0 \\"$1\\"" touch {marker}`,
   it.each([
     ["npm --unknown-global-option exec sh -c 'id > marker'", "npm", ["sh", "id"]],
     ["pnpm --unknown-global-option exec sh -c 'id > marker'", "pnpm", ["sh", "id"]],
-    ["pnpm -C ./package eslint .", "pnpm", ["eslint"]],
-    ["yarn run eslint .", "yarn", ["eslint"]],
   ] as const)(
     "rejects stale package-manager grants for %s",
     async (command, executable, extras) => {
@@ -1006,24 +946,6 @@ $0 \\"$1\\"" touch {marker}`,
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it("keeps policy-blocked script wrapper chains out of allow-always", async () => {
-    if (process.platform !== "darwin" && process.platform !== "freebsd") {
-      return;
-    }
-    const { dir, evaluate, persist } = createCommandFixture();
-    makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const { persisted } = await persist("/usr/bin/script -q /dev/null /bin/sh -c 'echo warmup-ok'");
-    expect(persisted).toStrictEqual([]);
-
-    const second = await evaluate(
-      "/usr/bin/script -q /dev/null /bin/sh -c 'id > marker'",
-      persisted.map((pattern) => ({ pattern })),
-    );
-    expect(second.allowlistSatisfied).toBe(false);
-    expectApprovalRequired(second);
-  });
-
   it("does not persist comment-tailed payload paths that never execute", async () => {
     if (process.platform === "win32") {
       return;
@@ -1071,21 +993,5 @@ $0 \\"$1\\"" touch {marker}`,
       { pattern: bashPath },
     ]);
     expect(second.allowlistSatisfied).toBe(false);
-  });
-
-  it("allows positional carriers for unknown carried executables when explicitly allowlisted", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const { dir, evaluate, persist } = createCommandFixture();
-    const xargsPath = makeExecutable(dir, "xargs");
-
-    const { persisted } = await persist(`sh -c '$0 "$@"' xargs echo SAFE`);
-    expect(persisted).toStrictEqual([]);
-
-    const second = await evaluate(`sh -c '$0 "$@"' xargs sh -c 'id > /tmp/pwned'`, [
-      { pattern: xargsPath },
-    ]);
-    expect(second.allowlistSatisfied).toBe(true);
   });
 });

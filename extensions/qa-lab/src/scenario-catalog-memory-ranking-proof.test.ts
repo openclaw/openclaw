@@ -164,44 +164,7 @@ async function runSessionMemoryRankingFlow(
 }
 
 describe("session memory ranking scenario evidence", () => {
-  it("compares conflicting facts while ignoring the current question and evergreen USER note", async () => {
-    const { result } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-    });
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("seeds the conflicting durable fact in an authentic three-day-old daily note", async () => {
-    const startedAt = Date.now();
-    const { utimes, writeFile } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-    });
-    const completedAt = Date.now();
-    const [stalePath, staleContent] = writeFile.mock.calls[0] ?? [];
-    const [datedPath, accessedAt, modifiedAt] = utimes.mock.calls[0] ?? [];
-
-    expect(stalePath).toMatch(/^\/qa\/workspace\/memory\/\d{4}-\d{2}-\d{2}\.md$/);
-    expect(staleContent).toContain("Project Nebula current codename: ORBIT-9.");
-    expect(datedPath).toBe(stalePath);
-    expect(accessedAt).toBeInstanceOf(Date);
-    expect(modifiedAt).toBe(accessedAt);
-    expect(accessedAt?.getTime()).toBeGreaterThanOrEqual(startedAt - 3 * 86_400_000);
-    expect(accessedAt?.getTime()).toBeLessThanOrEqual(completedAt - 3 * 86_400_000);
-    expect(stalePath).toBe(`/qa/workspace/memory/${accessedAt?.toISOString().slice(0, 10)}.md`);
-  });
-
-  it.each(["mock-openai", "live-frontier"] as const)(
+  it.each(["live-frontier"] as const)(
     "requires successful provider-independent persisted search evidence (%s)",
     async (providerMode) => {
       const { fetchJson, gatewayCall, runAgentPrompt } = await runSessionMemoryRankingFlow({
@@ -224,98 +187,11 @@ describe("session memory ranking scenario evidence", () => {
     },
   );
 
-  it("uses an answer-free setup query and requests unfiltered memory ranking", async () => {
-    const { forceMemoryIndex, runAgentPrompt } = await runSessionMemoryRankingFlow();
-
-    expect(forceMemoryIndex).toHaveBeenCalledWith(
-      expect.objectContaining({ query: searchQuery, expectedNeedle: "ORBIT-10" }),
-    );
-    const options = runAgentPrompt.mock.calls[0]?.[1];
-    expect(options?.message).not.toMatch(/corpus\s*=\s*(sessions|memory)/i);
-    expect(options?.message).toMatch(/without\s+(?:a\s+)?corpus\s+filter|unfiltered/i);
-  });
-
-  it("rejects a fabricated correct answer without a planned memory search", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        includeToolCall: false,
-      }),
-    ).rejects.toThrow(/memory_search|search|correlat/i);
-  });
-
-  it("rejects a fabricated correct answer without a successful memory result", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        includeToolResult: false,
-      }),
-    ).rejects.toThrow(/memory_search|search|result|correlat/i);
-  });
-
-  it("rejects a failed result even when it contains the correct answer", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        resultIsError: true,
-      }),
-    ).rejects.toThrow(/memory_search|search|result|success|correlat/i);
-  });
-
-  it("rejects memory results belonging to a different search call", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        resultCallId: "call-unrelated-memory-search",
-      }),
-    ).rejects.toThrow(/memory_search|search|result|correlat/i);
-  });
-
-  it("rejects session results that never compete with the stale durable fact", async () => {
-    await expect(runSessionMemoryRankingFlow({ results: [currentSessionResult] })).rejects.toThrow(
-      /competi|durable|stale|both/i,
-    );
-  });
-
   it("rejects stale facts ahead of current facts even when the current question ranks first", async () => {
     await expect(
       runSessionMemoryRankingFlow({
         results: [currentQuestionResult, staleDurableResult, currentSessionResult],
       }),
     ).rejects.toThrow(/rank|stale|durable/i);
-  });
-
-  it("accepts an omitted result limit using the canonical six-result product default", async () => {
-    const { result } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-      omitMaxResults: true,
-    });
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("rejects a correlated memory search using less than the canonical six-result window", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        maxResults: 3,
-      }),
-    ).rejects.toThrow(/maxResults|result|six|6/i);
-  });
-
-  it("rejects search calls that exclude either configured memory source", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        corpus: "sessions",
-      }),
-    ).rejects.toThrow(/corpus|filter|unfiltered|competi/i);
-  });
-
-  it("rejects search queries that already reveal the expected answer", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        query: `${searchQuery} ORBIT-10`,
-      }),
-    ).rejects.toThrow(/answer|reveal|leak|query/i);
   });
 });

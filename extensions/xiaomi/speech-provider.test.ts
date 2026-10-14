@@ -48,32 +48,6 @@ describe("buildXiaomiSpeechProvider", () => {
     );
   }
 
-  describe("metadata", () => {
-    it("registers Xiaomi MiMo as a speech provider", () => {
-      expect(provider.id).toBe("xiaomi");
-      expect(provider.aliases).toContain("mimo");
-      expect(provider.models).toEqual(["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign"]);
-      expect(provider.voices).toContain("mimo_default");
-    });
-  });
-
-  describe("isConfigured", () => {
-    afterEach(() => {
-      vi.unstubAllEnvs();
-    });
-
-    it("returns true when apiKey is in provider config", () => {
-      expect(
-        provider.isConfigured({ providerConfig: { apiKey: "sk-test" }, timeoutMs: 30000 }),
-      ).toBe(true);
-    });
-
-    it("returns false when XIAOMI_API_KEY is whitespace-only", () => {
-      vi.stubEnv("XIAOMI_API_KEY", "   ");
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
-    });
-  });
-
   describe("resolveConfig", () => {
     it("reads providers.xiaomi settings with generic model and speaker voice aliases", () => {
       const config = provider.resolveConfig!({
@@ -166,8 +140,10 @@ describe("buildXiaomiSpeechProvider", () => {
     it("makes the Xiaomi chat completions TTS call and decodes audio", async () => {
       mockAudioResponse();
       const mockFetch = vi.mocked(globalThis.fetch);
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
       const result = await synthesize({
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
         providerConfig: {
           apiKey: "sk-test",
           model: "mimo-v2.5-tts",
@@ -180,6 +156,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.fileExtension).toBe(".mp3");
       expect(result.voiceCompatible).toBe(false);
       expect(result.audioBuffer.toString()).toBe("fake-mp3-audio");
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0] ?? [];
@@ -206,36 +183,6 @@ describe("buildXiaomiSpeechProvider", () => {
       await expect(synthesize()).rejects.toThrow(
         "Xiaomi TTS API returned malformed base64 audio data",
       );
-    });
-
-    it("omits voice and uses configured style for Xiaomi voice design models", async () => {
-      mockAudioResponse("fake-wav-audio");
-      const mockFetch = vi.mocked(globalThis.fetch);
-
-      const result = await synthesize({
-        providerConfig: {
-          apiKey: "sk-test",
-          modelId: "mimo-v2.5-tts-voicedesign",
-          speakerVoice: "Chloe",
-          format: "wav",
-          style: "Warm, bright, natural voice.",
-        },
-      });
-
-      expect(result.outputFormat).toBe("wav");
-      expect(result.fileExtension).toBe(".wav");
-      expect(result.voiceCompatible).toBe(false);
-      expect(result.audioBuffer.toString()).toBe("fake-wav-audio");
-
-      expect(mockFetch).toHaveBeenCalledOnce();
-      const [, init] = mockFetch.mock.calls[0] ?? [];
-      const body = JSON.parse(init!.body as string);
-      expect(body.model).toBe("mimo-v2.5-tts-voicedesign");
-      expect(body.messages).toEqual([
-        { role: "user", content: "Warm, bright, natural voice." },
-        { role: "assistant", content: "Hello from OpenClaw." },
-      ]);
-      expect(body.audio).toEqual({ format: "wav" });
     });
 
     it("transcodes Xiaomi voice design output to Opus for voice-note targets", async () => {
@@ -268,13 +215,6 @@ describe("buildXiaomiSpeechProvider", () => {
         { role: "user", content: expect.stringContaining("natural") },
         { role: "assistant", content: "Hello from OpenClaw." },
       ]);
-    });
-
-    it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
-      mockAudioResponse();
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      await synthesize({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 });
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     });
 
     it("rejects blank keys before building request credentials", async () => {

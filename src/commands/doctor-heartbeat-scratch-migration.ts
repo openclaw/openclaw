@@ -238,17 +238,26 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
           });
     });
   };
-  try {
+  const readClaimContent = async (
+    filePath: string,
+    escapeMessage = "HEARTBEAT.md target escapes the agent workspace",
+  ) => {
     await assertWorkspaceUnchanged();
-    const claimRealPath = await fs.realpath(claimPath);
-    if (claimRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, claimRealPath)) {
-      throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
+    const fileRealPath = await fs.realpath(filePath);
+    if (fileRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, fileRealPath)) {
+      throw new Error(escapeMessage);
     }
-    const claimed = await readRegularFile({
-      filePath: claimRealPath,
+    const file = await readRegularFile({
+      filePath: fileRealPath,
       maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
     });
-    const claimedContent = utf8Decoder.decode(claimed.buffer);
+    return utf8Decoder.decode(file.buffer);
+  };
+  try {
+    const claimedContent = await readClaimContent(
+      claimPath,
+      "claimed HEARTBEAT.md target escapes the agent workspace",
+    );
     if (hashCronScratchSource(claimedContent) !== source.sha256) {
       throw new Error("HEARTBEAT.md changed before the migration claim was acquired");
     }
@@ -268,24 +277,12 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     await restore(error).catch(() => undefined);
     throw error;
   };
-  const readFinalContent = async (filePath: string) => {
-    await assertWorkspaceUnchanged();
-    const fileRealPath = await fs.realpath(filePath);
-    if (fileRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, fileRealPath)) {
-      throw new Error("HEARTBEAT.md target escapes the agent workspace");
-    }
-    const finalBytes = await readRegularFile({
-      filePath: fileRealPath,
-      maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-    });
-    return utf8Decoder.decode(finalBytes.buffer);
-  };
   const verifyUnchanged = async () => {
     // A holder of an already-open descriptor can still mutate the claimed
     // inode; re-verify the bytes before retiring it. The claim may itself be
     // a contained symlink, so resolve and containment-check it like the
     // initial claim did.
-    const finalContent = await readFinalContent(claimPath).catch((error: unknown) =>
+    const finalContent = await readClaimContent(claimPath).catch((error: unknown) =>
       failChanged("claimed HEARTBEAT.md could not be re-verified before finalization", error),
     );
     if (hashCronScratchSource(finalContent) !== source.sha256) {
@@ -308,22 +305,16 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
       await failChanged("HEARTBEAT.md was recreated while the migration claim was held");
     }
   };
-  const verifyRestoredUnchanged = async () => {
-    let finalContent: string;
-    try {
-      finalContent = await readFinalContent(source.entryKey);
-    } catch (error) {
-      throw changedError("restored HEARTBEAT.md could not be re-verified", error);
-    }
-    if (hashCronScratchSource(finalContent) !== source.sha256) {
-      throw changedError("HEARTBEAT.md changed after the migration claim was restored");
-    }
-  };
   return {
     restore,
     retain: async () => {
       await restore(undefined);
-      await verifyRestoredUnchanged();
+      const finalContent = await readClaimContent(source.entryKey).catch((error: unknown) => {
+        throw changedError("restored HEARTBEAT.md could not be re-verified", error);
+      });
+      if (hashCronScratchSource(finalContent) !== source.sha256) {
+        throw changedError("HEARTBEAT.md changed after the migration claim was restored");
+      }
     },
     release: async ({ archivePath }) => {
       await verifyUnchanged();
@@ -393,10 +384,7 @@ export async function collectHeartbeatScratchMigrationFindings(
     );
     try {
       const source = await readHeartbeatSource(cfg, agent.agentId);
-      if (!source) {
-        continue;
-      }
-      if (disabledEntryKeys.has(source.entryKey)) {
+      if (!source || disabledEntryKeys.has(source.entryKey)) {
         continue;
       }
       findings.push({
@@ -507,7 +495,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // receive the source. Any skipped owner keeps the shared file in place.
     // The revision seen here is also the CAS token for the later write, so a
     // concurrent edit in between surfaces as a conflict, never an overwrite.
-    let keepSource = retainSource;
     const importAgents: [string, CronJob][] = [];
     let scratchWriteNeeded = false;
     const plannedRevisionByJobId = new Map<string, number>();
@@ -517,7 +504,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       if (state.currentRevision > 0 && !current) {
         warnings.push(`Agent "${agentId}" scratch was explicitly unset; it was left unchanged.`);
-        keepSource = true;
       } else if (
         current &&
         current.content !== source.content &&
@@ -526,7 +512,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         warnings.push(
           `Agent "${agentId}" already has different cron scratch; it was left unchanged.`,
         );
-        keepSource = true;
       } else {
         importAgents.push([agentId, monitor]);
         if (current?.sourceSha256 !== source.sha256) {
@@ -534,6 +519,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         }
       }
     }
+    const keepSource = retainSource || importAgents.length !== agents.length;
     if (importAgents.length === 0 || (keepSource && !scratchWriteNeeded)) {
       continue;
     }

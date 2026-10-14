@@ -7,6 +7,10 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import {
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "../internal/google-model-family.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -51,7 +55,7 @@ export type GoogleProviderOptions = StreamOptions & {
   thinking?: GoogleThinkingOptions;
 };
 
-type GoogleGenerateContentClient = {
+export type GoogleGenerateContentClient = {
   models: {
     generateContentStream(
       params: GenerateContentParameters,
@@ -69,8 +73,7 @@ function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Cont
     ),
     replay: "signed-parts",
     requiresToolCallSignature:
-      model.provider !== "google-gemini-cli" &&
-      (isGemini3ProModel(model) || isGemini3FlashModel(model)),
+      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
   });
 }
 
@@ -182,12 +185,20 @@ function isAdaptiveGoogleReasoningLevel(value: unknown): value is "adaptive" {
   return value === "adaptive";
 }
 
-export function buildGoogleSimpleThinking<T extends GoogleApiType>(
+function buildGoogleThinking<T extends GoogleApiType>(
   model: Model<T>,
   options: SimpleStreamOptions | undefined,
+  interactions: boolean,
 ): GoogleThinkingOptions {
+  const disabled = (): GoogleThinkingOptions => {
+    const level =
+      interactions && model.reasoning
+        ? getDisabledGoogleThinkingConfig(model).thinkingLevel
+        : undefined;
+    return { enabled: false, ...(level ? { level } : {}) };
+  };
   if (!options?.reasoning || options.reasoning === "off") {
-    return { enabled: false };
+    return disabled();
   }
   if (isAdaptiveGoogleReasoningLevel(options.reasoning)) {
     if (!model.reasoning) {
@@ -196,20 +207,20 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     if (isGemma4Model(model)) {
       return { enabled: true, level: ThinkingLevel.HIGH };
     }
-    return isGemini3ProModel(model) || isGemini3FlashModel(model)
+    return isGoogleGemini3ThinkingLevelModel(model.id)
       ? { enabled: true }
       : { enabled: true, budgetTokens: -1 };
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
   if (clampedReasoning === "off") {
-    return { enabled: false };
+    return disabled();
   }
   const effort = (
     clampedReasoning === "max" ? "high" : clampedReasoning
   ) as ClampedGoogleThinkingLevel;
 
-  if (isGemini3ProModel(model) || isGemini3FlashModel(model) || isGemma4Model(model)) {
+  if (interactions || isGoogleGemini3ThinkingLevelModel(model.id) || isGemma4Model(model)) {
     return {
       enabled: true,
       level: getGoogleThinkingLevel(effort, model),
@@ -222,47 +233,28 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   };
 }
 
+export function buildGoogleSimpleThinking<T extends GoogleApiType>(
+  model: Model<T>,
+  options: SimpleStreamOptions | undefined,
+): GoogleThinkingOptions {
+  return buildGoogleThinking(model, options, false);
+}
+
 export function buildGoogleInteractionsSimpleThinking<T extends GoogleApiType>(
   model: Model<T>,
   options: SimpleStreamOptions | undefined,
 ): GoogleThinkingOptions {
-  const thinking = buildGoogleSimpleThinking(model, options);
-  if (!thinking.enabled) {
-    if (!model.reasoning) {
-      return thinking;
-    }
-    const disabled = getDisabledGoogleThinkingConfig(model);
-    return {
-      enabled: false,
-      ...(disabled.thinkingLevel ? { level: disabled.thinkingLevel } : {}),
-    };
-  }
-  if (
-    thinking.level !== undefined ||
-    !options?.reasoning ||
-    isAdaptiveGoogleReasoningLevel(options.reasoning)
-  ) {
-    return thinking;
-  }
-
-  const clampedReasoning = clampThinkingLevel(model, options.reasoning);
-  if (clampedReasoning === "off") {
-    return { enabled: false };
-  }
-  if (clampedReasoning === "xhigh" || clampedReasoning === "max") {
-    return { enabled: true, level: getGoogleThinkingLevel("high", model) };
-  }
-  return { enabled: true, level: getGoogleThinkingLevel(clampedReasoning, model) };
+  return buildGoogleThinking(model, options, true);
 }
 
 function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig {
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
-  // do not support full thinking-off either. For Gemini 3 models, use the lowest supported
+  // do not support full thinking-off either. For Gemini 3 and 4, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
-  if (isGemini3ProModel(model)) {
+  if (isGoogleGemini3ProModel(model.id)) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
-  if (isGemini3FlashModel(model)) {
+  if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
         ? ThinkingLevel.MINIMAL
@@ -282,20 +274,12 @@ function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
-function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-(?:3(?:\.\d+)?-pro|pro-latest)/.test(model.id.toLowerCase());
-}
-
-function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)/.test(model.id.toLowerCase());
-}
-
 function getGoogleThinkingLevel<T extends GoogleApiType>(
   effort: ClampedGoogleThinkingLevel,
   model: Model<T>,
 ): ThinkingLevel {
   const lowEffort = effort === "minimal" || effort === "low";
-  if (isGemini3ProModel(model)) {
+  if (isGoogleGemini3ProModel(model.id)) {
     return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
   }
   if (isGemma4Model(model)) {
@@ -303,9 +287,9 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   }
   switch (effort) {
     case "minimal":
-      return isGemini3FlashModel(model) && !googleFlashSupportsMinimalThinking(model.id)
-        ? ThinkingLevel.LOW
-        : ThinkingLevel.MINIMAL;
+      return googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.MINIMAL
+        : ThinkingLevel.LOW;
     case "low":
       return ThinkingLevel.LOW;
     case "medium":

@@ -29,10 +29,7 @@ export function buildTelegramQuestionCallbackData(callback: {
 export function buildTelegramQuestionCustomInputCallbackData(
   questionId: string,
 ): string | undefined {
-  if (!QUESTION_RECORD_ID_PATTERN.test(questionId)) {
-    return undefined;
-  }
-  return `tgqo1:${questionId}`;
+  return QUESTION_RECORD_ID_PATTERN.test(questionId) ? `tgqo1:${questionId}` : undefined;
 }
 
 export function parseTelegramQuestionCallbackData(

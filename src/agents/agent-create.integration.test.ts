@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
@@ -29,21 +30,21 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as workerStores from "../infra/sqlite-worker-store.js";
 import {
   persistProviderAuthProfileBatch,
   stageProviderAuthProfileBatch,
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -57,6 +58,8 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   installWorkspacePreparationPause,
@@ -84,12 +87,18 @@ it("restores only the configured held store after explicit creation, never throu
       openOpenClawAgentDatabase({ agentId: "alias", path: aliasPath, env: state.env }),
     ).toThrow("belongs to agent main; requested agent alias");
     const params = { name: "main", workspace: state.workspaceDir };
-    expect(
-      await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
-    ).toMatchObject({
-      status: "error",
-      reason: "already-exists",
-    });
+    const observation = observeHostDataSql();
+    try {
+      expect(
+        await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
+      ).toMatchObject({
+        status: "error",
+        reason: "already-exists",
+      });
+      expect(observation.queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     expect(recovery.readHolds()).toEqual(recovery.held);
     expect(await createAgent({ ...params, bootstrapMain: true })).toMatchObject({
       status: "existing",
@@ -136,6 +145,81 @@ it("restores only the configured held store after explicit creation, never throu
     await state.cleanup();
   }
 });
+
+it.each(["added", "removed"] as const)(
+  "observes a foreign hold %s between bootstrap probes without host hold SQL",
+  async (change) => {
+    const state = await createOpenClawTestState({ scenario: "minimal", label: "bootstrap-probes" });
+    try {
+      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+      await transformConfigFileWithRetry({
+        transform: (current) => ({ nextConfig: current, result: undefined }),
+      });
+      const target = { agentId: "main", path: state.path("custom", "history.sqlite") };
+      await prepareRecoveryHolds(state, target.agentId, [target]);
+      beginAgentDeletionJournal({
+        agentId: target.agentId,
+        operationId: randomUUID(),
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        sessionsDir: state.sessionsDir(),
+        deleteFiles: false,
+      });
+      const originalConfig = await fs.readFile(state.configPath, "utf8");
+      const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
+      try {
+        const update = foreign.prepare(
+          "UPDATE migration_sources SET report_json = ? WHERE source_key = ?",
+        );
+        const setHeld = (held: boolean) =>
+          update.run(
+            JSON.stringify({ description: "Synthetic recovery hold", held: held ? [target] : [] }),
+            AGENT_DELETION_RECOVERY_SOURCE_KEY,
+          );
+        setHeld(change === "removed");
+        await withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const observation = observeHostDataSql();
+            let changed = false;
+            try {
+              const result = await createAgent({
+                name: "main",
+                bootstrapMain: true,
+                beforePersistentApply: () => {
+                  if (!changed) {
+                    changed = true;
+                    setHeld(change === "added");
+                  }
+                },
+              });
+              expect(result).toMatchObject(
+                change === "added"
+                  ? { status: "existing" }
+                  : { status: "error", reason: "deletion-pending" },
+              );
+              expect(changed).toBe(true);
+              expect(
+                observation.queries.filter(
+                  (sql) => /^\s*select\b/i.test(sql) && /\bmigration_sources\b/i.test(sql),
+                ),
+              ).toEqual([]);
+            } finally {
+              observation.restore();
+            }
+          },
+          { env: state.env },
+        );
+      } finally {
+        foreign.close();
+      }
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);
 
 it("restores a held custom filename only after its session store configuration selects it", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-custom-store" });
@@ -610,6 +694,20 @@ it.each(["commit", "rollback", "close-failure"] as const)(
     let staged = false;
     let retainedCreation: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
     let restoreNativeClose: (() => void) | undefined;
+    let nativeStore: { close(): Promise<void> } | undefined;
+    const openNative = workerStores.openAgentDatabaseSqliteWorkerStore;
+    const observeNativeOpen =
+      phase === "close-failure"
+        ? vi
+            .spyOn(workerStores, "openAgentDatabaseSqliteWorkerStore")
+            .mockImplementation(async (...args) => {
+              const store = await openNative(...args);
+              if (args[0].databasePath === resolveAuthProfileDatabasePath(agentDir)) {
+                nativeStore = store;
+              }
+              return store;
+            })
+        : undefined;
     const settlement: string[] = [];
     // An ordinary writer outside the creation lifecycle, through the same wizard path.
     const writeOutsideCreation = () =>
@@ -649,22 +747,18 @@ it.each(["commit", "rollback", "close-failure"] as const)(
           staged = true;
           retainedCreation = AsyncLocalStorage.snapshot();
           if (phase === "close-failure") {
-            const database = getOpenClawAgentDatabaseIfOpen({
-              agentId: "work",
-              path: resolveAuthProfileDatabasePath(agentDir),
-            });
-            if (!database) {
-              throw new Error("Staged auth did not retain its database");
+            if (!nativeStore) {
+              throw new Error("Staged auth did not retain its worker store");
             }
-            const close = database.db.close.bind(database.db);
+            const close = nativeStore.close.bind(nativeStore);
             let failed = false;
-            const closeSpy = vi.spyOn(database.db, "close").mockImplementation(() => {
+            const closeSpy = vi.spyOn(nativeStore, "close").mockImplementation(async () => {
               if (!failed) {
                 failed = true;
                 settlement.push("close-failed");
                 throw new Error("injected native close failure");
               }
-              close();
+              await close();
               settlement.push("close-retried");
             });
             restoreNativeClose = () => closeSpy.mockRestore();
@@ -715,7 +809,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
           throw new Error("Auth staging did not capture its creation context");
         }
         await expect(retainedCreation(writeOutsideCreation)).rejects.toThrow(
-          "Agent creation claim is no longer active",
+          "agent work is deleted",
         );
         expect(isWorkDatabaseOpen()).toBe(false);
         expect(readProfiles()["openai:after"]).toBeUndefined();
@@ -723,6 +817,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
       }
     } finally {
       restoreNativeClose?.();
+      observeNativeOpen?.mockRestore();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

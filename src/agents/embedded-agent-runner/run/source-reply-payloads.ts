@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -16,7 +15,6 @@ import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evi
 export function buildSourceReplyPayloadState(params: {
   payloads?: MessagingToolSourceReplyPayload[];
   sentTargets?: MessagingToolSend[];
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   didDeliverSourceReplyViaMessageTool?: boolean;
   runId?: string;
   sessionKey: string;
@@ -76,9 +74,7 @@ export function buildSourceReplyPayloadState(params: {
     return [reply];
   });
   const hasSourceReplyPayload = replyItems.length > 0;
-  const deliveredSourceReplyViaMessageTool =
-    params.sourceReplyDeliveryMode === "message_tool_only" &&
-    params.didDeliverSourceReplyViaMessageTool === true;
+  const deliveredSourceReplyViaMessageTool = params.didDeliverSourceReplyViaMessageTool === true;
   const explicitFinalSourceReply = resolveExplicitFinalSourceReplyDeliveryEvidence({
     messagingToolSentTargets: params.sentTargets,
     messagingToolSourceReplyPayloads: sourceReplyPayloads,

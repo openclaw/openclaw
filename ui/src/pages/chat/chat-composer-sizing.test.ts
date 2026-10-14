@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   getComposerTextarea,
@@ -201,10 +202,12 @@ describe("chat composer sizing", () => {
     });
     const cancelAnimationFrameMock = vi.fn();
     class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target instanceof HTMLTextAreaElement) {
+          resizeCallback = this.callback;
+        }
       }
-      observe() {}
       unobserve() {}
       disconnect() {}
       takeRecords(): ResizeObserverEntry[] {
@@ -231,17 +234,19 @@ describe("chat composer sizing", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     expect(textarea.style.height).toBe("42px");
     expect(textarea.style.overflowY).toBe("hidden");
+    const resizeTextarea = expectDefined(resizeCallback, "textarea resize observer");
+    requestAnimationFrameMock.mockClear();
 
     scrollHeight = 180;
     clientHeight = 150;
-    resizeCallback?.([], {} as ResizeObserver);
+    resizeTextarea([], {} as ResizeObserver);
     expect(textarea.style.overflowY).toBe("auto");
     expect(requestAnimationFrameMock).not.toHaveBeenCalled();
 
     width = 180;
     scrollHeight = 120;
     clientHeight = 120;
-    resizeCallback?.([], {} as ResizeObserver);
+    resizeTextarea([], {} as ResizeObserver);
     expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
     expect(textarea.style.height).toBe("42px");
 
@@ -250,8 +255,10 @@ describe("chat composer sizing", () => {
     expect(textarea.style.overflowY).toBe("hidden");
 
     width = 160;
-    resizeCallback?.([], {} as ResizeObserver);
-    render(html``, container);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
+    resizeTextarea([], {} as ResizeObserver);
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(2);
+    const pendingAdjustmentFrame = nextAnimationFrameId;
+    cleanupSolid();
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(pendingAdjustmentFrame);
   });
 });

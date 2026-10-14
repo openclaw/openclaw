@@ -5,7 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { toAcpRuntimeErrorText, type AcpRuntimeErrorCode } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -62,21 +62,17 @@ type ParsedSetCommandInput = {
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
 
-function readOptionValue(params: { tokens: string[]; index: number; flags: readonly string[] }):
-  | {
-      matched: true;
-      flag: string;
-      value?: string;
-      nextIndex: number;
-      error?: string;
-    }
-  | { matched: false } {
+function readOptionValue(params: {
+  tokens: string[];
+  index: number;
+  flags: readonly string[];
+}): Result<{ flag: string; value: string; nextIndex: number }, string> | null {
   const token = params.tokens[params.index] ?? "";
   const flag = params.flags.find(
     (candidate) => token === candidate || token.startsWith(`${candidate}=`),
   );
   if (!flag) {
-    return { matched: false };
+    return null;
   }
   let value: string;
   let nextIndex = params.index + 1;
@@ -90,14 +86,9 @@ function readOptionValue(params: { tokens: string[]; index: number; flags: reado
     value = token.slice(flag.length + 1).trim();
   }
   if (!value) {
-    return {
-      matched: true,
-      flag,
-      nextIndex,
-      error: `${flag} requires a value`,
-    };
+    return { ok: false, error: `${flag} requires a value` };
   }
-  return { matched: true, flag, value, nextIndex };
+  return { ok: true, value: { flag, value, nextIndex } };
 }
 
 function normalizeAcpOptionToken(raw: string): string {
@@ -129,17 +120,18 @@ export function parseSpawnInput(
       index: i,
       flags: ["--mode", "--bind", "--thread", "--cwd", "--label"],
     });
-    if (option.matched) {
-      if (option.error) {
+    if (option) {
+      if (!option.ok) {
         return { ok: false, error: `${option.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalLowercaseString(option.value);
-      switch (option.flag) {
+      const { flag, value, nextIndex } = option.value;
+      const raw = normalizeOptionalLowercaseString(value);
+      switch (flag) {
         case "--mode":
           if (raw !== "persistent" && raw !== "oneshot") {
             return {
               ok: false,
-              error: `Invalid --mode value "${option.value}". Use persistent or oneshot.`,
+              error: `Invalid --mode value "${value}". Use persistent or oneshot.`,
             };
           }
           mode = raw;
@@ -148,7 +140,7 @@ export function parseSpawnInput(
           if (raw !== "here" && raw !== "off") {
             return {
               ok: false,
-              error: `Invalid --bind value "${option.value}". Use here or off.`,
+              error: `Invalid --bind value "${value}". Use here or off.`,
             };
           }
           bind = raw;
@@ -157,20 +149,20 @@ export function parseSpawnInput(
           if (raw !== "auto" && raw !== "here" && raw !== "off") {
             return {
               ok: false,
-              error: `Invalid --thread value "${option.value}". Use auto, here, or off.`,
+              error: `Invalid --thread value "${value}". Use auto, here, or off.`,
             };
           }
           thread = raw;
           sawThreadOption = true;
           break;
         case "--cwd":
-          cwd = normalizeOptionalString(option.value);
+          cwd = normalizeOptionalString(value);
           break;
         case "--label":
-          label = normalizeOptionalString(option.value);
+          label = normalizeOptionalString(value);
           break;
       }
-      i = option.nextIndex;
+      i = nextIndex;
       continue;
     }
 
@@ -236,15 +228,15 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
       index: i,
       flags: ["--session"],
     });
-    if (sessionOption.matched) {
-      if (sessionOption.error) {
+    if (sessionOption) {
+      if (!sessionOption.ok) {
         return {
           ok: false,
           error: `${sessionOption.error}. ${ACP_STEER_USAGE}`,
         };
       }
-      sessionToken = normalizeOptionalString(sessionOption.value);
-      i = sessionOption.nextIndex;
+      sessionToken = normalizeOptionalString(sessionOption.value.value);
+      i = sessionOption.value.nextIndex;
       continue;
     }
 
@@ -351,10 +343,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
 }
 
 export function formatAcpCapabilitiesText(controls: string[]): string {
-  if (controls.length === 0) {
-    return "(none)";
-  }
-  return controls.toSorted().join(", ");
+  return controls.length === 0 ? "(none)" : controls.toSorted().join(", ");
 }
 
 export function resolveCommandRequestId(params: HandleCommandsParams): string {
@@ -380,12 +369,14 @@ export async function withAcpCommandErrorBoundary(params: {
   try {
     return await params.run();
   } catch (error) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error,
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: params.fallbackMessage,
-      }),
-    );
+    return acpCommandErrorReply(error, params.fallbackMessage);
   }
+}
+
+export function acpCommandErrorReply(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackCode: AcpRuntimeErrorCode = "ACP_TURN_FAILED",
+): CommandHandlerResult {
+  return commandReply(toAcpRuntimeErrorText({ error, fallbackCode, fallbackMessage }));
 }

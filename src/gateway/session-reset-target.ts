@@ -33,10 +33,11 @@ export async function resolveSessionResetTarget(
   ) {
     return invalidSessionRequest("session key agent does not match agentId");
   }
-  const target = await resolveGatewaySessionStoreTargetInWorker({
+  const lookup = {
     cfg,
     key: params.key,
     ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-  });
+  };
+  const target = await resolveGatewaySessionStoreTargetInWorker(lookup);
   return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
 }

@@ -340,8 +340,9 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../infra/exec-approvals.js", () => ({
-  countObsoleteGeneratedExecApprovals: vi.fn(() => 0),
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
+  countObsoleteGeneratedExecApprovalRules: vi.fn(() => 0),
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
@@ -656,6 +657,13 @@ function captureProcessUnhandledRejections() {
   return { reasons, restore: () => processEmit.mockRestore() };
 }
 
+const fullNodePolicy: MockExecApprovalsResolved["agent"] = {
+  security: "full",
+  ask: "off",
+  askFallback: "deny",
+  autoAllowSkills: false,
+};
+
 function createNodeApprovals(
   allowlist: MockExecAllowlistEntry[],
   agent: MockExecApprovalsResolved["agent"] = { security: "allowlist", ask: "on-miss" },
@@ -762,14 +770,7 @@ describe("executeNodeHostCommand", () => {
     hasDurableExecApprovalMock.mockReset();
     hasDurableExecApprovalMock.mockReturnValue(false);
     resolveExecApprovalsFromFileMock.mockReset();
-    resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals([], {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
-    );
+    resolveExecApprovalsFromFileMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
     requiresExecApprovalMock.mockReset();
     usePolicyApprovalRequirementMock();
     resolveAllowAlwaysPersistenceDecisionMock.mockReset();
@@ -1027,13 +1028,20 @@ describe("executeNodeHostCommand", () => {
     });
 
     await vi.waitFor(() => {
-      expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
+      expect(callGatewayToolMock).toHaveBeenCalledTimes(2);
     });
 
     const call = requireGatewayCommand("system.run");
     expect(call.options.timeoutMs).toBe(40_000);
     expect(call.params?.timeoutMs).toBe(35_000);
-    expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+    expect(call.callOptions).toEqual({
+      scopes: ["operator.write", "operator.approvals"],
+      dispatchAuthority: {
+        version: 2,
+        kind: "source-bound",
+        assertCurrent: expect.any(Function),
+      },
+    });
     const runParams = requireRunParams(call);
     expect(runParams.approved).toBe(true);
     expect(runParams.approvalDecision).toBe("allow-once");
@@ -1080,6 +1088,11 @@ describe("executeNodeHostCommand", () => {
         expect(requireGatewayCommand("system.run").callOptions).toEqual({
           scopes: ["operator.write", "operator.approvals"],
           signal: abortController.signal,
+          dispatchAuthority: {
+            version: 2,
+            kind: "source-bound",
+            assertCurrent: expect.any(Function),
+          },
         });
       });
       abortController.abort(new Error("run aborted during node invocation"));
@@ -1575,12 +1588,7 @@ describe("executeNodeHostCommand", () => {
     });
     const nodeAllowlist = [{ pattern: "./scripts/check_mail.sh" }];
     resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals(nodeAllowlist, {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
+      createNodeApprovals(nodeAllowlist, fullNodePolicy),
     );
     evaluateShellAllowlistMock.mockImplementation(
       (params?: { command?: string; allowlist?: unknown[] }) => {
@@ -1664,12 +1672,7 @@ describe("executeNodeHostCommand", () => {
     });
     const nodeAllowlist = [{ pattern: "./scripts/check_mail.sh" }];
     resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals(nodeAllowlist, {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
+      createNodeApprovals(nodeAllowlist, fullNodePolicy),
     );
     evaluateShellAllowlistMock.mockImplementation(
       (params?: { command?: string; allowlist?: unknown[] }) => {
@@ -1737,12 +1740,7 @@ describe("executeNodeHostCommand", () => {
     });
     const nodeAllowlist = [{ pattern: "/bin/sh" }];
     resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals(nodeAllowlist, {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
+      createNodeApprovals(nodeAllowlist, fullNodePolicy),
     );
     evaluateShellAllowlistMock.mockImplementation(
       (params?: { command?: string; allowlist?: unknown[] }) => {
@@ -1810,12 +1808,7 @@ describe("executeNodeHostCommand", () => {
         },
       ],
       file: { version: 1, agents: {} },
-      agent: {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
+      agent: fullNodePolicy,
     });
     evaluateShellAllowlistMock.mockImplementation((params?: { command?: string }) => {
       const command = params?.command ?? "";
@@ -1863,14 +1856,7 @@ describe("executeNodeHostCommand", () => {
       plan: loginPlan,
       execPolicy: { security: "full", ask: "off" },
     });
-    resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals([], {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
-    );
+    resolveExecApprovalsFromFileMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
     evaluateShellAllowlistMock.mockImplementation((params?: { command?: string }) => {
       const command = params?.command ?? "";
       return analysis([
@@ -1966,7 +1952,11 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("does not use fallback-full when node approval policy is unavailable", async () => {
+  it("does not use fallback-full when legacy node approval policy is unavailable", async () => {
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: nodePlan(preparedPlan.argv, preparedPlan.commandText, preparedPlan.commandPreview),
+      execPolicy: { security: "full", ask: "off" },
+    });
     const autoReviewer = allowReviewer();
     resolveExecHostApprovalContextMock.mockReturnValue(
       createHostPolicy("allowlist", "on-miss", "full"),
@@ -2006,14 +1996,7 @@ describe("executeNodeHostCommand", () => {
       plan: preparedPlan,
       execPolicy: { security: "full", ask: "always" },
     });
-    resolveExecApprovalsFromFileMock.mockReturnValue(
-      createNodeApprovals([], {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
-    );
+    resolveExecApprovalsFromFileMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
 
     const result = await executeNodeHostCommand(
@@ -2207,6 +2190,16 @@ describe("executeNodeHostCommand", () => {
     };
     const commandMarker = { pattern: nodeCommandMarker, source: "allow-always" as const };
     mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: {
+        ...preparedPlan,
+        policySnapshot: {
+          ...preparedPlan.policySnapshot,
+          allowlistRules: [commandMarker, allowlistEntry],
+        },
+      },
+      execPolicy: { security: "full", ask: "off" },
+    });
     resolveExecApprovalsFromFileMock.mockReturnValue(
       createNodeApprovals([commandMarker, allowlistEntry]),
     );
@@ -2323,7 +2316,13 @@ describe("executeNodeHostCommand", () => {
     };
     mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
     parsePreparedSystemRunPayloadMock.mockReturnValueOnce({
-      plan: preparedPlan,
+      plan: {
+        ...preparedPlan,
+        policySnapshot: {
+          ...preparedPlan.policySnapshot,
+          allowlistRules: [commandMarker, allowlistEntry],
+        },
+      },
       execPolicy: { security: "full", ask: "off" },
       allowAlwaysCoverage: {
         complete: true,

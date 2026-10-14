@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
@@ -728,14 +729,18 @@ describe("qa mock openai server", () => {
 
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
     const server = await startMockServer();
-    const suffix = "A1B2C3D4";
+    const run = buildSlackProgressCommentaryRun("U_SUT", {
+      commentary: "standalone",
+      toolProgress: "absent",
+    });
+    const finalMarker = run.matchText;
+    const suffix = finalMarker.slice("SLACK-QA-COMMENTARY-DONE-".length);
     const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
     const toolMarker = `SLACK-QA-TOOL-${suffix}`;
-    const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
-    const command = `grep '${toolMarker}' /dev/null || sleep 5`;
-    const prompt = `${commentaryMarker} ${command} ${finalMarker}`;
+    const command = `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
+    const prompt = run.input.replaceAll(">", "&gt;");
     const stalePrompt =
-      "SLACK-QA-COMMENTARY-11112222 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-11112222";
+      "SLACK-QA-COMMENTARY-11112222 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-11112222' SLACK-QA-COMMENTARY-DONE-11112222";
     const currentEnvelope = `${stalePrompt}\n${prompt}`;
 
     const planResponse = await expectStreamingResponses(server, {
@@ -789,7 +794,7 @@ describe("qa mock openai server", () => {
       tools: [{ type: "function", name: "exec" }],
       input: [
         makeUserInput(
-          "SLACK-QA-COMMENTARY-A1B2C3D4 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+          "SLACK-QA-COMMENTARY-A1B2C3D4 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4' SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
         ),
       ],
     });
@@ -801,6 +806,7 @@ describe("qa mock openai server", () => {
 
   it("does not use stale exact replies from instructions after QA reads", async () => {
     const server = await startMockServer();
+    const evidencePrefix = "x".repeat(210);
 
     const final = await expectNonStreamingResponsesJson(server, {
       instructions: "If this is a heartbeat check, reply exactly: HEARTBEAT_OK",
@@ -808,26 +814,19 @@ describe("qa mock openai server", () => {
         makeUserInput("Read QA_KICKOFF_TASK.md, then summarize what you found."),
         makeToolOutputWithCallId(
           "call_mock_read_1",
-          JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+          JSON.stringify({ text: `${evidencePrefix}😀tail` }),
         ),
       ],
     });
 
     const text = outputText(final);
-    expect(text).toContain("Protocol note: I reviewed the requested material.");
+    expect(text).toBe(
+      `Protocol note: I reviewed the requested material. Evidence snippet: {"text":"${evidencePrefix}`,
+    );
     expect(text).not.toContain("HEARTBEAT_OK");
   });
 
-  const evidencePrefix = "x".repeat(219);
   it.each([
-    [
-      "preserves surrogate pairs in HTTP tool-output evidence snippets",
-      [
-        makeUserInput("Summarize the tool result."),
-        makeToolOutputWithCallId("call_mock_read_1", `${evidencePrefix}😀tail`),
-      ],
-      `Protocol note: I reviewed the requested material. Evidence snippet: ${evidencePrefix}`,
-    ],
     [
       "classifies a completion event before the child task text it quotes",
       [
@@ -1840,7 +1839,7 @@ describe("qa mock openai server", () => {
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each(["tool_call"])(
+  it.each(["dispatch_action"])(
     "makes the empty terminal worker terminal after one %s side effect",
     async (wireName) => {
       const server = await startMockServer();
@@ -1850,7 +1849,7 @@ describe("qa mock openai server", () => {
         input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
       });
       const call = outputToolCall(kickoff, wireName);
-      if (wireName === "tool_call") {
+      if (wireName === "dispatch_action") {
         expect(outputToolArgsFromItem(call)).toMatchObject({
           id: "write",
           args: { path: "qa-terminal-empty-side-effect.txt" },
@@ -1874,7 +1873,7 @@ describe("qa mock openai server", () => {
           call,
           makeToolOutputWithCallId(
             String(writeRequest.plannedToolCallId),
-            wireName === "tool_call"
+            wireName === "dispatch_action"
               ? JSON.stringify({
                   tool: { id: "write", name: "write", source: "core" },
                   result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
@@ -2836,7 +2835,7 @@ describe("qa mock openai server", () => {
   it.each([
     {
       name: "calls the selected catalog tool after a structured batch search",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: catalogQueries },
@@ -2847,7 +2846,7 @@ describe("qa mock openai server", () => {
     },
     {
       name: "does not call a catalog tool when structured search returns no matching candidate",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: [{ query: catalogTarget, limit: 1 }] },
@@ -2868,10 +2867,10 @@ describe("qa mock openai server", () => {
     const item = outputItem(payload);
     if (invokes) {
       expect(item.type).toBe("function_call");
-      expect(item.name).toBe("tool_call");
+      expect(item.name).toBe("dispatch_action");
       expect(JSON.parse(String(item.arguments))).toMatchObject({ id: catalogTarget });
     } else {
-      expect(item.name).not.toBe("tool_call");
+      expect(item.name).not.toBe("dispatch_action");
     }
   });
 
@@ -3008,12 +3007,16 @@ describe("qa mock openai server", () => {
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
+  let nestedImageInput: unknown = QA_IMAGE_INPUT;
+  for (let index = 0; index < 4_000; index += 1) {
+    nestedImageInput = [{ type: "input_text", text: "nested" }, nestedImageInput];
+  }
   it.each([
     [
-      "uses current request instructions for image descriptions",
+      "uses current request instructions for deeply nested image descriptions",
       [
         makeDeveloperInput(QA_IMAGE_DESCRIPTION_PROMPT),
-        makeImageUserInput(QA_IMAGE_INPUT, QA_IMAGE_MEDIA_CONTEXT),
+        makeImageUserInput(nestedImageInput, QA_IMAGE_MEDIA_CONTEXT),
       ],
       ["red", "blue"],
     ],
@@ -3031,39 +3034,11 @@ describe("qa mock openai server", () => {
       ["lighthouse"],
     ],
   ] as const)("%s", async (_name, input, words) => {
-    const text = (
-      await readMockImageResponseText(await startMockServer(), [...input])
-    ).toLowerCase();
+    const server = await startMockServer();
+    const text = (await readMockImageResponseText(server, [...input])).toLowerCase();
     for (const word of words) {
       expect(text).toContain(word);
     }
-  });
-
-  it("handles deeply nested image input shapes without recursive traversal failure", async () => {
-    const server = await startMockServer();
-
-    let content: unknown = {
-      type: "input_image",
-      source: {
-        type: "base64",
-        mime_type: "image/png",
-        data: QA_IMAGE_PNG_BASE64,
-      },
-    };
-    for (let index = 0; index < 4_000; index += 1) {
-      content = [{ type: "input_text", text: "nested" }, content];
-    }
-
-    await expectNonStreamingResponses(server, {
-      model: "mock-openai/gpt-5.6-luna",
-      input: [
-        {
-          role: "user",
-          content,
-        },
-      ],
-    });
-
     expect((await readDebugRequest(server)).imageInputCount).toBe(1);
   });
 
@@ -3396,54 +3371,7 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("places tool_result after the parent user message even in mixed-content turns", async () => {
-    // Fresh text must not fence out the tool result from the same turn.
-    const server = await startMockServer();
-
-    await expectAnthropicMessages(server, {
-      messages: [
-        makeAnthropicUserText("Delegate one bounded QA task to a subagent."),
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: "toolu_mock_spawn_mixed",
-              name: "sessions_spawn",
-              input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "toolu_mock_spawn_mixed",
-              content: "SUBAGENT-OK",
-            },
-            {
-              type: "text",
-              text: "Keep going with the fanout.",
-            },
-          ],
-        },
-      ],
-    });
-
-    const debug = (await fetchOkJson(`${server.baseUrl}/debug/last-request`)) as {
-      prompt: string;
-      allInputText: string;
-      toolOutputCallId: string;
-      toolOutput: string;
-    };
-    expect(debug.toolOutput).toBe("SUBAGENT-OK");
-    expect(debug.toolOutputCallId).toBe("toolu_mock_spawn_mixed");
-    expect(debug.prompt).toBe("Keep going with the fanout.");
-    expect(debug.allInputText).toContain("Delegate one bounded QA task");
-  });
-
-  it("exposes structured Anthropic tool_result errors in debug snapshots", async () => {
+  it("preserves mixed-content Anthropic tool_result errors in debug snapshots", async () => {
     const server = await startMockServer();
 
     await expectAnthropicMessages(server, {
@@ -3459,16 +3387,24 @@ describe("qa mock openai server", () => {
             },
           ],
         },
-        makeAnthropicErrorToolResult("toolu_mock_read_error", "ENOENT: no such file or directory"),
+        {
+          role: "user",
+          content: [
+            ...makeAnthropicErrorToolResult(
+              "toolu_mock_read_error",
+              "ENOENT: no such file or directory",
+            ).content,
+            { type: "text", text: "Report the read failure." },
+          ],
+        },
       ],
     });
 
-    const debug = (await fetchOkJson(`${server.baseUrl}/debug/last-request`)) as {
-      toolOutputCallId: string;
-      toolOutputStructuredError?: boolean;
-    };
+    const debug = await readDebugRequest(server);
     expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
     expect(debug.toolOutputStructuredError).toBe(true);
+    expect(debug.toolOutput).toBe("ENOENT: no such file or directory");
+    expect(debug.prompt).toBe("Report the read failure.");
   });
 
   it.each([{ label: "whitespace", content: "  ", isError: false }])(

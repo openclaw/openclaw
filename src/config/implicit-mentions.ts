@@ -31,21 +31,14 @@ export function resolveChannelImplicitMentions(params: {
     params.channel,
   );
   const defaults = params.cfg.channels?.defaults?.implicitMentions;
+  const resolve = (kind: keyof ResolvedChannelImplicitMentions) =>
+    accountConfig?.implicitMentions?.[kind] ??
+    channelConfig?.implicitMentions?.[kind] ??
+    defaults?.[kind] ??
+    SHIPPED_IMPLICIT_MENTION_DEFAULTS[kind];
   return {
-    replyToBot:
-      accountConfig?.implicitMentions?.replyToBot ??
-      channelConfig?.implicitMentions?.replyToBot ??
-      defaults?.replyToBot ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.replyToBot,
-    quotedBot:
-      accountConfig?.implicitMentions?.quotedBot ??
-      channelConfig?.implicitMentions?.quotedBot ??
-      defaults?.quotedBot ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.quotedBot,
-    threadParticipation:
-      accountConfig?.implicitMentions?.threadParticipation ??
-      channelConfig?.implicitMentions?.threadParticipation ??
-      defaults?.threadParticipation ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.threadParticipation,
+    replyToBot: resolve("replyToBot"),
+    quotedBot: resolve("quotedBot"),
+    threadParticipation: resolve("threadParticipation"),
   };
 }

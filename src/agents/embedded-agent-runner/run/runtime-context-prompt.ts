@@ -45,13 +45,17 @@ export type RuntimeContextCustomMessage = {
   timestamp: number;
 };
 
-/** Appends turn additions to both full and resumed projections without changing their provenance. */
+/** Adds turn context without separating an inline prompt header from its user text. */
 export function appendCurrentInboundContext(
   context: CurrentInboundPromptContext | undefined,
   fragments: RuntimeContextFragment[],
   legacyText = fragments.map((fragment) => fragment.text).join("\n\n"),
 ): CurrentInboundPromptContext {
-  const append = (text?: string) => [text, legacyText].filter(Boolean).join("\n\n");
+  // A space joiner binds the existing context's trailing header to the user body.
+  // Later additions must precede that context in both full and resumed prompts.
+  const inline = context?.promptJoiner === " ";
+  const append = (text?: string) =>
+    (inline ? [legacyText, text] : [text, legacyText]).filter(Boolean).join("\n\n");
   return {
     ...context,
     text: append(context?.text),
@@ -184,18 +188,11 @@ export function buildRuntimeContextCustomMessage(
       true,
     );
   }
-  return {
-    role: "custom",
-    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-    content: trimmedRuntimeContext,
-    display: false,
-    details: {
-      source: "openclaw-runtime-context",
-      runtimeContextCarrier: true,
-      ...(fragments?.length ? { fragments } : {}),
-    },
-    timestamp: Date.now(),
-  };
+  return buildContextCustomMessage(trimmedRuntimeContext, OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, {
+    source: "openclaw-runtime-context",
+    runtimeContextCarrier: true,
+    ...(fragments?.length ? { fragments } : {}),
+  });
 }
 
 export function buildSystemUpdateMessage(
@@ -203,14 +200,18 @@ export function buildSystemUpdateMessage(
   kind: "prompt-update" | "runtime-context",
   turnScoped: boolean,
 ): RuntimeContextCustomMessage {
-  return {
-    role: "custom",
-    customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
-    content,
-    display: false,
-    details: { kind, turnScoped },
-    timestamp: Date.now(),
-  };
+  return buildContextCustomMessage(content, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
+    kind,
+    turnScoped,
+  });
+}
+
+function buildContextCustomMessage(
+  content: string,
+  customType: string,
+  details: RuntimeContextCustomMessage["details"],
+): RuntimeContextCustomMessage {
+  return { role: "custom", customType, content, display: false, details, timestamp: Date.now() };
 }
 
 /** Project per-request instructions into the transient carrier without changing history. */

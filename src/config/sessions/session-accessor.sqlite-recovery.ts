@@ -134,7 +134,20 @@ export async function recoverSessionEntryFromRestartTombstone(
       ) {
         throw new Error("Session recovery commit omitted its publication keys");
       }
-      publication.begin(receipt.changedKeys, []);
+      // SAFETY: The paired recovery kernel supplies this pre-COMMIT publication.
+      const planned = receipt as SessionEntryReplacementPublication;
+      publication.begin(
+        planned.changedKeys,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        new Map(
+          [...planned.current].filter(
+            ([key]) => !planned.unavailableParticipantKeys?.includes(key),
+          ),
+        ),
+      );
     },
   );
 }

@@ -81,18 +81,16 @@ function compactSlackResponseUrlFallback(
       compacted.push(message);
       continue;
     }
-    if (!pending?.blocks?.length) {
-      pending = { ...message, blocks: [...message.blocks] };
-      continue;
-    }
-    const text = `${pending.text}\n\n${message.text}`;
-    const blocks = [...pending.blocks, ...message.blocks];
-    if (text.length > SLACK_MESSAGE_TEXT_HARD_LIMIT || blocks.length > SLACK_MAX_BLOCKS) {
+    if (pending?.blocks?.length) {
+      const text = `${pending.text}\n\n${message.text}`;
+      const blocks = [...pending.blocks, ...message.blocks];
+      if (text.length <= SLACK_MESSAGE_TEXT_HARD_LIMIT && blocks.length <= SLACK_MAX_BLOCKS) {
+        pending = { text, blocks, mrkdwn: false };
+        continue;
+      }
       flush();
-      pending = { ...message, blocks: [...message.blocks] };
-      continue;
     }
-    pending = { text, blocks, mrkdwn: false };
+    pending = { ...message, blocks: [...message.blocks] };
   }
   flush();
   return compacted;

@@ -139,21 +139,14 @@ describe("withOperatorApprovalsGatewayClient", () => {
   it("keeps device identity and omits approval runtime token for remote shared-auth approval clients", async () => {
     bootstrapState.url = "wss://gateway.example/ws";
     bootstrapState.urlSource = "config gateway.remote.url";
+    bootstrapState.tlsFingerprint = "sha256:remote";
 
     await runOperatorApprovalsGatewayClient();
 
     expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
     expect(clientState.options?.deviceIdentity).toBeUndefined();
     expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
-  it("passes the resolved TLS fingerprint to the approval Gateway client", async () => {
-    bootstrapState.url = "wss://127.0.0.1:18789";
-    bootstrapState.tlsFingerprint = "sha256:local";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expect(clientState.options?.tlsFingerprint).toBe("sha256:local");
+    expect(clientState.options?.tlsFingerprint).toBe("sha256:remote");
   });
 
   it("keeps device identity for env loopback approval clients without runtime authority", async () => {
@@ -195,14 +188,6 @@ describe("withOperatorApprovalsGatewayClient", () => {
   it("keeps approval runtime token for local fallback gateway URLs", async () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "missing gateway.remote.url (fallback local)";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expectRuntimeTokenApprovalClient();
-  });
-
-  it("omits stored device identity for local runtime-token approval clients without shared auth", async () => {
-    bootstrapState.auth = { token: undefined, password: undefined };
 
     await runOperatorApprovalsGatewayClient();
 

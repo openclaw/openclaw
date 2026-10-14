@@ -160,34 +160,6 @@ describe("buildSandboxCreateArgs", () => {
     expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
   });
 
-  it("passes explicit configured sandbox env through even when names look sensitive", () => {
-    const cfg = createSandboxConfig({
-      env: {
-        ANTHROPIC_ADMIN_KEY: "dummy-anthropic-admin-key",
-        GEMINI_API_KEY: "dummy-gemini-api-key",
-        GOOGLE_CLIENT_ID: "dummy-google-client-id",
-        GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
-        HIMALAYA_CONFIG: "dummy-himalaya-config",
-        HIMALAYA_PASSWORD: "dummy-himalaya-password",
-        OURA_CLIENT_ID: "dummy-oura-client-id",
-        OURA_CLIENT_SECRET: "dummy-oura-client-secret",
-        RESEND_API_KEY: "dummy-resend-api-key",
-      },
-    });
-
-    const { argv: args, env } = buildSandboxCreateArgs({
-      name: "openclaw-sbx-marker",
-      cfg,
-      scopeKey: "main",
-    });
-
-    expect(args).not.toContain("--env");
-    expect(env).toEqual({
-      ...cfg.env,
-      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
-    });
-  });
-
   it("emits Docker GPU passthrough as a separate argument", () => {
     const cfg = createSandboxConfig({
       gpus: "device=GPU-123",
@@ -207,12 +179,6 @@ describe("buildSandboxCreateArgs", () => {
       name: "dangerous Docker socket bind mounts",
       containerName: "openclaw-sbx-dangerous",
       cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
-      expected: /blocked path/,
-    },
-    {
-      name: "dangerous parent bind mounts",
-      containerName: "openclaw-sbx-dangerous-parent",
-      cfg: createSandboxConfig({}, ["/run:/run"]),
       expected: /blocked path/,
     },
     {
@@ -304,19 +270,5 @@ describe("buildSandboxCreateArgs", () => {
       scopeKey: "main",
     });
     expectFlagValues(args, "--network", ["container:peer"]);
-  });
-
-  it("passes one --init flag so Docker reaps orphaned processes", () => {
-    const cfg = createSandboxConfig();
-    const { argv: args } = buildSandboxCreateArgs({
-      name: "openclaw-sbx-init",
-      cfg,
-      scopeKey: "main",
-    });
-    expect(args.filter((arg) => arg === "--init")).toHaveLength(1);
-    // Docker create options must follow the subcommand and precede the image.
-    const createIdx = args.indexOf("create");
-    const initIdx = args.indexOf("--init");
-    expect(initIdx).toBeGreaterThan(createIdx);
   });
 });

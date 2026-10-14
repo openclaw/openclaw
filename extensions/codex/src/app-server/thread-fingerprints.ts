@@ -181,15 +181,9 @@ export function shouldStartTransientNoToolThread(params: {
 }): boolean {
   return Boolean(
     params.previous &&
-    !isEmptyDynamicToolsFingerprint(params.previous) &&
+    params.previous !== EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
+    params.previous !== LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
     !params.nextHasDynamicTools,
-  );
-}
-
-function isEmptyDynamicToolsFingerprint(fingerprint: string): boolean {
-  return (
-    fingerprint === EMPTY_DYNAMIC_TOOLS_FINGERPRINT ||
-    fingerprint === LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT
   );
 }
 

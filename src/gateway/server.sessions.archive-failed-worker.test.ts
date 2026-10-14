@@ -104,7 +104,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
   expect(reclaim).not.toHaveBeenCalled();
   const config = (await getGatewayConfigModule()).getRuntimeConfig();
   const policy = createManagedWorktreeOwnerPolicy(config);
-  expect(policy.shouldProtectOwner("session", key)).toBe(true);
+  expect(policy.readOwnerState("session", key)).toBe("active");
   expect(await managedWorktrees.gc(policy)).toMatchObject({
     removed: [],
   });
@@ -142,7 +142,10 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     to: "local",
     expectedGeneration: failed.generation,
   });
-  expect(createManagedWorktreeOwnerPolicy(config).shouldRemoveOwner("session", key)).toBe(true);
+  const retiredOwner = createManagedWorktreeOwnerPolicy(config);
+  await retiredOwner.withOwnerCleanup(getRegistryWorktree(process.env, worktree.id)!, async () => {
+    expect(retiredOwner.readOwnerState("session", key)).toBe("retired");
+  });
 });
 
 test("failed worker cleanup keeps worktree reconstruction blocked until the worker is gone", async () => {

@@ -139,7 +139,7 @@ export class WorkerTranscriptCommitClient {
         }
         if (response.error.details.reason === "stale-base-leaf") {
           // A stale base consumes this ledger seq. Retrying against a new leaf
-          // would append output built from stale context; milestone 3 must relaunch.
+          // would append output built from stale context; the turn must relaunch.
           this.nextSeqValue = request.seq + 1;
           this.terminalFailure = new WorkerTranscriptCommitError(
             response.error,

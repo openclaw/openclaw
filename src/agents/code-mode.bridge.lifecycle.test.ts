@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -21,7 +25,7 @@ import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-share
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   fakeTool,
   pluginToolWithExecute,
@@ -33,7 +37,7 @@ import {
 } from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-harness.js";
-import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
@@ -58,6 +62,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     harnessDisposers.splice(0).forEach((dispose) => dispose());
     vi.useRealTimers();
     await resetCodeModeTestState();
+    clearRuntimeConfigSnapshot();
   });
 
   it("admits nested activity when consecutive assistant responses reuse exec_0", async () => {
@@ -76,6 +81,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const target = fakeTool("read_record", "Read a record");
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
       const exec = expectDefined(harness.tools[0], "Code Mode exec");
+      const wait = expectDefined(harness.tools[1], "Code Mode wait");
       try {
         for (const value of ["first", "second"]) {
           const toolCall = {
@@ -90,11 +96,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             stopReason: "toolUse",
           });
           manager.appendMessage(assistantMessage);
-          const result = resultDetails(
+          const details = resultDetails(
             await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
               exec.execute(toolCall.id, toolCall.arguments),
             ),
           );
+          const result = await waitUntilCompleted({ details, waitTool: wait });
           expect(result.status, JSON.stringify(result)).toBe("completed");
           expect(result.value).toMatchObject({ input: { value } });
         }
@@ -124,6 +131,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
 
   it("returns a committed source reply after recording its nested tool activity", async () => {
     await withStateDirEnv("openclaw-code-mode-source-reply-", async () => {
+      const config = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config);
       const name = "source-reply";
       const scope = {
         agentId: "main",
@@ -135,7 +144,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const manager = SessionManager.open(scope);
       manager.appendMessage({ role: "user", content: "Review this format", timestamp: 1 });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
-      const config = { agents: { entries: { main: {} } } };
       const target = createMessageTool({
         config,
         preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -248,6 +256,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         sessionKey: "agent:main:nested-history",
         storePath: resolveDefaultSessionStorePath("main"),
       };
+      setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
       const initialEntry = { sessionId: scope.sessionId, updatedAt: 1 };
       await patchSessionEntryCore(scope, () => initialEntry, {
         fallbackEntry: initialEntry,
@@ -693,7 +702,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       tools: [fakeTool("client_probe", "Client probe")],
     });
     expect(testing.activeRuns.get(runId)).toBe(initial);
-    expect(exec.description).toContain("client_probe");
+    expect(buildCodeModeCatalogPrompt(owner, owner.catalogRef.current?.entries ?? [])).toContain(
+      "client_probe",
+    );
 
     for (let index = 0; index < 2; index += 1) {
       const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");

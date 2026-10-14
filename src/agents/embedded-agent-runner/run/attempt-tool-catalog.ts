@@ -1,3 +1,4 @@
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -65,7 +66,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
-    // tool hidden behind tool_call/exec is gated too; the catalog controls stay
+    // tool hidden behind dispatch_action/exec is gated too; the catalog controls stay
     // callable because they only dispatch into the gated tools.
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
@@ -106,7 +107,13 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       });
     }
     if (toolSearch.compacted && !toolSearch.catalogReused) {
-      log.info(
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "builtin",
+        mode: codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: toolSearch.catalogToolCount,
+      });
+      log.debug(
         codeModeControlsEnabledForRun
           ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
           : toolSearchConfig.mode === "directory"
@@ -130,19 +137,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       subagentPolicy,
       inheritedToolPolicy,
     } = runtimeCapabilityProfile.policy;
+    const agentToolLabel = agentId ? `agents.${agentId}.tools` : "agent tools";
     const explicitToolAllowlistSources = collectExplicitToolAllowlistSources([
       { label: "tools.allow", allow: globalPolicy?.allow },
       { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
-      {
-        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-        allow: agentPolicy?.allow,
-      },
-      {
-        label: agentId
-          ? `agents.${agentId}.tools.byProvider.allow`
-          : "agent tools.byProvider.allow",
-        allow: agentProviderPolicy?.allow,
-      },
+      { label: `${agentToolLabel}.allow`, allow: agentPolicy?.allow },
+      { label: `${agentToolLabel}.byProvider.allow`, allow: agentProviderPolicy?.allow },
       { label: "group tools.allow", allow: groupPolicy?.allow },
       { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
       { label: "subagent tools.allow", allow: subagentPolicy?.allow },

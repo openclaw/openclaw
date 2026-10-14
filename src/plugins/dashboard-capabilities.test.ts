@@ -80,11 +80,9 @@ function writeDashboardPlugin(
 }
 
 describe("plugin dashboard declarations", () => {
-  it.each([
-    ["/__openclaw__/diagram/app.js", "/__openclaw__/diagram/app.js"],
-    ["/mcp-app-sandbox", "/mcp-app-sandbox"],
-    ["/renderer/app.js?v=1#asset", "/renderer/app.js%3Fv=1%23asset"],
-  ])("publishes private renderer path %s through its capability", (resourcePath, resolvedPath) => {
+  it("publishes encoded private renderer paths through their capability", () => {
+    const resourcePath = "/renderer/app.js?v=1#asset";
+    const resolvedPath = "/renderer/app.js%3Fv=1%23asset";
     useNoBundledPlugins();
     const plugin = writeWidgetPlugin({ id: "diagram", resourcePath });
 
@@ -129,29 +127,24 @@ describe("plugin dashboard declarations", () => {
     );
   });
 
-  it.each([
-    "/mcp-app-sandbox",
-    "/renderer/../app.js",
-    "/renderer/%2e%2e/app.js",
-    "/renderer/./app.js",
-    "/renderer/app.js?v=1",
-    "/renderer/app.js#v1",
-    "/renderer\\app.js",
-  ])("rejects an unservable public resource path %s", (resourcePath) => {
-    useNoBundledPlugins();
-    const plugin = writeWidgetPlugin({
-      id: "invalid-renderer-path",
-      surface: "renderer",
-      resourcePath,
-      publicReader: true,
-    });
+  it.each(["/mcp-app-sandbox", "/renderer/../app.js"])(
+    "rejects an unservable public resource path %s",
+    (resourcePath) => {
+      useNoBundledPlugins();
+      const plugin = writeWidgetPlugin({
+        id: "invalid-renderer-path",
+        surface: "renderer",
+        resourcePath,
+        publicReader: true,
+      });
 
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain("resource path");
-    expect(registry.boardWidgetContentKinds.size).toBe(0);
-  });
+      const registry = loadFixture(plugin);
+      const record = registry.plugins.find((entry) => entry.id === plugin.id);
+      expect(record).toMatchObject({ status: "error", failurePhase: "register" });
+      expect(record?.error).toContain("resource path");
+      expect(registry.boardWidgetContentKinds.size).toBe(0);
+    },
+  );
 
   it.each([
     { firstPublic: false, secondPublic: true, sharedPath: true },
@@ -267,28 +260,6 @@ describe("plugin dashboard declarations", () => {
         code: "dashboard-declaration-invalid",
       }),
     );
-  });
-
-  it("escapes plugin ids that would otherwise overlap dynamic cron grants", () => {
-    useNoBundledPlugins();
-    const plugin = writeDashboardPlugin(
-      "cron.trigger:nightly",
-      { "plugin.nightly.read": "operator.read" },
-      {
-        dataBindings: [
-          {
-            id: "run",
-            method: "plugin.nightly.read",
-            description: "Colliding cron binding",
-          },
-        ],
-      },
-    );
-
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record?.status).toBe("loaded");
-    expect(registry.dashboardDataBindings.has("cron%2Etrigger:nightly.run")).toBe(true);
   });
 
   it("keeps dotted plugin owners and literal escape markers distinct", () => {

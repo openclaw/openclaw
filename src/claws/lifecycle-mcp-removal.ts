@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import type { AgentDeletionOperation } from "../agents/agent-lifecycle-registry.js";
 import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -28,7 +29,7 @@ export async function removeClawMcpServers(params: {
   agentId: string;
   servers: ClawStatusRecord["mcpServers"];
   options: RemoveMcpServerOptions;
-  assertCurrent: () => void;
+  deletion: Pick<AgentDeletionOperation, "assertCurrentFinal" | "assertCurrentAsync">;
 }): Promise<{ mcpServers: RemovedMcpServer[]; error?: string }> {
   const listed = params.options.sourceMcpServers
     ? undefined
@@ -37,7 +38,7 @@ export async function removeClawMcpServers(params: {
       : params.options.config
         ? undefined
         : await listConfiguredMcpServers();
-  params.assertCurrent();
+  await params.deletion.assertCurrentAsync();
   if (listed && !listed.ok) {
     throw new ClawRemoveError("mcp_config_unavailable", listed.error);
   }
@@ -50,12 +51,17 @@ export async function removeClawMcpServers(params: {
   const mcpServers: RemovedMcpServer[] = [];
   for (const server of params.servers) {
     let removalError: string | undefined;
-    params.assertCurrent();
+    await params.deletion.assertCurrentAsync();
     await withClawMcpLifecycleLease(server.name, params.options, async (assertMcpCurrent) => {
       const assertCurrent = () => {
-        params.assertCurrent();
+        params.deletion.assertCurrentFinal();
         assertMcpCurrent();
       };
+      const assertCurrentAsync = async () => {
+        await params.deletion.assertCurrentAsync();
+        assertMcpCurrent();
+      };
+      await assertCurrentAsync();
       assertCurrent();
       const currentRef = readClawMcpServerRefsByName(server.name, params.options).find(
         (candidate) => candidate.agentId === params.agentId,
@@ -101,6 +107,7 @@ export async function removeClawMcpServers(params: {
           expectedServer,
           recordIndependentOwner: false,
           assertCurrent,
+          assertCurrentAsync,
         });
         if (!result.ok) {
           throw new Error(result.error);
@@ -114,7 +121,7 @@ export async function removeClawMcpServers(params: {
         removalError = message;
       }
     });
-    params.assertCurrent();
+    await params.deletion.assertCurrentAsync();
     if (removalError) {
       return { mcpServers, error: removalError };
     }

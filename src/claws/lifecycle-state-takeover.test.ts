@@ -3,11 +3,9 @@ import { join } from "node:path";
 import * as fsSafe from "@openclaw/fs-safe/root";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -37,6 +35,7 @@ describe("Claw workspace deletion ownership", () => {
     ["SOUL.md", "discovery"],
     ["SOUL.md", "staged read"],
     ["SOUL.md", "staged replacement"],
+    ["SOUL.md", "remove dispatch"],
     ["BOOTSTRAP.md", "discovery"],
     ["BOOTSTRAP.md", "staged read"],
   ] as const)("preserves %s after deletion takeover during %s", async (filename, boundary) => {
@@ -70,13 +69,26 @@ describe("Claw workspace deletion ownership", () => {
         const readBytes = workspace.readBytes.bind(workspace);
         workspace.readBytes = async (path, options) => {
           const bytes = await readBytes(path, options);
-          if (boundary !== "discovery" && path.startsWith(`${filename}.openclaw-claw-remove-`)) {
+          if (
+            (boundary === "staged read" || boundary === "staged replacement") &&
+            path.startsWith(`${filename}.openclaw-claw-remove-`)
+          ) {
             if (boundary === "staged replacement") {
               await writeFile(join(current.plan.agent.workspace, filename), "replacement\n");
             }
             replaceOwner();
           }
           return bytes;
+        };
+        const remove = workspace.remove.bind(workspace);
+        workspace.remove = async (path, options) => {
+          if (
+            boundary === "remove dispatch" &&
+            path.startsWith(`${filename}.openclaw-claw-remove-`)
+          ) {
+            replaceOwner();
+          }
+          return remove(path, options);
         };
       }
       return workspace;

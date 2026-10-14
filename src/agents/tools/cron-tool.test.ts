@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -51,6 +52,9 @@ describe("cron tool", () => {
   function createTestCronTool(
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
+    if (opts?.config) {
+      setRuntimeConfigSnapshot(opts.config);
+    }
     return createCronTool(opts, {
       callGatewayTool: async (method, gatewayOpts, params) => {
         const result = await callGatewayMock({ method, params }, gatewayOpts);
@@ -153,10 +157,15 @@ describe("cron tool", () => {
   }
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValue({ ok: true });
     extractDeliveryInfoMock.mockReset();
     extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {

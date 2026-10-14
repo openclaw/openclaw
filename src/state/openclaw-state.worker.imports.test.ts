@@ -12,6 +12,31 @@ vi.mock("./openclaw-state-worker-runtime.js", () => {
   throw new Error("Plugin-state preparation must not load unrelated shared-state commands");
 });
 
+it.each(["restartLifecycle.consumeIntent", "restartLifecycle.writeHandoff"] as const)(
+  "prepares cold %s without application commands or database access",
+  async (commandType) => {
+    await withOpenClawTestState({ label: "restart-lazy-preparation" }, async () => {
+      const databasePath = openOpenClawStateDatabase().path;
+      await closeOpenClawStateDatabaseAsync();
+      const context = captureOpenClawStateWorkerContext();
+      const backend = runWithSqliteWorkerStateContext(context, () =>
+        openExistingSqliteWorkerBackend(undefined, {
+          databasePath,
+          existingIdentity: context.admission.identity.key,
+        }),
+      );
+      unlinkSync(databasePath);
+      try {
+        expect(backend[SQLITE_WORKER_PREPARE_COMMAND]).toBeTypeOf("function");
+        await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(commandType);
+        expect(existsSync(databasePath)).toBe(false);
+      } finally {
+        await backend.close();
+      }
+    });
+  },
+);
+
 it("keeps the shared-state command worker independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges("src/state/openclaw-state-worker-runtime.ts", [
@@ -30,6 +55,7 @@ it.each([
     input: { pluginId: "lazy-fixture", namespace: "missing", key: "value" },
   },
   { type: "deviceAuth.prepare", input: undefined },
+  { type: "plugins.deferredMigrations.read", input: { artifactPreservingReadOnly: true } },
 ] as const)(
   "prepares cold $type without unrelated commands or creating a database",
   async (command) => {
@@ -47,8 +73,14 @@ it.each([
       try {
         expect(existsSync(databasePath)).toBe(false);
         await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
+        // A Promise tells the transport to flush newly loaded compile-cache entries.
+        expect(backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type)).toBeUndefined();
         expect(runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toEqual(
-          command.type === "pluginState.lookup" ? { ok: true, value: undefined } : undefined,
+          command.type === "pluginState.lookup"
+            ? { ok: true, value: undefined }
+            : command.type === "plugins.deferredMigrations.read"
+              ? []
+              : undefined,
         );
         if (command.type === "deviceAuth.prepare") {
           expect(

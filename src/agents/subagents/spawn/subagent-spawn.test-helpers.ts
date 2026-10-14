@@ -11,6 +11,32 @@ import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
 } from "../registry/subagent-registry.types.js";
+import type { SpawnAcpResult } from "./acp-spawn-result.js";
+
+export function expectFailedAcpSpawn(
+  result: SpawnAcpResult,
+  status?: "error" | "forbidden",
+): Extract<SpawnAcpResult, { status: "error" | "forbidden" }> {
+  if (status) {
+    expect(result.status).toBe(status);
+  } else {
+    expect(result.status).not.toBe("accepted");
+  }
+  if (result.status === "accepted") {
+    throw new Error("Expected ACP spawn to fail");
+  }
+  return result;
+}
+
+export function expectAcceptedAcpSpawn(
+  result: SpawnAcpResult,
+): Extract<SpawnAcpResult, { status: "accepted" }> {
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") {
+    throw new Error("Expected ACP spawn to be accepted");
+  }
+  return result;
+}
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -347,18 +373,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
-    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
-      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    readSessionEntryReadOnlyInWorker: async (
-      scope: { storePath?: string; sessionKey: string },
-      assertCurrent: () => void,
-    ) => {
-      assertCurrent();
-      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
-      const value = await Promise.resolve(store[scope.sessionKey]);
-      assertCurrent();
-      return value;
-    },
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
@@ -420,8 +434,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
   }));
 
+  // mock-isolation: Spawn fixtures supply caller depth without opening a session database.
   vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
+    getSubagentDepthFromSessionStoreInWorker: async (key: string, opts?: unknown) =>
+      params.getSubagentDepthFromSessionStore?.(key, opts) ?? 0,
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({

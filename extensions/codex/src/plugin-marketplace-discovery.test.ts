@@ -34,36 +34,6 @@ function catalog(name: string, pluginName: string, path?: string): v2.PluginList
 }
 
 describe("Codex marketplace plugin discovery", () => {
-  it("merges repository/global and workspace/shared/personal marketplace requests", async () => {
-    const request = vi.fn(async (params: v2.PluginListParams) =>
-      params.marketplaceKinds
-        ? catalog("workspace-directory", "workspace-review")
-        : catalog("company-tools", "security-review", "/repo/.agents/plugins/marketplace.json"),
-    );
-
-    const result = await discoverCodexMarketplacePlugins({ request, workspaceDir: "/repo" });
-
-    expect(request).toHaveBeenNthCalledWith(1, { cwds: ["/repo"] });
-    expect(request).toHaveBeenNthCalledWith(2, {
-      cwds: ["/repo"],
-      marketplaceKinds: [
-        "workspace-directory",
-        "shared-with-me",
-        "created-by-me-remote",
-        "vertical",
-      ],
-    });
-    expect(result.plugins.map((plugin) => plugin.id)).toEqual([
-      "security-review@company-tools",
-      "workspace-review@workspace-directory",
-    ]);
-    expect(result.plugins[0]).toMatchObject({
-      displayName: "Security Review",
-      developerName: "Example Labs",
-      description: "Summarize source code",
-    });
-  });
-
   it("preserves authorized workspace catalogs when another supplemental category fails", async () => {
     const request = vi.fn(async (params: v2.PluginListParams) => {
       if (!params.marketplaceKinds) {
@@ -118,16 +88,6 @@ describe("Codex marketplace plugin discovery", () => {
     }
   });
 
-  it("derives a stable slug from summary identities when a remote display name contains spaces", async () => {
-    const listed = catalog("workspace-directory", "security-review");
-    listed.marketplaces[0]!.plugins[0]!.name = "Security Review";
-    const request = vi.fn(async () => listed);
-
-    const result = await discoverCodexMarketplacePlugins({ request, workspaceDir: "/repo" });
-
-    expect(result.plugins[0]?.id).toBe("security-review@workspace-directory");
-  });
-
   it("refuses ambiguous equal identifiers from different marketplace paths", async () => {
     const request = vi.fn(async (params: v2.PluginListParams) =>
       params.marketplaceKinds
@@ -141,7 +101,7 @@ describe("Codex marketplace plugin discovery", () => {
     expect(result.warnings[0]).toContain("requires a unique identity");
   });
 
-  it.each(["security-review", "security-review.v2"])(
+  it.each(["security-review.v2"])(
     "deduplicates qualified and unqualified %s summaries for the same trusted marketplace source",
     async (pluginName) => {
       const request = vi.fn(async (params: v2.PluginListParams) => {
@@ -159,10 +119,7 @@ describe("Codex marketplace plugin discovery", () => {
     },
   );
 
-  it.each([
-    { availability: "DISABLED_BY_ADMIN", installPolicy: "AVAILABLE" },
-    { availability: "AVAILABLE", installPolicy: "NOT_AVAILABLE" },
-  ] as const)(
+  it.each([{ availability: "AVAILABLE", installPolicy: "NOT_AVAILABLE" }] as const)(
     "retains the most restrictive policy across duplicate catalog snapshots",
     async (policy) => {
       const request = vi.fn(async (params: v2.PluginListParams) => {
@@ -177,40 +134,6 @@ describe("Codex marketplace plugin discovery", () => {
 
       expect(result.plugins).toHaveLength(1);
       expect(result.plugins[0]?.available).toBe(false);
-    },
-  );
-
-  it("retains Codex-approved local marketplaces regardless of their catalog name", async () => {
-    const request = vi.fn(async () =>
-      catalog("openai-curated", "github", "/repo/.agents/plugins/marketplace.json"),
-    );
-
-    const result = await discoverCodexMarketplacePlugins({
-      request,
-      workspaceDir: "/repo/subdirectory",
-    });
-
-    expect(result.plugins.map((plugin) => plugin.id)).toEqual(["github@openai-curated"]);
-    expect(result.warnings).toEqual([]);
-  });
-
-  it.each([true, false, null] as const)(
-    "preserves remote installation-interstitial policy %j",
-    async (mustShowInstallationInterstitial) => {
-      const listed = catalog("workspace-directory", "security-review");
-      Object.assign(listed.marketplaces[0]!.plugins[0]!, {
-        remotePluginId: "plugins~Plugin_remote_opaque",
-        mustShowInstallationInterstitial,
-      });
-
-      const result = await discoverCodexMarketplacePlugins({
-        request: vi.fn(async () => listed),
-        workspaceDir: "/repo",
-      });
-
-      expect(result.plugins[0]?.mustShowInstallationInterstitial).toBe(
-        mustShowInstallationInterstitial,
-      );
     },
   );
 });

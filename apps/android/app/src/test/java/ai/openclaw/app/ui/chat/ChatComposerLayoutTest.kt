@@ -1760,7 +1760,7 @@ class ChatComposerLayoutTest {
         viewModel.chatComposerState.reportAttachmentOmission(owner, 1)
       }
       val steps = List(20) { "Compact viewport progress step ${it + 1}" }
-      showProgressCard(steps)
+      showProgressCard(viewModel, steps)
       val editor = composerEditor()
       val draft = "Editable first line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line"
       editor.performClick()
@@ -2181,6 +2181,7 @@ class ChatComposerLayoutTest {
     val owner = model.captureChatShareOwner()
     val sessionKey = controller.sessionKey.value
     val calls = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val reviewLoad = AtomicReference<Job?>()
     val endpointField = NodeRuntime::class.java.getDeclaredField("connectedEndpoint").apply { isAccessible = true }
     val previousEndpoint = endpointField.get(runtime)
     val previousRequest = runtime.gatewayDataRequestOverrideForTests
@@ -2192,6 +2193,30 @@ class ChatComposerLayoutTest {
     val observeChatRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
       chatMethods.add(method)
       previousChatRequest(gatewayId, method, params)
+    }
+
+    fun openReview() {
+      reviewLoad.set(null)
+      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+      // Snapshot decoding and patch preparation leave Compose for Dispatchers.Default.
+      val loading =
+        object : IdlingResource {
+          override val isIdleNow: Boolean
+            get() = reviewLoad.get()?.isCompleted == true
+
+          override fun getDiagnosticMessageIfBusy(): String = "Review snapshot requests=${calls.size} job=${reviewLoad.get()}"
+        }
+      composeRule.registerIdlingResource(loading)
+      try {
+        composeRule.waitForIdle()
+      } finally {
+        composeRule.unregisterIdlingResource(loading)
+      }
+      assertFalse("The review snapshot must finish normally", checkNotNull(reviewLoad.get()).isCancelled)
+      composeRule
+        .onNode(hasText("Snapshot from the conversation workspace", substring = true) and hasAnyAncestor(isDialog()))
+        .assertIsDisplayed()
     }
     try {
       chatRequestField.set(controller, observeChatRequest)
@@ -2207,6 +2232,7 @@ class ChatComposerLayoutTest {
       runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, params ->
         assertEquals(owner.gatewayStableId, gatewayId)
         assertEquals("sessions.diff", method)
+        reviewLoad.set(currentCoroutineContext().job)
         calls.add(method to params)
         buildJsonObject {
           put("sessionKey", JsonPrimitive(sessionKey))
@@ -2228,12 +2254,7 @@ class ChatComposerLayoutTest {
           )
         }.toString()
       }
-      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
-      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
-      composeRule.waitUntil {
-        composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
-      }
-      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertIsDisplayed()
+      openReview()
       composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertIsDisplayed()
       composeRule.onNode(isDialog()).performTouchInput { swipeDown() }
       composeRule.waitForIdle()
@@ -2262,19 +2283,12 @@ class ChatComposerLayoutTest {
         assertFalse("Referencing code must not send the draft", "chat.send" in chatMethods)
       }
 
-      fun reopenReview() {
-        composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
-        composeRule.onNodeWithText(nativeString("Review changes")).performClick()
-        composeRule.waitUntil {
-          composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
-        }
-      }
-      reopenReview()
+      openReview()
       val reviewDialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
       composeRule.runOnIdle { reviewDialog.onBackPressedDispatcher.onBackPressed() }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      reopenReview()
+      openReview()
       val other = model.chatSessions.value.first { it.key != sessionKey }
       composeRule.runOnIdle { model.switchChatSession(other.key, other.ownerAgentId) }
       composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
@@ -2880,11 +2894,13 @@ class ChatComposerLayoutTest {
       branchDiagnosticCase = "eligible"
       openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performClick()
-      composeRule.waitUntil {
+      awaitBranchSwitch(calls)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02"
-      }
+          ?.entryId,
+      )
       assertEquals(1, calls.count { it.method == "sessions.branches.switch" })
     }
 
@@ -5317,9 +5333,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
-    showChat()
+    val viewModel = showChat()
     val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    showProgressCard(steps)
+    showProgressCard(viewModel, steps)
 
     assertComposerControlsVisible()
     if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
@@ -5332,8 +5348,8 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
-    showChat()
-    showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
+    val viewModel = showChat()
+    showProgressCard(viewModel, listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
     val card = composeRule.onNodeWithTag("chat-progress-card", useUnmergedTree = true)
     val composer = composeRule.onNodeWithTag("chat-composer-surface")
@@ -5373,8 +5389,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersProgressMarkupAsANativeBar() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5413,8 +5430,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardKeepsWarningAfterDisclosure() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5434,8 +5452,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersAdjacentBarsWithoutLeakingMarkup() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5479,7 +5498,7 @@ class ChatComposerLayoutTest {
           """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
         )
       }
-      showProgressCard(listOf("Keep voice-note progress independent"))
+      showProgressCard(viewModel, listOf("Keep voice-note progress independent"))
       composeRule
         .onNode(
           SemanticsMatcher("voice-note long press") { node ->
@@ -5596,6 +5615,7 @@ class ChatComposerLayoutTest {
   }
 
   private fun showProgressCard(
+    viewModel: MainViewModel,
     steps: List<String>,
     markdown: String? = null,
   ) {
@@ -5651,16 +5671,16 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    // The controller publishes from IO, outside Compose's automatic synchronization.
+    // The UI's ViewModel bridge publishes after the controller's IO result.
     val progressCardRefresh =
       object : IdlingResource {
         override val isIdleNow: Boolean
           get() =
-            controller.progressCard.value
-              ?.steps
-              ?.size == steps.size
+            viewModel.chatProgressCard.value?.let { card ->
+              card.revision == 1 && card.markdown == markdown && card.steps.map { it.step } == steps
+            } == true
 
-        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+        override fun getDiagnosticMessageIfBusy(): String = "Rendered progress card=${viewModel.chatProgressCard.value} expected steps=$steps markdown=$markdown"
       }
     composeRule.registerIdlingResource(progressCardRefresh)
     try {
@@ -5669,11 +5689,11 @@ class ChatComposerLayoutTest {
       composeRule.unregisterIdlingResource(progressCardRefresh)
     }
     assertEquals(
-      "The progress card must publish all fixture steps",
-      steps.size,
-      controller.progressCard.value
+      "The rendered progress card must publish all fixture steps",
+      steps,
+      viewModel.chatProgressCard.value
         ?.steps
-        ?.size,
+        ?.map { it.step },
     )
   }
 

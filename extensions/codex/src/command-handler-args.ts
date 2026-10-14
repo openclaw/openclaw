@@ -154,37 +154,26 @@ export function splitArgs(value: string | undefined): string[] {
     if (escaping) {
       current += char;
       escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (char === "\\" && quote !== "'") {
+    } else if (char === "\\" && quote !== "'") {
       escaping = true;
-      tokenStarted = true;
-      continue;
-    }
-    if (quote) {
+    } else if (quote) {
       if (char === quote) {
         quote = undefined;
       } else {
         current += char;
       }
-      tokenStarted = true;
-      continue;
-    }
-    if (char === '"' || char === "'") {
+    } else if (char === '"' || char === "'") {
       quote = char;
-      tokenStarted = true;
-      continue;
-    }
-    if (/\s/.test(char)) {
+    } else if (/\s/.test(char)) {
       if (tokenStarted) {
         args.push(current);
         current = "";
         tokenStarted = false;
       }
       continue;
+    } else {
+      current += char;
     }
-    current += char;
     tokenStarted = true;
   }
   if (escaping) {

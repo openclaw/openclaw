@@ -16,6 +16,7 @@ import {
   type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
 import {
@@ -229,13 +230,14 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   };
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
-  const storePaths = new Set<string>();
-  const phaseSignalPaths = new Set<string>();
-  const storeErrors: string[] = [];
-  const phaseSignalErrors: string[] = [];
-  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
-  const signalEntries: ShortTermDreamingStatsEntry[] = [];
-  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+  const storePaths = new Set(stats.flatMap((stat) => (stat.storePath ? [stat.storePath] : [])));
+  const phaseSignalPaths = new Set(
+    stats.flatMap((stat) => (stat.phaseSignalPath ? [stat.phaseSignalPath] : [])),
+  );
+  const storeErrors = stats.flatMap((stat) => (stat.storeError ? [stat.storeError] : []));
+  const phaseSignalErrors = stats.flatMap((stat) =>
+    stat.phaseSignalError ? [stat.phaseSignalError] : [],
+  );
 
   for (const stat of stats) {
     totals.shortTermCount += stat.shortTermCount;
@@ -248,21 +250,6 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     totals.remPhaseHitCount += stat.remPhaseHitCount;
     totals.promotedTotal += stat.promotedTotal;
     totals.promotedToday += stat.promotedToday;
-    if (stat.storePath) {
-      storePaths.add(stat.storePath);
-    }
-    if (stat.phaseSignalPath) {
-      phaseSignalPaths.add(stat.phaseSignalPath);
-    }
-    if (stat.storeError) {
-      storeErrors.push(stat.storeError);
-    }
-    if (stat.phaseSignalError) {
-      phaseSignalErrors.push(stat.phaseSignalError);
-    }
-    shortTermEntries.push(...stat.shortTermEntries);
-    signalEntries.push(...stat.signalEntries);
-    promotedEntries.push(...stat.promotedEntries);
     const promotedAtMs = stat.lastPromotedAt ? Date.parse(stat.lastPromotedAt) : Number.NaN;
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;
@@ -273,17 +260,17 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   return {
     ...totals,
     shortTermEntries: sortAndLimitBy(
-      shortTermEntries,
+      stats.flatMap((stat) => stat.shortTermEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByRecency,
     ),
     signalEntries: sortAndLimitBy(
-      signalEntries,
+      stats.flatMap((stat) => stat.signalEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryBySignals,
     ),
     promotedEntries: sortAndLimitBy(
-      promotedEntries,
+      stats.flatMap((stat) => stat.promotedEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByPromotion,
     ),
@@ -399,13 +386,13 @@ export const createDoctorHandlers = (
     }
 
     try {
-      let status = manager.status();
+      let status = await readMemorySearchManagerStatus(manager);
       const shouldProbe = params.probe === true || params.deep === true;
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
       if (shouldProbe) {
-        status = manager.status();
+        status = await readMemorySearchManagerStatus(manager);
       }
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };

@@ -2,12 +2,14 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   type SessionTranscriptWriteLockAccessorContext,
   type TranscriptMessageAppendOptions,
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -33,6 +35,7 @@ export type InternalSessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<unknown[]>;
+  readMessageFacts: SessionTranscriptWriteLockAccessorContext["readMessageFacts"];
   target: InternalSessionTranscriptTarget;
 };
 
@@ -47,7 +50,11 @@ export async function withProjectedSessionTranscriptWriteLock<
     context: InternalSessionTranscriptWriteLockContext,
     locked: SessionTranscriptWriteLockAccessorContext,
   ) => TContext,
+  mode: "lock" | "sequence" = "lock",
 ): Promise<T> {
+  if (mode === "lock") {
+    assertLegacyTranscriptPreparation(params);
+  }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
@@ -96,12 +103,14 @@ export async function withProjectedSessionTranscriptWriteLock<
       callbackClosed = true;
     }
   };
-  return await withTranscriptWriteLock(boundScope, async (locked) => {
+  const write = mode === "sequence" ? withTranscriptWriteSequence : withTranscriptWriteLock;
+  return await write(boundScope, async (locked) => {
     const result = await runOpen(
       projectContext(
         {
           target,
           readEvents: () => whileOpen(locked.readEvents),
+          readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
           appendMessage: (options) =>
             whileOpen(() =>
               locked.appendMessage({

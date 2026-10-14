@@ -156,7 +156,8 @@ export function assertSupportedCodexAppServerVersion(response: CodexInitializeRe
   return detectedVersion;
 }
 
-function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+/** Reads the Codex version from an initialize `userAgent` such as `openclaw/0.160.0 (...)`. */
+export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
   // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
   // version in the leading product field is stable.

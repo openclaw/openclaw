@@ -7,11 +7,14 @@ import type {
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
 import {
@@ -63,6 +66,7 @@ afterEach(async () => {
   await closeSessionTranscriptReconcileWorkerPool();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
 });
 
 it.each([
@@ -81,6 +85,9 @@ it.each([
     const continuedSession = continuation === "redirtied" ? "first" : "second";
     const stateDir = tempDirs.make("transcript-reconcile-continuation-");
     const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    setRuntimeConfigSnapshot({
+      session: { store: resolveSessionStorePathCore(undefined, options) },
+    });
     for (const sessionId of ["first", "second"]) {
       await persistSessionTranscriptTurn(
         { ...options, sessionId, sessionKey: `agent:main:${sessionId}` },
@@ -163,7 +170,9 @@ it.each([
                         if (sweep) {
                           sweepDispatches++;
                           if (continuation === "retires-between-batches" && sweepDispatches === 2) {
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           }
                         }
                         const result = await worker
@@ -210,7 +219,9 @@ it.each([
                               hasMore: false,
                             });
                             // Revocation is immediate; awaiting close would join this operation.
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           } else if (continuation === "retires-between-batches") {
                             expect(result).toMatchObject({
                               hasMore: true,
@@ -222,7 +233,9 @@ it.each([
                               hasMore: false,
                             });
                             // Closing joins this accepted task; await it after the owner settles.
-                            closing = closeSessionTranscriptReconcileWorkerPool();
+                            closing = runInDetachedAsyncContext(
+                              closeSessionTranscriptReconcileWorkerPool,
+                            );
                           }
                         }
                         return result;
@@ -268,15 +281,15 @@ it.each([
       if (retires || closesPool) {
         expect(closing).toBeDefined();
         await closing;
-        expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
-        expect(sweepResults).toBe(1);
+        if (retires) {
+          expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
+          expect(sweepResults).toBe(1);
+        }
       } else if (!failsBeforeCancellation) {
         await waitForSessionTranscriptIndexReconcile(options);
       }
       expect(worklists).toEqual(
-        retires || closesPool || failsBeforeCancellation
-          ? [["first"]]
-          : [["first"], [continuedSession]],
+        retires || failsBeforeCancellation ? [["first"]] : [["first"], [continuedSession]],
       );
       if (continuation === "redirtied") {
         expect(dirtiedAgain).toBe(true);
@@ -290,7 +303,7 @@ it.each([
           .all(),
       ).toEqual([
         { session_id: "first", needs_rebuild: 0 },
-        { session_id: "second", needs_rebuild: retires || closesPool ? 1 : 0 },
+        { session_id: "second", needs_rebuild: retires ? 1 : 0 },
       ]);
       expect(
         verified.db
@@ -299,7 +312,7 @@ it.each([
           )
           .all(continuedSession),
       ).toEqual(
-        retires || closesPool
+        retires
           ? []
           : [{ session_id: continuedSession, message_id: `${continuedSession}-message` }],
       );

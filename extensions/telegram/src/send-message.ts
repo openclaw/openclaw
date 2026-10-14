@@ -84,8 +84,8 @@ export async function sendMessageTelegram(
     });
     const deliveryResults: TelegramSendResult[] = [];
     let finalMediaBatch = true;
-    const reportDelivery: TelegramDeliveryReporter = async (params) => {
-      return await reportTelegramProviderDelivery({
+    const reportDelivery: TelegramDeliveryReporter = (params) =>
+      reportTelegramProviderDelivery({
         ...params,
         successfulSendThread: threadSpec,
         onPrepared: (delivery) => {
@@ -99,7 +99,6 @@ export async function sendMessageTelegram(
         },
         onDeliveryResult: opts.onDeliveryResult,
       });
-    };
     const recordDeliveredPromptContext = async (
       params: Omit<
         Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -206,7 +205,7 @@ export async function sendMessageTelegram(
       }
       return receipt;
     };
-    const { sendChunkedText } = createTelegramTextSender({
+    const sendChunkedText = createTelegramTextSender({
       cfg,
       ownerAgentId,
       account,
@@ -246,9 +245,8 @@ export async function sendMessageTelegram(
           sendLogger.warn(
             `Photo dimensions (${width}x${height}) are not valid for Telegram photos. Sending as document instead.`,
           );
-          return false;
         }
-        return true;
+        return isValidPhoto;
       } catch (err) {
         sendLogger.warn(
           `Failed to validate photo dimensions: ${formatErrorMessage(err)}. Sending as document instead.`,
@@ -302,13 +300,12 @@ export async function sendMessageTelegram(
       const { htmlCaption, plainCaption, followUpText } = mediaPlan;
       // If text exceeds Telegram's caption limit, send media without caption
       // then send text as a separate follow-up message.
-      const needsSeparateText = Boolean(followUpText);
       // When splitting, put reply_markup only on the follow-up text (the "main" content),
       // not on the media message.
       const mediaThreadParams = buildThreadParams(!singleUseReplyTo || sender.parts.length === 0);
       const baseMediaParams = {
         ...mediaThreadParams,
-        ...(!needsSeparateText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
+        ...(!followUpText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
       };
       const videoDimensions =
         mediaPlan.deliveryKind === "video" && !mediaPlan.isVideoNote
@@ -432,7 +429,7 @@ export async function sendMessageTelegram(
             },
           });
           const lastPart = part.result === lastMedia.result;
-          if (!needsSeparateText || !lastPart) {
+          if (!followUpText || !lastPart) {
             await recordMediaPromptPart(part, lastPart);
           }
           logTelegramOutboundSendOk({
@@ -449,7 +446,6 @@ export async function sendMessageTelegram(
         {
           partialDeliveryResult: () => ({
             receipt: buildMediaReceipt(),
-            visibleReplySent: true,
           }),
         },
       );
@@ -566,7 +562,6 @@ export async function sendMessageTelegram(
         opts.promptContextProjectionPlan?.cursor.invalidate();
         return sender.fail(error, 0, {
           receipt: buildMediaReceipt(),
-          visibleReplySent: true,
         });
       }
     }

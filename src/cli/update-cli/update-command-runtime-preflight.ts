@@ -154,11 +154,21 @@ export async function resolvePackageRuntimePreflight(params: {
       ? false
       : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
     const targetVersion = target.version;
-    const unchangedRuntime = { ...unchanged(), activationRuntime, targetVersion };
-    const keepCurrentRuntime = (): Result<PackageRuntimePreflight, string> =>
-      activationRuntime ? ok(unchangedRuntime) : resultError(coerceErrorMessage(captureError));
+    const runtimeResult = (
+      capturedRuntime: PackageActivationRuntime | undefined,
+      selectedRunner = nodeRunner,
+      replacedNodeRunner?: string,
+    ): Result<PackageRuntimePreflight, string> =>
+      capturedRuntime
+        ? ok({
+            ...(selectedRunner ? { nodeRunner: selectedRunner } : {}),
+            activationRuntime: capturedRuntime,
+            ...(replacedNodeRunner ? { replacedNodeRunner } : {}),
+            targetVersion,
+          })
+        : resultError(coerceErrorMessage(captureError));
     if (satisfies === true) {
-      return keepCurrentRuntime();
+      return runtimeResult(activationRuntime);
     }
     const canRefreshCurrentService =
       params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
@@ -182,19 +192,11 @@ export async function resolvePackageRuntimePreflight(params: {
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
-        if (!fallbackActivationRuntime) {
-          return resultError(coerceErrorMessage(captureError));
-        }
-        return ok({
-          nodeRunner: fallbackNodeRunner,
-          activationRuntime: fallbackActivationRuntime,
-          replacedNodeRunner: nodeRunner,
-          targetVersion,
-        });
+        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
       }
     }
     if (satisfies !== false) {
-      return keepCurrentRuntime();
+      return runtimeResult(activationRuntime);
     }
     if (params.runtimeRecovery && target.nodeEngine) {
       const { resolveTargetNodeRuntime } =
@@ -207,14 +209,9 @@ export async function resolvePackageRuntimePreflight(params: {
       if (recovered) {
         const recoveredRuntime = captureRuntime(recovered);
         if (!recoveredRuntime) {
-          return resultError(coerceErrorMessage(captureError));
+          return runtimeResult(recoveredRuntime);
         }
-        return ok({
-          nodeRunner: recovered,
-          activationRuntime: recoveredRuntime,
-          replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
-          targetVersion,
-        });
+        return runtimeResult(recoveredRuntime, recovered, nodeRunner ?? resolveNodeRunner());
       }
     }
     const runtimePath = runtime.nodeRunner ?? process.execPath;

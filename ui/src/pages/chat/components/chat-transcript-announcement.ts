@@ -5,7 +5,7 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
 registerChatMessageMetadataEnglish();
@@ -80,7 +80,7 @@ export function latestTranscriptAnnouncement(
         continue;
       }
       for (const group of chatItemGroups(part).toReversed()) {
-        if (isInterSessionGroup(group)) {
+        if (isSessionActivityGroup(group)) {
           const count = group.messages.reduce(
             (total, entry) => total + (entry.duplicateCount ?? 1),
             0,

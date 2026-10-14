@@ -102,16 +102,9 @@ export function resolveChannelSetupEntries(params: {
   const installedCatalogEntries = catalogEntries(installedCatalogEntriesSource, true);
   const installableCatalogEntries = catalogEntries(installableCatalogEntriesSource, false);
 
-  const metaById = new Map<string, ChannelMeta>();
-  for (const meta of listChatChannels()) {
-    metaById.set(
-      meta.id,
-      normalizeChannelMeta({
-        id: meta.id,
-        meta,
-      }),
-    );
-  }
+  const metaById = new Map<string, ChannelMeta>(
+    listChatChannels().map((meta) => [meta.id, normalizeChannelMeta({ id: meta.id, meta })]),
+  );
   for (const plugin of params.installedPlugins) {
     metaById.set(
       plugin.id,

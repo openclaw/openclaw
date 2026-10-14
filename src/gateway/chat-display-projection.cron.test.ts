@@ -2,15 +2,17 @@ import path from "node:path";
 import { constants } from "node:sqlite";
 import { expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   prepareForwardedMessageCronJobNameResolver,
@@ -27,6 +29,7 @@ import { projectSessionMessagePayload } from "./session-transcript-message.js";
 it("batches automation names across history reads after rename and deletion without a source session", async () => {
   const jobCount = 32;
   await withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const job: CronJob = {
       id: "daily-report",
       name: "Daily report",
@@ -98,9 +101,10 @@ it("batches automation names across history reads after rename and deletion with
       effectiveMaxChars: 100_000,
     };
     const database = openOpenClawStateDatabase({ env: state.env });
+    const db = requireNativeSqliteDatabase(database.db);
     // Host-boundary counts exclude the history worker's independent connection.
     const measure = async <T>(operation: string, read: () => T | Promise<T>): Promise<T> => {
-      const counter = trackSqliteStatementExecutions(database.db, ["names"], (sql) =>
+      const counter = trackSqliteStatementExecutions(db, ["names"], (sql) =>
         /\bfrom\s+"?cron_jobs"?\b/iu.test(sql) ? "names" : null,
       );
       try {
@@ -229,7 +233,7 @@ it("batches automation names across history reads after rename and deletion with
       ).toMatchObject(firstExpected);
     }
     let deniedNameReads = 0;
-    database.db.setAuthorizer((action, table, column) => {
+    db.setAuthorizer((action, table, column) => {
       if (action === constants.SQLITE_READ && table === "cron_jobs" && column === "name") {
         deniedNameReads++;
         return constants.SQLITE_DENY;
@@ -241,12 +245,12 @@ it("batches automation names across history reads after rename and deletion with
         /prepared/iu,
       );
       expect(deniedNameReads).toBe(0);
-      database.db.setAuthorizer(() => constants.SQLITE_DENY);
+      db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];
       expect(projectForwardedMessages(ordinary)).toBe(ordinary);
     } finally {
-      database.db.setAuthorizer(null);
+      db.setAuthorizer(null);
     }
   });
 });

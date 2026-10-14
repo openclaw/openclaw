@@ -41,7 +41,8 @@ function normalizeToolCallsInMessage(
   let sawAllowedToolCall = false;
   let sawIncompleteToolCall = false;
   let sawBlankStringToolCall = false;
-  const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
+  // An empty set declares no tools available; undefined leaves availability unknown.
+  const hasAllowedToolNames = allowedToolNames !== undefined;
   for (const block of content) {
     if (!isRunnerToolCallBlock(block)) {
       continue;
@@ -191,25 +192,20 @@ function guardUnknownToolLoopInMessage(
   const unknownToolName = toolCallState.toolName;
 
   const countableMessage = message && typeof message === "object" ? message : undefined;
-  if (!params.countAttempt || (countableMessage && state.countedMessages.has(countableMessage))) {
-    // Partial events and already-counted final projections may rewrite, but
-    // only a new final message advances the loop counter.
-    if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-      rewriteUnknownToolLoopMessage(message, unknownToolName);
+  // Partial events and already-counted final projections may rewrite, but
+  // only a new final message advances the loop counter.
+  if (params.countAttempt && !(countableMessage && state.countedMessages.has(countableMessage))) {
+    if (countableMessage) {
+      state.countedMessages.add(countableMessage);
     }
-    return params.countAttempt;
-  }
-  if (countableMessage) {
-    state.countedMessages.add(countableMessage);
+    state.count = state.lastUnknownToolName === unknownToolName ? state.count + 1 : 1;
+    state.lastUnknownToolName = unknownToolName;
   }
 
-  state.count = state.lastUnknownToolName === unknownToolName ? state.count + 1 : 1;
-  state.lastUnknownToolName = unknownToolName;
-
-  if (state.count > threshold) {
+  if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
     rewriteUnknownToolLoopMessage(message, unknownToolName);
   }
-  return true;
+  return params.countAttempt;
 }
 
 function wrapStreamTrimToolCallNames(

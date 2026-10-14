@@ -42,7 +42,12 @@ type QualificationDispatchClient = {
   readApi: (endpoint: string, fields?: string[]) => string;
   postApi: (args: string[]) => string;
   httpStatus: (response: string) => number;
+  // Throws unless the observed main tip is trusted admission tooling that
+  // descends from the previously selected P.
+  verifyMainAdvance?: (previousSha: string, currentSha: string) => void;
 };
+// Bounded re-reads absorb ordinary main merges between P selection and the POST.
+const MAX_ADMISSION_MAIN_ADVANCES = 3;
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -101,6 +106,15 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
       .map((key) => [key, String(inputs[key])]),
   );
   return `sha256:${createHash("sha256").update(JSON.stringify(wireInputs)).digest("hex")}`;
+}
+
+export function formatDispatchSelection(
+  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+): string {
+  const { inputs } = request;
+  // Waiver values remain in the private request; operator output records selection only.
+  const waiver = inputs.telegram_waiver ? "selected (redacted)" : "omitted";
+  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak} telegram_waiver=${waiver}`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -505,21 +519,52 @@ export async function qualifyAdmission(
   client: QualificationDispatchClient,
 ) {
   let record = initialRecord;
-  const admission = record.admission;
+  let admission = record.admission;
   requireDispatch(admission, "Candidate admission is missing");
   if (admission.phase === "prepared") {
     // P's mutable dispatch selector is checked immediately before the one POST.
     // If it moves in the API window, the observed run SHA refuses adoption.
+    // Before any POST, a moved main may only advance P to a verified descendant;
+    // protected tags never move.
     const refPath =
       admission.workflowRef === "main" ? "heads/main" : "tags/" + admission.workflowRef;
-    const ref: unknown = JSON.parse(client.readApi("repos/" + REPOSITORY + "/git/ref/" + refPath));
-    requireDispatch(
-      isJsonRecord(ref) &&
-        isJsonRecord(ref.object) &&
-        ref.object.type === "commit" &&
-        ref.object.sha === admission.workflowSha,
-      "Admission tooling ref moved before dispatch",
-    );
+    let workflowSha = admission.workflowSha;
+    for (let advances = 0; ; advances += 1) {
+      const ref: unknown = JSON.parse(
+        client.readApi("repos/" + REPOSITORY + "/git/ref/" + refPath),
+      );
+      requireDispatch(
+        isJsonRecord(ref) && isJsonRecord(ref.object) && ref.object.type === "commit",
+        "Admission tooling ref is unreadable",
+      );
+      const currentSha = stringValue(ref.object.sha);
+      if (currentSha === workflowSha) {
+        break;
+      }
+      requireDispatch(
+        admission.workflowRef === "main" &&
+          client.verifyMainAdvance &&
+          SHA_PATTERN.test(currentSha) &&
+          advances < MAX_ADMISSION_MAIN_ADVANCES,
+        "Admission tooling ref moved before dispatch",
+      );
+      try {
+        client.verifyMainAdvance(workflowSha, currentSha);
+      } catch (error) {
+        throw new Error(
+          "Admission tooling ref moved before dispatch: " +
+            (error instanceof Error ? error.message : String(error)),
+          { cause: error },
+        );
+      }
+      console.log(`Admission P advanced with main: ${workflowSha} -> ${currentSha}`);
+      workflowSha = currentSha;
+    }
+    if (workflowSha !== admission.workflowSha) {
+      admission = { ...admission, workflowSha };
+      record = { ...record, admission };
+      retain(record);
+    }
     const directory = mkdtempSync(join(tmpdir(), "openclaw-qualification-request-"));
     const path = join(directory, "dispatch.json");
     try {

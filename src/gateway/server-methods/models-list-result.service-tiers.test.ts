@@ -251,7 +251,7 @@ describe("models.list account service tiers", () => {
               },
               routeResolverFactory: routeResolverFactory(dualRoutes),
             });
-          const a = await prepare(accountA);
+          const a = await prepare(accountA, false, true);
           const readRuntime = (result: typeof a, runtimeId: string) => {
             const row = result.read().models.find((entry) => entry.id === model.id);
             return row?.agentRuntime?.id === runtimeId
@@ -287,7 +287,7 @@ describe("models.list account service tiers", () => {
           const repeated = await prepare(accountA);
           expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
           expect(discover).toHaveBeenCalledOnce();
-          const b = await prepare(accountB);
+          const b = await prepare(accountB, false, true);
           expect(readRuntime(b, "codex")?.serviceTiers).toEqual([]);
           expect(discover).toHaveBeenCalledTimes(2);
           const preparedOnly = await prepare(accountA, true);
@@ -332,9 +332,23 @@ describe("models.list account service tiers", () => {
   );
 });
 
-it("publishes Daybreak restrictions through the real model catalog projection", async () => {
-  const ids = ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"];
+it("publishes provider tier restrictions through the model catalog projection", async () => {
+  const ids = ["synthetic-priority-model", "synthetic-default-model"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({
+    pluginId: "openai",
+    source: "test",
+    provider: {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      resolveFastModeSupport: ({ modelId }) => modelId === ids[0],
+      resolveServiceTiers: ({ modelId }) =>
+        modelId === ids[0] ? ["default", "priority"] : ["default"],
+    },
+  });
   const context = createModelsListTestContext({
+    pluginRegistry,
     cfg: {
       agents: {
         defaults: {
@@ -349,7 +363,7 @@ it("publishes Daybreak restrictions through the real model catalog projection", 
     preparedAuthStore: {
       version: 1,
       profiles: {
-        "openai:daybreak-fixture": {
+        "openai:policy-fixture": {
           type: "api_key",
           provider: "openai",
           key: "synthetic-api-key",

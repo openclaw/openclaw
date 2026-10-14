@@ -273,19 +273,15 @@ export function emptyChannelConfigSchema(): ChannelConfigSchema {
         if (value === undefined) {
           return { success: true, data: undefined };
         }
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          return {
-            success: false,
-            issues: [{ path: [], message: "expected config object" }],
-          };
-        }
-        if (Object.keys(value as Record<string, unknown>).length > 0) {
-          return {
-            success: false,
-            issues: [{ path: [], message: "config must be empty" }],
-          };
-        }
-        return { success: true, data: value };
+        const message =
+          !value || typeof value !== "object" || Array.isArray(value)
+            ? "expected config object"
+            : Object.keys(value).length > 0
+              ? "config must be empty"
+              : undefined;
+        return message
+          ? { success: false, issues: [{ path: [], message }] }
+          : { success: true, data: value };
       },
     },
   };

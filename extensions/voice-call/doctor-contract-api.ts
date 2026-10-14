@@ -55,7 +55,7 @@ const schemaMigrationDescriptions = {
   "state-table-retirement-v10": "retired shared-state tables -> removed tables and indexes",
   "state-table-retirement-v11": "retired skill curator tables -> removed tables and indexes",
   "singleton-state-foldin-v12": "singleton state tables -> shared configuration state",
-  "state-consolidation-v13": "cron jobs and subagent runs -> canonical JSON storage",
+  "state-consolidation-v13": "cron jobs and subagent runs -> current JSON storage",
   "creator-namespace-v14": "cron creators -> explicit principal namespaces",
   "conversation-binding-targets-v15":
     "conversation bindings -> exact target keys without agent/session projections",
@@ -63,6 +63,9 @@ const schemaMigrationDescriptions = {
     "prepared workers -> one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts -> original requesting authority",
+  "portable-identity-columns-v22": "ACP resume keys and receipt cursors -> portable columns",
+  "predicate-columns-v21":
+    "meeting transcripts and delivery retention -> derived predicate columns",
   "worker-placement-execution-mode-v8": "cloud worker placements -> execution-mode claims",
   "operator-approvals-system-agent": "operator approvals -> OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors -> provenance column",

@@ -5,7 +5,7 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.types
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import * as turnBoundary from "../chat-turn-boundary.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createAttachmentBlock,

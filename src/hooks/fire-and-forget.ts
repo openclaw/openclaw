@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Fire-and-forget hook helpers schedule hook work without blocking hot paths.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,7 +21,6 @@ type FireAndForgetHookState = {
   queue: FireAndForgetHookJob[];
 };
 
-/** Queue limits for bounded fire-and-forget hook execution. */
 type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
@@ -51,7 +49,6 @@ export function formatHookErrorForLog(err: unknown): string {
   return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
-/** Run a hook promise without awaiting it, logging rejection safely. */
 export function fireAndForgetHook(
   task: Promise<unknown>,
   label: string,

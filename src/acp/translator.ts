@@ -112,10 +112,11 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async shutdown(): Promise<void> {
-    this.sessionUpdates.stop();
+    const updatesClosed = this.sessionUpdates.stop();
     try {
       await this.promptStream.shutdown();
     } finally {
+      await updatesClosed;
       this.ownedSessionStore?.dispose();
     }
   }

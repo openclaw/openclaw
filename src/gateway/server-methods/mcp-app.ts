@@ -96,12 +96,15 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
-function resolveRequestedMcpAppView({ params, context, client }: GatewayRequestHandlerOptions) {
+function resolveRequestedMcpAppView(
+  { params, context, client }: GatewayRequestHandlerOptions,
+  prepared?: { cfg: OpenClawConfig; requesterId: string | undefined },
+) {
   return resolveMcpAppActiveView({
     sessionKey: requireString(params, "sessionKey"),
-    agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+    agentId: resolveMcpAppSessionOwner(params, prepared?.cfg ?? context.getRuntimeConfig()),
     viewId: requireString(params, "viewId"),
-    requesterId: resolveMcpAppRequesterId(client),
+    requesterId: prepared ? prepared.requesterId : resolveMcpAppRequesterId(client),
     cfg: context.getRuntimeConfig(),
     restore: false,
   });
@@ -116,15 +119,8 @@ function operationHandler(
     const operation = buildOperation(params);
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
-    const active = await resolveMcpAppActiveView({
-      sessionKey: requireString(params, "sessionKey"),
-      agentId: resolveMcpAppSessionOwner(params, cfg),
-      viewId: requireString(params, "viewId"),
-      requesterId,
-      cfg: context.getRuntimeConfig(),
-      restore: false,
-    });
-    const read = retainSessionScopedRead(
+    const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
+    const read = await retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
@@ -203,7 +199,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId);
     const assertRequestCurrent = () => {
       read?.assertCurrent();
       if (requesterId !== resolveMcpAppRequesterId(client)) {
@@ -280,7 +276,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
-        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+        const ingress = client?.remoteControlUiIngress;
+        const configuredOrigin =
+          ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
         let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
         try {
           standalone = createMcpAppStandaloneTicket({
@@ -298,7 +296,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         }
         assertRequestCurrent();
         return {
-          sandboxUrl: buildMcpAppSandboxPath(view.csp),
+          sandboxUrl: ingress
+            ? new URL(buildMcpAppSandboxPath(view.csp), ingress.sandboxOrigin).href
+            : buildMcpAppSandboxPath(view.csp),
           sandboxPort,
           ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
           html: view.html,

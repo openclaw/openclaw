@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import { safeStatSync } from "@openclaw/fs-safe/path";
+import { escapeRegExp } from "../shared/regexp.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
 
@@ -490,13 +491,14 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
       path.join(refsBase, "packed-refs"),
       Number.MAX_SAFE_INTEGER,
     ).toString("utf8");
-    for (const line of packedRefs.split("\n")) {
-      if (!line || line.startsWith("#") || line.startsWith("^")) {
-        continue;
-      }
-      const [value, packedRef] = line.trim().split(/\s+/, 2);
-      if (packedRef && missing.delete(packedRef)) {
-        values.set(packedRef, value ?? null);
+    // Materialize only requested refs, not every unrelated snapshot or remote ref.
+    const records = new RegExp(
+      `^(?![#^])[^\\S\\r\\n]*(\\S+)[^\\S\\r\\n]+(${[...missing].map(escapeRegExp).join("|")})(?=\\s|$)`,
+      "gm",
+    );
+    for (const [, value, packedRef] of packedRefs.matchAll(records)) {
+      if (missing.delete(packedRef!)) {
+        values.set(packedRef!, value!);
       }
     }
   } catch (error) {
@@ -510,9 +512,6 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
 /** Safely resolve a Git ref path, rejecting traversal from a crafted HEAD file. */
 function resolveRefPath(refsBase: string, ref: string): string | null {
   if (!ref.startsWith("refs/")) {
-    return null;
-  }
-  if (path.isAbsolute(ref)) {
     return null;
   }
   if (ref.split(/[/]/).includes("..")) {

@@ -64,13 +64,11 @@ export function toTelegramRichMessageContextParams(
 ): TelegramRichMessageContextParams {
   const richParams: TelegramRichMessageContextParams = {};
   const directMessagesTopicId = finiteInteger(params?.direct_messages_topic_id);
-  if (directMessagesTopicId !== undefined) {
-    richParams.direct_messages_topic_id = directMessagesTopicId;
-  } else {
-    const messageThreadId = finiteInteger(params?.message_thread_id);
-    if (messageThreadId !== undefined) {
-      richParams.message_thread_id = messageThreadId;
-    }
+  const topicField =
+    directMessagesTopicId === undefined ? "message_thread_id" : "direct_messages_topic_id";
+  const topicId = directMessagesTopicId ?? finiteInteger(params?.message_thread_id);
+  if (topicId !== undefined) {
+    richParams[topicField] = topicId;
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;

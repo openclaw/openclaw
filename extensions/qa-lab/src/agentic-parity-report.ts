@@ -459,69 +459,56 @@ export function buildQaRuntimeParityReport(params: {
     const parity = scenario.runtimeParity;
     if (!parity) {
       failures.push(`Missing runtime parity capture for ${scenario.name}.`);
-      return {
-        name: scenario.name,
-        status: scenario.status === "pass" ? "pass" : "fail",
-        runtimeParityUsage: resolveRuntimeParityUsagePolicy(undefined),
-        drift: "missing",
-        driftDetails: scenario.details,
-        openclawStatus: "missing",
-        codexStatus: "missing",
-        openclawTokens: 0,
-        codexTokens: 0,
-        openclawUsage: null,
-        codexUsage: null,
-        openclawToolCalls: 0,
-        codexToolCalls: 0,
-        openclawWallClockMs: null,
-        codexWallClockMs: null,
-        fasterRuntime: null,
-        speedupPercent: null,
-      } satisfies QaRuntimeParityScenarioReport;
+    } else {
+      driftCounts[parity.drift] += 1;
     }
-    driftCounts[parity.drift] += 1;
-    const openclawCell = parity.cells.openclaw;
-    const codexCell = parity.cells.codex;
-    const openclawStatus = runtimeParityCellStatus(openclawCell);
-    const codexStatus = runtimeParityCellStatus(codexCell);
-    const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
-    const runtimeParityUsage = resolveRuntimeParityUsagePolicy(parity.runtimeParityUsage);
+    const openclawCell = parity?.cells.openclaw;
+    const codexCell = parity?.cells.codex;
+    const parityStatus = (parity ? isRuntimeParityResultPass(parity) : scenario.status === "pass")
+      ? "pass"
+      : "fail";
+    const runtimeParityUsage = resolveRuntimeParityUsagePolicy(parity?.runtimeParityUsage);
+    const openclawWallClockMs = openclawCell ? openclawCell.wallClockMs : null;
+    const codexWallClockMs = codexCell ? codexCell.wallClockMs : null;
     const reportScenario = {
       name: scenario.name,
       status: parityStatus,
       runtimeParityUsage,
-      drift: parity.drift,
-      driftDetails: parity.driftDetails,
-      openclawStatus,
-      codexStatus,
-      openclawTokens: openclawCell.usage.totalTokens,
-      codexTokens: codexCell.usage.totalTokens,
+      drift: parity ? parity.drift : "missing",
+      driftDetails: parity ? parity.driftDetails : scenario.details,
+      openclawStatus: openclawCell ? runtimeParityCellStatus(openclawCell) : "missing",
+      codexStatus: codexCell ? runtimeParityCellStatus(codexCell) : "missing",
+      openclawTokens: openclawCell ? openclawCell.usage.totalTokens : 0,
+      codexTokens: codexCell ? codexCell.usage.totalTokens : 0,
       openclawUsage:
-        runtimeParityUsage.expectation === "not-applicable"
+        !openclawCell || runtimeParityUsage.expectation === "not-applicable"
           ? null
           : summarizeRuntimeParityCacheUsage(openclawCell.usage),
       codexUsage:
-        runtimeParityUsage.expectation === "not-applicable"
+        !codexCell || runtimeParityUsage.expectation === "not-applicable"
           ? null
           : summarizeRuntimeParityCacheUsage(codexCell.usage),
-      ...(openclawCell.cacheDiagnostics === undefined
+      ...(openclawCell?.cacheDiagnostics === undefined
         ? {}
         : { openclawCacheDiagnostics: openclawCell.cacheDiagnostics }),
-      ...(codexCell.cacheDiagnostics === undefined
+      ...(codexCell?.cacheDiagnostics === undefined
         ? {}
         : { codexCacheDiagnostics: codexCell.cacheDiagnostics }),
-      openclawToolCalls: openclawCell.toolCalls.length,
-      codexToolCalls: codexCell.toolCalls.length,
-      openclawWallClockMs: openclawCell.wallClockMs,
-      codexWallClockMs: codexCell.wallClockMs,
-      ...(openclawCell.bootstrapWallClockMs === undefined
+      openclawToolCalls: openclawCell ? openclawCell.toolCalls.length : 0,
+      codexToolCalls: codexCell ? codexCell.toolCalls.length : 0,
+      openclawWallClockMs,
+      codexWallClockMs,
+      ...(openclawCell?.bootstrapWallClockMs === undefined
         ? {}
         : { openclawBootstrapWallClockMs: openclawCell.bootstrapWallClockMs }),
-      ...(codexCell.bootstrapWallClockMs === undefined
+      ...(codexCell?.bootstrapWallClockMs === undefined
         ? {}
         : { codexBootstrapWallClockMs: codexCell.bootstrapWallClockMs }),
-      ...compareRuntimeWallClockMs(openclawCell.wallClockMs, codexCell.wallClockMs),
+      ...compareRuntimeWallClockMs(openclawWallClockMs, codexWallClockMs),
     } satisfies QaRuntimeParityScenarioReport;
+    if (!parity) {
+      return reportScenario;
+    }
     if (parityStatus === "fail") {
       failures.push(
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,

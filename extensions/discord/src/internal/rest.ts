@@ -20,7 +20,12 @@ import { appendQuery, createRouteKey } from "./rest-routes.js";
 import { RestScheduler, type RequestPriority, type RequestQuery } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
+export {
+  DiscordError,
+  isUnknownDiscordMessageError,
+  isUnknownDiscordVoiceStateError,
+  RateLimitError,
+} from "./rest-errors.js";
 
 export type RequestClientOptions = {
   baseUrl?: string;
@@ -216,7 +221,14 @@ export class RequestClient {
       const response = this.guardedEndpoint
         ? await effect.run(request)
         : await effect.initiate(request);
-      const text = await readResponseBodyText(response, this.options.timeout);
+      const text = await readResponseBodyText(response, this.options.timeout).catch(
+        (error: unknown) => {
+          if (response.ok) {
+            throw error;
+          }
+          return "";
+        },
+      );
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {

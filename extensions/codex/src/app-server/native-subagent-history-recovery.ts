@@ -18,7 +18,7 @@ import type {
   RecoveredCompletion,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
-import type { JsonObject } from "./protocol.js";
+import type { CodexTurn, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 const THREAD_READ_TIMEOUT_MS = 30_000;
@@ -113,11 +113,8 @@ export class CodexNativeSubagentHistoryRecovery {
     const threadStatus = isJsonObject(thread.status)
       ? normalizeIdentifier(readString(thread.status, "type"))
       : undefined;
-    let completion: RecoveredCompletion | undefined;
+    let recovery = readTurnRecovery(undefined, childThreadId);
     let fallbackCompletion: RecoveredCompletion | undefined;
-    let nativeTurnId: string | undefined;
-    let nativeTurnState: NativeTurnState | undefined;
-    let resumable = false;
     let threadState: ThreadRecovery["threadState"] =
       threadStatus === "active"
         ? "active"
@@ -143,27 +140,21 @@ export class CodexNativeSubagentHistoryRecovery {
       }
       const turn = turns[index];
       const turnStatus = normalizeIdentifier(readString(turn, "status"));
-      nativeTurnId = readString(turn, "id");
-      nativeTurnState = readNativeTurnState(turn);
-      completion = isJsonObject(turn) ? readTurnCompletion(turn, childThreadId) : undefined;
-      resumable = turnStatus === "interrupted";
+      recovery = readTurnRecovery(turn, childThreadId);
       threadState = turnStatus === "inprogress" ? "active" : turnStatus ? "other" : "unavailable";
     } else if (threadStatus === "active") {
       const turn = rawTurns.at(-1);
       if (normalizeIdentifier(readString(turn, "status")) === "inprogress") {
-        nativeTurnId = readString(turn, "id");
-        nativeTurnState = "active";
+        recovery.nativeTurnId = readString(turn, "id");
+        recovery.nativeTurnState = "active";
       }
     } else if (threadStatus !== "systemerror") {
-      ({ nativeTurnId, nativeTurnState, completion, resumable } = readThreadTurnRecovery(
-        thread,
-        childThreadId,
-      ));
+      recovery = readTurnRecovery(rawTurns.findLast(isJsonObject), childThreadId);
     }
     if (
       !unresolvedAssignment &&
       threadStatus === "systemerror" &&
-      (!turnId || (threadState === "unavailable" && !completion))
+      (!turnId || (threadState === "unavailable" && !recovery.completion))
     ) {
       // The pinned protocol's paged history distinguishes the failed current
       // turn from earlier persisted results.
@@ -185,12 +176,9 @@ export class CodexNativeSubagentHistoryRecovery {
       const matchesAssignment = !turnId || readString(latestTurn, "id") === turnId;
       if (latestTurn && matchesAssignment) {
         if (turnId) {
-          ({ nativeTurnId, nativeTurnState, completion, resumable } = readThreadTurnRecovery(
-            { turns: [latestTurn] },
-            childThreadId,
-          ));
+          recovery = readTurnRecovery(latestTurn, childThreadId);
         } else if (latestTurnStatus === "failed") {
-          completion = readTurnCompletion(latestTurn, childThreadId);
+          recovery.completion = readTurnCompletion(latestTurn, childThreadId);
         }
       }
       const current = !latestTurn ? this.knownChildren.get(childThreadId)?.assignment : undefined;
@@ -198,12 +186,12 @@ export class CodexNativeSubagentHistoryRecovery {
         current?.runId === assignment.runId &&
         this.children.get(current.runId)?.nativeTurnState !== "completed";
       if (latestTurnStatus === "inprogress" && matchesAssignment) {
-        nativeTurnId = readString(latestTurn, "id");
-        nativeTurnState = "active";
+        recovery.nativeTurnId = readString(latestTurn, "id");
+        recovery.nativeTurnState = "active";
         threadState = "active";
       } else if (
-        !completion &&
-        !resumable &&
+        !recovery.completion &&
+        !recovery.resumable &&
         latestTurnStatus !== "inprogress" &&
         (!turnId || (!latestTurn && unresolvedCurrentAssignment))
       ) {
@@ -214,42 +202,40 @@ export class CodexNativeSubagentHistoryRecovery {
     }
     if (
       recordedCompletion &&
-      (!turnId || !completion || completion.status !== recordedCompletion.status)
+      (!turnId || !recovery.completion || recovery.completion.status !== recordedCompletion.status)
     ) {
-      completion = recordedCompletion;
+      recovery.completion = recordedCompletion;
       if (!turnId) {
-        nativeTurnId = undefined;
-        nativeTurnState = undefined;
+        recovery.nativeTurnId = undefined;
+        recovery.nativeTurnState = undefined;
       }
       fallbackCompletion = undefined;
-      resumable = false;
+      recovery.resumable = false;
       threadState = "other";
     }
     return {
       parentThreadId: readThreadParentThreadId(thread),
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
-      nativeTurnId,
-      nativeTurnState,
+      nativeTurnId: recovery.nativeTurnId,
+      nativeTurnState: recovery.nativeTurnState,
       observedPendingTurns,
-      completion,
+      completion: recovery.completion,
       fallbackCompletion,
-      resumable,
+      resumable: recovery.resumable,
       threadState,
     };
   }
 }
 
-function readThreadTurnRecovery(
-  thread: JsonObject,
+function readTurnRecovery(
+  turn: CodexTurn | JsonObject | undefined,
   childThreadId: string,
 ): Pick<ThreadRecovery, "completion" | "resumable" | "nativeTurnId" | "nativeTurnState"> {
-  const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  const turn = turns.findLast(isJsonObject);
   return turn
     ? {
         nativeTurnId: readString(turn, "id"),
         nativeTurnState: readNativeTurnState(turn),
-        completion: readTurnCompletion(turn, childThreadId),
+        completion: isJsonObject(turn) ? readTurnCompletion(turn, childThreadId) : undefined,
         resumable: normalizeIdentifier(readString(turn, "status")) === "interrupted",
       }
     : { resumable: false };
@@ -270,16 +256,6 @@ function readNativeTurnState(
   return normalizeIdentifier(readString(turn, "status")) === "inprogress"
     ? "active"
     : readNativeTurnEnd(turn);
-}
-
-function readTurnErrorMessage(turn: JsonObject): string | undefined {
-  const error = isJsonObject(turn.error) ? turn.error : undefined;
-  return (
-    normalizeOptionalString(readString(error, "message")) ??
-    normalizeOptionalString(
-      isJsonObject(error?.codexErrorInfo) ? readString(error.codexErrorInfo, "message") : undefined,
-    )
-  );
 }
 
 export function systemErrorFallbackCompletion(childThreadId: string): RecoveredCompletion {
@@ -322,23 +298,25 @@ export function readTurnCompletion(
       ...timestamp,
     };
   }
-  // Codex keeps interrupted subagents resumable. They remain a running task
-  // until a later turn reaches an authoritative terminal state.
-  if (status === "interrupted") {
-    return undefined;
-  }
   if (status === "failed") {
+    const error = isJsonObject(turn.error) ? turn.error : undefined;
     return {
       childThreadId,
       status: "failed",
       statusLabel: source === "history" ? "task_failed" : "turn_failed",
       result:
-        readTurnErrorMessage(turn) ??
+        normalizeOptionalString(readString(error, "message")) ??
+        normalizeOptionalString(
+          isJsonObject(error?.codexErrorInfo)
+            ? readString(error.codexErrorInfo, "message")
+            : undefined,
+        ) ??
         (source === "history" ? result : undefined) ??
         "Subagent failed.",
       ...timestamp,
     };
   }
+  // Interrupted subagents remain resumable until a later authoritative terminal turn.
   return undefined;
 }
 

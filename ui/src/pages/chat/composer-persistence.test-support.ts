@@ -15,7 +15,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
   admitStoredChatComposerQueueItem,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   listStoredChatOutboxes,
   persistChatComposerState,
   removeStoredChatComposerQueueItem,
@@ -77,7 +77,7 @@ export function admitItem(
 }
 
 export function reviewLegacyItem(state: ComposerState, id: string) {
-  expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  expect(loadChatComposerState(state, state.sessionKey).snapshot).toBeNull();
   expect(listStoredChatOutboxes(state)).toEqual([]);
   const entry = readChatOutboxRecovery(state).entries.find((candidate) =>
     candidate.session.queue?.some((item) => item.id === id),
@@ -89,7 +89,7 @@ export function reviewLegacyItem(state: ComposerState, id: string) {
   );
   expect(destination).not.toBeNull();
   expect(restoreChatOutboxRecovery(state, entry!, destination!)).toBe("restored");
-  return loadChatComposerSnapshot(state, state.sessionKey)!.queue[0]!;
+  return loadChatComposerState(state, state.sessionKey).snapshot!.queue[0]!;
 }
 
 export function fillOutboxes(prefix: string, count = 20) {

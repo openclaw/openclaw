@@ -1,7 +1,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { classifyFailoverReason } from "../failover/classify.js";
+import { classifyFailoverReason, isProviderRequestSizeCeilingError } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
@@ -86,47 +86,17 @@ function hasNonTextVisiblePayloadContent(
   return hasDeliverableAssistantPayload({ payloads: [payloadWithoutText] });
 }
 
-function classifyGenericExternalRunFailurePayload(params: {
-  provider: string;
-  model: string;
-  result: EmbeddedAgentRunResult;
-}): ModelFallbackResultClassification {
-  const payloads = params.result.payloads;
-  if (!Array.isArray(payloads) || payloads.length !== 1) {
-    return null;
-  }
-  const [payload] = payloads;
-  const text = payload?.text;
-  if (
-    !payload ||
-    payload.isError === true ||
-    payload.isReasoning === true ||
-    typeof text !== "string" ||
-    text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
-    hasNonTextVisiblePayloadContent(payload)
-  ) {
-    return null;
-  }
-  return {
-    message: `${params.provider}/${params.model} ended with a generic external runner failure: ${text}`,
-    reason: "format",
-    code: "generic_external_run_failure",
-    rawError: text,
-  };
-}
-
 const HARNESS_RESULT_FAILURES = new Map<string, readonly [description: string, code: string]>([
   ["empty", ["without a visible assistant reply", "empty_result"]],
   ["reasoning-only", ["with reasoning only", "reasoning_only_result"]],
   ["planning-only", ["with a structured plan but no final answer", "planning_only_result"]],
 ]);
 
-function classifyHarnessResult(params: {
-  provider: string;
-  model: string;
-  classification: EmbeddedAgentRunResult["meta"]["agentHarnessResultClassification"];
-}): ModelFallbackResultClassification {
-  const failure = params.classification && HARNESS_RESULT_FAILURES.get(params.classification);
+function classifyHarnessResult(
+  params: { provider: string; model: string },
+  classification: EmbeddedAgentRunResult["meta"]["agentHarnessResultClassification"],
+): ModelFallbackResultClassification {
+  const failure = classification && HARNESS_RESULT_FAILURES.get(classification);
   return failure
     ? {
         message: `${params.provider}/${params.model} ended ${failure[0]}`,
@@ -187,6 +157,19 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
+  const terminalError = params.result.meta.error;
+  if (
+    (terminalError?.kind === "context_overflow" || terminalError?.kind === "compaction_failure") &&
+    !isProviderRequestSizeCeilingError(terminalError.message)
+  ) {
+    // The embedded recovery owner has already compacted/truncated, or found input it cannot shrink.
+    return {
+      message: terminalError.message,
+      reason: "context_overflow",
+      rawError: terminalError.message,
+      preserveResultOnExhaustion: true,
+    };
+  }
   if (
     isReplaySafeEmbeddedOpenAiCyberRefusal({
       provider: params.provider,
@@ -205,13 +188,22 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const payloads = params.result.payloads ?? [];
-  const genericExternalFailureClassification = classifyGenericExternalRunFailurePayload({
-    provider: params.provider,
-    model: params.model,
-    result: params.result,
-  });
-  if (genericExternalFailureClassification) {
-    return genericExternalFailureClassification;
+  const singlePayload = Array.isArray(payloads) && payloads.length === 1 ? payloads[0] : undefined;
+  const singlePayloadText = singlePayload?.text;
+  if (
+    singlePayload &&
+    singlePayload.isError !== true &&
+    singlePayload.isReasoning !== true &&
+    typeof singlePayloadText === "string" &&
+    singlePayloadText.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT &&
+    !hasNonTextVisiblePayloadContent(singlePayload)
+  ) {
+    return {
+      message: `${params.provider}/${params.model} ended with a generic external runner failure: ${singlePayloadText}`,
+      reason: "format",
+      code: "generic_external_run_failure",
+      rawError: singlePayloadText,
+    };
   }
   if (hasDeliverableAssistantPayload(params.result)) {
     return null;
@@ -230,11 +222,10 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       preserveResultPriority: params.result.meta.error?.terminalPresentation === true ? 1 : 0,
     };
   }
-  const harnessClassification = classifyHarnessResult({
-    provider: params.provider,
-    model: params.model,
-    classification: params.result.meta.agentHarnessResultClassification,
-  });
+  const harnessClassification = classifyHarnessResult(
+    params,
+    params.result.meta.agentHarnessResultClassification,
+  );
   if (harnessClassification) {
     return harnessClassification;
   }
@@ -267,6 +258,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       reason: failoverReason,
       code: "embedded_error_payload",
       rawError,
+      rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,
     };
   }
 
@@ -284,13 +276,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const assistantPayloads = payloads.filter((payload) => payload.isError !== true);
-  return classifyHarnessResult({
-    provider: params.provider,
-    model: params.model,
-    classification:
-      assistantPayloads.length > 0 &&
+  return classifyHarnessResult(
+    params,
+    assistantPayloads.length > 0 &&
       assistantPayloads.every((payload) => payload.isReasoning === true)
-        ? "reasoning-only"
-        : "empty",
-  });
+      ? "reasoning-only"
+      : "empty",
+  );
 }

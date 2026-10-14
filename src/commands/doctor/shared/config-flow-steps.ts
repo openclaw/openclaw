@@ -1,6 +1,6 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
@@ -12,6 +12,7 @@ import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { createMergePatch } from "../../../config/merge-patch.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-contract-registry.js";
 import { migratePluginConfigId } from "../../../plugins/update-config.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
@@ -23,6 +24,7 @@ import {
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
@@ -178,9 +180,7 @@ function retainValuePreservingMigrationRefs(
   const values = new Map<string, unknown>();
   const ambiguous = new Set<string>();
   const resolvedEntry = (resolved: unknown, key: string): unknown =>
-    resolved && typeof resolved === "object"
-      ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-      : undefined;
+    asOptionalObjectRecord(resolved)?.[key];
   const collect = (authored: unknown, resolved: unknown): void => {
     if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
       if (values.has(authored) && !isDeepStrictEqual(values.get(authored), resolved)) {
@@ -235,14 +235,13 @@ export function restoreDoctorConfigEnvRefs(
     return candidate;
   }
   // Both views use the original resolved roster identity, including escaped-id facts.
-  const canonicalAuthored = projectAuthoredAgentRosterForWrite({
-    rootAuthoredConfig: source.authored,
-    sourceConfigBeforeMigrations: source.resolved,
-  });
-  const canonicalResolved = projectAuthoredAgentRosterForWrite({
-    rootAuthoredConfig: source.resolved,
-    sourceConfigBeforeMigrations: source.resolved,
-  });
+  const projectRoster = (rootAuthoredConfig: OpenClawConfig) =>
+    projectAuthoredAgentRosterForWrite({
+      rootAuthoredConfig,
+      sourceConfigBeforeMigrations: source.resolved,
+    });
+  const canonicalAuthored = coerceConfig(projectRoster(source.authored));
+  const canonicalResolved = coerceConfig(projectRoster(source.resolved));
   const unchanged = restoreEnvVarRefsFromResolved(
     candidate,
     canonicalAuthored,
@@ -253,10 +252,17 @@ export function restoreDoctorConfigEnvRefs(
     sourceConfigBeforeMigrations: source.resolved,
     context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
   };
-  const migratedAuthored = applyLegacyDoctorMigrations(canonicalAuthored, options);
-  const migratedResolved = applyLegacyDoctorMigrations(canonicalResolved, options);
-  const authoredView = migratedAuthored.next ?? canonicalAuthored;
-  const resolvedView = migratedResolved.next ?? canonicalResolved;
+  // Replay the resolved routing decision on authored templates before plugin cleanup.
+  const providerRenames = planProviderRenames(
+    canonicalResolved,
+    resolvePluginDoctorProviderRenames({ config: canonicalResolved }),
+  );
+  const authoredProviderConfig = applyProviderRenames(canonicalAuthored, providerRenames).config;
+  const migratedAuthored = applyLegacyDoctorMigrations(authoredProviderConfig, options);
+  const resolvedProviderConfig = applyProviderRenames(canonicalResolved, providerRenames).config;
+  const migratedResolved = applyLegacyDoctorMigrations(resolvedProviderConfig, options);
+  const authoredView = migratedAuthored.next ?? authoredProviderConfig;
+  const resolvedView = migratedResolved.next ?? resolvedProviderConfig;
   if (!isRecord(authoredView) || !isRecord(resolvedView)) {
     throw new Error("Doctor reference migrations must preserve config object roots.");
   }

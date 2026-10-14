@@ -8,10 +8,15 @@ import {
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   loadTranscriptEventsSync,
   persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
@@ -22,14 +27,72 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "./transcript-write-context.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-boundary-");
 
 describe("awaited compaction persistence", () => {
+  it("retains intervening accounting writes and publishes a usable transcript version", async () => {
+    const dir = sessionDirs.make();
+    const scope = {
+      agentId: "main",
+      sessionId: "successive-compactions",
+      sessionKey: "agent:main:successive-compactions",
+      env: { OPENCLAW_STATE_DIR: dir },
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      compactionCount: 0,
+    });
+    const manager = await SessionManager.openAsync(scope, dir);
+    const keptId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "keep",
+        timestamp: 1,
+      }),
+      "Compaction fixture must append its retained user entry",
+    );
+    const compact = () =>
+      withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(scope, {
+            prepared,
+            transcriptByteCompactionLatch: {
+              activeBytes: 2048,
+              sessionId: scope.sessionId,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("summary", keptId, 100),
+      );
+    await compact();
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope)!,
+      compactionCount: 7,
+      label: "preserve this metadata",
+    });
+    const boundaryId = await compact();
+    const nextId = await manager.appendMessageAsync({
+      role: "user",
+      content: "next",
+      timestamp: 2,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      compactionCount: 8,
+      label: "preserve this metadata",
+    });
+    expect(loadTranscriptEventsSync(scope).slice(-2)).toMatchObject([
+      { id: boundaryId, type: "compaction" },
+      { id: nextId, type: "message", parentId: boundaryId },
+    ]);
+    expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+  });
+
   it("retains a committed receipt when accounting retargets the manager before publication", async () => {
     const dir = sessionDirs.make();
     const scope = {
@@ -67,10 +130,8 @@ describe("awaited compaction persistence", () => {
             maxBytes: 1024,
           },
         });
-        // A separate retarget operation does not inherit the compaction writer's authority.
-        await runWithoutOwnedSessionTranscriptWrites(() =>
-          manager.setSessionTargetAsync(replacement),
-        );
+        // The independent retarget must not inherit the compaction's physical writer admission.
+        await runInDetachedAsyncContext(() => manager.setSessionTargetAsync(replacement));
         return committed;
       },
       () => manager.appendCompactionAsync("summary", keptId, 100),
@@ -84,6 +145,7 @@ describe("awaited compaction persistence", () => {
       committedVersion: receipt.after,
     });
     expect(isRecordedModelFallbackStop(failure)).toBe(true);
+    expect(manager.getSessionTarget()).toMatchObject(replacement);
     expect(() => manager.getEntries()).toThrow("Session entry committed");
     expect(loadTranscriptEventsSync(scope).at(-1)).toMatchObject({
       id: receipt.result.id,
@@ -250,7 +312,7 @@ describe("awaited compaction persistence", () => {
       type: "compaction",
       parentId: keptId,
     });
-    expect(loadTranscriptEventsSync(scope).at(-1)).toMatchObject({
+    expect((await loadTranscriptEvents(scope)).at(-1)).toMatchObject({
       id: entryId,
       type: "compaction",
     });
@@ -280,6 +342,32 @@ describe("awaited compaction persistence", () => {
       compactionCount: 1,
       transcriptByteCompactionLatch: latch,
     });
+    const owner = { agentId: scope.agentId, path: resolveIncognitoOpenClawAgentSqlitePath(scope) };
+    memorySessionActorOwners.closeDatabase(owner);
+    const sql = observeMainThreadSql();
+    try {
+      await expect(
+        persistCompactionBoundaryWithSessionEntryAsync(scope, {
+          prepared: {
+            scope,
+            event: {
+              type: "compaction",
+              id: "closed-owner-compaction",
+              parentId: entryId,
+              timestamp: new Date(2).toISOString(),
+              summary: "Closed owner",
+              firstKeptEntryId: keptId,
+              tokensBefore: 100,
+            },
+          },
+          transcriptByteCompactionLatch: latch,
+        }),
+      ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
+      expect(memorySessionActorOwners.read(owner)).toBeUndefined();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 });
 

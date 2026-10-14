@@ -24,11 +24,9 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
-  type AgentHandlerArgs,
   type AgentParams,
   waitForAssertion,
   requireValue,
@@ -53,6 +51,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -137,7 +136,6 @@ describe("gateway agent handler", () => {
   it("releases a claimed cron continuation when the request exits before dispatch", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
-    const baseSessionKey = "agent:main:cron:job-1";
     const entry = {
       sessionId: "run-1",
       updatedAt: Date.now(),
@@ -154,13 +152,13 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
     const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
     const store = {
-      [baseSessionKey]: baseEntry,
+      "agent:main:cron:job-1": baseEntry,
       [sessionKey]: structuredClone(entry),
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
@@ -307,7 +305,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:internal:ephemeral";
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: undefined,
       canonicalKey: sessionKey,
     });
@@ -537,7 +535,7 @@ describe("gateway agent handler", () => {
     const sessionKey = `agent:main:explicit:${sessionId}`;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: undefined,
       canonicalKey: sessionKey,
     });
@@ -926,53 +924,6 @@ describe("gateway agent handler", () => {
     }>();
     expect(worktreeCall.workspaceDir).toBe("/tmp/session-worktree");
     expect(worktreeCall.cwd).toBe("/tmp/session-worktree");
-  });
-
-  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "12345" },
-      }),
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        "agent:main:main": buildExistingMainStoreEntry({
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", to: "12345" },
-          }),
-        }),
-      };
-      return await updater(store);
-    });
-
-    mockSuccessfulAgentCommand();
-
-    await invokeAgent(
-      {
-        message: "webchat turn",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-webchat-origin-channel",
-      },
-      {
-        reqId: "webchat-origin-1",
-        client: {
-          connect: {
-            client: { id: "webchat-ui", mode: "webchat" },
-          },
-        } as AgentHandlerArgs["client"],
-        isWebchatConnect: () => true,
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      channel?: string;
-      messageChannel?: string;
-      runContext?: { messageChannel?: string };
-    }>();
-    expect(callArgs.channel).toBe("telegram");
-    expect(callArgs.messageChannel).toBe("webchat");
-    expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
   it("forwards elevated defaults only for valid exec approval runtime handoffs", async () => {

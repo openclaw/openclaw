@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import { abortAndDrainEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -19,6 +19,9 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
@@ -26,7 +29,6 @@ import {
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
-import * as workerGitHubBinding from "./worker-github-binding.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
   ENVIRONMENT_ID,
@@ -43,6 +45,10 @@ import {
   SESSION_KEY,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  type WorkerTurnEnvironmentService,
+  type WorkerTurnLauncherOptions,
   database,
   placements,
   setupWorkerTurnLauncherTest,
@@ -50,6 +56,8 @@ import {
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+
+afterAll(closeStateDatabaseForTest);
 
 function createLane(initialParams: SessionPlacementTurnParams) {
   let params = initialParams;
@@ -71,7 +79,7 @@ function createLane(initialParams: SessionPlacementTurnParams) {
 
 describe("local claim recovery before backend registration", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["local", "standalone", "remote"] as const)(
     "admits a queued %s child after its inherited parent claim closes",
@@ -133,7 +141,7 @@ describe("local claim recovery before backend registration", () => {
         });
         expect(localTask).toHaveBeenCalledTimes(execution === "remote" ? 0 : 1);
         expect(remoteTask).toHaveBeenCalledTimes(execution === "remote" ? 1 : 0);
-        expect(placements.get(SESSION_ID)?.turnClaim ?? null).toBeNull();
+        expect((await placements.getAsync(SESSION_ID))?.turnClaim ?? null).toBeNull();
       } finally {
         gate.resolve();
         await Promise.allSettled([child]);
@@ -299,12 +307,11 @@ describe("local claim recovery before backend registration", () => {
 
 describe("worker pre-launch claim recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     "workspace resolution",
     "workspace queue",
-    "GitHub binding",
     "execution-start publication",
     "workspace mutation",
     "dispatch",
@@ -528,7 +535,6 @@ describe("worker pre-launch claim recovery", () => {
         }
       },
     };
-    let github: MockInstance<typeof workerGitHubBinding.prepareWorkerGitHubBinding> | undefined;
     let blocked: Promise<unknown> | undefined;
     let successor: Promise<unknown> | undefined;
     let recovery: Promise<unknown> | undefined;
@@ -538,18 +544,10 @@ describe("worker pre-launch claim recovery", () => {
           throw new Error("unexpected local execution");
         }),
       ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+      await placements.waitForTurnClaimRelease(SESSION_ID, {});
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       blockSecond = true;
-      if (stage === "GitHub binding") {
-        github = vi
-          .spyOn(workerGitHubBinding, "prepareWorkerGitHubBinding")
-          .mockImplementationOnce(async () => {
-            entered.resolve();
-            await resume.promise;
-            return undefined;
-          });
-      }
       if (stage === "workspace queue") {
         queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
       }
@@ -623,6 +621,7 @@ describe("worker pre-launch claim recovery", () => {
             }),
           ),
         ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+        await placements.waitForTurnClaimRelease(SESSION_ID, {});
         expect(placements.get(SESSION_ID)).toMatchObject({
           state: "active",
           environmentId: `${ENVIRONMENT_ID}-recovered`,
@@ -672,11 +671,187 @@ describe("worker pre-launch claim recovery", () => {
       resume.resolve();
       finishSuccessor.resolve();
       await Promise.allSettled([blocked, successor, queuedBlocker, recovery]);
-      github?.mockRestore();
       operation.complete();
       first.preparedRunAdmission.close();
       second.preparedRunAdmission.close();
       uninstall();
+    }
+  });
+});
+
+describe("worker turn launcher node-loss continuation", () => {
+  beforeEach(setupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+
+  it("retains an interrupted workspace and waits for reconnect before allowing continuation", async () => {
+    await seedActivePlacement();
+    const loss = new WorkerNodeLostError();
+    const reconnect = createDeferred();
+    const waiting = createDeferred();
+    const order: string[] = [];
+    let interruptedClaim: WorkerSessionTurnClaim | undefined;
+    const launchTurn = vi.fn(
+      async (request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) => {
+        interruptedClaim = request.turnClaim;
+        request.onDispatchReady?.();
+        throw loss;
+      },
+    );
+    const persistAbandonedPartial = vi.fn<
+      NonNullable<WorkerTurnLauncherOptions["persistAbandonedPartial"]>
+    >(async (claim) => {
+      expect(claim.missingToolResultText).toBe(loss.message);
+      order.push("transcript saved");
+    });
+    const environment = {
+      ...attachedEnvironment(),
+      nodeDeviceId: "paired-node",
+      sshEndpoint: null,
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: () => environment,
+      acquireTurnCredential: async () => credential(),
+      acknowledgeCredentialDelivery: async () => true,
+      startTunnel: async () =>
+        createWorkerTurnTunnel({
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+          launchTurn,
+        }),
+      stopTunnel: async () => {
+        order.push("tunnel stopped");
+      },
+    };
+    const reconcileActivePlacement = vi.fn(async () => {
+      expect(interruptedClaim).toBeDefined();
+      await placements.acceptWorkspaceResult(interruptedClaim!);
+      await placements.completeWorkspaceResultAndReleaseTurn(interruptedClaim!);
+      order.push("workspace settled");
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      environments,
+      persistAbandonedPartial,
+      reconcileActivePlacement,
+      waitForAdmissionNode: async ({ signal, assertCurrent }) => {
+        expect(signal.aborted).toBe(false);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+          { runId: "node-loss-reconnect", recoveryRequestedAtMs: expect.any(Number) },
+        ]);
+        waiting.resolve();
+        await reconnect.promise;
+        assertCurrent();
+        order.push("node reconnected");
+      },
+    });
+    const runLocal = vi.fn();
+    const attempt = provider
+      .executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "node-loss-reconnect",
+        },
+        turn("node-loss-reconnect"),
+        runLocal,
+      )
+      .catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(
+        waiting.promise,
+        attempt,
+        "node loss settled before reconnect admission",
+      );
+      expect(loss.canContinue).toBe(false);
+      expect(reconcileActivePlacement).not.toHaveBeenCalled();
+      reconnect.resolve();
+      expect(await attempt).toBe(loss);
+      expect(loss.canContinue).toBe(true);
+      expect(order).toEqual([
+        "transcript saved",
+        "tunnel stopped",
+        "node reconnected",
+        "workspace settled",
+      ]);
+      expect(launchTurn).toHaveBeenCalledOnce();
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    } finally {
+      reconnect.resolve();
+      await attempt;
+    }
+  });
+
+  it.each([
+    "partial persistence failed",
+    "node never reconnects",
+    "retained workspace and no reconnect",
+  ] as const)("does not allow continuation when %s", async (failure) => {
+    await seedActivePlacement();
+    const loss = new WorkerNodeLostError();
+    const waitForAdmissionNode = vi.fn(async () => {
+      throw new Error("node admission expired");
+    });
+    const reconcileActivePlacement = vi.fn();
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const launchTurn = vi.fn(
+      async (request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) => {
+        request.onDispatchReady?.();
+        if (failure !== "retained workspace and no reconnect") {
+          await placements.markWorkspaceResultPending(request.turnClaim);
+        }
+        throw loss;
+      },
+    );
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      waitForAdmissionNode,
+      reconcileActivePlacement,
+      persistAbandonedPartial: async () => {
+        if (failure === "partial persistence failed") {
+          throw new Error("transcript unavailable");
+        }
+      },
+      environments: {
+        ...unusedEnvironments(),
+        get: () => attachedEnvironment(),
+        stopTunnel: async () => {},
+        destroy,
+        acquireTurnCredential: async () => credential(),
+        acknowledgeCredentialDelivery: async () => true,
+        startTunnel: async () =>
+          createWorkerTurnTunnel({
+            reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+            launchTurn,
+          }),
+      },
+    });
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "node-loss-unavailable",
+        },
+        turn("node-loss-unavailable"),
+        vi.fn(),
+      ),
+    ).rejects.toBe(loss);
+    expect(loss.canContinue).toBe(false);
+    expect(waitForAdmissionNode).toHaveBeenCalledTimes(
+      failure === "partial persistence failed" ? 0 : 1,
+    );
+    expect(launchTurn).toHaveBeenCalledOnce();
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+    expect(destroy).not.toHaveBeenCalled();
+    if (failure === "retained workspace and no reconnect") {
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active" });
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+        { recoveryRequestedAtMs: expect.any(Number) },
+      ]);
     }
   });
 });

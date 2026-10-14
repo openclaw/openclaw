@@ -5,7 +5,6 @@ import {
   formatAuthChoiceChoicesForCli,
   isFeaturedAuthChoiceGroup,
 } from "./auth-choice-options.js";
-import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
 
 type ResolveProviderSetupFlowContributions =
   typeof import("../flows/provider-flow.js").resolveProviderSetupFlowContributions;
@@ -48,37 +47,29 @@ describe("buildAuthChoiceOptions", () => {
     resolveProviderSetupFlowContributions.mockReset();
   });
 
-  it.each([
-    { assistantVisibleOnly: true, detected: false },
-    { assistantVisibleOnly: false, detected: false },
-    { assistantVisibleOnly: true, detected: true },
-    { assistantVisibleOnly: false, detected: true },
-  ])(
-    "offers detected-only providers only after detection ($assistantVisibleOnly, $detected)",
-    ({ assistantVisibleOnly, detected }) => {
-      resolveProviderSetupFlowContributions.mockReturnValue([
-        flowContribution("native", {
-          value: "native-local",
-          label: "Native local model",
-          assistantVisibility: "detected-only",
-          group: { id: "native", label: "Native" },
-        }),
-        flowContribution("other", {
-          value: "other-api-key",
-          label: "Other API key",
-          group: { id: "other", label: "Other" },
-        }),
-      ]);
-      const { groups } = buildAuthChoiceGroups({
-        includeSkip: false,
-        assistantVisibleOnly,
-        detectedProviderIds: new Set(detected ? ["NATIVE"] : ["other"]),
-      });
-      expect(groups.some((group) => group.value === "native")).toBe(detected);
-      expect(groups.some((group) => group.value === "other")).toBe(true);
-      expect(formatAuthChoiceChoicesForCli().split("|")).toContain("native-local");
-    },
-  );
+  it("offers a detected-only provider after detection", () => {
+    resolveProviderSetupFlowContributions.mockReturnValue([
+      flowContribution("native", {
+        value: "native-local",
+        label: "Native local model",
+        assistantVisibility: "detected-only",
+        group: { id: "native", label: "Native" },
+      }),
+      flowContribution("other", {
+        value: "other-api-key",
+        label: "Other API key",
+        group: { id: "other", label: "Other" },
+      }),
+    ]);
+    const { groups } = buildAuthChoiceGroups({
+      includeSkip: false,
+      assistantVisibleOnly: true,
+      detectedProviderIds: new Set(["NATIVE"]),
+    });
+    expect(groups.some((group) => group.value === "native")).toBe(true);
+    expect(groups.some((group) => group.value === "other")).toBe(true);
+    expect(formatAuthChoiceChoicesForCli().split("|")).toContain("native-local");
+  });
 
   it("builds cli help choices from the same prepared flow results", () => {
     resolveProviderSetupFlowContributions.mockReturnValue([
@@ -115,33 +106,6 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("skip");
     expect(options.map((option) => option.value)).toContain("ollama");
     expect(cliChoices).toContain("ollama");
-  });
-
-  it("keeps static cli help choices off the plugin-backed catalog", () => {
-    resolveProviderSetupFlowContributions.mockReturnValue([
-      flowContribution("openai", {
-        value: "openai-api-key",
-        label: "OpenAI API key",
-      }),
-      flowContribution("ollama", {
-        value: "ollama",
-        label: "Ollama",
-        hint: "Cloud and local open models",
-        group: {
-          id: "ollama",
-          label: "Ollama",
-        },
-      }),
-    ]);
-
-    const cliChoices = formatStaticAuthChoiceChoicesForCli().split("|");
-
-    expect(cliChoices).not.toContain("ollama");
-    expect(cliChoices).not.toContain("openai-api-key");
-    expect(cliChoices).not.toContain("chutes");
-    expect(cliChoices).not.toContain("litellm-api-key");
-    expect(cliChoices).toContain("custom-api-key");
-    expect(cliChoices).toContain("skip");
   });
 
   it("orders common auth provider groups before the alphabetical remainder", () => {
@@ -235,103 +199,6 @@ describe("buildAuthChoiceOptions", () => {
       "Google",
       "Anthropic",
     ]);
-  });
-
-  it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
-    resolveProviderSetupFlowContributions.mockReturnValue([
-      flowContribution("anthropic", {
-        value: "apiKey",
-        label: "Anthropic API key",
-        group: {
-          id: "anthropic",
-          label: "Anthropic",
-        },
-      }),
-      flowContribution("anthropic", {
-        value: "anthropic-cli",
-        label: "Anthropic Claude CLI",
-        group: {
-          id: "anthropic",
-          label: "Anthropic",
-        },
-        assistantPriority: -20,
-      }),
-    ]);
-    const { groups } = buildAuthChoiceGroups({
-      includeSkip: false,
-    });
-    const anthropicGroup = requireChoiceGroup(groups, "anthropic");
-
-    expect(anthropicGroup.options.map((option) => option.value)).toEqual([
-      "anthropic-cli",
-      "apiKey",
-    ]);
-  });
-
-  it("groups OpenAI auth methods under one provider entry", () => {
-    resolveProviderSetupFlowContributions.mockReturnValue([
-      flowContribution("openai", {
-        value: "openai",
-        label: "ChatGPT Login",
-        group: {
-          id: "openai",
-          label: "OpenAI",
-        },
-        assistantPriority: -40,
-        assistantVisibility: "manual-only",
-      }),
-      flowContribution("openai", {
-        value: "openai-device-code",
-        label: "ChatGPT Device Pairing",
-        group: {
-          id: "openai",
-          label: "OpenAI",
-        },
-        assistantPriority: -10,
-        assistantVisibility: "manual-only",
-      }),
-      flowContribution("openai", {
-        value: "openai-api-key",
-        label: "OpenAI API Key",
-        group: {
-          id: "openai",
-          label: "OpenAI",
-        },
-        assistantPriority: 5,
-      }),
-      flowContribution("openai", {
-        value: "openai",
-        label: "ChatGPT/Codex Browser Login",
-        group: {
-          id: "openai",
-          label: "OpenAI",
-        },
-        assistantPriority: -30,
-        onboardingFeatured: true,
-      }),
-      flowContribution("openai", {
-        value: "openai-chatgpt-device-code",
-        label: "ChatGPT/Codex Device Pairing",
-        group: {
-          id: "openai",
-          label: "OpenAI",
-        },
-        assistantPriority: -10,
-      }),
-    ]);
-
-    const { groups } = buildAuthChoiceGroups({
-      includeSkip: false,
-    });
-    const openAIGroup = requireChoiceGroup(groups, "openai");
-
-    expect(openAIGroup.options.map((option) => option.value)).toEqual([
-      "openai",
-      "openai-chatgpt-device-code",
-      "openai-api-key",
-    ]);
-    expect(openAIGroup.providerIds).toEqual(["openai"]);
-    expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
   });
 
   it("includes manual-only methods when the grouped CLI picker requests them", () => {

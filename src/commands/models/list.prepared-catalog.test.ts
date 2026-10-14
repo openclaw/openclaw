@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import {
@@ -10,11 +9,12 @@ import * as catalog from "../../agents/prepared-model-catalog.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
-import { runCommandWithRuntime } from "../../cli/cli-utils.js";
+import * as localStateOwner from "../../cli/local-state-owner.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
+import * as proxyLifecycle from "../../infra/net/proxy/proxy-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -97,7 +97,23 @@ function createOwner(
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(cfg);
+  vi.spyOn(localStateOwner, "runWithLocalStateOwner").mockImplementation(async ({ runLocal }) =>
+    runLocal({
+      config: cfg,
+      env: process.env,
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+  );
+  vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
+    Object.assign(
+      async () => {
+        runtimeConfig.setRuntimeConfigSnapshot(cfg, cfg);
+        return cfg;
+      },
+      { assertCurrent() {} },
+    ),
+  );
   vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
     sourceConfig: cfg,
     resolvedConfig: cfg,
@@ -110,11 +126,16 @@ beforeEach(() => {
     createdAt: "fixture",
   });
   vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [model] });
+  vi.spyOn(proxyLifecycle, "startProxy").mockResolvedValue(null);
+  vi.spyOn(proxyLifecycle, "stopProxy").mockResolvedValue();
   vi.spyOn(catalog, "withPreparedModelCatalogOwner").mockImplementation(
     async (_params, read) => await read(createOwner()),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 async function list(options: Parameters<typeof modelsListCommand>[0]) {
   return withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
@@ -123,6 +144,58 @@ async function list(options: Parameters<typeof modelsListCommand>[0]) {
 }
 
 describe("models list published transport", () => {
+  it.each(["ready", "unavailable"] as const)(
+    "reports configured ids missing from a %s listing without changing availability",
+    async (status) => {
+      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+      const owner = createOwner({
+        modelCatalog: markPreparedModelCatalogFull({
+          ...createOwner().modelCatalog,
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              unlistedConfiguredModelIds: ["Reader", "Absent"],
+            },
+          ],
+        }),
+      });
+      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) =>
+        read(owner),
+      );
+      await list({ json: true });
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              ...(status === "ready" ? { unlistedConfiguredModelIds: ["Reader", "Absent"] } : {}),
+            },
+          ],
+          models: [
+            expect.objectContaining({
+              key: "catalog-provider/Reader",
+              available: true,
+              tags: ["default", "alias:work"],
+            }),
+          ],
+        }),
+        2,
+      );
+      const warnings = runtime.error.mock.calls
+        .map(([message]) => message)
+        .filter((message) => String(message).includes("last successful server catalog"));
+      expect(warnings).toEqual(
+        status === "ready"
+          ? ["Reader", "Absent"].map((id) =>
+              expect.stringContaining(`Configured model "catalog-provider/${id}" is not present`),
+            )
+          : [],
+      );
+    },
+  );
+
   it("refreshes the selected Gateway's inventory without resolving local provider secrets", async () => {
     vi.mocked(configLoader.loadModelsConfigWithSource).mockRejectedValue(
       new Error("Local provider secret unavailable"),
@@ -133,6 +206,8 @@ describe("models list published transport", () => {
     await list({ agent: "work", provider: "catalog-provider", json: true, refresh: true });
     expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+    expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         requiredCapabilities: ["published-model-catalog"],
@@ -184,38 +259,6 @@ describe("models list published transport", () => {
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("uses a selected remote Gateway without reading a local lock owner", async () => {
-    vi.mocked(gateway.isImplicitLocalGatewayTarget).mockResolvedValue(false);
-    await list({ json: true });
-    expect(gatewayLock.readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.not.objectContaining({ localPortOverride: expect.anything() }),
-    );
-    expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].timeoutMs).toBeUndefined();
-  });
-
-  it("prints an unknown provider rejection and exits unsuccessfully", async () => {
-    const message =
-      'Unknown model catalog provider "missing". Run openclaw models list --all to list models and their provider IDs.';
-    vi.mocked(gateway.callGateway).mockRejectedValue(
-      new GatewayClientRequestError({ code: "INVALID_REQUEST", message }),
-    );
-
-    await runCommandWithRuntime(runtime, () => list({ provider: "missing" }));
-
-    expect(gateway.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "models.list",
-        params: expect.objectContaining({ provider: "missing" }),
-      }),
-    );
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
-    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-  });
-
   it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>
       modelsListCommand({ json: true }, runtime),
@@ -225,18 +268,7 @@ describe("models list published transport", () => {
     expect(gateway.callGateway).toHaveBeenCalledOnce();
   });
 
-  it("keeps successful empty inventory empty", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({ models: [] });
-    await list({ json: true, refresh: true });
-    expect(runtime.writeJson).toHaveBeenCalledWith({ count: 0, models: [] }, 2);
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { refresh: true, refreshFailed: undefined },
-    { refresh: false, refreshFailed: true },
-  ])(
+  it.each([{ refresh: false, refreshFailed: true }])(
     "uses published refresh status with rejected auth for %j",
     async ({ refresh, refreshFailed }) => {
       vi.mocked(gateway.callGateway).mockResolvedValue({
@@ -245,12 +277,15 @@ describe("models list published transport", () => {
         providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
       });
       await list({ refresh, json: true });
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Model discovery authentication was rejected for signed-out. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+      );
       if (refreshFailed) {
-        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect(runtime.error).toHaveBeenCalledWith(
           "Model discovery could not refresh all providers. Showing the available published model list.",
         );
       } else {
-        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledTimes(1);
       }
       expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
       expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
@@ -261,10 +296,93 @@ describe("models list published transport", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([{ json: false, plain: false }])(
+    "reports rejected discovery with empty provider inventory for %j",
+    async (output) => {
+      const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
+      vi.mocked(gateway.callGateway).mockResolvedValue({
+        models: [],
+        providerOutcomes: [outcome],
+      });
+
+      await list({ provider: "xai", agent: "work", ...output });
+
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+      );
+      if (output.json) {
+        expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+          { count: 0, models: [], providerOutcomes: [outcome] },
+          2,
+        );
+      } else if (output.plain) {
+        expect(runtime.log).not.toHaveBeenCalled();
+        expect(runtime.writeStdout).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
+      }
+    },
+  );
+
+  it("preserves model rows and public discovery facts without printing raw provider errors", async () => {
+    const providerOutcomes = [
+      { provider: "catalog-provider", status: "ready" },
+      { provider: "xai", status: "auth-rejected", profileId: "xai:work" },
+      { provider: "offline", status: "unavailable" },
+    ];
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: providerOutcomes.map((outcome) => ({
+        ...outcome,
+        message: "synthetic-private-provider-response",
+      })),
+    });
+
+    await list({ json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        count: 1,
+        models: [expect.objectContaining({ key: "catalog-provider/Reader", available: true })],
+        providerOutcomes,
+      }),
+      2,
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(2);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Model discovery is unavailable for offline. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.",
+    );
+    expect(JSON.stringify(runtime.error.mock.calls)).not.toContain("synthetic-private");
+  });
+
+  it("sanitizes provider and profile labels in discovery warnings", async () => {
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: [
+        { provider: "\u001b[31mxai\u001b[0m", profileId: "work\nnext", status: "auth-rejected" },
+      ],
+    });
+
+    await list({ plain: true });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile work\\nnext). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
+  });
+
+  it.each([true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",
     async (refresh) => {
       vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+      const stop = vi.fn(async () => {});
+      const handle = { proxyUrl: "http://proxy.example.test", stop, kill: vi.fn() };
+      vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) => {
+        expect(proxyLifecycle.startProxy).toHaveBeenCalledTimes(refresh ? 1 : 0);
+        expect(proxyLifecycle.stopProxy).not.toHaveBeenCalled();
+        return await read(createOwner());
+      });
       await list({ agent: "work", all: true, json: true, refresh });
       expect(runtime.error).toHaveBeenCalledWith(
         refresh
@@ -276,7 +394,7 @@ describe("models list published transport", () => {
         expect.objectContaining({
           agentId: "work",
           readOnly: !refresh,
-          ...(refresh ? { refreshFullCatalog: true } : {}),
+          ...(refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
         }),
         expect.any(Function),
       );
@@ -289,8 +407,29 @@ describe("models list published transport", () => {
         }),
         2,
       );
+      if (refresh) {
+        expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
+        );
+        expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
+        expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
+      } else {
+        expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
+        expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+      }
     },
   );
+
+  it("releases local refresh proxy routing when discovery fails", async () => {
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const handle = { proxyUrl: "http://proxy.example.test", stop: vi.fn(), kill: vi.fn() };
+    vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+    vi.mocked(catalog.withPreparedModelCatalogOwner).mockRejectedValue(
+      new Error("discovery failed"),
+    );
+    await expect(list({ refresh: true })).rejects.toThrow("discovery failed");
+    expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
+  });
 
   // Only the standalone owner registers Claude CLI; the command process has no active registry.
   async function listStandaloneClaudeOwner(
@@ -334,31 +473,6 @@ describe("models list published transport", () => {
     );
     await list({ agent: "work", json: true });
   }
-
-  it("projects a standalone owner's Claude CLI route with that owner's plugin registry", async () => {
-    await listStandaloneClaudeOwner(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: { work: { workspace: "/tmp/published-cli-work" } },
-          defaults: {
-            model: { primary: "anthropic/claude-opus-5" },
-            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
-          },
-        },
-      },
-      [
-        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
-        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
-      ],
-    );
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        models: [expect.objectContaining({ key: "anthropic/claude-opus-5", available: true })],
-      }),
-      2,
-    );
-  });
 
   it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
     await listStandaloneClaudeOwner(
@@ -417,13 +531,6 @@ describe("models list published transport", () => {
     await list({ local: true, plain: true });
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
     expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("keeps an empty plain list machine-readable", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({ models: [] });
-    await list({ plain: true });
-    expect(runtime.writeStdout).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });

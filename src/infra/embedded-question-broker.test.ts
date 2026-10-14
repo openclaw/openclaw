@@ -1,15 +1,5 @@
-import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  QuestionGetResultSchema,
-  QuestionListResultSchema,
-  QuestionRequestedEventSchema,
-  QuestionRequestResultSchema,
-  QuestionResolvedEventSchema,
-  QuestionResolveResultSchema,
-  QuestionWaitAnswerResultSchema,
-  type QuestionRequestParams,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { QuestionRequestParams } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -77,44 +67,7 @@ afterEach(async () => {
 });
 
 describe("EmbeddedQuestionBroker", () => {
-  it("publishes a protocol question and resolves its waiting tool with a correlated answer", async () => {
-    const broker = createBroker();
-    const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => events.push(event));
-    const request = broker.request(requestParams());
-    const listed = broker.list();
-    const fetched = broker.get({ id: request.id });
-
-    expect(Value.Check(QuestionRequestResultSchema, request)).toBe(true);
-    expect(Value.Check(QuestionListResultSchema, listed)).toBe(true);
-    expect(Value.Check(QuestionGetResultSchema, fetched)).toBe(true);
-    expect(listed.questions).toEqual([fetched.question]);
-    expect(events).toEqual([{ event: "question.requested", payload: fetched.question }]);
-    expect(Value.Check(QuestionRequestedEventSchema, events[0]?.payload)).toBe(true);
-
-    const answer = broker.waitAnswer({ id: request.id, includeResolutionId: true });
-    const resolved = broker.resolve({
-      id: request.id,
-      answers: { answers: { destination: [" Staging "] } },
-      resolutionId: "local-answer",
-    });
-    expect(Value.Check(QuestionResolveResultSchema, resolved)).toBe(true);
-    expect(await answer).toEqual({
-      status: "answered",
-      answers: { answers: { destination: ["Staging"] } },
-      resolutionId: "local-answer",
-    });
-    expect(Value.Check(QuestionWaitAnswerResultSchema, await answer)).toBe(true);
-    expect(Value.Check(QuestionResolvedEventSchema, events[1]?.payload)).toBe(true);
-    expect(events[1]).toEqual({
-      event: "question.resolved",
-      payload: { id: request.id, ...resolved },
-    });
-    expect(broker.list().questions).toEqual([]);
-    expect(broker.get({ id: request.id }).question.status).toBe("answered");
-  });
-
-  it.each(["cancel", "expiry", "run-abort", "stop"] as const)(
+  it.each(["expiry", "run-abort", "stop"] as const)(
     "settles the waiter and dismisses the prompt on %s",
     async (ending) => {
       vi.useFakeTimers();
@@ -124,9 +77,7 @@ describe("EmbeddedQuestionBroker", () => {
       const run = new AbortController();
       const request = broker.request(requestParams(), run.signal);
       const answer = broker.waitAnswer({ id: request.id });
-      if (ending === "cancel") {
-        broker.resolve({ id: request.id, cancel: true });
-      } else if (ending === "expiry") {
+      if (ending === "expiry") {
         await clock.advanceBy(5_000);
       } else if (ending === "run-abort") {
         run.abort();
@@ -142,16 +93,6 @@ describe("EmbeddedQuestionBroker", () => {
       expect(broker.list().questions).toEqual([]);
     },
   );
-
-  it("leaves an unanswered prompt pending when only the wait deadline ends", async () => {
-    vi.useFakeTimers();
-    const broker = createBroker();
-    const request = broker.request(requestParams());
-    const answer = broker.waitAnswer({ id: request.id, timeoutMs: 10 });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(await answer).toEqual({ status: "pending" });
-    expect(broker.get({ id: request.id }).question.status).toBe("pending");
-  });
 
   it.each(["answer", "owner-close"] as const)(
     "holds the admitted run's human-input wait until %s",

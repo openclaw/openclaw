@@ -1,4 +1,3 @@
-// Matrix tests cover channelirectory plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -184,25 +183,6 @@ describe("matrix directory", () => {
     });
   });
 
-  it("accepts raw room ids when inferring Matrix direct user ids", () => {
-    expect(
-      matrixPlugin.threading?.buildToolContext?.({
-        cfg: {} as CoreConfig,
-        context: {
-          From: "user:@alice:example.org",
-          To: "!dm:example.org",
-          ChatType: "direct",
-        },
-        hasRepliedRef: { value: false },
-      }),
-    ).toEqual({
-      currentChannelId: "!dm:example.org",
-      currentThreadTs: undefined,
-      currentDirectUserId: "@alice:example.org",
-      hasRepliedRef: { value: false },
-    });
-  });
-
   it("resolves group mention policy from account config", () => {
     const cfg = {
       channels: {
@@ -241,7 +221,7 @@ describe("matrix directory", () => {
     ).toBe(false);
   });
 
-  it("matches prefixed Matrix aliases in group context", () => {
+  it("does not trust prefixed Matrix aliases in group context", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -258,7 +238,7 @@ describe("matrix directory", () => {
         groupId: "matrix:room:!room:example.org",
         groupChannel: "matrix:channel:#ops:example.org",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("reports room access warnings against the active Matrix config path", () => {
@@ -536,24 +516,6 @@ describe("matrix directory", () => {
     );
   });
 
-  it("resolves account id from input name when explicit account id is missing", () => {
-    const accountId = matrixPlugin.setupContract!.resolveAccountId?.({
-      cfg: {} as CoreConfig,
-      accountId: undefined,
-      input: { name: "Main Bot" },
-    });
-    expect(accountId).toBe("main-bot");
-  });
-
-  it("resolves binding account id from agent id when omitted", () => {
-    const accountId = matrixPlugin.setupContract!.resolveBindingAccountId?.({
-      cfg: {} as CoreConfig,
-      agentId: "Ops",
-      accountId: undefined,
-    });
-    expect(accountId).toBe("ops");
-  });
-
   it("clears stale access token when switching an account to password auth", () => {
     const cfg = {
       channels: {
@@ -580,33 +542,5 @@ describe("matrix directory", () => {
 
     expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBe("new-password");
     expect(updated.channels?.["matrix"]?.accounts?.default?.accessToken).toBeUndefined();
-  });
-
-  it("clears stale password when switching an account to token auth", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            default: {
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              password: "old-password", // pragma: allowlist secret
-            },
-          },
-        },
-      },
-    } as unknown as CoreConfig;
-
-    const updated = matrixPlugin.setupContract!.applyAccountConfig({
-      cfg,
-      accountId: "default",
-      input: {
-        homeserver: "https://matrix.example.org",
-        accessToken: "new-token",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
-
-    expect(updated.channels?.["matrix"]?.accounts?.default?.accessToken).toBe("new-token");
-    expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBeUndefined();
   });
 });

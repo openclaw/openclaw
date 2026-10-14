@@ -41,6 +41,12 @@ const TOOL_FOLLOWUPS = [
     "Collector runs require explicit collection instead.",
     "Collector runs require agents_wait instead.",
   ],
+  [
+    "nodes",
+    "exec",
+    "fs.listDir returns sub-directories only)",
+    "fs.listDir returns sub-directories only; use the exec tool with host=node to list files)",
+  ],
 ] as const;
 
 function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<string>): string {
@@ -58,8 +64,8 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
     if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
       const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
       description = description.replace(
-        " Thread chats rejected:",
-        ` ${guidance} Thread chats rejected:`,
+        / (?=Thread chats rejected:|Missing configured-agent main created\.)/,
+        ` ${guidance} `,
       );
     }
   }

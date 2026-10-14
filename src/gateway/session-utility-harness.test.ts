@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as simpleCompletionExecution from "../agents/simple-completion-execution.js";
 import * as simpleCompletionRuntime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  readSessionTranscriptWatermark,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
@@ -56,6 +59,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       },
       plugins: { entries: { codex: { enabled: false } } },
     };
+    setRuntimeConfigSnapshot(config);
     runtimeMocks.acquire.mockReset().mockResolvedValue({
       snapshot: {
         config,
@@ -75,11 +79,11 @@ describe("utility completion with an unavailable implicit harness", () => {
         name: "Utility fixture",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
+        contextWindow: 32_768,
+        maxTokens: 16_384,
       },
       auth: { apiKey: "synthetic-utility-key", mode: "api-key", source: "test" },
     });
@@ -130,7 +134,10 @@ describe("utility completion with an unavailable implicit harness", () => {
         expect.anything(),
       );
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 300, temperature: 0.2, reasoning: "off" }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {
@@ -173,20 +180,30 @@ describe("utility completion with an unavailable implicit harness", () => {
       completeModel: complete,
     });
     try {
-      recaps.ensure(target);
+      await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));
       await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
       await expect(complete.mock.results[0]?.value).resolves.toMatchObject({
         owner: { kind: "harness", id: "openclaw" },
       });
       await vi.waitFor(() => {
         const entry = loadSessionEntryReadOnly(scope);
-        expect(projectSessionActivitySummary({ ...target, cfg: config, entry })).toMatchObject({
+        expect(
+          projectSessionActivitySummary({
+            ...target,
+            cfg: config,
+            entry,
+            watermark: readSessionTranscriptWatermark(scope),
+          }),
+        ).toMatchObject({
           state: "current",
           text,
         });
       });
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 240, temperature: 0.2, reasoning: "off" }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {

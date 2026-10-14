@@ -74,6 +74,7 @@ export function projectPublicSessionEntryPatch(
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
 export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  usageReport: undefined,
   inputTokens: undefined,
   outputTokens: undefined,
   cacheRead: undefined,
@@ -88,9 +89,8 @@ export function projectCompactionAccountingPatch(
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
-    transcriptByteCompactionLatch?: NonNullable<
-      InternalSessionEntry["transcriptByteCompactionLatch"]
-    >;
+    /** Omission preserves host suppression; null clears it across the worker boundary. */
+    transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
 ): Partial<InternalSessionEntry> {
   const incrementBy = Math.max(0, params.amount ?? 1);
@@ -102,8 +102,10 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
+    ...(params.transcriptByteCompactionLatch !== undefined
+      ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch ?? undefined }
+      : {}),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };

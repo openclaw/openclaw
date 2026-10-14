@@ -242,20 +242,8 @@ export async function runRestoreInterruptionProof(params: {
   }
 
   return {
-    afterPublish: {
-      ...afterPublish,
-      existingTargetPreserved: true,
-      retryRestored: false,
-      targetVerifiedAfterCrash: true,
-      targetVisibleAfterCrash: true,
-    },
-    beforePublish: {
-      ...beforePublish,
-      existingTargetPreserved: false,
-      retryRestored: true,
-      targetVerifiedAfterCrash: false,
-      targetVisibleAfterCrash: false,
-    },
+    afterPublish,
+    beforePublish,
     snapshotBytes: params.expectedSnapshotBytes,
   };
 }

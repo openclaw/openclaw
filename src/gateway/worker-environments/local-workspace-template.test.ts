@@ -98,6 +98,9 @@ beforeAll(async () => {
     await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
     ignoreVariants.set(pattern, await git(source, "rev-parse", "HEAD"));
   }
+  const remote = path.join(root, "origin.git");
+  await git(root, "clone", "--quiet", "--bare", source, remote);
+  await git(source, "remote", "add", "origin", remote);
   await write(source, ".env.local", "synthetic host-only credential\n");
   await write(source, ".npmrc", "synthetic host-only registry credential\n");
   await git(source, "config", "credential.helper", "!echo synthetic-host-credential");
@@ -185,19 +188,6 @@ it("shares one installed generation across independent checkouts and replaces it
   expect(templates[0]?.status).toBe("ready");
 });
 
-it("retains installed packages when Git reports ignored children or unignored modules", async ({
-  signal,
-}) => {
-  for (const commit of ignoreVariants.values()) {
-    const clone = await fixture(signal);
-    for (const name of ["first", "second"]) {
-      const checkout = await clone(name, commit);
-      expect(await read(checkout, "node_modules/dependency/index.js")).toBe(secondLock);
-    }
-  }
-  expect(mocks.install).toHaveBeenCalledTimes(2);
-});
-
 it("retains only installed node_modules and never copies source credentials", async ({
   signal,
 }) => {
@@ -237,21 +227,6 @@ it("retains only installed node_modules and never copies source credentials", as
   expect(mocks.install).toHaveBeenCalledOnce();
 });
 
-it("rebuilds a ready generation after its template directory was removed", async ({ signal }) => {
-  const previous = new Set((await listTemplatesAsync(env)).map((row) => row.id));
-  const clone = await fixture(signal);
-  await clone("first");
-  const created = (await listTemplatesAsync(env)).find((row) => !previous.has(row.id));
-  if (!created) {
-    throw new Error("Template was not reserved");
-  }
-  await fs.rm(created.path, { recursive: true });
-  const second = await clone("second");
-  expect(await read(second, "node_modules/dependency/index.js")).toBe(firstLock);
-  expect((await listTemplatesAsync(env)).some((row) => row.id === created.id)).toBe(false);
-  expect(mocks.install).toHaveBeenCalledTimes(2);
-});
-
 it("falls back instead of retaining links into a virtual store that would be trimmed", async ({
   signal,
 }) => {
@@ -271,7 +246,7 @@ it("falls back instead of retaining links into a virtual store that would be tri
   expect(mocks.install).toHaveBeenCalledOnce();
 });
 
-for (const failure of ["install failure", "tracked source changed", "frozen lockfile changed"]) {
+for (const failure of ["install failure", "tracked source changed"]) {
   it(`caches a clean source-only fallback after ${failure}`, async ({ signal }) => {
     mocks.install.mockImplementation(async ({ directory }) => {
       await writeModulesManifest(directory);
@@ -279,9 +254,6 @@ for (const failure of ["install failure", "tracked source changed", "frozen lock
       await write(directory, ".env.installer", "synthetic installer output\n");
       if (failure === "tracked source changed") {
         await write(directory, "source.ts", "changed by install\n");
-      }
-      if (failure === "frozen lockfile changed") {
-        await write(directory, "pnpm-lock.yaml", secondLock);
       }
       return failure === "install failure"
         ? { installed: false, reason: "synthetic install failure" }

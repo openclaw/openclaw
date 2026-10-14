@@ -2,6 +2,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { Agent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMemorySearchDeadlineControl,
@@ -83,6 +84,7 @@ async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown> | null;
   status?: number;
+  redirectUrl?: string;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -103,7 +105,10 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
-        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        res.writeHead(params?.status ?? 200, {
+          "content-type": "application/json",
+          ...(params?.redirectUrl ? { location: params.redirectUrl } : {}),
+        });
         res.end(
           JSON.stringify(
             params?.respond
@@ -292,6 +297,79 @@ afterEach(async () => {
 });
 
 describe("openai-compatible generic embedding provider", () => {
+  it("honors private-network denial for a configured provider and remote override", async () => {
+    const server = await startEmbeddingServer();
+    for (const remoteOverride of [false, true]) {
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          provider: "private-fixture",
+          config: {
+            models: {
+              providers: {
+                "private-fixture": {
+                  api: "openai-completions",
+                  baseUrl: remoteOverride ? "https://provider.example.test/v1" : server.baseUrl,
+                  request: { allowPrivateNetwork: false },
+                  models: [],
+                },
+              },
+            },
+          },
+          ...(remoteOverride ? { remote: { baseUrl: server.baseUrl } } : {}),
+        }),
+      );
+      await expect(provider.embed("private input")).rejects.toThrow(
+        /private\/internal\/special-use/,
+      );
+    }
+    expect(server.requests).toEqual([]);
+  });
+
+  it("does not extend configured private-network trust to another origin", async () => {
+    const target = await startEmbeddingServer();
+    const source = await startEmbeddingServer({
+      status: 307,
+      redirectUrl: `${target.baseUrl}/embeddings`,
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: source.baseUrl } }),
+    );
+    await expect(provider.embed("private input")).rejects.toThrow(/private\/internal\/special-use/);
+    expect(source.requests).toHaveLength(1);
+    expect(target.requests).toEqual([]);
+  });
+
+  it.each([true, false])("preserves caller-owned HTTP deadlines: signal=%s", async (withSignal) => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+    const requests: Dispatcher.DispatchOptions[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with the same Agent receiver.
+    const dispatch = Agent.prototype.dispatch;
+    const spy = vi.spyOn(Agent.prototype, "dispatch").mockImplementation(function (
+      this: Agent,
+      options,
+      handler,
+    ) {
+      requests.push(options);
+      return dispatch.call(this, options, handler);
+    });
+    try {
+      await expect(
+        provider.embedBatch(["document"], {
+          inputType: "document",
+          ...(withSignal ? { signal: new AbortController().signal } : {}),
+        }),
+      ).resolves.toEqual([[0.1, 0.2, 0.3]]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headersTimeout).toBe(withSignal ? 0 : undefined);
+      expect(requests[0]?.bodyTimeout).toBe(withSignal ? 0 : undefined);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("forwards readiness phases without pausing reconciliation", async () => {
     const server = await startEmbeddingServer();
     const release = vi.fn();
@@ -437,10 +515,15 @@ describe("openai-compatible generic embedding provider", () => {
     expect(client.baseUrl).toBe(server.baseUrl);
     expect(server.requests).toHaveLength(0);
 
-    await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 1]);
-    await expect(provider.embedBatch(["a", "abcd"])).resolves.toEqual([
+    const onUsage = vi.fn();
+    await expect(provider.embed("hello", { onUsage })).resolves.toEqual([5, 0.25, 1]);
+    await expect(provider.embedBatch(["a", "abcd"], { onUsage })).resolves.toEqual([
       [1, 0.25, 1],
       [4, 1.25, 1],
+    ]);
+    expect(onUsage.mock.calls).toEqual([
+      [{ promptTokens: 1, totalTokens: 1 }],
+      [{ promptTokens: 2, totalTokens: 2 }],
     ]);
 
     expect(server.requests).toHaveLength(2);
@@ -488,7 +571,7 @@ describe("openai-compatible generic embedding provider", () => {
     }
     expect(outcome.error).toBeInstanceOf(Error);
     expect((outcome.error as Error).message).toBe(
-      `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
+      `openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
       withTestTimeout(
@@ -509,7 +592,7 @@ describe("openai-compatible generic embedding provider", () => {
     );
 
     await expect(provider.embed("hello")).rejects.toThrow(
-      "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
+      "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): JSON response exceeds 16777216 bytes",
     );
     await expect(
       withTestTimeout(

@@ -12,7 +12,8 @@
 }
 
 .model-setup__intro h1,
-.model-setup-wizard h2 {
+.model-setup-wizard h2,
+.model-setup-success__copy h2 {
   margin: 0;
   font-size: 20px;
 }
@@ -202,11 +203,6 @@
   color: var(--danger);
 }
 
-.model-setup__failure-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
 .model-setup__failure span:last-child {
   overflow-wrap: anywhere;
 }
@@ -240,7 +236,8 @@
   width: 100%;
 }
 
-.model-setup-provider-select::part(menu) {
+.model-setup-provider-select > .model-setup-provider-select__menu {
+  --oc-overlay-distance: 0px;
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
   overflow-y: auto;
@@ -265,12 +262,18 @@
   color: var(--text);
   font: inherit;
   outline: none;
-  text-align: left;
+  text-align: start;
   cursor: var(--cursor-action);
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {
   background: var(--bg-elevated);
+}
+
+.model-setup-provider-select__trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .model-setup-provider-select__trigger:focus-visible {
@@ -316,6 +319,7 @@
 
 .model-setup-provider-select__chevron svg,
 .model-setup-provider-select__placeholder-icon svg,
+.model-setup__failure-icon svg,
 .model-setup__manual-help svg,
 .model-setup-success__icon svg,
 .model-setup-success__actions svg {
@@ -323,7 +327,7 @@
   height: 18px;
 }
 
-.model-setup-provider-select__option {
+.model-setup-provider-select__menu .model-setup-provider-select__option {
   padding: 6px 8px;
   border-radius: var(--menu-item-radius);
   color: var(--text);
@@ -335,7 +339,7 @@
   background: var(--menu-selected);
 }
 
-.model-setup-provider-select__option::part(label) {
+.model-setup-provider-select__option > .oc-menu-item__label {
   min-width: 0;
   width: 100%;
 }
@@ -420,11 +424,6 @@
 .model-setup-success__icon > svg {
   width: 28px;
   height: 28px;
-}
-
-.model-setup-success__copy h2 {
-  margin: 0;
-  font-size: 20px;
 }
 
 .model-setup-success__copy p {

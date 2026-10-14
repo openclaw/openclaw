@@ -2,10 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -39,6 +43,20 @@ const {
 
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
+
+const actorDirs = useAutoCleanupTempDirTracker(afterAll);
+const actorAuthority = { assertCurrent() {}, authorize() {} };
+let commandActor: ReturnType<typeof memorySessionActorOwners.get>;
+beforeAll(async () => {
+  const env = { OPENCLAW_STATE_DIR: actorDirs.make("agent-command-actor-") };
+  commandActor = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  });
+});
+afterAll(async () => {
+  memorySessionActorOwners.closeDatabase(commandActor);
+});
 
 function discordTurn(sessionId: string, sessionKey: string) {
   return {
@@ -97,6 +115,74 @@ async function commitAttemptCompaction(
 }
 
 describe("agentCommand compaction transcript rotation", () => {
+  it("admits an actor-bound command and persists its transcript through final delivery", async () => {
+    const cfg = expectDefined(state.cfg, "command fixture config");
+    const sessionId = "actor-command";
+    const sessionKey = `agent:main:dashboard:incognito-${sessionId}`;
+    const target = { agentId: "main", sessionId, sessionKey, storePath: commandActor.path };
+    const actor = await commandActor.acquire(
+      { database: commandActor.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: {
+            sessionId,
+            incognito: true,
+            lifecycleRevision: "initial",
+            updatedAt: Date.now(),
+            sessionStartedAt: Date.now(),
+          },
+        },
+      },
+      actorAuthority,
+    );
+    state.cfg = { ...cfg, session: { ...cfg.session, store: commandActor.path } };
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      const recorder = expectDefined(params.userTurnTranscriptRecorder, "command user recorder");
+      expect(await recorder.persistApproved()).toBeDefined();
+      return makeResult({ sessionId, text: "actor command answer", runner: "cli" });
+    });
+    try {
+      await runWithSessionActorStorage(
+        {
+          actor,
+          authority: actorAuthority,
+          agentId: commandActor.agentId,
+          path: commandActor.path,
+        },
+        async () => {
+          const result = await agentCommand(discordTurn(sessionId, sessionKey));
+          expect(result).toMatchObject({ deliverySucceeded: true });
+          const events = await loadTranscriptEvents(target);
+          expect(events).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ role: "user" }),
+              }),
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ role: "assistant" }),
+              }),
+            ]),
+          );
+          expect(JSON.stringify(events)).toContain("room message");
+          expect(JSON.stringify(events)).toContain("actor command answer");
+          expect(state.deliveryFreshEntries.at(-1)).toMatchObject({ sessionId, incognito: true });
+          const stored = commandActor.readSession(sessionKey, actorAuthority)?.entry;
+          expect(stored?.sessionId).toBe(sessionId);
+          expect(stored?.pendingFinalDelivery).toBeUndefined();
+        },
+      );
+    } finally {
+      state.cfg = cfg;
+      await actor.release();
+    }
+  });
+
   it.each([
     ["settles a precreated baseline claim before embedded execution", false],
     ["does not execute after baseline work-start invalidation", true],
@@ -555,28 +641,33 @@ describe("agentCommand compaction transcript rotation", () => {
           compactionSetupError = new Error("compaction test requires persisted session state");
           throw compactionSetupError;
         }
-        successorBeforeCleanup = {
-          ...params.sessionEntry,
-          sessionId: successorSessionId,
-          updatedAt: Date.now(),
-        };
-        await replaceSessionEntry(
-          { sessionKey: params.sessionKey, storePath: params.storePath },
-          successorBeforeCleanup,
+        const predecessor = expectDefined(
+          loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath }),
+          "command compaction predecessor",
         );
-        params.sessionStore[params.sessionKey] = successorBeforeCleanup;
-        host?.onCommitted?.({
-          sessionId: successorSessionId,
-          sessionFile: params.sessionKey,
-          sessionTarget: {
+        const accepted = await acceptCompactionSuccessor({
+          currentTarget: {
             agentId: params.sessionAgentId,
-            sessionId: successorSessionId,
+            sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             storePath: params.storePath,
           },
-          entry: successorBeforeCleanup,
-          previousSessionId: params.sessionId,
+          currentSessionFile: params.sessionKey,
+          expectedEntry: {
+            sessionId: params.sessionId,
+            lifecycleRevision: predecessor.lifecycleRevision,
+            activeWriterRunId: predecessor.activeWriterRunId,
+          },
+          assertActive: expectDefined(host?.assertActive, "command compaction fence"),
+          onCommitted: host?.onCommitted,
+          result: {
+            ok: true,
+            compacted: true,
+            result: { sessionId: successorSessionId, tokensBefore: 120, tokensAfter: 42 },
+          },
         });
+        successorBeforeCleanup = accepted.entry;
+        params.sessionStore[params.sessionKey] = accepted.entry;
         expect(onSessionIdChanged).not.toHaveBeenCalled();
         if (completion === "maintenance-error") {
           throw new Error(COMPACTION_ERROR);

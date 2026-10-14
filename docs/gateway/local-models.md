@@ -181,7 +181,7 @@ Custom/local provider entries trust their exact configured `baseUrl` origin for 
 
 Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names. Non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
 
-Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run timeout is lower, raise that too. The provider timeout cannot extend the whole run.
+Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run-specific timeout is lower, raise that too: the provider timeout cannot extend the current model attempt's budget. Each configured fallback gets a fresh attempt budget.
 
 <Note>
 For custom OpenAI-compatible providers, a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.
@@ -260,6 +260,10 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 ## Smaller or stricter backends
 
+For one shared vLLM server handling interactive and background work, see
+[per-model priority scheduling](/providers/vllm#prioritize-interactive-requests).
+It uses vLLM's native scheduler and is disabled by default.
+
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
 1. **Check the local model responds** - no tools, no agent context:
@@ -283,14 +287,16 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.
+- **Provider hostname has both IPv4 and IPv6?** Guarded model requests retain every address that passes the configured SSRF policy. When Node's address-family autoselection is enabled, connections try IPv4 first and can fall back to IPv6 if IPv4 is unreachable. Single-address lookups still prefer IPv4; forbidden DNS answers still reject the request.
 - **LM Studio model unloaded?** Reload it. Cold start is a common "hanging" cause.
 - **Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?** OpenClaw records a low-cardinality `model.call.error.failureKind` plus the OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama memory pressure, match that timestamp against the server log or a macOS crash/jetsam log to check whether the model server was killed.
 - **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap. It warns below 20% with an **8k** floor. It hard-blocks below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
+- **One-token replies near the context limit?** OpenAI-compatible proxy requests enter context-overflow recovery when the input estimate would reduce the requested output cap below 16 tokens, including with thinking off. Deliberately short caps still work when they fit. The estimate is conservative: if a prompt fits the server but OpenClaw reports overflow, reduce the prompt or raise the configured context limit to match the server's actual allocation.
 - **`messages[].content ... expected a string`?** Add `compat.requiresStringContent: true` on that model entry.
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
 - **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first. `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
 - **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution. Fix the server's chat template and parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above. Use that model entry only for sessions where a tool call is expected every turn.
-- **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit prompt-injection blast radius.
+- **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit the damage from prompt injection.
 
 ### Local model lean mode
 
@@ -298,11 +304,13 @@ Configure lean mode in **Settings → Agent Defaults → Agents** with advanced 
 
 Lean mode is an advanced troubleshooting override that explicitly restricts capabilities. Local inference normally uses [Tool Search](/tools/tool-search) to defer schemas while preserving capabilities, so leave lean mode off unless you deliberately want a smaller tool set.
 
-`agents.defaults.experimental.localModelLean: true` removes optional tools before catalog construction: `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. These removed tools cannot be found through Tool Search. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.entries.*.experimental.localModelLean` to scope this to one agent.
+`agents.defaults.experimental.localModelLean: true` removes optional tools before catalog construction: `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. These removed tools cannot be found through Tool Search. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults catalogs to structured Tool Search (`tool_search`, `tool_describe`, `dispatch_action`) when `tools.toolSearch` is not already set. Use `agents.entries.*.experimental.localModelLean` to scope this to one agent.
 
 Setup no longer writes this flag. For older installations, `openclaw doctor --fix` removes an onboarding-owned `true` when its ownership marker still matches the default model. Explicit settings and settings with stale ownership markers are preserved. Set a retained flag to `false` to restore optional capabilities; automatic Tool Search still applies to local routes.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
+
+Lean Tool Search directories list tool names and owners without descriptions. Full descriptions and schemas remain available through Tool Search. Removing optional tools therefore cannot expand the remaining directory descriptions. Lean mode keeps the ordinary system instructions, skills, and workspace context.
 
 In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 

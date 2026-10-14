@@ -28,6 +28,7 @@ export function libraryFileText(file: SkillLibraryFile): string | null {
   }
 }
 
+// Local reads may finish after uploads are disabled; publication and each request recheck policy.
 export async function readLibraryFiles(
   input: File[],
   config?: ApplicationConfigCapability,
@@ -48,7 +49,6 @@ export async function readLibraryFiles(
       ? file.webkitRelativePath.split("/").slice(1).join("/")
       : file.name;
     const bytes = new Uint8Array(await file.arrayBuffer());
-    assertUploadsEnabled(config);
     if (path === "SKILL.md") {
       content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     } else {
@@ -73,7 +73,6 @@ export async function uploadLibraryArchive(
     throw new Error(t("skillLibrary.bundleLimit"));
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  assertUploadsEnabled(config);
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");

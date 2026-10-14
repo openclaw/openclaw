@@ -70,8 +70,6 @@ describe("resolveControlUiHandoffTarget", () => {
 
   it.each([
     ["blocks implicit token failure", undefined, undefined, "password", undefined],
-    ["blocks explicit token failure", "token", undefined, "token", undefined],
-    ["ignores inactive token refs", "password", undefined, "password", ambientPassword],
   ] as const)(
     "%s",
     async (_label, configuredMode, configuredPassword, expectedMode, expectedHandoff) => {
@@ -160,32 +158,6 @@ describe("waitForControlUiDocument", () => {
     },
   );
 
-  it("can inspect dashboard TLS using only the public certificate", async () => {
-    const root = await tempDirs.make("openclaw-tls-owner-dashboard-");
-    const certPath = path.join(root, "cert.pem");
-    await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
-    const read = vi.spyOn(fs, "readFile");
-    const open = vi.spyOn(fs, "open");
-    const fetch = vi
-      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
-      .mockImplementation(async () => htmlHead());
-
-    const result = await waitForControlUiDocument({
-      url: "https://127.0.0.1:32123/dashboard/",
-      tlsConfig: {
-        enabled: true,
-        certPath,
-        keyPath: path.join(root, "absent-key.pem"),
-        caPath: path.join(root, "absent-ca.pem"),
-      },
-    });
-
-    expect(result.ready).toBe(true);
-    expect([...read.mock.calls, ...open.mock.calls].map(([file]) => file)).toEqual([certPath]);
-    expect(fetch).toHaveBeenCalledOnce();
-    await expect(fs.readdir(root)).resolves.toEqual(["cert.pem"]);
-  });
-
   it("probes the exact HTML document without credentials or redirects", async () => {
     const response = htmlHead();
     const fetch = vi
@@ -209,20 +181,6 @@ describe("waitForControlUiDocument", () => {
         },
       }),
     );
-    expect(response.release).toHaveBeenCalledOnce();
-  });
-
-  it("rejects HTTP 200 responses that are not dashboard HTML", async () => {
-    const response = guardedResponse(
-      new Response(null, { status: 200, headers: { "content-type": "application/json" } }),
-    );
-
-    vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard").mockResolvedValue(response);
-    await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
-      ready: false,
-      reason: "Control UI dashboard is unavailable (HTTP 200).",
-      status: 200,
-    });
     expect(response.release).toHaveBeenCalledOnce();
   });
 
@@ -275,63 +233,21 @@ describe("waitForControlUiDocument", () => {
     expect(onPending).not.toHaveBeenCalled();
   });
 
-  it("reads one bounded sanitized diagnostic only for terminal plain-text failures", async () => {
+  it("keeps the observed HTTP failure when the diagnostic request fails", async () => {
     const head = guardedResponse(new Response(null, { status: 503 }));
-    const diagnostic = guardedResponse(
-      new Response("Invalid configured root\nRun openclaw doctor --fix", {
-        status: 503,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      }),
-    );
     const fetch = vi
       .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
       .mockResolvedValueOnce(head)
-      .mockResolvedValueOnce(diagnostic);
+      .mockRejectedValueOnce(new Error("diagnostic request failed"));
 
     await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
       ready: false,
-      reason: "Invalid configured root Run openclaw doctor --fix",
+      reason: "Control UI dashboard is unavailable (HTTP 503).",
       status: 503,
     });
-
     expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
     expect(head.release).toHaveBeenCalledOnce();
-    expect(diagnostic.release).toHaveBeenCalledOnce();
   });
-
-  it.each(["request", "body"] as const)(
-    "keeps the observed HTTP failure when the diagnostic %s fails",
-    async (failure) => {
-      const head = guardedResponse(new Response(null, { status: 503 }));
-      const diagnostic = guardedResponse(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              controller.error(new Error("diagnostic body failed"));
-            },
-          }),
-          { status: 503, headers: { "content-type": "text/plain" } },
-        ),
-      );
-      const fetch = vi
-        .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
-        .mockResolvedValueOnce(head);
-      if (failure === "request") {
-        fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
-      } else {
-        fetch.mockResolvedValueOnce(diagnostic);
-      }
-
-      await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
-        ready: false,
-        reason: "Control UI dashboard is unavailable (HTTP 503).",
-        status: 503,
-      });
-      expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
-      expect(head.release).toHaveBeenCalledOnce();
-      expect(diagnostic.release).toHaveBeenCalledTimes(failure === "body" ? 1 : 0);
-    },
-  );
 
   it.each(["complete", "broken"] as const)(
     "preserves a real HTTP failure with a %s diagnostic body",

@@ -1,13 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -44,7 +36,14 @@ describePosix("native correction preparation", () => {
       const selectedDir = join(f.root, ".local", "selected git");
       mkdirSync(selectedDir);
       const selected = join(selectedDir, "git");
-      symlinkSync(resolved.stdout.trim(), selected);
+      // A configured Git may be a policy shim that resolves its backend via PATH.
+      // Preserve that search while leaving direct, unconfigured calls trapped.
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      writeFileSync(
+        selected,
+        `#!/bin/sh\nexport PATH=${quote(process.env.PATH ?? "")}\nexec ${quote(resolved.stdout.trim())} "$@"\n`,
+        { mode: 0o755 },
+      );
       const env = {
         PATH: `${bin}:${process.env.PATH}`,
         OPENCLAW_PR_GIT: selector === "OPENCLAW_PR_GIT" ? selected : "",
@@ -249,7 +248,7 @@ describePosix("native correction preparation", () => {
     expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(true);
   });
 
-  it("does not qualify a correction with deferred GitHub gates", () => {
+  it("qualifies the reviewed correction for deferred GitHub gates without success stamps", () => {
     const f = fixture(true);
     const result = f.run(
       [
@@ -261,13 +260,16 @@ describePosix("native correction preparation", () => {
         "prepare_push 42",
       ].join("\n"),
     );
-    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.status, result.stdout + result.stderr).toBe(73);
     const gates = readFileSync(join(f.root, ".local/gates.env"), "utf8");
     expect(gates).toContain("GATES_MODE=github_pending");
     expect(gates).not.toContain("GATES_PASSED_AT");
     expect(gates).not.toContain("LAST_VERIFIED_HEAD_SHA");
-    expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(false);
-    expect(f.run("prepare_sync_head 42").status).toBe(1);
+    expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${f.git("rev-parse", "HEAD")}`);
+    expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(true);
+    expect(f.run("push_prep_head_to_pr_branch() { return 73; }; prepare_sync_head 42").status).toBe(
+      73,
+    );
   });
 
   it.each(["completed", "pending", "revoked", "fork", "stale-review", "foreign-gate"])(
@@ -442,7 +444,7 @@ describePosix("native correction preparation", () => {
           "PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot 42)",
           'pr_git() { if [ "$1" = push ]; then touch .local/publication; return 0; fi; git "$@"; }',
           `pr_gh_plain() { touch .local/publication; printf '%s\\n' '{"data":{"createCommitOnBranch":{"commit":{"oid":"${head}"}}}}'; }`,
-          `verify_prep_first_parent_range_signed() { ${mutation}; return 0; }`,
+          `verify_prep_commit_range_signed() { ${mutation}; return 0; }`,
           `verify_prep_head_extends_hosted_head() { git merge-base --is-ancestor "$1" HEAD || return 1; ${mutation}; }`,
           "PRHEAD_REMOTE_URL=https://example.invalid/repo.git; OPENCLAW_PR_PUSH_MODE=git",
           'revalidate_pr_publication() { [ "$1" = 42 ] && [ "$2" = fixture-observation ] && [ "$3" = topic ] && [ "$5" = "$(git rev-parse HEAD)" ]; }',

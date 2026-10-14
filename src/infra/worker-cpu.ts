@@ -1,15 +1,24 @@
+import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MessagePort, Worker } from "node:worker_threads";
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
+import { isMainThread, MessagePort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import type { GcSample } from "./gc-observer.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
+import {
+  recordWorkerMessage,
+  observeWorkerMessage,
+  workerMessagePayloadBytes,
+} from "./worker-message-metrics.js";
+
+type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & { heapSizeLimitBytes?: number; gc?: GcSample[] };
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -20,6 +29,8 @@ type WorkerCpuHandle = {
 
 type WorkerSource = {
   script: string;
+  internalMessages?: true;
+  lifecycleMessages?: boolean;
   poolId?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
@@ -57,6 +68,8 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   // Node also reports direct plugin/dependency Workers here, without a second registry.
   process.on("worker", trackWorker);
   return {
+    // SAFETY: The optional callback starts unset and only receives the typed observer below.
+    gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -66,10 +79,12 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
 });
 
 export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
-  const worker = new Worker(...args);
-  trackWorker(worker); // Bun need not emit Node's process-level Worker event.
-  // Node's process event can register the Worker before its constructor returns.
-  trackedWorkers.workers.get(worker)!.script = workerScriptName(args[0], args[1]?.eval);
+  const worker = runWithMainThreadTask(
+    `worker:${workerScriptName(args[0], args[1]?.eval)}`,
+    () => new Worker(...args),
+  );
+  trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
+  trackedWorkers.workers.get(worker)!.internalMessages = true;
   return worker;
 }
 
@@ -79,8 +94,14 @@ export function trackNativeWorkerForCpu(
   filename: string | URL,
   evalSource = false,
 ): void {
+  // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
-  trackedWorkers.workers.get(worker)!.script = workerScriptName(filename, evalSource);
+  const source = trackedWorkers.workers.get(worker)!;
+  source.script = workerScriptName(filename, evalSource);
+  // Heartbeat verification shares SQLite's id/ok reply shape; its owner identifies the protocol.
+  source.lifecycleMessages =
+    source.script === "openclaw-state-lease-heartbeat.worker.js" ||
+    source.script === "gateway-state-owner-heartbeat.worker.js";
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -158,9 +179,75 @@ export function markWorkerRetirement(
   }
 }
 
+function canObserveWorkerMessages(worker: Worker): boolean {
+  if (!Object.isExtensible(worker)) {
+    return false;
+  }
+  for (const method of ["postMessage", "emit"]) {
+    let owner: object | null = worker;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
+      if (descriptor) {
+        if (!descriptor.writable || typeof descriptor.value !== "function") {
+          return false;
+        }
+        break;
+      }
+      owner = Reflect.getPrototypeOf(owner);
+    }
+    if (!owner) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function trackWorker(worker: WorkerCpuHandle): void {
   if (trackedWorkers.workers.has(worker)) {
     return;
+  }
+  if (isMainThread && worker instanceof Worker) {
+    // Worker construction clones startup data and inherited environment data once.
+    recordWorkerMessage("lifecycle", "to_worker");
+  }
+  // Foreign Workers with accessor/read-only methods keep CPU/lifecycle coverage only.
+  // Inspect descriptors once at registration; never invoke getters or setters for metrics.
+  if (isMainThread && worker instanceof Worker && canObserveWorkerMessages(worker)) {
+    // Per-instance hooks also cover plugin Workers, without adding a message listener
+    // that would change native port reference semantics. Virtual retained handles
+    // already observe their native task/control ports.
+    const nativePrototype = Object.getPrototypeOf(worker) === Worker.prototype;
+    const postMessage =
+      // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
+      !nativePrototype || Object.hasOwn(worker, "postMessage") ? worker.postMessage : undefined;
+    worker.postMessage = function (value, transferList) {
+      const bytes = source.internalMessages ? workerMessagePayloadBytes(value) : undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Preserve later prototype instrumentation and the receiver.
+      (postMessage ?? Worker.prototype.postMessage).call(this, value, transferList);
+      if (source.lifecycleMessages) {
+        recordWorkerMessage("lifecycle", "to_worker", bytes);
+      } else if (source.internalMessages) {
+        observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
+      } else {
+        // Dependency payloads can have getters/proxies. Only native cloning may inspect them.
+        recordWorkerMessage("other", "to_worker");
+      }
+    };
+    // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
+    const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
+    worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "message") {
+        if (source.lifecycleMessages) {
+          recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
+        } else if (source.internalMessages) {
+          observeWorkerMessage(args[0], "from_worker");
+        } else {
+          recordWorkerMessage("other", "from_worker");
+        }
+      }
+      // oxlint-disable-next-line typescript/unbound-method -- Preserve later prototype instrumentation and the receiver.
+      return (emit ?? Worker.prototype.emit).call(this, event, ...args);
+    };
   }
   let pending = false;
   const source: WorkerSource = {
@@ -230,6 +317,23 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
   }
 }
 
+/** Heartbeat demand also applies to workers attaching after observer activation. */
+export function setTrackedWorkerGcObserver(
+  observer: ((samples: GcSample[], thread: string) => void) | undefined,
+): void {
+  const wasEnabled = Boolean(trackedWorkers.gcObserver);
+  trackedWorkers.gcObserver = observer;
+  const enabled = Boolean(observer);
+  if (wasEnabled !== enabled) {
+    for (const source of trackedWorkers.workers.values()) {
+      if (source.memoryPort) {
+        source.memoryPort.postMessage({ gc: enabled }, []);
+        recordWorkerMessage("memory", "to_worker", 1);
+      }
+    }
+  }
+}
+
 /** The existing registry owns this channel until native exit, never the submitting task. */
 export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknown): boolean {
   if (!isRecord(message) || message.status !== "memory" || !(message.port instanceof MessagePort)) {
@@ -249,24 +353,25 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryUnavailable = true;
     port.close();
   };
-  port.on("message", (value: unknown) => {
-    const record = isRecord(value) ? value : {};
-    const heapUsed = asNonNegativeFiniteNumber(record.heapUsed);
-    const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
-    const external = asNonNegativeFiniteNumber(record.external);
-    const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
-    const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
-    if (
-      heapUsed === undefined ||
-      heapTotal === undefined ||
-      external === undefined ||
-      arrayBuffers === undefined
-    ) {
-      close();
+  port.on("message", (record: WorkerMemorySample | { gc: GcSample[] }) => {
+    // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+    recordWorkerMessage(
+      "memory",
+      "from_worker",
+      ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+        (record.gc?.length ?? 0) * 8,
+    );
+    // This private port is handed off by our isolate telemetry owner, not task input.
+    if (record.gc) {
+      trackedWorkers.gcObserver?.(record.gc, source.script);
+    }
+    if (!("heapUsed" in record)) {
       return;
     }
+    // The private producer supplies native counters; retain the cloned sample as-is.
+    delete record.gc;
     source.heap = {
-      value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
+      value: record,
       sampledAt: performance.now(),
     };
     source.memoryPending = false;
@@ -275,6 +380,10 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   port.once("close", close);
   port.once("messageerror", close);
   port.unref();
+  if (trackedWorkers.gcObserver) {
+    port.postMessage({ gc: true });
+    recordWorkerMessage("memory", "to_worker", 1);
+  }
   return true;
 }
 
@@ -338,6 +447,7 @@ export function sampleTrackedWorkerMemory() {
         source.memoryPending = true;
         try {
           source.memoryPort.postMessage(undefined, []);
+          recordWorkerMessage("memory", "to_worker", 0);
         } catch {
           source.memoryPort.close();
           source.memoryPort = undefined;

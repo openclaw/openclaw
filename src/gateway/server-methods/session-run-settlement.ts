@@ -7,9 +7,10 @@ import {
 import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
+  getTerminalSessionWorkAdmissionRelease,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import {
   isCurrentChatAbortExecution,
   waitForChatAbortControllerRemoval,
@@ -30,8 +31,11 @@ export async function waitForTerminalSessionRunSettlement(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const sessionKeys = [params.requestedKey, params.canonicalKey];
-  // Admissions have no run identity; never wait on a possibly live competing turn.
-  if (isCompetingSessionWorkAdmissionActive(params.storePath, [...sessionKeys, params.sessionId])) {
+  const admissions = getTerminalSessionWorkAdmissionRelease({
+    scope: params.storePath,
+    identities: [...sessionKeys, params.sessionId],
+  });
+  if (admissions === false) {
     return false;
   }
   const matchingRuns = [...params.context.chatAbortControllers].filter(
@@ -41,7 +45,10 @@ export async function waitForTerminalSessionRunSettlement(params: {
   );
   const currentRunId = matchingRuns.find(([, entry]) => isCurrentChatAbortExecution(entry))?.[0];
   const terminalRuns = matchingRuns
-    .filter(([, entry]) => entry.projectSessionTerminalObservedAt !== undefined)
+    .filter(
+      ([, entry]) =>
+        entry.terminalOutcomeObserved || entry.projectSessionTerminalObservedAt !== undefined,
+    )
     .map(([runId, entry]) => ({ runId, entry }));
   const replies = resolveReplyOperationsForSession({ ...params, sessionKeys }).filter(
     (operation) =>
@@ -52,7 +59,9 @@ export async function waitForTerminalSessionRunSettlement(params: {
   if (
     matchingRuns.some(
       ([runId, entry]) =>
-        runId !== currentRunId && entry.projectSessionTerminalObservedAt === undefined,
+        runId !== currentRunId &&
+        !entry.terminalOutcomeObserved &&
+        entry.projectSessionTerminalObservedAt === undefined,
     ) ||
     replies.some(
       (operation) => operation.result === null && !hasCommittedReplyOperationOutcome(operation),
@@ -63,6 +72,7 @@ export async function waitForTerminalSessionRunSettlement(params: {
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
   return await racePromiseWithAbortSignal(
     Promise.all([
+      settlesWithin(admissions, timeoutMs),
       waitForChatAbortControllerRemoval({
         entries: params.context.chatAbortControllers,
         targets: terminalRuns,

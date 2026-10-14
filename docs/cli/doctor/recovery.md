@@ -60,12 +60,35 @@ LaunchAgent registration so its KeepAlive policy can recover; the error reports
 whether the job is loaded and gives a recovery command if bootstrap also fails.
 An ambiguous `kickstart` error followed by a check that confirms the job is absent
 uses bootstrap recovery; successful activation then completes normally. A failure
-for a job that remains loaded stays visible.
+for a job that remains loaded stays visible. Bootstrap repair also accepts an
+operation-in-progress response when native inspection verifies that the job is
+loaded, without restarting a healthy Gateway. A stopped job is kickstarted before
+repair reports success. Persistent bootstrap I/O failures remain visible and
+require service diagnostics.
 
 Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
+
+During service inspection, Doctor reuses already recorded update continuation
+receipts after rechecking live update ownership. This avoids repeating full
+database integrity scans for unchanged receipts within the service manager's
+inspection deadline. New continuation or takeover receipts still use the
+validated ledger writer.
+
+On Linux, nested service-manager inspections share deadline accounting that
+excludes synchronous ownership and admission checks. Slow database inspection
+therefore does not consume the manager I/O allowance. Every authority check
+still runs; manager calls, cancellation, and service stop and drain deadlines
+remain bounded. Database inspection can still increase the total command time.
+
+After restoration, Doctor verifies the Gateway with the shared health probe used
+by `openclaw gateway start`. A running process or owned listener alone does not
+mean it is ready. If the readiness budget expires while the service is running,
+Doctor leaves it running and warns that readiness was not verified, including
+the observed startup phase when available. Run `openclaw gateway status --deep`
+or `openclaw gateway diagnostics export` to investigate; repair still completes.
 
 When an exited container leaves a Gateway lock in a bind-mounted state directory,
 Doctor uses Gateway startup's namespace and heartbeat policy. It waits up to
@@ -184,6 +207,10 @@ path, rather than running `pnpm ui:build` in an unrelated project.
 Packaged installs without UI sources receive reinstall guidance instead of a
 source-build command. Doctor does not download a source checkout to repair a
 packaged installation.
+
+Doctor reports obsolete `cache/control-ui-assets` directories left by older
+installs. `openclaw doctor --fix` removes them; the update command's Doctor pass
+also runs this repair. Cleanup failures are warnings and do not abort Doctor.
 
 ## Invalid Gateway tokens
 

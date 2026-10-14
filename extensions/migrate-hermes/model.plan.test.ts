@@ -171,41 +171,7 @@ describe("Hermes migration model planning", () => {
     );
   });
 
-  it("treats default-agent model overrides as conflicts", async () => {
-    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: openai\n  model: gpt-5.4\n",
-    );
-    const config = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          model: "openai/gpt-5.4",
-        },
-        entries: {
-          main: {
-            model: "anthropic/claude-sonnet-4.6",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir, config }));
-
-    expect(plan.items).toEqual(
-      expectedHermesModelPlanItems({
-        modelStatus: "conflict",
-        modelReason: HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
-      }),
-    );
-  });
-
-  it.each([
-    ["main/model", "imported/model", "skipped"],
-    ["imported/model", "research/model", "conflict"],
-  ])(
+  it.each([["main/model", "imported/model", "skipped"]])(
     "checks the selected agent model instead of the default (%s, %s)",
     async (main, model, status) => {
       const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);

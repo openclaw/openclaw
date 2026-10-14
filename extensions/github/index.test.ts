@@ -306,7 +306,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
       const meta = { source: "host-preview" };
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
         ok: true,
-        payload: preview({ ...fields, additions: 3, deletions: 1, changedFiles: 2 }),
+        payload: preview({ ...fields, stale: true, additions: 3, deletions: 1, changedFiles: 2 }),
         meta,
       });
       const respond = await request("github.preview", { url: pullUrl });
@@ -314,6 +314,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
         respond,
         expect.objectContaining({
           badge,
+          stale: true,
           author: "octocat",
           authorUrl: "https://github.com/octocat",
           metadata: [

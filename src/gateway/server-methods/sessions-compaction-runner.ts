@@ -29,7 +29,10 @@ type GatewaySessionCompactionParams = {
   storePath: string;
 };
 
-function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {
+/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
+export async function preflightGatewaySessionCompaction(
+  params: GatewaySessionCompactionParams,
+): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const persistedRuntime = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
@@ -37,17 +40,10 @@ function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): b
     cfg: params.cfg,
   }).agentHarnessId;
   const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
-  return (
-    (!persistedRuntime || persistedRuntime === "openclaw") &&
-    (!contextEngine || contextEngine === "legacy")
-  );
-}
-
-/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
-export async function preflightGatewaySessionCompaction(
-  params: GatewaySessionCompactionParams,
-): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
-  if (!usesLegacyOpenClawCompaction(params)) {
+  if (
+    (persistedRuntime && persistedRuntime !== "openclaw") ||
+    (contextEngine && contextEngine !== "legacy")
+  ) {
     return undefined;
   }
   try {

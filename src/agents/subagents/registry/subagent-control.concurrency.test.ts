@@ -1,9 +1,15 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import * as lifecycleAdmission from "../../../sessions/session-lifecycle-admission.js";
 import {
@@ -26,20 +32,26 @@ import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 
 it("does not transfer a selected task cancellation to an admitted follow-up generation", async () => {
   const owner = "agent:main:main";
   const sessionKey = "agent:main:subagent:selected-generation";
   const sessionId = "selected-generation-session";
-  await writeSubagentSessionEntry({
+  const storePath = await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId: "selected-original",
     childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
     requesterSessionKey: owner,
     requesterDisplayKey: owner,
     task: "Original work",
@@ -108,10 +120,14 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })
+        ?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -216,10 +232,14 @@ it.each([
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })
+        ?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -363,7 +383,9 @@ it.each([
   },
 );
 
-it("admin cancellation interrupts every sibling before waiting for any sibling to drain", async () => {
+it("admin cancellation interrupts every sibling before waiting for any sibling to drain", async ({
+  signal,
+}) => {
   const requester = "agent:main:main";
   const sessionKey = (id: string) => `agent:main:subagent:${id}`;
   const owner = sessionKey("root");
@@ -377,10 +399,17 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
       agentId: "main",
       sessionKey: sessionKey(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     await registerSubagentRun({
       runId: id,
       childSessionKey: sessionKey(id),
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        agentId: "main",
+        storePath,
+        sessionKey: sessionKey(id),
+      })?.entry,
       requesterSessionKey: id === "root" ? requester : owner,
       requesterAgentId: "main",
       requesterDisplayKey: requester,
@@ -393,7 +422,15 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
   }
   const start = vi.fn(async () => {});
   const cleanupGate = createDeferred();
-  const removed = vi.fn(async () => await cleanupGate.promise);
+  const allRemoved = createDeferred();
+  let removals = 0;
+  const removed = vi.fn(async () => {
+    removals += 1;
+    if (removals === queued.length) {
+      allRemoved.resolve();
+    }
+    await cleanupGate.promise;
+  });
   for (const runId of queued) {
     enqueueSwarmRun({
       groupId: "sibling-cancellation",
@@ -406,7 +443,7 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
     });
   }
   const interrupted: string[] = [];
-  const firstInterrupted = createDeferred();
+  const allInterrupted = createDeferred();
   const leases: SessionWorkAdmissionLease[] = [];
   const activeRuns = running.map((runId) => ({
     runId,
@@ -421,7 +458,9 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
         assertAllowed: () => {},
         onInterrupt: () => {
           interrupted.push(runId);
-          firstInterrupted.resolve();
+          if (interrupted.length === running.length) {
+            allInterrupted.resolve();
+          }
           // Cancellation releases real scheduler capacity while these admissions
           // remain held. Selected queued children must still never dispatch.
           expect(releaseSwarmRun(runId)).toBe(true);
@@ -437,14 +476,31 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
     },
   );
   try {
-    await firstInterrupted.promise;
-    await vi.waitFor(() => expect(interrupted.toSorted()).toEqual(running));
+    // Await the owner's own publications instead of polling: a loaded host must not
+    // turn healthy scheduler work into a wall-clock race.
+    await withinTest(
+      awaitGateBeforeSettlement(
+        allInterrupted.promise,
+        pending,
+        "Cancellation settled before interrupting every running sibling.",
+      ),
+      signal,
+    );
+    expect(interrupted.toSorted()).toEqual(running);
     expect(getActiveSessionWorkAdmissionCount()).toBe(running.length);
     expect(start).not.toHaveBeenCalled();
     for (const lease of leases.toReversed()) {
       lease.release();
     }
-    await vi.waitFor(() => expect(removed).toHaveBeenCalledTimes(queued.length));
+    await withinTest(
+      awaitGateBeforeSettlement(
+        allRemoved.promise,
+        pending,
+        "Cancellation settled before removing every queued sibling.",
+      ),
+      signal,
+    );
+    expect(removed).toHaveBeenCalledTimes(queued.length);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -475,7 +531,9 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
   }
 });
 
-it("keeps a late descendant queued when registered before capacity release on an independent sibling that releases first", async () => {
+it("keeps a late descendant queued when registered before capacity release on an independent sibling that releases first", async ({
+  signal,
+}) => {
   const owner = "agent:main:main";
   const key = (id: string) => `agent:main:subagent:${id}`;
   const parents = { a: owner, b: owner, d: key("a"), x: key("d"), g: key("d") };
@@ -484,6 +542,12 @@ it("keeps a late descendant queued when registered before capacity release on an
     registerSubagentRun({
       runId: id,
       childSessionKey: key(id),
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        agentId: "main",
+        storePath,
+        sessionKey: key(id),
+      })?.entry,
       requesterSessionKey: parents[id],
       controllerSessionKey: parents[id],
       swarmRequesterSessionKey: parents[id],
@@ -502,12 +566,16 @@ it("keeps a late descendant queued when registered before capacity release on an
       agentId: "main",
       sessionKey: key(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     if (id !== "g") {
       await register(id);
     }
   }
-  const unrelatedStart = vi.fn(async () => {});
+  const unrelatedStarted = createDeferred();
+  const unrelatedStart = vi.fn(async () => {
+    unrelatedStarted.resolve();
+  });
   const startG = vi.fn(async () => {});
   const startFailure = vi.fn(() => true);
   enqueueSwarmRun({
@@ -588,7 +656,9 @@ it("keeps a late descendant queued when registered before capacity release on an
     await bReleased.promise;
     expect(lateRegistration).toBeDefined();
     await lateRegistration;
-    await vi.waitFor(() => expect(unrelatedStart).toHaveBeenCalledOnce());
+    // The kill cannot settle while admission A is held, so only the test deadline bounds this.
+    await withinTest(unrelatedStarted.promise, signal);
+    expect(unrelatedStart).toHaveBeenCalledOnce();
     expect(interruptD).not.toHaveBeenCalled();
     expect(startG).not.toHaveBeenCalled();
     admissionA.release();

@@ -21,28 +21,18 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
     message.includes("mixed content") ||
     message.includes("insecure websocket");
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
-  const details = {
-    code: securityError
-      ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
-      : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    browserErrorName,
-    browserMessage,
-  };
-  if (securityError) {
-    return {
-      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
-      message:
-        "Browser refused the Gateway WebSocket for security reasons." +
+  const code = securityError
+    ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+    : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE;
+  return {
+    code,
+    message: securityError
+      ? "Browser refused the Gateway WebSocket for security reasons." +
         (isPlaintextWs
           ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy."),
-      details,
-    };
-  }
-  return {
-    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
-    details,
+          : " Check the Gateway WebSocket URL and browser security policy.")
+      : `Could not create the Gateway WebSocket: ${browserMessage}`,
+    details: { code, browserErrorName, browserMessage },
   };
 }
 

@@ -29,9 +29,9 @@ export async function handleDryRunPreflightError(
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
-    return { incompatible: [], indeterminate: [] };
+  } else {
+    await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   }
-  await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   return { incompatible: [], indeterminate: [] };
 }
 

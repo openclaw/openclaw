@@ -40,6 +40,7 @@ export function createRepositoryFixture(
       },
     },
     agents: {
+      subscribe: () => () => undefined,
       state: {
         agentsList: {
           defaultId: "main",
@@ -49,7 +50,8 @@ export function createRepositoryFixture(
         },
       },
     },
-    sessions: { state: { result: null } },
+    sessions: { subscribe: () => () => undefined, state: { result: null } },
+    config: { subscribe: () => () => undefined, current: {} },
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: options.cloudProfiles ?? [{ id: "aws", providerId: "crabbox" }],
@@ -86,5 +88,14 @@ export function createRepositoryFixture(
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
-  return { state, browser, context, persistPreference, readPreference, request, requestUpdate };
+  return {
+    state,
+    browser,
+    context,
+    gateway,
+    persistPreference,
+    readPreference,
+    request,
+    requestUpdate,
+  };
 }

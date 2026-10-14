@@ -1,8 +1,8 @@
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import { resolveAuthStorePathForDisplayAsync } from "../../agents/auth-profiles/paths.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
@@ -19,7 +19,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionFallbackModel } from "../../status/session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { resolveSupportedThinkingLevel } from "../thinking.js";
@@ -56,11 +56,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return undefined;
   }
 
-  const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
-  const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
+  const directive = normalizeOptionalLowercaseString(params.directives.rawModelDirective);
   const isLiteralModelDirective = params.directives.modelDirectiveSource !== "alias";
   const wantsStatus = isLiteralModelDirective && directive === "status";
-  const wantsSummary = isLiteralModelDirective && !rawDirective;
+  const wantsSummary = isLiteralModelDirective && !directive;
   const wantsLegacyList = isLiteralModelDirective && directive === "list";
   if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
     return undefined;
@@ -104,7 +103,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     selectedModel: params.model,
     sessionEntry: params.sessionEntry,
   };
-  const completedModel = readSessionFallbackModel({
+  const completedModel = await readSessionFallbackModelAsync({
     ...modelParams,
     config: params.cfg,
     sessionScope: {
@@ -117,8 +116,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
     ...modelParams,
     sessionEntry: completedModel ?? params.sessionEntry,
   });
+  const lines = [
+    `Current: ${modelRefs.selected.label}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
+  ].filter((line): line is string => Boolean(line));
   if (wantsSummary) {
-    const current = modelRefs.selected.label;
     const thinkingRuntime = resolveEffectiveAgentRuntime({
       cfg: params.cfg,
       provider: params.provider,
@@ -134,10 +136,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
       catalog: params.thinkingCatalog,
       agentRuntime: thinkingRuntime,
     });
-    const thinkingLine = `Think: ${effectiveThinkLevel} (change with /think <level>)`;
-    const activeRuntimeLine = modelRefs.activeDiffers
-      ? `Active: ${modelRefs.active.label} (runtime)`
-      : null;
     const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
     const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
     const instructions = channelData
@@ -159,14 +157,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ];
     return {
       text: [
-        `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-        activeRuntimeLine,
-        thinkingLine,
-        "",
+        ...lines,
+        `Think: ${effectiveThinkLevel} (change with /think <level>)`,
         ...instructions,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
       ...(channelData ? { channelData } : {}),
     };
   }
@@ -215,15 +209,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
   });
   const authByProvider = prepared.providerAuthLabels;
 
-  const current = modelRefs.selected.label;
-  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
-  const lines = [
-    `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
-    `Default: ${defaultLabel}`,
+  lines.push(
+    `Default: ${params.defaultProvider}/${params.defaultModel}`,
     `Agent: ${params.activeAgentId}`,
-    `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
-  ].filter((line): line is string => Boolean(line));
+    `Auth store: ${shortenHomePath(await resolveAuthStorePathForDisplayAsync(params.agentDir))}`,
+  );
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);
   }
@@ -233,21 +223,20 @@ export async function maybeHandleModelDirectiveInfo(params: {
       modelKey(entry.provider, entry.id),
     ),
   );
-  const wrapperKeys = new Set<string>();
-  for (const entry of pickerCatalog) {
-    const id = normalizeOptionalString(entry.id) ?? "";
-    const slash = id.indexOf("/");
-    if (slash <= 0) {
-      continue;
-    }
-    const nestedProvider = normalizeProviderId(id.slice(0, slash));
-    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
-    const wrapperProvider = normalizeProviderId(entry.provider);
-    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
-      continue;
-    }
-    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
-  }
+  const wrapperKeys = new Set(
+    pickerCatalog.flatMap((entry) => {
+      const id = normalizeOptionalString(entry.id) ?? "";
+      const slash = id.indexOf("/");
+      if (slash <= 0) {
+        return [];
+      }
+      const nestedProvider = normalizeProviderId(id.slice(0, slash));
+      const nestedModel = normalizeOptionalString(id.slice(slash + 1));
+      return nestedProvider && nestedModel && nestedProvider !== normalizeProviderId(entry.provider)
+        ? [modelKey(nestedProvider, nestedModel)]
+        : [];
+    }),
+  );
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   for (const entry of pickerCatalog) {
     const provider = normalizeProviderId(entry.provider);

@@ -3,6 +3,10 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -39,6 +43,7 @@ export function useCodexCommandTestState(options: {
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       clearRuntimeAuthProfileStoreSnapshots();
+      clearRuntimeConfigSnapshot();
       clearSessionStoreCacheForTest();
       vi.unstubAllEnvs();
       cleanup();
@@ -49,6 +54,7 @@ export function useCodexCommandTestState(options: {
     resetCodexTestBindingStore();
     const tempDir = tempDirs.make("openclaw-codex-command-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     options.onSetup(tempDir);
   });
 }
@@ -205,6 +211,13 @@ function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArra
 export function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
   return mockCall(mockFn, callIndex)[argIndex];
 }
+
+export function mutatingCodexRequestMethods(
+  calls: ReadonlyArray<readonly [method: string, ...args: unknown[]]>,
+): string[] {
+  return calls.map(([method]) => method).filter((method) => method !== "thread/read");
+}
+
 export function requestParams(
   mockFn: ReturnType<typeof vi.fn>,
   callIndex = 0,
@@ -293,5 +306,16 @@ export function holdCodexThreadQueue(threadId: string) {
       blocked.resolve();
       await queue;
     },
+  };
+}
+
+export function oauthProfile(email: string, now: number) {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: now + 60 * 60 * 1000,
+    email,
   };
 }

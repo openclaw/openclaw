@@ -2,21 +2,23 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
+import {
+  resolveConfiguredThinkingDefault,
+  resolveThinkingSelection,
+} from "../../../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import { normalizeThinkLevel } from "../../thinking.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { completeFollowupRunLifecycle, completeFollowupRuns } from "./lifecycle.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
 
 type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
-  /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: { rescheduleRequested: boolean };
+  rescheduleRequested?: boolean;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -158,6 +160,15 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   return queue;
 }
 
+export function clearFollowupQueueContent(queue: FollowupQueueState): void {
+  queue.items.length = 0;
+  queue.droppedCount = 0;
+  queue.summaryLines = [];
+  queue.summarySources = [];
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
+}
+
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
   const queue = getExistingFollowupQueue(cleaned);
@@ -166,16 +177,9 @@ export function clearFollowupQueue(key: string): number {
   }
   queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
-  for (const item of followupQueueSources(queue)) {
-    completeFollowupRunLifecycle(item);
-  }
-  queue.items.length = 0;
+  completeFollowupRuns(followupQueueSources(queue));
+  clearFollowupQueueContent(queue);
   queue.inFlight.clear();
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-  queue.summarySources = [];
-  queue.summaryElisions = [];
-  queue.evictedSummaryCount = 0;
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
@@ -272,6 +276,7 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (shouldRewriteModelSelection) {
         delete run.hasAutoFallbackProvenance;
+        delete run.autoFallbackPrimaryProbe;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
         run.hasSessionModelOverride =
@@ -290,6 +295,14 @@ export function refreshQueuedFollowupSession(params: {
           run.thinkLevelOverride === "default"
             ? undefined
             : (run.thinkLevelOverride ?? normalizeThinkLevel(params.nextThinking.level));
+        run.thinkingExplicit =
+          explicitLevel !== undefined ||
+          resolveConfiguredThinkingDefault({
+            cfg: run.config,
+            agentId: run.agentId,
+            provider: run.provider,
+            model: run.model,
+          }) !== undefined;
         run.thinkLevel = resolveThinkingSelection({
           cfg: run.config,
           agentId: run.agentId,
@@ -298,7 +311,7 @@ export function refreshQueuedFollowupSession(params: {
           catalog: params.nextThinking.catalog,
           agentRuntime: params.nextThinking.agentRuntime,
           level: explicitLevel,
-        }).level;
+        }).requestedLevel;
       }
     }
   };

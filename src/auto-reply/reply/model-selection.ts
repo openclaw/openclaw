@@ -34,10 +34,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
@@ -64,7 +61,6 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-export { resolveContextTokens } from "./model-selection-context.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -169,8 +165,7 @@ export async function createModelSelectionState(params: {
     }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
 
-  let provider = params.provider;
-  let model = params.model;
+  let { provider, model } = params;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
@@ -340,12 +335,12 @@ export async function createModelSelectionState(params: {
             sessionKey,
             initialEntry: initialSessionEntry,
             entry: nextSessionEntry,
-            validateCommit: () => {
-              operatorAuthority?.assertCurrent();
-              return undefined;
-            },
+            commitGuard: operatorAuthority?.assertCurrent,
           });
-          if (persistence.status === "lifecycle-invalidated") {
+          if (
+            persistence.status === "lifecycle-invalidated" ||
+            persistence.status === "commit-rejected"
+          ) {
             throw new SessionWorkStartInvalidatedError(persistence.error);
           }
           const persistedEntry = persistence.entry;
@@ -423,8 +418,7 @@ export async function createModelSelectionState(params: {
       usesStoredAutomaticSelection ||
       visibilityPolicy.allows(normalizedStoredOverride)
     ) {
-      provider = normalizedStoredOverride.provider;
-      model = normalizedStoredOverride.model;
+      ({ provider, model } = normalizedStoredOverride);
     }
   }
 
@@ -442,8 +436,7 @@ export async function createModelSelectionState(params: {
         `Configured default model "${buildModelCatalogRef(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
       );
     }
-    provider = allowedInitialSelection.provider;
-    model = allowedInitialSelection.model;
+    ({ provider, model } = allowedInitialSelection);
   }
   let operatorModelOverride = false;
   if (!params.hasModelDirective) {
@@ -462,8 +455,7 @@ export async function createModelSelectionState(params: {
       throw new Error("No model is available for this operator role and agent.");
     }
     operatorModelOverride = selection.provider !== provider || selection.model !== model;
-    provider = selection.provider;
-    model = selection.model;
+    ({ provider, model } = selection);
   }
 
   if (
@@ -474,17 +466,19 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+    const { ensureAuthProfileStoreAsync, prepareAuthProfileProvider } =
       await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(
+    const selection = { ...sessionEntry };
+    const authProfileId = sessionEntry.authProfileOverride;
+    const store = await ensureAuthProfileStoreAsync(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
         allowKeychainPrompt: false,
-        profileId: sessionEntry.authProfileOverride,
+        profileId: authProfileId,
       },
     );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
-    const profile = store.profiles[sessionEntry.authProfileOverride];
+    const profile = store.profiles[authProfileId];
     const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
     const harnessPolicy = resolveAgentHarnessPolicy({
       provider,
@@ -508,7 +502,6 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    const selection = { ...sessionEntry };
     const assertSelectionCurrent = () => {
       operatorAuthority?.assertCurrent();
       if (
@@ -585,15 +578,11 @@ export async function createModelSelectionState(params: {
   const resolveThinkingCatalog = async (
     selection: ThinkingDefaultSelection = { provider, model },
   ) => {
-    const thinkingSelection = resolveThinkingSelection(selection);
-    const { agentRuntime } = thinkingSelection;
+    const { agentRuntime } = resolveThinkingSelection(selection);
     const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
-    const cached = thinkingCatalogs.get(key);
-    if (cached) {
-      return cached.length > 0 ? cached : undefined;
-    }
-    let catalog = visibilityPolicy.catalog;
-    if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
+    let catalog = thinkingCatalogs.get(key);
+    if (!catalog) {
+      catalog = visibilityPolicy.catalog;
       const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
       const preparedCatalog = await loadProviderScopedThinkingCatalog({
         config: cfg,
@@ -606,8 +595,8 @@ export async function createModelSelectionState(params: {
       if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
         catalog = createVisibilityPolicy(preparedCatalog).catalog;
       }
+      thinkingCatalogs.set(key, catalog);
     }
-    thinkingCatalogs.set(key, catalog);
     return catalog.length > 0 ? catalog : undefined;
   };
 

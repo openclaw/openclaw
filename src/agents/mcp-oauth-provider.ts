@@ -50,6 +50,22 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
   );
 }
 
+function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
+  if (redirectUris.includes(redirectUrl)) {
+    return true;
+  }
+  const loopback = URL.parse(redirectUrl);
+  if (
+    !loopback ||
+    loopback.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]", "localhost"].includes(loopback.hostname)
+  ) {
+    return false;
+  }
+  // RFC 8252 exempts the port, not other callback bytes changed by URL serialization.
+  return redirectUris.includes(redirectUrl.replace(/^(http:\/\/[^/?#]+):\d+(?=[/?#]|$)/iu, "$1"));
+}
+
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
 export function withMcpOAuthLeaseSignal(
   fetchFn: FetchLike | undefined,
@@ -201,7 +217,10 @@ export async function createMcpOAuthClientProvider(params: {
         clientInformation &&
         "redirect_uris" in clientInformation &&
         Array.isArray(clientInformation.redirect_uris) &&
-        !clientInformation.redirect_uris.includes(resolveOAuthRedirectUrl(config, store))
+        !hasRegisteredOAuthRedirect(
+          clientInformation.redirect_uris,
+          resolveOAuthRedirectUrl(config, store),
+        )
       ) {
         return undefined;
       }

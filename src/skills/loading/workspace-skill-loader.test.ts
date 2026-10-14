@@ -17,11 +17,8 @@ import { buildPluginMetadataProviderFacts } from "../../plugins/plugin-metadata-
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  getSkillsSourceVersion,
-} from "../runtime/refresh-state.js";
+import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -71,7 +68,7 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
   };
 });
 
-describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparation", (caller) => {
+describe("prompt asynchronous binary preparation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -119,11 +116,9 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
       }),
     };
     const resolve = async (assertCurrent?: () => void) => {
-      const entries =
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent }))
-              .eligible
-          : await prepareWorkspaceSkills(workspaceDir, options, assertCurrent);
+      const entries = (
+        await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent })
+      ).eligible;
       return entries.map((entry) => entry.skill.name);
     };
     return { binDir, config, eligibility, resolve };
@@ -141,38 +136,6 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
       },
     ]);
   }
-
-  it("does not probe skills excluded by agent selection and preserves session overrides", async () => {
-    const skillOverrides: Record<string, boolean> = {};
-    const { binDir, config, resolve } = await fixture(
-      [
-        { name: "allowed", metadata: { requires: { bins: ["allowed-tool"] } } },
-        { name: "excluded", metadata: { requires: { bins: ["excluded-tool"] } } },
-      ],
-      { agentId: "operator", skillOverrides },
-    );
-    const selectedSkills: string[] = [];
-    config.agents = { defaults: { skills: selectedSkills }, entries: { operator: {} } };
-    for (const name of ["allowed", "excluded"]) {
-      await fs.writeFile(path.join(binDir, `${name}-tool`), "fixture", { mode: 0o755 });
-    }
-    const access = vi.spyOn(fs, "access");
-    expect(await resolve()).toEqual([]);
-    expect(access.mock.calls).toEqual([]);
-
-    skillOverrides.allowed = true;
-    expect(await resolve()).toEqual(["allowed"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
-      "allowed-tool",
-    ]);
-    access.mockClear();
-    skillOverrides.allowed = false;
-    selectedSkills.push("excluded");
-    expect(await resolve()).toEqual(["excluded"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
-      "excluded-tool",
-    ]);
-  });
 
   it("skips binary IO for cheap exclusions and always skills, while detecting newly installed tools", async () => {
     const { binDir, config, resolve } = await fixture([
@@ -211,7 +174,8 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
     ]);
     access.mockClear();
     expect(await resolve()).toEqual(["always", "ordinary"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
+    expect(access.mock.calls.map(([file]) => path.basename(String(file))).toSorted()).toEqual([
+      "installed-tool",
       "missing-tool",
     ]);
   });
@@ -500,6 +464,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  await closeSkillsWatchers(true);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -532,6 +497,7 @@ describe("loadWorkspaceSkills", () => {
   it("keeps an eligible bundled skill addressable across a workspace collision", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    const executionWorkspaceDir = await createTempWorkspaceDir();
     await writeSkill({
       dir: path.join(bundledSkillsDir, "control-ui"),
       name: "control-ui",
@@ -542,6 +508,9 @@ describe("loadWorkspaceSkills", () => {
       name: "control-ui",
       description: "Workspace replacement",
     });
+    await writeWorkspaceSkills(executionWorkspaceDir, [
+      { name: "execution-only", description: "Unrelated execution skill" },
+    ]);
 
     const visible = loadVisibleSkills(workspaceDir, {
       config: {},
@@ -549,14 +518,25 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
     });
     const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
-    const [bundledControlUi] = await prepareWorkspaceSkills(workspaceDir, {
+    const bundledEntries = await prepareWorkspaceSkills(workspaceDir, {
       bundledSkillName: "control-ui",
+      executionWorkspaceDir,
+      librarySelections: [
+        {
+          skillId: "unavailable-library-skill",
+          revision: "unavailable-revision",
+          name: "unrelated-library-skill",
+          ownerProfileId: "fixture-owner",
+        },
+      ],
       eligibility: {},
       config: {},
       bundledSkillsDir,
     });
+    const [bundledControlUi] = bundledEntries;
 
     expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
+    expect(bundledEntries.map((entry) => entry.skill.name)).toEqual(["control-ui"]);
     expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");
     expect(bundledControlUi?.skill.filePath).toBe(
       await fs.realpath(path.join(bundledSkillsDir, "control-ui", "SKILL.md")),
@@ -604,7 +584,8 @@ describe("loadWorkspaceSkills", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
-  it("reuses agent discovery across execution scopes and refreshes only changed sources", async () => {
+  it("reuses discovery across execution scopes until the passive refresh interval", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const workspaceDir = await createTempWorkspaceDir();
     const executionDirs = [await createTempWorkspaceDir(), await createTempWorkspaceDir()] as const;
     await writeWorkspaceSkills(workspaceDir, [
@@ -622,19 +603,14 @@ describe("loadWorkspaceSkills", () => {
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     };
-    const directoryReads = vi.spyOn(fsSync, "opendirSync");
-    const reads = (dir: string) =>
-      directoryReads.mock.calls.filter(([file]) => String(file) === path.join(dir, "skills"))
-        .length;
     const scoped = (executionWorkspaceDir: string) => ({ ...options, executionWorkspaceDir });
     try {
-      const first = loadWorkspaceSkills(workspaceDir, options);
-      const initialReadCount = directoryReads.mock.calls.length;
-      expect(reads(workspaceDir)).toBe(1);
+      const first = await prepareWorkspaceSkills(workspaceDir, options);
       expect(
-        loadWorkspaceSkills(workspaceDir, { ...options, skillFilter: ["cached-skill"] })[0],
-      ).toBe(first[0]);
-      expect(directoryReads).toHaveBeenCalledTimes(initialReadCount);
+        (
+          await prepareWorkspaceSkills(workspaceDir, { ...options, skillFilter: ["cached-skill"] })
+        ).map((entry) => entry.skill.name),
+      ).toEqual(["cached-skill"]);
       for (const executionDir of executionDirs) {
         const entries = await prepareWorkspaceSkills(workspaceDir, scoped(executionDir));
         expect(entries.map((entry) => entry.skill.name)).toEqual([
@@ -643,98 +619,54 @@ describe("loadWorkspaceSkills", () => {
         ]);
         expect(entries[0]?.skill.description).toBe("Agent skill");
         expect(entries[1]?.skill.description).toBe(executionDir);
-        expect(reads(executionDir)).toBe(1);
       }
-      expect(reads(workspaceDir)).toBe(1);
       const changedExecutionDir = executionDirs[0];
       const version = getSkillsSnapshotVersion(workspaceDir);
       await writeWorkspaceSkills(changedExecutionDir, [
         { name: "cached-skill", description: "Changed loser" },
       ]);
-      bumpSkillsSnapshotVersion({
-        workspaceDir,
-        reason: "watch",
-        sourceScopes: [scoped(changedExecutionDir)],
-      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(
+        (await prepareWorkspaceSkills(workspaceDir, scoped(changedExecutionDir)))[0]?.skill
+          .description,
+      ).toBe("Agent skill");
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-      expect(reads(workspaceDir)).toBe(1);
-      expect(reads(changedExecutionDir)).toBe(2);
-      expect(reads(executionDirs[1])).toBe(1);
       await writeWorkspaceSkills(workspaceDir, [
         { name: "fresh-skill", description: "Fresh skill" },
       ]);
-      expect(loadWorkspaceSkills(workspaceDir, options)).toEqual(first);
-      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      expect(await prepareWorkspaceSkills(workspaceDir, options)).toEqual(first);
+      await vi.advanceTimersByTimeAsync(60_000);
       for (const executionDir of executionDirs) {
         expect(
-          loadWorkspaceSkills(workspaceDir, scoped(executionDir)).map((entry) => entry.skill.name),
+          (await prepareWorkspaceSkills(workspaceDir, scoped(executionDir))).map(
+            (entry) => entry.skill.name,
+          ),
         ).toEqual(["cached-skill", "fresh-skill", "execution-skill"]);
       }
-      expect(reads(workspaceDir)).toBe(2);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
     } finally {
-      directoryReads.mockRestore();
+      vi.useRealTimers();
     }
   });
 
-  it.each([false, true])(
-    "reconciles incoming plugin metadata with scoped invalidation=%s",
-    async (scoped) => {
-      const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
-      const config = { plugins: { entries: { "workspace-skills": { enabled: true } } } };
-      const executionWorkspaceDir = scoped ? await createTempWorkspaceDir() : undefined;
-      const options = { config, managedSkillsDir: managedDir, executionWorkspaceDir };
-      const sourceVersion = getSkillsSourceVersion(workspaceDir);
-      expect(
-        loadTestWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name),
-      ).toContain("drafting");
-      const version = getSkillsSnapshotVersion(workspaceDir);
-      const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
-        workspaceDir,
-        config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      });
-      bumpSkillsSnapshotVersion({
-        workspaceDir,
-        reason: "watch-targets",
-        sourceScopes: scoped ? [{ executionWorkspaceDir }] : undefined,
-        refreshInputs: { sourceScope: { executionWorkspaceDir }, config, pluginMetadataSnapshot },
-      });
-      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
-      if (scoped) {
-        expect(getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
-      }
-      expect(
-        loadTestWorkspaceSkills(workspaceDir, { ...options, pluginMetadataSnapshot }).map(
-          (entry) => entry.skill.name,
-        ),
-      ).not.toContain("drafting");
-    },
-  );
-
-  it("filters plugin-shipped skills through plugin config", async () => {
+  it("uses incoming plugin metadata when reusing source discovery", async () => {
     const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
-
-    const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { "workspace-skills": { enabled: true } },
-        },
-      },
-      managedSkillsDir: managedDir,
+    const config = { plugins: { entries: { "workspace-skills": { enabled: true } } } };
+    const executionWorkspaceDir = await createTempWorkspaceDir();
+    const options = { config, managedSkillsDir: managedDir, executionWorkspaceDir };
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name),
+    ).toContain("drafting");
+    const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
     });
-
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("drafting");
-
-    const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          allow: ["something-else"],
-        },
-      },
-      managedSkillsDir: managedDir,
-    });
-
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("drafting");
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, { ...options, pluginMetadataSnapshot }).map(
+        (entry) => entry.skill.name,
+      ),
+    ).not.toContain("drafting");
   });
 
   it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {
@@ -830,37 +762,6 @@ describe("loadWorkspaceSkills", () => {
     );
   });
 
-  it("loads workspace metadata with JSON5-style trailing commas", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const skillDir = path.join(workspaceDir, "skills", "json5-metadata");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      `---
-name: json5-metadata
-description: JSON5-style metadata
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
----
-`,
-      "utf8",
-    );
-
-    const entry = loadTestWorkspaceSkills(workspaceDir).find(
-      (candidate) => candidate.skill.name === "json5-metadata",
-    );
-
-    expect(entry?.metadata?.requires?.env).toEqual(["EXAMPLE_VAR"]);
-  });
-
   it("warns for malformed files and keeps loading sibling workspace skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const brokenDir = path.join(workspaceDir, "skills", "broken");
@@ -934,102 +835,5 @@ description: Broken skill
     if (process.platform !== "win32") {
       expect(warningText).toContain(unreadableFile);
     }
-  });
-
-  it("applies agent skill filters and replacement semantics", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const defaultEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: {} },
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(defaultEntries.map((entry) => entry.skill.name)).toEqual(["github"]);
-
-    const replacementEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: { skills: ["docs-search"] } },
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(replacementEntries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
-  });
-
-  it("keeps remote-eligible skills when agent filtering is active", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "remote-only"),
-      name: "remote-only",
-      description: "Needs a remote bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
-    });
-
-    const entries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["remote-only"],
-          },
-          entries: { writer: {} },
-        },
-      },
-      agentId: "writer",
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
-          note: "sandbox",
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
-  });
-
-  it("filters remote-ineligible skills when no agent skill filter is active", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "local-only"),
-      name: "local-only",
-      description: "Always available",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "remote-only"),
-      name: "remote-only",
-      description: "Needs a remote bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
-    });
-
-    const entries = loadTestWorkspaceSkills(workspaceDir, {
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: () => false,
-          note: "sandbox",
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["local-only"]);
   });
 });

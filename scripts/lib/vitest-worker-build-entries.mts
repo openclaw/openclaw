@@ -1,9 +1,11 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
+import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
 import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
+import { memoryAdmissionRestartEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
@@ -13,7 +15,7 @@ import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/g
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
 import { workboardSqliteBackendEntrypoint } from "../../extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts";
 import { agentCoreRetentionEntrypoints } from "../../packages/agent-core/src/retention-runtime.test-support.ts";
-import { cleanForGeminiEntrypoint } from "../../packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts";
+import { toolSchemaDepthEntrypoint } from "../../packages/ai/src/providers/tool-schema-depth-runtime.test-support.ts";
 import { eventStreamRetentionEntrypoint } from "../../packages/llm-core/src/retention-runtime.test-support.ts";
 import { eventHubRetentionEntrypoint } from "../../packages/sdk/src/retention-runtime.test-support.ts";
 import { tableStackEntrypoint } from "../../packages/terminal-core/src/table-runtime.test-support.ts";
@@ -37,6 +39,8 @@ import {
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
+  windowsProcessJobRetentionEntrypoint,
+  windowsProcessOwnershipEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
@@ -50,6 +54,7 @@ import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-r
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
 import { deliveryQueueProcessEntrypoints } from "../../src/infra/outbound/delivery-queue-process-runtime.test-support.ts";
+import { postgresLockTestEntrypoint } from "../../src/infra/postgres-sync/locks-runtime.test-support.ts";
 import { sqliteMaintenanceEntrypoints } from "../../src/infra/sqlite-maintenance-runtime.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
 import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
@@ -266,8 +271,10 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/skills.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
+  "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
+  "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
@@ -303,9 +310,11 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
     codexCatalogPageWorkerEntrypoint,
+    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
+    memoryAdmissionRestartEntrypoint,
     memoryForgetFaultEntrypoint,
     memoryForgetPlanningObserverEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,
@@ -313,6 +322,7 @@ export const vitestWorkerBuildEntries = {
     sqliteWorkerStoreCompileCacheParentEntrypoint,
     ...Object.values(nativeProcessTestEntrypoints),
     ...Object.values(storageProcessTestEntrypoints),
+    postgresLockTestEntrypoint,
     ...Object.values(workerTaskPoolEntrypoints),
     nativeWorkerLifecycleEntrypoint,
     nativeWorkerResourceEntrypoint,
@@ -325,7 +335,7 @@ export const vitestWorkerBuildEntries = {
     eventHubRetentionEntrypoint,
     eventStreamRetentionEntrypoint,
     ...Object.values(agentCoreRetentionEntrypoints),
-    cleanForGeminiEntrypoint,
+    toolSchemaDepthEntrypoint,
     tableStackEntrypoint,
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
@@ -342,6 +352,8 @@ export const vitestWorkerBuildEntries = {
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(cliMessageExitEntrypoints),
+    windowsProcessOwnershipEntrypoint,
+    windowsProcessJobRetentionEntrypoint,
     ...Object.values(updateCandidateExitEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
     ...Object.values(updateExecutorEntrypoints),

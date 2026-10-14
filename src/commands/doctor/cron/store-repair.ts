@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,6 +16,7 @@ import {
 } from "../../../cron/store/row-codec.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
 import { createVerifiedSqliteSnapshot } from "../../../infra/sqlite-snapshot.js";
 import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
@@ -25,6 +26,7 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -42,6 +44,13 @@ export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, stor
   );
 }
 
+export function resolveStoredCronJobOwner(job: Record<string, unknown> | undefined) {
+  return tryResolveCronJobEffectiveAgentId({
+    agentId: normalizeOptionalString(job?.agentId),
+    sessionKey: normalizeOptionalString(job?.sessionKey),
+  });
+}
+
 /** Pins only ownerless definitions, retaining every other authored and runtime field. */
 export async function repairLegacyCronJobOwnersForDoctor(
   scope: DoctorCronScope,
@@ -56,12 +65,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   const changes: Array<{ jobId: string; agentId: string; definition: string }> = [];
   for (const row of rows) {
     const job = safeParseJsonRecord(row.job_json);
-    if (
-      tryResolveCronJobEffectiveAgentId({
-        agentId: normalizeOptionalString(job?.agentId),
-        sessionKey: normalizeOptionalString(job?.sessionKey),
-      })
-    ) {
+    if (resolveStoredCronJobOwner(job)) {
       continue;
     }
     if (!job) {
@@ -117,8 +121,18 @@ export async function repairLegacyCronJobOwnersForDoctor(
 export async function inspectCronJobsForDoctor(
   scope: DoctorCronScope,
 ): Promise<PluginDoctorCronInventory> {
+  // Doctor admits live authority reads only after its offline backup boundary.
+  // Borrow that owner instead of allocating another disposable snapshot and worker.
+  const databasePath = resolveOpenClawStateSqlitePath(scope.env);
+  if (!existsSync(databasePath)) {
+    return { jobs: [] };
+  }
+  const reused = withMaintenanceOpenClawStateDatabaseReadOnly(
+    ({ db }) => inspectCronRowsForDoctor(db),
+    databasePath,
+  );
   return {
-    jobs: await inspectCronJobsReadOnly(scope.env),
+    jobs: reused.reused ? reused.value : await inspectCronJobsReadOnly(scope.env),
   };
 }
 
@@ -196,7 +210,7 @@ export async function backupCronStoreForDoctor(
   scope: DoctorCronScope,
   repair: {
     assertCurrent: () => void;
-    assertRowsUnchanged: (db: DatabaseSync) => void;
+    assertRowsUnchanged: (db: EngineConnection) => void;
   },
 ): Promise<string> {
   repair.assertCurrent();
@@ -219,8 +233,8 @@ async function commitCronDoctorRepair(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   repair: {
-    assertRowsUnchanged: (db: DatabaseSync) => void;
-    write: (db: DatabaseSync) => void;
+    assertRowsUnchanged: (db: EngineConnection) => void;
+    write: (db: EngineConnection) => void;
   },
 ): Promise<string> {
   const backupPath = await backupCronStoreForDoctor(scope, {

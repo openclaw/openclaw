@@ -74,7 +74,7 @@ function normalizeCallTransport(value: unknown) {
     isVoip: asBoolean(transport.is_voip ?? transport.isVoip),
     isEmergency: asBoolean(transport.is_emergency ?? transport.isEmergency),
   };
-  if (
+  const verifiedFaceTime =
     transport.kind === "facetime" &&
     (transport.classifier_version === "tu-provider-v1" ||
       transport.classifierVersion === "tu-provider-v1") &&
@@ -85,26 +85,9 @@ function normalizeCallTransport(value: unknown) {
     base.isUsingBaseband === false &&
     base.isWifiCall === false &&
     base.isVoip === true &&
-    base.isEmergency === false
-  ) {
-    return {
-      kind: "facetime",
-      classifierVersion: base.classifierVersion,
-      service: base.service,
-      ...(base.faceTimeTransportType !== undefined
-        ? { faceTimeTransportType: base.faceTimeTransportType }
-        : {}),
-      providerClassified: true,
-      providerIsFaceTime: true,
-      providerIsTelephony: false,
-      isUsingBaseband: false,
-      isWifiCall: false,
-      isVoip: true,
-      isEmergency: false,
-    };
-  }
+    base.isEmergency === false;
   return {
-    kind: transport.kind === "cellular" ? "cellular" : "unknown",
+    kind: verifiedFaceTime ? "facetime" : transport.kind === "cellular" ? "cellular" : "unknown",
     classifierVersion: base.classifierVersion,
     ...(base.service !== undefined ? { service: base.service } : {}),
     ...(base.faceTimeTransportType !== undefined

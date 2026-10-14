@@ -84,6 +84,11 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.resume()
     }
 
+    /// URLSessionWebSocketTask cancellation can lose a race with its HTTP 101: the task completes
+    /// as canceled, then Foundation opens the upgraded socket anyway. Nothing in URLSession (task
+    /// cancel, session invalidation or reset) reclaims that socket, and its descriptor outlives
+    /// the peer's close. Callers keep it unused through socket generations and admission; the
+    /// Gateway closes its end at the preauth handshake timeout.
     public func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         self.task.cancel(with: closeCode, reason: reason)
     }

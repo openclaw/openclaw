@@ -46,7 +46,7 @@ export function createTelegramDeps(stateDir: string, cfg: OpenClawConfig): Teleg
       modelNames: new Map<string, string>(),
       modelCatalog: [],
     }),
-    listSkillCommandsForAgents: () => [],
+    prepareSkillCommandsForAgents: async () => [],
     wasSentByBot: () => false,
   } as TelegramBotDeps;
 }

@@ -23,8 +23,8 @@ export function createDiscordSupplementalContextAccessChecker(params: {
   const userAllowList = params.channelConfig?.users ?? params.guildInfo?.users ?? [];
   const roleAllowList = params.channelConfig?.roles ?? params.guildInfo?.roles ?? [];
   const allowFrom = [...userAllowList, ...roleAllowList];
-  return (sender: DiscordSupplementalContextSender): boolean => {
-    return resolveInboundSupplementalSenderAllowed({
+  return (sender: DiscordSupplementalContextSender): boolean =>
+    resolveInboundSupplementalSenderAllowed({
       isGroup: params.isGuild,
       groupPolicy: allowFrom.length === 0 ? "open" : "allowlist",
       allowFrom,
@@ -39,7 +39,6 @@ export function createDiscordSupplementalContextAccessChecker(params: {
           allowNameMatching: params.allowNameMatching,
         }),
     });
-  };
 }
 
 export function buildDiscordGroupSystemPrompt(

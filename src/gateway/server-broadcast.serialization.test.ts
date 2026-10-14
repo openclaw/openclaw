@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
@@ -332,6 +333,7 @@ describe("presence recipient projection", () => {
   it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const sharedKey = "agent:main:shared";
       const incognitoKey = "agent:main:dashboard:incognito-presence";
       const keys = [
@@ -469,6 +471,8 @@ describe("presence recipient projection", () => {
 
   it("keeps solo and system authority without treating pending identity or missing read scope as solo", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let policy: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(policy);
       const key = "agent:main:private";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
@@ -506,7 +510,6 @@ describe("presence recipient projection", () => {
       worker.connect.role = "worker";
       worker.connect.scopes = [];
       worker.connectionKind = "worker";
-      let policy: OpenClawConfig = {};
       const projection = await createSessionRowProjection({
         cfg: policy,
         modelCatalog: [],
@@ -568,17 +571,24 @@ describe("presence payload encoding", () => {
       revoked = true;
     });
     const stringify = vi.spyOn(JSON, "stringify");
+    const encode = vi.spyOn(Buffer, "from");
     const stateVersion = { presence: 3 };
     broadcast("presence", { presence: visible }, { stateVersion });
     const encodings = stringify.mock.calls.filter(
       ([value]) => value?.payload?.presence === visible || value?.payload?.presence === hidden,
     );
+    const byteEncodings = encode.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes('"presence":['),
+    );
     stringify.mockRestore();
+    encode.mockRestore();
 
     expect(encodings).toHaveLength(2);
+    expect(byteEncodings.length).toBeLessThanOrEqual(2);
     expect(project).toHaveBeenCalledTimes(4);
     for (const [index, peer] of peers.entries()) {
-      expect(peer.socket.send.mock.lastCall![0]).toBe(
+      expect(Buffer.isBuffer(peer.socket.send.mock.lastCall![0])).toBe(true);
+      expect(String(peer.socket.send.mock.lastCall![0])).toBe(
         JSON.stringify({
           type: "event",
           event: "presence",

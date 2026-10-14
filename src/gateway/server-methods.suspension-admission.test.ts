@@ -48,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
+  vi.useRealTimers();
 });
 
 describe("gateway request suspension admission", () => {
@@ -72,9 +73,11 @@ describe("gateway request suspension admission", () => {
       scope: "operator.admin",
       core: true,
       handler: expectDefined(handlers["update.runs.get"], "lazy update-run handler"),
-      context: { requestEntryLifetime, logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
+      context: {
+        getRuntimeConfig: () => ({}),
+        requestEntryLifetime,
+        logGateway: { warn: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     });
     await preparing.promise;
     requestEntryLifetime.beginClose();
@@ -174,6 +177,7 @@ describe("gateway request suspension admission", () => {
       }),
     ]);
     const context = {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
     let releaseContinuation: (() => void) | null = null;
@@ -274,6 +278,7 @@ describe("gateway request suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      getRuntimeConfig: () => ({}),
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
@@ -372,6 +377,7 @@ describe("gateway request suspension admission", () => {
         ],
       ]);
       const context = {
+        getRuntimeConfig: () => ({}),
         cron,
         logGateway: { warn: vi.fn(), info: vi.fn() },
         chatAbortControllers,
@@ -409,7 +415,7 @@ describe("gateway request suspension admission", () => {
           status: "draining",
           suspensionId: expect.any(String),
           expiresAtMs: expect.any(Number),
-          retryAfterMs: 20_000,
+          retryAfterMs: 5_000,
           activeCount: preservingTerminals ? 3 : 2,
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],
           blockers: expect.arrayContaining([
@@ -466,7 +472,7 @@ describe("gateway request suspension admission", () => {
         expect(pending.respond).toHaveBeenCalledWith(true, {
           status: "draining",
           expiresAtMs: result.expiresAtMs,
-          retryAfterMs: 20_000,
+          retryAfterMs: 5_000,
           activeCount: 1,
           blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],

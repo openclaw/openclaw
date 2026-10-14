@@ -10,12 +10,73 @@ import {
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import {
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   type ResolvedRealtimeVoiceProvider,
 } from "../talk/provider-resolver.js";
 import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
+import {
+  createRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+
+const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
+// Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
+const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
+const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
+
+type HarnessOptions = Parameters<typeof createRealtimeVoiceSessionHarness>[0];
+
+export function createMeetingRealtimeHarness(
+  params: {
+    config: { chrome: { audioFormat: MeetingRealtimeAudioFormat } };
+    transport: { inputAudioIsolated?: boolean };
+    logger: NonNullable<HarnessOptions["talkback"]>["logger"];
+    meetingSessionId: string;
+    requesterSessionKey?: string;
+    consultAgent(request: {
+      meetingSessionId: string;
+      requesterSessionKey?: string;
+      args: { question: string; responseStyle: string };
+      transcript: RealtimeVoiceSessionHarness["transcript"];
+      abortSignal: AbortSignal;
+    }): Promise<{ text: string }>;
+  },
+  options: Pick<HarnessOptions, "talk" | "talkPayloads"> & {
+    logPrefix: string;
+    deliver: NonNullable<HarnessOptions["talkback"]>["deliver"];
+  },
+): RealtimeVoiceSessionHarness {
+  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
+    talk: options.talk,
+    talkPayloads: options.talkPayloads,
+    echoSuppression: params.transport.inputAudioIsolated
+      ? undefined
+      : {
+          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
+          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
+          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
+        },
+    talkback: {
+      debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      logger: params.logger,
+      logPrefix: options.logPrefix,
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle, signal }) =>
+        params.consultAgent({
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript: harness.transcript,
+          abortSignal: signal,
+        }),
+      deliver: options.deliver,
+    },
+  });
+  return harness;
+}
 
 type MeetingRealtimeProviderSelectionConfig = {
   realtime: {
@@ -37,13 +98,13 @@ export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat)
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
 }
 
-export function resolveMeetingRealtimeProvider(params: {
+export async function resolveMeetingRealtimeProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeVoiceProvider {
+}): Promise<ResolvedRealtimeVoiceProvider> {
   const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
@@ -56,11 +117,11 @@ export function resolveMeetingRealtimeProvider(params: {
   });
 }
 
-export function resolveMeetingRealtimeTranscriptionProvider(params: {
+export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
-}): ResolvedRealtimeTranscriptionProvider {
+}): Promise<ResolvedRealtimeTranscriptionProvider> {
   const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
@@ -84,7 +145,11 @@ export function resolveMeetingRealtimeTranscriptionProvider(params: {
   const providerConfig = provider.resolveConfig
     ? provider.resolveConfig({ cfg: params.fullConfig, rawConfig })
     : rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
+  if (
+    !(provider.isConfiguredAsync
+      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
+  ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
   }
   return { provider, providerConfig };

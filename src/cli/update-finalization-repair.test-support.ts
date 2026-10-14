@@ -72,12 +72,15 @@ export const readGatewayServiceState = async () => {
     outcome,
     healthy: outcome === "ready",
     waitOutcome:
-      outcome === "ready" ? "healthy" : outcome === "starting" ? "still-starting" : "timeout",
+      outcome === "ready" ? "healthy" : outcome === "starting" ? "still-starting" : "stopped-free",
     staleGatewayPids: [],
-    runtime: { status: "running" },
+    runtime:
+      outcome === "failed"
+        ? { status: "stopped", state: "failed", lastExitStatus: 1 }
+        : { status: "running" },
     portUsage: {
       port: Number(process.env.OPENCLAW_GATEWAY_PORT),
-      status: outcome === "starting" ? "free" : "busy",
+      status: outcome === "ready" ? "busy" : "free",
       listeners: [],
       hints: [],
     },

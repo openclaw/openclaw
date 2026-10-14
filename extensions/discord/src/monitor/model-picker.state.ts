@@ -184,15 +184,13 @@ export function buildDiscordModelPickerCustomId(
     }
   };
   append("p", normalizedProvider);
-  const runtime = params.runtime?.trim();
-  append("r", runtime);
+  append("r", params.runtime?.trim());
   const runtimeToken = params.runtimeToken?.trim();
   if (runtimeToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeToken)) {
     throw new Error("Discord model picker runtime token is invalid");
   }
   append("rt", runtimeToken);
-  const runtimeIndex = normalizeOptionalModelPickerIndex(params.runtimeIndex);
-  append("ri", runtimeIndex);
+  append("ri", normalizeOptionalModelPickerIndex(params.runtimeIndex));
   append("pp", providerPage);
   if (modelToken) {
     parts.push(`m=${modelToken}`);
@@ -202,10 +200,8 @@ export function buildDiscordModelPickerCustomId(
     append("mi", modelIndex);
     append("rs", recentSlot);
   }
-  const providerBucket = params.providerBucket?.trim().toLowerCase();
-  append("pb", providerBucket);
-  const modelBucket = params.modelBucket?.trim().toLowerCase();
-  append("mb", modelBucket);
+  append("pb", params.providerBucket?.trim().toLowerCase());
+  append("mb", params.modelBucket?.trim().toLowerCase());
 
   // Page one is already the parser default. A model token also identifies its provider.
   if (parts.join(";").length > DISCORD_CUSTOM_ID_MAX_CHARS) {
@@ -361,14 +357,6 @@ export function findProviderBucketLocation(
   return findModelPickerBucketLocation(data.providers.toSorted(), normalizeProviderId(provider));
 }
 
-export function findModelBucketId(
-  data: ModelsProviderData,
-  provider: string,
-  model: string,
-): string | undefined {
-  return resolveDiscordModelPickerPageForModel({ data, provider, model }).bucket;
-}
-
 function findModelPickerBucketLocation(
   sortedItems: string[],
   item: string,
@@ -460,4 +448,12 @@ export function resolveDiscordModelPickerPageForModel(params: {
   }
   const sorted = [...modelSet].toSorted(compareBucketItems);
   return findModelPickerBucketLocation(sorted, params.model) ?? { page: 1 };
+}
+
+export function getDiscordModelPickerRecentModelRefs(
+  data: ModelsProviderData,
+  quickModels: string[],
+): string[] {
+  const defaultModelRef = `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`;
+  return [defaultModelRef, ...quickModels.filter((modelRef) => modelRef !== defaultModelRef)];
 }

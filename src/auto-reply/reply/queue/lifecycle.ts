@@ -1,5 +1,5 @@
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
-import type { FollowupRun } from "./types.js";
+import { FollowupRunDeferredError, type FollowupRun } from "./types.js";
 
 const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
@@ -13,6 +13,26 @@ type FollowupLifecycleRun = Pick<
   FollowupRun,
   "steerPending" | "turnAdoptionLifecycle" | "operatorAuthority"
 >;
+
+function stopFollowupRunPreAdoptionHeartbeat(lifecycle: TurnAdoptionLifecycle | undefined): void {
+  if (lifecycle) {
+    deferredHeartbeatStops.get(lifecycle)?.();
+  }
+}
+
+export function updateFollowupRetryHeartbeats(
+  error: unknown,
+  sources: readonly FollowupRun[],
+): void {
+  // Preparation failures stop renewal; a later capacity wait restores source liveness.
+  for (const source of sources) {
+    if (error instanceof FollowupRunDeferredError) {
+      startFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
+    } else {
+      stopFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
+    }
+  }
+}
 
 export function startFollowupRunPreAdoptionHeartbeat(
   lifecycle: TurnAdoptionLifecycle | undefined,
@@ -35,13 +55,13 @@ export function startFollowupRunPreAdoptionHeartbeat(
   ) {
     return undefined;
   }
-  deferredHeartbeatStops.get(lifecycle)?.();
+  stopFollowupRunPreAdoptionHeartbeat(lifecycle);
   const pulse = () => {
     try {
       heartbeat();
     } catch {
       // Leave recovery to the ingress watchdog when its liveness callback fails.
-      deferredHeartbeatStops.get(lifecycle)?.();
+      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
     }
   };
   const timer = setInterval(pulse, intervalMs).unref();
@@ -127,7 +147,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
       await lifecycle.onAdopted();
       run.operatorAuthority?.assertCurrent();
       admittedTurnAdoptionLifecycles.add(lifecycle);
-      deferredHeartbeatStops.get(lifecycle)?.();
+      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
     }
   });
 
@@ -166,7 +186,7 @@ export function completeFollowupRunLifecycle(
     };
 
     if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
-      deferredHeartbeatStops.get(lifecycle)?.();
+      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
       completedTurnAdoptionLifecycles.add(lifecycle);
     }
 
@@ -177,6 +197,22 @@ export function completeFollowupRunLifecycle(
       // Completion closes future admission immediately, but the callback waits for
       // the in-flight admission attempt so adoption and abandonment cannot race.
       void admission.then(finish, finish).catch(() => {});
+    }
+  }
+}
+
+export function completeFollowupRuns(
+  items: Iterable<FollowupLifecycleRun>,
+  onError?: (error: unknown) => void,
+): void {
+  for (const item of items) {
+    try {
+      completeFollowupRunLifecycle(item);
+    } catch (error) {
+      if (!onError) {
+        throw error;
+      }
+      onError(error);
     }
   }
 }

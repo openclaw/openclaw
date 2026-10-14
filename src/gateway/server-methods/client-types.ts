@@ -34,6 +34,7 @@ export type GatewayClient = Pick<
   | "authPolicy"
   | "invalidated"
   | "connectionSignal"
+  | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
   | "clientIp"

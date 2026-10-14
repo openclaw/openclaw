@@ -196,28 +196,26 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         });
         const normalized = normalizeWebSearchOutput({ ...executed, query });
         const latencyMs = Date.now() - startedAt;
-        if (normalized.kind === "results") {
+        if (normalized.kind === "results" || normalized.kind === "answer") {
           result = {
             provider: executed.provider,
             latencyMs,
             status: "ok",
-            results: normalized.results.map((row) => ({
-              title: unwrapWebSearchOutputText(row.title),
-              url: row.url,
-              ...(row.snippet ? { snippet: unwrapWebSearchOutputText(row.snippet) } : {}),
-            })),
-            cached: normalized.cached === true,
-          };
-        } else if (normalized.kind === "answer") {
-          result = {
-            provider: executed.provider,
-            latencyMs,
-            status: "ok",
-            content: unwrapWebSearchOutputText(normalized.content),
-            citations: normalized.citations?.map((row) => ({
-              url: row.url,
-              ...(row.title ? { title: unwrapWebSearchOutputText(row.title) } : {}),
-            })),
+            ...(normalized.kind === "results"
+              ? {
+                  results: normalized.results.map((row) => ({
+                    title: unwrapWebSearchOutputText(row.title),
+                    url: row.url,
+                    ...(row.snippet ? { snippet: unwrapWebSearchOutputText(row.snippet) } : {}),
+                  })),
+                }
+              : {
+                  content: unwrapWebSearchOutputText(normalized.content),
+                  citations: normalized.citations?.map((row) => ({
+                    url: row.url,
+                    ...(row.title ? { title: unwrapWebSearchOutputText(row.title) } : {}),
+                  })),
+                }),
             cached: normalized.cached === true,
           };
         } else {

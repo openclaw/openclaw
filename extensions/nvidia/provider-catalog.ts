@@ -47,11 +47,6 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
-const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
-  manifest.modelCatalog.providers.nvidia.models
-    .filter((model) => "status" in model && model.status === "deprecated")
-    .map((model) => model.id),
-);
 
 const lookupNvidiaFeaturedModelHostname = (async (
   hostname: string,
@@ -72,14 +67,6 @@ export function buildNvidiaProvider(): ModelProviderConfig {
     ...provider,
     apiKey: "NVIDIA_API_KEY",
     models: applyNvidiaModelDefaults(provider.models),
-  };
-}
-
-export function buildSelectableNvidiaProvider(): ModelProviderConfig {
-  const provider = buildNvidiaProvider();
-  return {
-    ...provider,
-    models: provider.models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id)),
   };
 }
 

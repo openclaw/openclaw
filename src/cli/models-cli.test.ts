@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   modelsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
-  modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   changeFallbacksCommand: vi.fn().mockResolvedValue(undefined),
@@ -54,7 +53,6 @@ const {
   modelsRefreshCommand,
   modelsScanCommand,
   modelsSetCommand,
-  modelsSetImageCommand,
   modelsStatusCommand,
 } = mocks;
 
@@ -107,9 +105,6 @@ vi.mock("../commands/models/scan.js", () => ({
 }));
 vi.mock("../commands/models/set.js", () => ({
   modelsSetCommand: mocks.modelsSetCommand,
-}));
-vi.mock("../commands/models/set-image.js", () => ({
-  modelsSetImageCommand: mocks.modelsSetImageCommand,
 }));
 vi.mock("../commands/models/refresh.js", () => ({
   modelsRefreshCommand: mocks.modelsRefreshCommand,
@@ -318,11 +313,13 @@ describe("models cli", () => {
       label: "set",
       args: ["set", "anthropic/claude-sonnet-4-6"],
       command: modelsSetCommand,
+      field: "model",
     },
     {
       label: "set-image",
       args: ["set-image", "openai/gpt-image-1"],
-      command: modelsSetImageCommand,
+      command: modelsSetCommand,
+      field: "imageModel",
     },
     {
       label: "aliases add",
@@ -380,9 +377,12 @@ describe("models cli", () => {
 
   it.each(globalModelCommands)(
     "still runs models $label without --agent",
-    async ({ args, command }) => {
+    async ({ args, command, field }) => {
       await runModelsCommand(["models", ...args]);
       expect(command).toHaveBeenCalledOnce();
+      if (field) {
+        expect(command).toHaveBeenCalledWith(args[1], defaultRuntime, field);
+      }
     },
   );
 

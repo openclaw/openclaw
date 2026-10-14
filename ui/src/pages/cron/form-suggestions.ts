@@ -82,20 +82,18 @@ export function buildCronSuggestions(params: {
     (channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
       : (params.channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
-    ).flatMap((account) => [account.accountId, account.name]),
+    ).map((account) => account.accountId),
   );
+  const forDeliveryMode = (targets: string[]) =>
+    params.cron.cronForm.deliveryMode === "webhook"
+      ? targets.filter((value) => /^https?:\/\//i.test(value))
+      : targets;
   return {
     agentSuggestions,
     modelSuggestions,
     timezoneSuggestions: resolveCronTimezoneSuggestions(params.cron.cronJobs),
     accountTargets,
-    failureAlertToSuggestions:
-      params.cron.cronForm.deliveryMode === "webhook"
-        ? savedDeliveryTargets.filter((value) => /^https?:\/\//i.test(value))
-        : savedDeliveryTargets,
-    deliveryToSuggestions:
-      params.cron.cronForm.deliveryMode === "webhook"
-        ? deliveryTargets.filter((value) => /^https?:\/\//i.test(value))
-        : deliveryTargets,
+    failureAlertToSuggestions: forDeliveryMode(savedDeliveryTargets),
+    deliveryToSuggestions: forDeliveryMode(deliveryTargets),
   };
 }

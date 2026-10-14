@@ -2,10 +2,7 @@ import {
   buildControlUiResourcePath,
   parseControlUiResourcePath,
 } from "../../../src/gateway/control-ui-resource-routes.js";
-import {
-  buildControlUiUserAvatarPath,
-  canonicalizeControlUiUserAvatarPath,
-} from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { canonicalizeControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
 import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
@@ -120,16 +117,6 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
           resourceBasePath,
         ).matched)
     ) {
-      return { kind: "profile", url: trusted };
-    }
-  }
-
-  if (identity?.type === "profile") {
-    const trusted = resolveTrustedAvatarUrl(
-      buildControlUiUserAvatarPath(identity.id),
-      gatewayOrigin,
-    );
-    if (trusted) {
       return { kind: "profile", url: trusted };
     }
   }

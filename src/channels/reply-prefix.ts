@@ -57,11 +57,6 @@ export function createReplyPrefixContext(params: {
 export function createReplyPrefixOptions(
   params: Parameters<typeof createReplyPrefixContext>[0],
 ): ReplyPrefixOptions {
-  const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
-    createReplyPrefixContext(params);
-  return {
-    responsePrefix,
-    responsePrefixContextProvider,
-    onModelSelected,
-  };
+  const { prefixContext: _prefixContext, ...options } = createReplyPrefixContext(params);
+  return options;
 }

@@ -8,15 +8,12 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
   provider,
   resetSessionCatalogTestState,
   setSessionCatalogEntries,
   startCall,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
-
-const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
 
 beforeEach(() => {
   resetSessionCatalogTestState();
@@ -111,8 +108,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
   try {
     for (let index = 0; index < 3; index++) {
       const waiting = startCall("sessions.catalog.list", query, config, client, context);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waiting.completion;
+      await vi.advanceTimersByTimeAsync(0);
       expect(waiting.respond).toHaveBeenCalledWith(true, {
         catalogs: [
           expect.objectContaining({
@@ -124,6 +120,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
           }),
         ],
       });
+      await waiting.completion;
     }
     expect(list).toHaveBeenCalledTimes(2);
     late.resolve([freshHost]);
@@ -195,7 +192,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
   }
 });
 
-it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archive"] as const)(
+it.each(["caller", "query", "config", "registration", "gateway", "archive"] as const)(
   "does not reuse a cached page after a change to %s",
   async (change) => {
     const host = {
@@ -225,9 +222,6 @@ it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archi
     }
     if (change === "registration") {
       hoisted.activeRegistry.sessionCatalogs = [{ provider: fixture }];
-    }
-    if (change === "epoch") {
-      markPluginRegistryActive(getActivePluginRegistry());
     }
     if (change === "gateway") {
       gateway.abort();

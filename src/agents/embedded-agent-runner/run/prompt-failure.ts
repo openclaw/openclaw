@@ -84,7 +84,6 @@ export async function handleEmbeddedPromptFailure(input: {
     EmbeddedRunFailoverRetryController,
     | "resolveAuthProfileFailureReason"
     | "advanceAuthProfile"
-    | "advanceRateLimitAuthProfile"
     | "maybeMarkAuthProfileFailure"
     | "transientRetryCount"
   >;
@@ -92,6 +91,7 @@ export async function handleEmbeddedPromptFailure(input: {
   getThinkLevel: () => ThinkLevel;
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
+  rateLimitRetriesExhausted?: number;
 }): Promise<PromptFailureOutcome> {
   const { runInput, preparedRuntime, normalizedAttempt, runtime, terminal } = input;
   if (
@@ -242,15 +242,11 @@ export async function handleEmbeddedPromptFailure(input: {
   let failoverDecision = resolveDecision(false);
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
-    if (promptFailoverReason === "rate_limit") {
-      rotated = await input.failover.advanceRateLimitAuthProfile({
-        failoverProvider: preparedRuntime.provider,
-        failoverModel: preparedRuntime.modelId,
-        logFallbackDecision: logFailoverDecision,
-      });
-    } else {
-      rotated = await input.failover.advanceAuthProfile();
-    }
+    rotated = await input.failover.advanceAuthProfile(promptFailoverReason, {
+      failoverProvider: preparedRuntime.provider,
+      failoverModel: preparedRuntime.modelId,
+      logFallbackDecision: logFailoverDecision,
+    });
     if (!rotated) {
       failoverDecision = resolveDecision(true);
     }
@@ -303,11 +299,20 @@ export async function handleEmbeddedPromptFailure(input: {
       lastRetryFailoverReason: input.previousRetryFailoverReason,
     };
   }
+  // Keep provider facts and fallback policy intact; only terminal presentation changes.
+  const retryExhaustionFailure =
+    input.rateLimitRetriesExhausted !== undefined && promptFailoverReason === "rate_limit"
+      ? coerceToFailoverError(normalizedPromptFailover ?? terminal.promptError, {
+          ...failoverContext,
+          rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
+        })
+      : undefined;
   if (failoverDecision.action === "fallback_model") {
     const fallbackReason = failoverDecision.reason;
     const status = resolveFailoverStatus(fallbackReason, promptErrorDetails.code);
     recordFailoverDecision("fallback_model", fallbackReason, status);
     throw (
+      retryExhaustionFailure ??
       (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
         ...failoverContext,
@@ -331,7 +336,7 @@ export async function handleEmbeddedPromptFailure(input: {
       })
     );
   }
-  throw toErrorObject(terminal.promptError, "Prompt failed");
+  throw retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed");
 }
 
 function resolveBlockedPromptResult(

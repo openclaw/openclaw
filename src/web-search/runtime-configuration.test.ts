@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -14,6 +15,12 @@ import {
   type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { hasConfiguredWebSearchProvider, prepareWebSearchConfiguration } from "./runtime.js";
+
+// mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
 
 const { resolveRuntimeWebSearchProvidersMock } = vi.hoisted(() => ({
   resolveRuntimeWebSearchProvidersMock: vi.fn<
@@ -37,6 +44,7 @@ function createCustomSearchProvider(overrides: Partial<WebSearchTestProviderPara
 }
 
 beforeEach(() => {
+  noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
   clearRuntimeConfigSnapshot();
   clearActiveRuntimeWebToolsMetadata();
   resolveRuntimeWebSearchProvidersMock.mockReset();
@@ -48,6 +56,33 @@ afterEach(() => {
 });
 
 describe("web search configuration presence", () => {
+  it("uses the supplied auth owner only when configuration needs source presence", async () => {
+    const sourceProbe = vi
+      .spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync")
+      .mockRejectedValue(new Error("Unexpected standalone auth admission"));
+    const prepareAuthSource = vi.fn(async () => ({ version: 1, profiles: {} }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({ authProviderId: "xai" }),
+    ]);
+    await expect(prepareWebSearchConfiguration({ config: {} }, prepareAuthSource)).resolves.toBe(
+      false,
+    );
+    expect(prepareAuthSource).toHaveBeenCalledExactlyOnceWith(resolveDefaultAgentDir({}));
+    expect(sourceProbe).not.toHaveBeenCalled();
+    prepareAuthSource.mockClear();
+    await expect(
+      prepareWebSearchConfiguration(
+        { config: { tools: { web: { search: { provider: "custom" } } } } },
+        prepareAuthSource,
+      ),
+    ).resolves.toBe(true);
+    setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, resolveDefaultAgentDir({}));
+    await expect(prepareWebSearchConfiguration({ config: {} }, prepareAuthSource)).resolves.toBe(
+      false,
+    );
+    expect(prepareAuthSource).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "uses published auth stores without cold admission (configured=%s)",
     async (configured) => {

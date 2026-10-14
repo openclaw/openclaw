@@ -10,24 +10,12 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
-
-type WhatsAppQuestionReactionIdentity = {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-};
-
-function buildKey(identity: WhatsAppQuestionReactionIdentity): string | undefined {
-  const parts = [identity.accountId, identity.remoteJid, identity.messageId].map((part) =>
-    part.trim(),
-  );
-  return parts.every(Boolean) ? parts.join(":") : undefined;
-}
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 
 const questionReactionTargets = createQuestionReactionTargetStore({
   channel: "whatsapp",
   channelDisplayName: "WhatsApp",
-  buildKey,
+  buildKey: buildWhatsAppReactionTargetKey,
   registerChannelDelivery: questionGatewayRuntime.registerChannelDelivery,
   resolveReaction: questionGatewayRuntime.resolveReaction,
 });

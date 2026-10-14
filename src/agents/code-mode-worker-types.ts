@@ -69,6 +69,14 @@ export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
   retainFinalValue?: boolean;
 };
 
+export type CodeModeNodeInput = (
+  | (Omit<
+      Extract<CodeModeWorkerPayload<never>, { kind: "exec" }>,
+      "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
+    > & { initialization: SharedArrayBuffer })
+  | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
+) & { progress: SharedArrayBuffer; inlineHost: boolean };
+
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };

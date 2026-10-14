@@ -108,30 +108,26 @@ export async function prepareWorkspaceSkillRestoration(params: {
     proposedContentHash: file.proposedContentHash,
   }));
   assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
-  const skillTarget = resolveSkillsRootWriteTarget(params.skillsRoot, params.skillFile);
-  const preparedSupportFiles: PreparedWorkspaceSkillMutation["supportFiles"] = [];
-  for (const file of supportFiles) {
-    const filePath = path.join(params.skillDir, ...file.path.split("/"));
-    const target = resolveSkillsRootWriteTarget(params.skillsRoot, filePath);
-    preparedSupportFiles.push({
-      path: file.path,
-      filePath,
-      ...target,
-      previousContent: file.previousContent,
-      content: file.previousContent ?? "",
-      proposedContentHash: file.proposedContentHash,
-    });
-  }
+  const prepareFile = (
+    filePath: string,
+    file: Pick<PreparedWorkspaceSkillFileMutation, "previousContent" | "proposedContentHash">,
+  ): PreparedWorkspaceSkillFileMutation => ({
+    filePath,
+    ...resolveSkillsRootWriteTarget(params.skillsRoot, filePath),
+    previousContent: file.previousContent,
+    content: file.previousContent ?? "",
+    proposedContentHash: file.proposedContentHash,
+  });
+  const skillFile = prepareFile(params.skillFile, params);
   return {
     mode: params.mode,
-    skillFile: {
-      filePath: params.skillFile,
-      ...skillTarget,
-      previousContent: params.previousContent,
-      content: params.previousContent ?? "",
-      proposedContentHash: params.proposedContentHash,
-    },
-    supportFiles: preparedSupportFiles,
+    skillFile,
+    supportFiles: supportFiles.map((file) =>
+      Object.assign(
+        { path: file.path },
+        prepareFile(path.join(params.skillDir, ...file.path.split("/")), file),
+      ),
+    ),
   };
 }
 

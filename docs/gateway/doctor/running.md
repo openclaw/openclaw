@@ -9,6 +9,9 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+You can run Doctor after an update without first starting the Gateway. Plugin
+health checks use the runtime config prepared by Doctor.
+
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
 Gateway's event loop. This uses the existing `--non-interactive` behavior,

@@ -6,6 +6,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.ts";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
+import {
   appendTranscriptMessages,
   createSessionEntryWithTranscript,
 } from "../../../src/config/sessions/session-accessor.js";
@@ -23,6 +27,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const agentIds = ["main", "second", "third", "fourth", "fifth"];
@@ -228,7 +233,12 @@ const suite = createControlUiE2eSuite({
         },
       };
       await owner.state.writeConfig(config);
-      await seedSessions(owner, config);
+      setRuntimeConfigSnapshot(config);
+      try {
+        await seedSessions(owner, config);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
       await owner.startGateway();
       return {
         baseUrl: `http://127.0.0.1:${owner.port}/`,
@@ -362,7 +372,14 @@ suite.define(() => {
       const url = new URL("/chat/main", suite.server.baseUrl);
       url.hash = new URL(browserUrl).hash;
       await suite.withPage(
-        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+        {
+          serviceWorkers: "block",
+          locale: "en-US",
+          viewport: { width: 1280, height: 900 },
+          ...(captureEnabled
+            ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+            : {}),
+        },
         async ({ page }) => {
           await page.addInitScript((key) => {
             localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
@@ -589,6 +606,8 @@ suite.define(() => {
             pane.locator(".chat-thread"),
           ]);
 
+          // Category membership spans accessible owners, beyond the default Mine scope.
+          await selectAllSidebarSessions(page);
           const otherKey = "agent:fifth:search-roster-4";
           await page
             .locator(

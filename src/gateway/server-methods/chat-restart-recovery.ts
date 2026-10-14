@@ -151,32 +151,36 @@ function isAdoptedRestartRecoveryClaim(
   );
 }
 
-export async function resolveDurableChatClaim(params: {
+export function resolveDurableChatClaim(params: {
   canonicalSessionKey: string;
   cfg: OpenClawConfig;
   clientRunId: string;
   entry?: SessionEntry;
   persistedSessionKey: string;
-  reloadEntry: () => SessionEntry | undefined;
+  reloadEntry: () => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
-}): Promise<DurableChatClaimResolution> {
-  let entry = params.entry;
-  if (isAdoptedRestartRecoveryClaim(entry, params.clientRunId) && entry.abortedLastRun === true) {
-    const recoverySessionError = resolveAgentSessionWorkStartError(
-      params.canonicalSessionKey,
-      entry,
-    );
-    if (recoverySessionError) {
-      return { kind: "rejected", message: recoverySessionError };
-    }
-    if (!params.recoveryRuntime) {
-      return {
-        kind: "pending",
-        message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
-      };
-    }
+}): DurableChatClaimResolution | Promise<DurableChatClaimResolution> {
+  const entry = params.entry;
+  if (!isAdoptedRestartRecoveryClaim(entry, params.clientRunId) || entry.abortedLastRun !== true) {
+    return isAdoptedRestartRecoveryClaim(entry, params.clientRunId) ||
+      hasRestartRecoveryTerminalRun(entry, params.clientRunId)
+      ? { kind: "accepted" }
+      : { kind: "continue", entry };
+  }
+  const recoverySessionError = resolveAgentSessionWorkStartError(params.canonicalSessionKey, entry);
+  if (recoverySessionError) {
+    return { kind: "rejected", message: recoverySessionError };
+  }
+  const recoveryRuntime = params.recoveryRuntime;
+  if (!recoveryRuntime) {
+    return {
+      kind: "pending",
+      message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
+    };
+  }
+  return (async (): Promise<DurableChatClaimResolution> => {
     try {
       const { retryRestartAbortedMainSessionRecovery } =
         await import("../../agents/main-session-recovery/main-session-restart-recovery.js");
@@ -188,21 +192,24 @@ export async function resolveDurableChatClaim(params: {
         expectedSessionId: entry.sessionId,
         sessionKey: params.persistedSessionKey,
         storePath: params.storePath,
-        gatewayRuntime: params.recoveryRuntime,
+        gatewayRuntime: recoveryRuntime,
       });
     } catch (error) {
       params.warn(String(error));
     }
-    entry = params.reloadEntry();
-    if (isAdoptedRestartRecoveryClaim(entry, params.clientRunId) && entry.abortedLastRun === true) {
+    const current = await params.reloadEntry();
+    if (
+      isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
+      current.abortedLastRun === true
+    ) {
       return {
         kind: "pending",
         message: "accepted chat turn recovery is still pending; retry",
       };
     }
     if (
-      !isAdoptedRestartRecoveryClaim(entry, params.clientRunId) &&
-      !hasRestartRecoveryTerminalRun(entry, params.clientRunId)
+      !isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
+      !hasRestartRecoveryTerminalRun(current, params.clientRunId)
     ) {
       return {
         kind: "rejected",
@@ -211,11 +218,8 @@ export async function resolveDurableChatClaim(params: {
         unavailable: true,
       };
     }
-  }
-  return isAdoptedRestartRecoveryClaim(entry, params.clientRunId) ||
-    hasRestartRecoveryTerminalRun(entry, params.clientRunId)
-    ? { kind: "accepted" }
-    : { kind: "continue", entry };
+    return { kind: "accepted" };
+  })();
 }
 
 function isRestartSafeChatSession(params: {
@@ -289,7 +293,7 @@ function hasRestartUnsafeChatWork(params: {
 
 export type PreparedRestartSafeChatPlacement = {
   sessionId: string;
-  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
+  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareSessionPlacement"]>>;
 };
 
 /** Borrow placement facts only while the chat owner revalidates and commits admission. */
@@ -298,10 +302,10 @@ export async function withRestartSafeChatPlacement(
   sessionId: string,
   consume: (prepared: PreparedRestartSafeChatPlacement) => Promise<void>,
 ): Promise<void> {
-  if (!service.prepareRuntimeRefresh) {
+  if (!service.prepareSessionPlacement) {
     throw new Error("Worker placement admission reader is unavailable; retry.");
   }
-  const facts = await service.prepareRuntimeRefresh(sessionId);
+  const facts = await service.prepareSessionPlacement(sessionId);
   try {
     await consume({ sessionId, facts });
   } finally {
@@ -332,7 +336,7 @@ export function resolveRestartSafeChatAdmission(params: {
   const placement = params.placement;
   // Only local input may be consumed before turn admission. Worker setup and
   // reconciliation retain approved input in custody until their writer is ready.
-  if (placement && placement.state !== "local") {
+  if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
   if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {
@@ -393,6 +397,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   clientRunId: string;
   startedAt: number;
   sourceIngress: "control-ui" | "internal";
+  lastInteractionAt?: number;
   operatorSource?: InternalSessionEntry["restartRecoveryOperatorSource"];
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
@@ -412,6 +417,9 @@ export function buildRestartSafeChatTranscriptState(params: {
         event: { runId: params.clientRunId, ts: params.startedAt, data: { phase: "start" } },
       }),
       lifecycleRunId: params.clientRunId,
+      ...(params.lastInteractionAt !== undefined
+        ? { lastInteractionAt: params.lastInteractionAt }
+        : {}),
       lastRunId: undefined,
       restartRecoveryDeliveryContext: undefined,
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,

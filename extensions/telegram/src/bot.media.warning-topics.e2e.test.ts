@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -218,7 +218,7 @@ describe("telegram media groups", () => {
       const fetchSpy = mockTelegramPngDownload();
       const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
       const baseMessage = {
         chat: { id: -10042, type: "supergroup" as const, is_forum: true },
         from: { id: 777, is_bot: false, first_name: "Ada" },
@@ -286,7 +286,7 @@ describe("telegram media groups", () => {
       const fetchSpy = mockTelegramPngDownload();
       const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
       const savedPaths = [
         "/tmp/media/inbound/album-context-1.png",
         "/tmp/media/inbound/album-context-2.png",
@@ -383,7 +383,7 @@ describe("telegram media groups", () => {
       const fetchSpy = mockTelegramPngDownload();
       const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
 
       try {
         const messages = [
@@ -444,7 +444,7 @@ describe("telegram media groups", () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
       const savedPaths = [
         "/tmp/media/inbound/album-partial-2.png",
         "/tmp/media/inbound/album-partial-3.png",
@@ -572,7 +572,7 @@ describe("telegram media groups", () => {
       const fetchSpy = mockTelegramPngDownload();
       const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
 
       try {
         await Promise.all([
@@ -834,7 +834,9 @@ describe("Telegram media failure notices", () => {
 
   it("keeps channel-post oversize warnings suppressed (failure=false)", async () => {
     const { replySpy } = await createBotHandlerWithOptions({});
-    const handler = onSpy.mock.calls.find(([event]) => event === "channel_post")?.[1];
+    const handler = onSpy.mock.calls.find(([filter]) =>
+      Array.isArray(filter) ? filter.includes("channel_post") : filter === "channel_post",
+    )?.[1];
     mockTelegramPngDownload();
     await handler({
       channelPost: {
@@ -862,7 +864,7 @@ describe("Telegram media failure notices", () => {
   it("accounts for 2 failed attachments in an album", async () => {
     const { handler, replySpy } = await createBotHandlerWithOptions({});
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     try {
       mockTelegramPngDownload();
       for (let index = 0; index < 2; index++) {

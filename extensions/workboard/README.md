@@ -20,3 +20,20 @@ tool policy and workspace permissions.
 
 Workboard tracks work on one Gateway. See the [Workboard guide](https://docs.openclaw.ai/plugins/workboard)
 for card workflows, worker dispatch, and sharing boundaries.
+
+## Browser development
+
+The browser UI uses Solid 2 and bundles its own renderer through the plugin
+builder. Shared pickers, dialogs, and dashboards use the documented Control UI
+SDK mounts; browser code does not import host UI internals. Rebuild assets after
+browser changes:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/workboard
+```
+
+The browser has a dedicated typecheck configuration:
+
+```bash
+node scripts/run-tsgo.mjs -p extensions/workboard/browser/tsconfig.json
+```

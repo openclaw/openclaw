@@ -83,13 +83,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
-      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
-      this.setSessionObserverVisibility(false);
-      return;
-    }
-    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
-    this.setSessionObserverVisibility(true);
+    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion");
+    const changeSlot = closing ? closeSlot : openSlot;
+    this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
+    this.setSessionObserverVisibility(!closing);
   }
 
   requestSubagentsPanel(intent: "open" | "toggle"): void {
@@ -97,7 +94,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
   }
 
   /** Opens the Subagents panel on one subagent, or on its list. */
-  protected showSubagents(subagentKey: string | null): void {
+  protected showSubagents(subagentKey: string | null, focus = false): void {
     const sessionKey = this.state?.sessionKey;
     // The pane owns the intent across the panel's lazy mount; the panel takes
     // it once, and only for the session that asked.
@@ -111,12 +108,37 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.subagentsShowRequest = take;
     this.requestUpdate();
     this.requestBackgroundPanel("subagents", "open");
+    if (focus) {
+      void this.focusSubagentsPanel();
+    }
+  }
+
+  private async focusSubagentsPanel(): Promise<void> {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
+    await customElements.whenDefined("openclaw-chat-sidebar-region");
+    this.requestUpdate();
+    await this.updateComplete;
+    const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
+    await region?.updateComplete;
+    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
+      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
+    );
+    if (
+      this.isConnected &&
+      state &&
+      this.state === state &&
+      state.sessionKey === sessionKey &&
+      this.isSlotShown(state.sidebarLayout, "subagents")
+    ) {
+      tab?.focus({ preventScroll: true });
+    }
   }
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
   protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
-    return this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
-      ? presentNarrowSidebarLayout(layout)
+    return this.mergedChrome || this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout, { allPanels: this.mergedChrome })
       : layout;
   }
 
@@ -126,13 +148,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
 
   protected requestBackgroundPanel(
     slot: "subagents" | "processes",
-    intent: "open" | "toggle",
+    intent: "open" | "close" | "toggle",
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot);
+    const closing =
+      intent === "close" ||
+      (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot));
     if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
       // The panel is about to replace the view this control is in; the region,
       // which may not have loaded yet, carries focus across from it.

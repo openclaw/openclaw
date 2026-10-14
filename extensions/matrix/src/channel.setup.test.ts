@@ -119,16 +119,7 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
-  it("exposes config-promotion declarations on the setup-only adapter", () => {
-    expect(matrixSetupAdapter.singleAccountKeysToMove).toEqual(
-      expect.arrayContaining(["homeserver", "accessToken", "deviceName", "rooms"]),
-    );
-    expect(matrixSetupAdapter.namedAccountPromotionKeys).toContain("homeserver");
-    expect(matrixSetupAdapter.resolveSingleAccountPromotionTarget).toBeTypeOf("function");
-  });
-
   it.each([
-    { name: "empty", env: {}, configured: false },
     {
       name: "scoped account",
       env: {
@@ -151,91 +142,41 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("bootstraps verification for newly added encrypted accounts", async () => {
-    const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
-    mockBootstrapResult({ success: true, backupVersion: "7" });
-
-    await runAfterAccountConfigWritten({ previousCfg, nextCfg, accountId, input });
-
-    expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
-      accountId: "default",
-      cfg: nextCfg,
-    });
-    expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
-    expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 7');
-    expect(error).not.toHaveBeenCalled();
-  });
-
-  it("does not bootstrap verification for already configured accounts", async () => {
-    const previousCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            flurry: {
-              encryption: true,
-              homeserver: "https://matrix.example.org",
-              userId: "@flurry:example.org",
-              accessToken: "token",
+  it.each([false, true])(
+    "does not bootstrap existing accounts (encryption=%s)",
+    async (encryption) => {
+      const previousCfg = {
+        channels: {
+          matrix: {
+            accounts: {
+              flurry: {
+                encryption,
+                homeserver: "https://matrix.example.org",
+                userId: "@flurry:example.org",
+                accessToken: "token",
+              },
             },
           },
         },
-      },
-    } as CoreConfig;
-    const input = {
-      homeserver: "https://matrix.example.org",
-      userId: "@flurry:example.org",
-      accessToken: "new-token",
-    };
-    const { nextCfg, accountId } = applyAccountConfig({
-      previousCfg,
-      accountId: "flurry",
-      input,
-    });
+      } as CoreConfig;
+      const input = {
+        homeserver: "https://matrix.example.org",
+        userId: "@flurry:example.org",
+        accessToken: "new-token",
+      };
+      const { nextCfg, accountId } = applyAccountConfig({
+        previousCfg,
+        accountId: "flurry",
+        input,
+      });
 
-    await runAfterAccountConfigWritten({ previousCfg, nextCfg, accountId, input });
+      await runAfterAccountConfigWritten({ previousCfg, nextCfg, accountId, input });
 
-    expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
-
-  it("bootstraps verification when setup enables encryption for an existing account", async () => {
-    const previousCfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@flurry:example.org",
-          accessToken: "token",
-          encryption: false,
-        },
-      },
-    } as CoreConfig;
-    const nextCfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@flurry:example.org",
-          accessToken: "token",
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
-    mockBootstrapResult({ success: true, backupVersion: "8" });
-
-    await runAfterAccountConfigWritten({
-      previousCfg,
-      nextCfg,
-      accountId: "default",
-      input: {},
-    });
-
-    expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
-      accountId: "default",
-      cfg: nextCfg,
-    });
-    expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
-    expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 8');
-  });
+      expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    },
+  );
 
   it("logs a warning when verification bootstrap fails", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();

@@ -98,6 +98,9 @@ describe("canonical shared-state resource drainage", () => {
       created.admission.identity.key,
     );
     expect(precreationProof?.identity.key).toMatch(/^path:/);
+    expect(Atomics.load(new BigInt64Array(precreationProof!.revision), 0)).not.toBe(
+      precreationProof!.epoch,
+    );
     expect(created.admission.coordinationKey).toBe(coordinationKey);
     absent.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);
@@ -173,11 +176,13 @@ describe("canonical shared-state resource drainage", () => {
     const original = lifecycle.capture(pathname);
     expect(original.identity.key).toMatch(/^path:/);
     const coordinationKey = original.coordinationKey;
+    const precreation = original.captureIntegrity!();
     expect(coordinationKey).toBe(original.identity.key);
     writeFileSync(pathname, "");
     linkSync(pathname, alias);
     const observed = lifecycle.capture(alias);
     expect(original.identity.key).toBe(observed.identity.key);
+    expect(Atomics.load(new BigInt64Array(precreation.revision), 0)).not.toBe(precreation.epoch);
     expect(original.coordinationKey).toBe(coordinationKey);
     expect(observed.coordinationKey).toBe(coordinationKey);
     lifecycle.publish(pathname);
@@ -360,7 +365,7 @@ describe("canonical shared-state resource drainage", () => {
       unregister();
       expect(first.db.isOpen).toBe(true);
       expect(firstReader.database.db.isOpen).toBe(true);
-      expect(() => captureOpenClawStateDatabaseReadAdmission(first.path)).toThrow(/closed/);
+      captureOpenClawStateDatabaseReadAdmission(first.path).assertCurrent();
       captureOpenClawStateDatabaseReadAdmission(second.path).assertCurrent();
       await closeOpenClawStateDatabaseByPathAsync(second.path);
       expect(close).toHaveBeenLastCalledWith(secondIdentity);
@@ -401,7 +406,7 @@ describe("canonical shared-state resource drainage", () => {
       expect(finalize).not.toHaveBeenCalled();
       expect(owner.db.isOpen).toBe(true);
       expect(reader.database.db.isOpen).toBe(true);
-      expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
+      captureOpenClawStateDatabaseReadAdmission(owner.path).assertCurrent();
       await closeOpenClawStateDatabaseAsync();
       expect(close).toHaveBeenCalledTimes(2);
       expect(finalize).toHaveBeenCalledOnce();
@@ -414,6 +419,108 @@ describe("canonical shared-state resource drainage", () => {
       await closeOpenClawStateDatabaseAsync();
     }
   });
+
+  it("releases reads after failed drainage and seals them again for each retry", async () => {
+    const owner = openOpenClawStateDatabase({ path: databasePath() });
+    const initial = captureOpenClawStateDatabaseReadAdmission(owner.path);
+    const failure = new Error("resource did not settle");
+    let outcome: Error | undefined = failure;
+    let entered = createDeferredCore();
+    let finish = createDeferredCore();
+    const close = vi.fn(async () => {
+      entered.resolve();
+      await finish.promise;
+      if (outcome) {
+        throw outcome;
+      }
+    });
+    const unregister = registerOpenClawStateDatabaseAsyncResource({ close });
+    const retry = async (
+      admitted: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>,
+    ) => {
+      entered = createDeferredCore();
+      finish = createDeferredCore();
+      const closing = closeOpenClawStateDatabaseByPathAsync(owner.path);
+      await entered.promise;
+      // Readers admitted after a failed drain are sealed and drained again.
+      expect(admitted.assertCurrent).toThrow(/admission is closed/);
+      expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
+      finish.resolve();
+      return closing;
+    };
+    try {
+      await expect(retry(initial)).rejects.toBe(failure);
+      expect(owner.db.isOpen).toBe(true);
+      expect(initial.assertCurrent).toThrow(/admission changed/);
+      const afterFirst = captureOpenClawStateDatabaseReadAdmission(owner.path);
+      afterFirst.assertCurrent();
+
+      await expect(retry(afterFirst)).rejects.toBe(failure);
+      expect(owner.db.isOpen).toBe(true);
+      const afterSecond = captureOpenClawStateDatabaseReadAdmission(owner.path);
+      afterSecond.assertCurrent();
+
+      outcome = undefined;
+      await expect(retry(afterSecond)).resolves.toBe(true);
+      expect(close).toHaveBeenCalledTimes(3);
+      expect(owner.db.isOpen).toBe(false);
+      expect(afterSecond.assertCurrent).toThrow(/admission changed/);
+      captureOpenClawStateDatabaseReadAdmission(owner.path).assertCurrent();
+    } finally {
+      outcome = undefined;
+      finish.resolve();
+      unregister();
+    }
+  });
+
+  it.each(["after failed drainage", "during drainage"] as const)(
+    "keeps failed path-close custody when a replacement publishes %s",
+    async (timing) => {
+      const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+      const pathname = databasePath();
+      writeFileSync(pathname, "original");
+      const original = lifecycle.capture(pathname).identity;
+      const failure = new Error("resource did not settle");
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const close = vi
+        .fn<(identity?: DatabasePathIdentity) => Promise<void>>()
+        .mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
+          throw failure;
+        })
+        .mockResolvedValue();
+      const unregister = lifecycle.register({ close });
+      const retireNative = vi.fn((_identity?: DatabasePathIdentity) => true);
+      const replace = () => {
+        renameSync(pathname, `${pathname}.retired`);
+        writeFileSync(pathname, "replacement");
+        return lifecycle.publish(pathname);
+      };
+      try {
+        const failed = lifecycle.close(pathname, retireNative);
+        await entered.promise;
+        const replacement = timing === "during drainage" ? replace() : undefined;
+        finish.resolve();
+        await expect(failed).rejects.toBe(failure);
+        const published = replacement ?? replace();
+        expect(published.identity.key).not.toBe(original.key);
+        // Reads at the path must not bind the unretired original file.
+        expect(() => lifecycle.capture(pathname)).toThrow(/admission is closed/);
+        await expect(lifecycle.close(pathname, retireNative)).resolves.toBe(true);
+        expect(close).toHaveBeenLastCalledWith(original);
+        expect(retireNative).toHaveBeenCalledOnce();
+        expect(retireNative).toHaveBeenCalledWith(original);
+        const current = lifecycle.capture(pathname);
+        current.assertCurrent();
+        expect(current.identity.key).toBe(published.identity.key);
+      } finally {
+        finish.resolve();
+        unregister();
+      }
+    },
+  );
 
   it("coalesces pending closes and retains the read seal after a native close failure", async () => {
     const owner = openOpenClawStateDatabase({ path: databasePath() });

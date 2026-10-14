@@ -445,10 +445,12 @@ if (process.argv[2] === "--version") {
       }),
     ]);
 
-    // A completed result followed by a timeout identifies retained process resources.
+    expect(
+      completion,
+      completion.status === "rejected" ? String(completion.reason) : undefined,
+    ).toMatchObject({ status: "fulfilled" });
     expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toMatchObject({
       payloads: [{ text: "PLUGIN_HARNESS_OK" }],
     });
-    expect(completion).toMatchObject({ status: "fulfilled" });
   });
 });

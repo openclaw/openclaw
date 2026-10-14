@@ -21,6 +21,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -61,7 +62,12 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, params.accountId);
+  const mediaMaxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
+  });
+  const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
   );
@@ -88,7 +94,10 @@ export function createMSTeamsReplyDispatcher(params: {
           params.app,
           buildConversationReference(params.conversationRef),
           { type: "typing" },
-          { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg) },
+          {
+            accountId: params.accountId,
+            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
+          },
         );
       },
       onRevokedLog: () => {
@@ -117,16 +126,12 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams", params.accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
   });
-  const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-  });
-  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
   // Teams native streams are provider-visible before outbound modifiers run. Keep them off
   // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.
   const hookRunner = getGlobalHookRunner();
@@ -278,6 +283,7 @@ export function createMSTeamsReplyDispatcher(params: {
       for (const msg of toSend) {
         try {
           const msgIds = await sendMSTeamsMessages({
+            accountId: params.accountId,
             replyStyle: params.replyStyle,
             app: params.app,
             conversationRef: params.conversationRef,
@@ -311,9 +317,14 @@ export function createMSTeamsReplyDispatcher(params: {
         }
       }
       if (failed > 0) {
+        const classification = classifyMSTeamsSendError(lastFailedError);
+        const hint = formatMSTeamsSendErrorHint(classification);
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+          error: formatUnknownError(lastFailedError),
+          classification,
+          ...(hint ? { hint } : {}),
         });
         queueDeliveryFailureSystemEvent({
           failed,

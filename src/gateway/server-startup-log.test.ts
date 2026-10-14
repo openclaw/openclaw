@@ -11,7 +11,7 @@ import {
 } from "./server-startup-log.js";
 
 const modelMocks = vi.hoisted(() => ({
-  resolveThinkingDefault: vi.fn(() => "medium" as const),
+  resolveThinkingDefault: vi.fn((): "medium" | "off" => "medium"),
 }));
 function createManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
@@ -106,6 +106,15 @@ describe("gateway startup log", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("logs version alignment guidance as information on ordinary startup", async () => {
+    const { info, warn } = await startup({});
+
+    expect(info).toHaveBeenCalledWith(
+      "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("warns when dangerous config flags are enabled", async () => {
@@ -250,23 +259,27 @@ describe("gateway startup log", () => {
     );
   });
 
-  it("defaults unset startup thinking to medium", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: {
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
+  it.each(["medium", "off"] as const)(
+    "reports the provider's unset thinking default: %s",
+    (level) => {
+      modelMocks.resolveThinkingDefault.mockReturnValue(level);
+      expect(
+        formatAgentModelStartupDetails({
+          cfg: {
+            agents: {
+              defaults: {
+                model: "openai/gpt-5.5",
+              },
+              entries: { main: { fastModeDefault: true } },
             },
-            entries: { main: { fastModeDefault: true } },
           },
-        },
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-    ).toBe("thinking=medium, fast=on");
-    expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
-  });
+          provider: "openai",
+          model: "gpt-5.5",
+        }),
+      ).toBe(`thinking=${level}, fast=on`);
+      expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("preserves explicit startup thinking off", () => {
     expect(

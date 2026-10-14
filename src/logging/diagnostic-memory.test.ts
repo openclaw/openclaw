@@ -8,6 +8,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as workerMemory from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -51,6 +52,7 @@ describe("diagnostic memory", () => {
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    vi.spyOn(workerMessages, "getWorkerMessageMetrics").mockReturnValue([]);
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
@@ -163,6 +165,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -193,6 +196,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -599,7 +603,7 @@ describe("diagnostic memory", () => {
       ])} thresholdBytes=3000`,
     );
     expect(records[0]?.message).toContain(
-      "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
+      "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
     );
   });
 

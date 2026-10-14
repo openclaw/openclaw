@@ -1,6 +1,7 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -12,6 +13,7 @@ import { isStrictAgenticExecutionContractActive } from "../execution-contract.js
 import type { FailoverReason } from "../failover/signal.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
+import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
@@ -38,6 +40,7 @@ import {
   beginRunAttempt,
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
+  recordRunModelProgress,
   recordRunRetry,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -98,7 +101,11 @@ export async function runPreparedEmbeddedLoop(
   );
   // Admission and cancellation travel together: recovery must observe queue expiry
   // after the physical attempt closes, even when the caller signal remains live.
-  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
+  const admittedRunInput: PreparedEmbeddedRunInput = {
+    ...input,
+    runParams: params,
+    modelCallSequence: getAgentRunContext(params.runId)?.modelCallSequence ?? { value: 0 },
+  };
   ({ provider, modelId } = preparedRuntime);
   const {
     model,
@@ -229,9 +236,8 @@ export async function runPreparedEmbeddedLoop(
         effectiveModel,
         outerContextTokenMeta,
         lastProfileId,
-        thinkLevel: initialThinkLevel,
+        thinkLevel,
       } = attemptRuntimeSnapshot;
-      let thinkLevel = initialThinkLevel;
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
           `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
@@ -316,8 +322,6 @@ export async function runPreparedEmbeddedLoop(
             sessionPromptState,
             terminalRetryState,
             replayState: accumulatedReplayState,
-            provider,
-            modelId,
             startupStagesEmitted,
             bootstrapPromptWarningSignaturesSeen,
             resolveRuntimeFallbackReason,
@@ -352,7 +356,17 @@ export async function runPreparedEmbeddedLoop(
       const { dispatchedAttempt, runtimePlan } = dispatch;
       const refusal = await providerReview.settle(dispatchedAttempt.rawAttempt);
       failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
-      attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
+      if (dispatchedAttempt.rawAttempt.hasSuccessfulModelResponse) {
+        recordRunModelProgress(runRetryBudget);
+      }
+      const rawAttempt = refresh.applyDeliveryState(dispatchedAttempt.rawAttempt);
+      attemptCarryover.apply(rawAttempt);
+      // Attempt subscriptions reset on retry; the reply owner retains final source
+      // delivery and clears it when a newly admitted steered input needs an answer.
+      rawAttempt.sourceReplyDeliveryState = resolveSourceReplyDelivery(
+        rawAttempt,
+        params.replyOperation?.sourceReplyDelivered ? "delivered" : "missing",
+      );
       const normalization = {
         runInput: admittedRunInput,
         preparedRuntime,
@@ -465,11 +479,11 @@ export async function runPreparedEmbeddedLoop(
         overloadProfileRotations,
         previousRetryFailoverReason: lastRetryFailoverReason,
         failover: failoverRetryController,
+        rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
         traceAttempts,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       });
-      thinkLevel = assistantFailureOutcome.thinkLevel;
-      preparedRuntime.setThinkLevel(thinkLevel);
+      preparedRuntime.setThinkLevel(assistantFailureOutcome.thinkLevel);
       authRetryPending = assistantFailureOutcome.authRetryPending;
       emptyErrorRetries = assistantFailureOutcome.emptyErrorRetries;
       overloadProfileRotations = assistantFailureOutcome.overloadProfileRotations;
@@ -493,6 +507,7 @@ export async function runPreparedEmbeddedLoop(
             attemptCompactionCount,
           },
           terminalBase: {
+            rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
             mergeToolMedia: refresh.mergeToolMedia,
             runParams: params,
             provider,
@@ -522,9 +537,7 @@ export async function runPreparedEmbeddedLoop(
       );
       const {
         attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
         finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
@@ -554,16 +567,12 @@ export async function runPreparedEmbeddedLoop(
         terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
         "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
-        prepared: terminalPrepared,
+        ...finalizedTerminal,
         runParams: params,
         retryState: terminalRetryState,
-        attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         activeErrorContext,
         modelApi: effectiveModel.api,
         executionContract,
-        terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         sessionPromptState,
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
@@ -588,13 +597,26 @@ export async function runPreparedEmbeddedLoop(
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         traceAttempts,
-        thinkLevel,
+        thinkLevel: assistantFailureOutcome.thinkLevel,
         contextRecoveryState,
       });
       if (terminalResolution.action === "retry") {
         continue;
       }
-      return providerReview.finish(terminalResolution.result);
+      // Diagnostics-only final-message fact from terminal preparation; terminal
+      // resolution builds the rest of the completed result.
+      const { result } = terminalResolution;
+      return providerReview.finish(
+        terminalPrepared.finalAssistantMessageRawText === undefined
+          ? result
+          : {
+              ...result,
+              meta: {
+                ...result.meta,
+                finalAssistantMessageRawText: terminalPrepared.finalAssistantMessageRawText,
+              },
+            },
+      );
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

@@ -306,9 +306,10 @@ export function createExecApprovalHandlers(
           ask: p.ask ?? null,
           unavailableDecisions,
         }),
-        agentId: effectiveAgentId ?? null,
+        // The runtime owns the decision; the plan retains node policy identity.
+        agentId: trustedAgentRuntime?.agentId ?? effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ? sanitizeExecApprovalDisplayText(p.resolvedPath) : null,
-        sessionKey: effectiveSessionKey ?? null,
+        sessionKey: trustedAgentRuntime?.sessionKey ?? effectiveSessionKey ?? null,
         sessionId: trustedAgentRuntime ? null : (normalizeOptionalString(p.sessionId) ?? null),
         runId: requestRunId ?? null,
         toolCallId: normalizeOptionalString(p.toolCallId) ?? null,

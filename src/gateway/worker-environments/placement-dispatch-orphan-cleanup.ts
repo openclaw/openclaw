@@ -3,6 +3,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
@@ -14,6 +15,7 @@ import {
 
 /** One startup pass of orphan-ref cleanup: workspace roots resolved once, completed roots remembered. */
 export type PendingWorkspaceResultOrphanCleanup = {
+  placements: readonly WorkerSessionPlacementIdentity[];
   /** sessionId → workspace root, or null when the placement has no local root to clean. */
   rootsBySession: Map<string, string | null>;
   completedRoots: Set<string>;
@@ -29,15 +31,15 @@ export async function cleanupPendingWorkspaceResultOrphans(
   }
   const { placements } = deps;
   const { completedRoots, rootsBySession } = pass;
-  // Each sweep admits the current placements, but a placement's workspace root is resolved
+  // Each sweep admits the startup placements, but a placement's workspace root is resolved
   // once per pass; a failed resolution stays uncached and is retried on the next sweep.
   const workspaceSessions = new Map<string, string[]>();
-  for (const placement of await placements.readChangeSnapshot()) {
+  for (const placement of pass.placements) {
     let root = rootsBySession.get(placement.sessionId);
     if (root === undefined) {
       try {
         const workspace = await deps.resolveWorkspace(placement);
-        root = workspace.kind === "repository" ? null : workspace.path;
+        root = workspace.kind === "local" ? workspace.path : null;
         rootsBySession.set(placement.sessionId, root);
       } catch {
         // Cleanup refs are independently retryable on the next sweep or after the next restart.

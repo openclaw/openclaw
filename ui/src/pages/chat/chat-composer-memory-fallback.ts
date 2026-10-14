@@ -9,8 +9,7 @@ import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-sto
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
-  loadChatComposerCommittedDraftRevision,
-  loadChatComposerDraftRevision,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
   type ChatComposerDraftRetry,
 } from "./composer-persistence.ts";
@@ -47,15 +46,10 @@ function resolveChatComposerMemoryFallback(
       fallbackSourceKeys.add(key);
     }
   }
-  const candidates = [...fallbackSourceKeys]
-    .map((candidateScopeKey) => ({
-      fallback: state.chatComposerFallbackByScope[candidateScopeKey],
-      scopeKey: candidateScopeKey,
-    }))
-    .filter(
-      (candidate): candidate is { fallback: ChatComposerMemoryFallback; scopeKey: string } =>
-        candidate.fallback !== undefined,
-    );
+  const candidates = [...fallbackSourceKeys].flatMap((candidateScopeKey) => {
+    const fallback = state.chatComposerFallbackByScope[candidateScopeKey];
+    return fallback === undefined ? [] : [{ fallback, scopeKey: candidateScopeKey }];
+  });
   const newest = candidates.toSorted(
     (left, right) => right.fallback.sequence - left.fallback.sequence,
   )[0];
@@ -72,12 +66,10 @@ function resolveChatComposerMemoryFallback(
   }
   let adoptedFallback = sourceFallback;
   if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
-    const committedRevision = loadChatComposerCommittedDraftRevision(
-      state,
-      sessionKey,
-      scope.agentId,
-    );
-    const latestRevision = loadChatComposerDraftRevision(state, sessionKey, scope.agentId);
+    const committedRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .committed;
+    const latestRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .latestAttempt;
     // Rebase only when this unresolved edit is newer than every resolved
     // attempt. Otherwise its original CAS must keep newer pane input intact.
     if (sourceFallback.draftRetry.draftRevision > latestRevision) {

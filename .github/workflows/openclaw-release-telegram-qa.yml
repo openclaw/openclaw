@@ -1672,8 +1672,32 @@ jobs:
                   trap '\''rm -f "$projection_tmp"'\'' EXIT
                   cat "$source_config" >"$projection_tmp"
                   [[ "$(sha256sum "$projection_tmp" | cut -d " " -f1)" == "$expected_generation" ]]
+                  # Configured run fixtures are authored by the trusted scenario host.
+                  # Copy them as the SUT, just like its config, so loader ownership
+                  # admission remains unchanged across the isolated UID boundary.
+                  temp_root="$4"
+                  index=0
+                  while IFS= read -r plugin_path; do
+                    case "$plugin_path" in "$temp_root/"*) ;; *) continue ;; esac
+                    [[ -d "$plugin_path" && ! -L "$plugin_path" &&
+                          "$(realpath -e "$plugin_path")" == "$plugin_path" ]]
+                    [[ -z "$(find "$plugin_path" ! -type f ! -type d -print -quit)" ]] || {
+                      printf "%s\n" "Telegram QA plugin fixture contains unsupported file types" >&2
+                      exit 1
+                    }
+                    case "$projection_dir/" in "$plugin_path/"*) exit 1 ;; esac
+                    fixture_dir="$projection_dir/plugin-fixtures/$index"
+                    mkdir -p "$fixture_dir"
+                    cp -R "$plugin_path/." "$fixture_dir/"
+                    next_projection="$(mktemp "$projection_dir/.plugins.XXXXXX")"
+                    jq --arg source "$plugin_path" --arg target "$fixture_dir" \
+                      '\'' .plugins.load.paths |= map(if . == $source then $target else . end) '\'' \
+                      "$projection_tmp" >"$next_projection"
+                    mv -T "$next_projection" "$projection_tmp"
+                    index=$((index + 1))
+                  done < <(jq -r '\'' .plugins.load.paths[]? '\'' "$source_config")
                   mv -T "$projection_tmp" "$projection_dir/openclaw.json"
-                ' openclaw-config-projection "$config_path" "$projection_dir" "$config_generation"
+                ' openclaw-config-projection "$config_path" "$projection_dir" "$config_generation" "$temp_root"
               [[ "$(sha256sum "$config_path" | cut -d ' ' -f1)" == "$config_generation" ]]
               generation_tmp="$(mktemp "$generation_dir/.generation.XXXXXX")"
               printf %s "$config_generation" >"$generation_tmp"

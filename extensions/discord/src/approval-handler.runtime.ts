@@ -1,6 +1,6 @@
 import { ButtonStyle } from "discord-api-types/v10";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ApprovalViewModel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
@@ -214,25 +214,19 @@ async function finalizeMessage(params: {
         token: params.token,
         accountId: params.accountId,
       });
+      let request: () => Promise<unknown>;
       if (operation === "delete") {
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () => deleteChannelMessage(rest, params.channelId, params.messageId),
-            "delete-approval",
-          ),
-        );
+        request = () => deleteChannelMessage(rest, params.channelId, params.messageId);
       } else {
         const payload = buildExecApprovalPayload(params.container);
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () =>
-              editChannelMessage(rest, params.channelId, params.messageId, {
-                body: stripUndefinedFields(serializePayload(payload)),
-              }),
-            "update-approval",
-          ),
-        );
+        request = () =>
+          editChannelMessage(rest, params.channelId, params.messageId, {
+            body: stripUndefinedFields(serializePayload(payload)),
+          });
       }
+      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+        discordRequest(request, `${operation}-approval`),
+      );
       return;
     } catch (err) {
       logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
@@ -251,7 +245,7 @@ function buildTerminalApprovalResult(
   return { kind: "update", payload: createApprovalContainer(params.view) } as const;
 }
 
-export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   DiscordPendingDelivery,
   PreparedDeliveryTarget,
   PendingApproval,

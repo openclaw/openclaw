@@ -21,6 +21,7 @@ import type { OperatorApprovalStoreGuard } from "../operator-approval-store.type
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
+  prepareApprovalSessionAccess,
   readApprovalRequestSource,
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
@@ -195,11 +196,7 @@ export function broadcastApprovalResolvedEvent<TPayload>(params: {
     params.approvalKind === "system-agent"
       ? "openclaw.approval.resolved"
       : `${params.approvalKind}.approval.resolved`;
-  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
-    approvalKind: params.approvalKind,
-    context: params.context,
-    record: params.record,
-  });
+  const recipientConnIds = resolveApprovalRequestRecipientConnIds(params);
   if (recipientConnIds) {
     params.context.broadcastToConnIds(eventName, params.event, recipientConnIds, {
       dropIfSlow: true,
@@ -228,6 +225,12 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   }
   const snapshot = await params.manager.getSnapshot(id, params.authority);
   params.authority?.assertCurrent();
+  using sessionAccess = await prepareApprovalSessionAccess({
+    ...params,
+    client: params.client ?? null,
+    sources: snapshot ? [readApprovalRequestSource(snapshot)] : [],
+  });
+  params.authority?.assertCurrent();
   const visible = (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
     return (
@@ -236,6 +239,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
         record,
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
+        sessionAccess,
       })
     );
   };
@@ -366,13 +370,22 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount =
-      suppressDelivery || approvalClientsOnly
-        ? 0
-        : (params.context.approvalEvents?.publishRequested(
+    const approvalEvents = params.context.approvalEvents;
+    let internalApprovalSubscriberCount = 0;
+    if (!suppressDelivery && !approvalClientsOnly && approvalEvents) {
+      internalApprovalSubscriberCount = approvalEvents.publishRequestedAsync
+        ? await approvalEvents.publishRequestedAsync(
             params.approvalKind ?? "exec",
             params.requestEvent,
-          ) ?? 0);
+          )
+        : approvalEvents.publishRequested(params.approvalKind ?? "exec", params.requestEvent);
+    }
+
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -396,12 +409,17 @@ export async function handlePendingApprovalRequest<
       !hasApprovalClients &&
       !delivered &&
       (params.approvalKind !== "plugin" || pluginRequest !== undefined) &&
-      hasApprovalTurnSourceRoute({
+      (await hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
         approvalKind: params.approvalKind ?? "exec",
         ...(pluginRequest ? { request: pluginRequest } : {}),
-      });
+      }));
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"
       : hasApprovalClients
@@ -514,9 +532,11 @@ export async function handleApprovalResolve<
       respondApprovalStorageUnavailable({ ...params, operation: "resolve", error });
     }
   };
-  const custody = params.reviewer
+  using custody = params.reviewer
     ? prepareApprovalChannelCustody({
         cfg: params.context.getRuntimeConfig(),
+        getCfg: params.context.getRuntimeConfig,
+        assertCurrent: () => params.authority.assertCurrent(),
         approvalKind: params.approvalKind,
         reviewer: params.reviewer,
       })
@@ -568,6 +588,22 @@ export async function handleApprovalResolve<
     return;
   }
 
+  let sessionAccess: Awaited<ReturnType<typeof prepareApprovalSessionAccess>>;
+  try {
+    sessionAccess = await prepareApprovalSessionAccess({
+      client: params.client,
+      getCfg: params.context.getRuntimeConfig,
+      sources: [readApprovalRequestSource(resolved.snapshot)],
+    });
+  } catch (error) {
+    respondFailure(error);
+    return;
+  }
+  using retainedSessionAccess = sessionAccess;
+  if (!params.authority.isCurrent()) {
+    respondUnknownOrExpiredApproval(params.respond);
+    return;
+  }
   const validationError = params.validateDecision?.(resolved.snapshot);
   if (validationError) {
     params.respond(
@@ -591,13 +627,6 @@ export async function handleApprovalResolve<
     family: params.authority.guard.family,
     assertCurrent: () => {
       params.authority.assertCommitCurrent();
-      const currentCustody = params.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: params.context.getRuntimeConfig(),
-            approvalKind: params.approvalKind,
-            reviewer: params.reviewer,
-          })
-        : null;
       if (
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||
@@ -607,10 +636,10 @@ export async function handleApprovalResolve<
           record: resolved.snapshot,
           client: params.client,
           ...(params.authority.guard.family === "native-compatibility"
-            ? { cfg: params.context.getRuntimeConfig() }
+            ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
             : {}),
         }) ||
-        (params.reviewer && !currentCustody?.authorizes(resolved.snapshot))
+        (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");
       }

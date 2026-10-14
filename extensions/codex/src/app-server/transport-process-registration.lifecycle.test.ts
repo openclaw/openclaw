@@ -94,8 +94,9 @@ describe("Codex registration settlement", () => {
     };
     state.rows.set("live-owner", existing);
     state.entries.mockReturnValue(reading.promise);
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // Advance the owner's clock to prove durable reads do not consume its inspection budget.
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const spawned = child();
     state.spawn.mockImplementation(() => {
       queueMicrotask(() => spawned.emit("spawn"));
@@ -185,14 +186,11 @@ describe("Codex registration settlement", () => {
     expect(state.rows.size).toBe(0);
   });
 
-  it.for(["deleted", "retained"])("joins delayed cleanup, leaving a %s fact", async (mode) => {
+  it("joins delayed cleanup, retaining the fact when deletion fails", async () => {
     const deletion = createDeferred<void>();
-    state.delete.mockImplementation(async (key) => {
+    state.delete.mockImplementation(async () => {
       await deletion.promise;
-      if (mode === "retained") {
-        throw new Error("database unavailable");
-      }
-      state.rows.delete(key);
+      throw new Error("database unavailable");
     });
     const spawned = child();
     const { registered } = await startRegistration(spawned);
@@ -207,7 +205,7 @@ describe("Codex registration settlement", () => {
     expect(state.rows.size).toBe(1);
     deletion.resolve();
     await closing;
-    expect(state.rows.size).toBe(mode === "retained" ? 1 : 0);
+    expect(state.rows.size).toBe(1);
   });
 
   it.for(["revoked", "commit failure"])(

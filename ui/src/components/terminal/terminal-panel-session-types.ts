@@ -3,7 +3,6 @@ import type {
   CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
-import type { ReactiveControllerHost } from "lit";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
@@ -61,7 +60,9 @@ export type TerminalPanelSessionControllerState = {
   error: TerminalPanelError | null;
 };
 
-export interface TerminalPanelSessionControllerHost extends ReactiveControllerHost {
+export interface TerminalPanelSessionControllerHost {
+  readonly updateComplete: Promise<unknown>;
+  requestUpdate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;

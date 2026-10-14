@@ -37,10 +37,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -212,12 +210,12 @@ describe("Gateway RPC fixture session writes", () => {
           ]),
         ).toBe("closing");
         expect(isOpenClawStateDatabaseOpen(identityPath)).toBe(true);
-        await expect(fs.access(dir)).resolves.toBeUndefined();
+        await fs.access(dir);
         if (outcome === "timeout") {
           await expect(removing).rejects.toThrow(
             `Timed out closing shared-state fixture database ${JSON.stringify(identityPath)}`,
           );
-          await expect(fs.access(dir)).resolves.toBeUndefined();
+          await fs.access(dir);
         } else {
           release.resolve();
           await removing;

@@ -1,5 +1,5 @@
+import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -23,6 +23,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   isProgressCardRefreshInputProvenance,
@@ -78,7 +79,7 @@ export type NormalizedChatSendRequest = {
   normalizedAttachments: ChatAttachment[];
   rawMessage: string;
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
-  requestIdentity: string;
+  requestIdentity?: string;
   mentions?: HumanMention[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
@@ -97,6 +98,7 @@ export function normalizeChatSendRequest(params: {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
+  const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
@@ -105,10 +107,9 @@ export function normalizeChatSendRequest(params: {
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
   if (!validateChatSendParams(controlUiReconnectResume.params)) {
-    return {
-      ok: false,
-      error: `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
-    };
+    return reject(
+      `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
+    );
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
@@ -132,7 +133,7 @@ export function normalizeChatSendRequest(params: {
       p.fastMode !== undefined ||
       p.timeoutMs !== undefined)
   ) {
-    return { ok: false, error: "Provider continuation no longer matches the reviewed input." };
+    return reject("Provider continuation no longer matches the reviewed input.");
   }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
@@ -152,13 +153,11 @@ export function normalizeChatSendRequest(params: {
     !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
   ) {
-    return {
-      ok: false,
-      error:
-        p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
-          ? "system provenance fields require admin scope"
-          : "originating route fields require admin scope",
-    };
+    return reject(
+      p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
+        ? "system provenance fields require admin scope"
+        : "originating route fields require admin scope",
+    );
   }
 
   const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
@@ -176,11 +175,9 @@ export function normalizeChatSendRequest(params: {
       p.suppressCommandInterpretation !== undefined ||
       sanitizedMessageResult.message !== p.message.normalize("NFC"))
   ) {
-    return {
-      ok: false,
-      error:
-        "Goal start requires a nonempty objective of at most 16000 characters, without queue or system-input options.",
-    };
+    return reject(
+      "Goal start requires a nonempty objective of at most 16000 characters, without queue or system-input options.",
+    );
   }
   if (
     p.intent &&
@@ -194,11 +191,9 @@ export function normalizeChatSendRequest(params: {
       controlUiReconnectResume.resumeRequested)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
-    return {
-      ok: false,
-      error:
-        "Goal start uses the session settings and local delivery; per-request runtime or routing overrides are not supported.",
-    };
+    return reject(
+      "Goal start uses the session settings and local delivery; per-request runtime or routing overrides are not supported.",
+    );
   }
   const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
   if (!systemReceiptResult.ok) {
@@ -214,7 +209,7 @@ export function normalizeChatSendRequest(params: {
     ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
     : normalizeInputProvenance(p.systemInputProvenance);
   if (!params.trustedSystemInput && isProgressCardRefreshInputProvenance(systemInputProvenance)) {
-    return { ok: false, error: "Progress refresh input is reserved for progressCard.refresh." };
+    return reject("Progress refresh input is reserved for progressCard.refresh.");
   }
   const systemProvenanceReceipt = systemReceiptResult.receipt;
   const stopCommand = !commandInterpretationSuppressed && isAbortRequestText(inboundMessage);
@@ -224,10 +219,10 @@ export function normalizeChatSendRequest(params: {
       !isBrowserCopilotClient(clientInfo) ||
       client.pairedClientId !== clientInfo?.id
     ) {
-      return { ok: false, error: "run tool bindings require a paired browser copilot" };
+      return reject("run tool bindings require a paired browser copilot");
     }
     if (!hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS)) {
-      return { ok: false, error: "run tool bindings require client capability" };
+      return reject("run tool bindings require client capability");
     }
   }
   if (
@@ -235,7 +230,7 @@ export function normalizeChatSendRequest(params: {
     !stopCommand &&
     (!p.toolBindings || !Object.hasOwn(p.toolBindings, "browser"))
   ) {
-    return { ok: false, error: "browser copilot runs require an explicit browser tool binding" };
+    return reject("browser copilot runs require an explicit browser tool binding");
   }
   // The browser plugin owns the binding schema and validates it while tools are
   // constructed, before model execution. Gateway owns only paired-client admission.
@@ -244,7 +239,7 @@ export function normalizeChatSendRequest(params: {
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
   const rawMessage = hasGoalOperation || providerReview ? inboundMessage : inboundMessage.trim();
   if (!rawMessage && normalizedAttachments.length === 0) {
-    return { ok: false, error: "message or attachment required" };
+    return reject("message or attachment required");
   }
   const mentions = normalizeChatHumanMentions(
     p.message,
@@ -272,32 +267,28 @@ export function normalizeChatSendRequest(params: {
       suppressCommandInterpretation ||
       !ordinaryChat)
   ) {
-    return {
-      ok: false,
-      error:
-        "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
-    };
+    return reject(
+      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+    );
   }
   if (p.workContext && !ordinaryChat) {
-    return { ok: false, error: "Working context is only supported for ordinary chat messages." };
+    return reject("Working context is only supported for ordinary chat messages.");
   }
   const workContext = p.workContext
     ? { snapshot: captureChatWorkContext(p.workContext), text: rawMessage }
     : undefined;
   if (workContext && !workContext.snapshot.page) {
-    return { ok: false, error: "Working context requires a nonempty page." };
+    return reject("Working context requires a nonempty page.");
   }
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
-  const requestIdentity = sha256Hex(
-    JSON.stringify([
-      p.message,
-      p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
-      ...(workContext ? [workContext.snapshot] : []),
-      ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
-    ]),
-  );
+  const requestInput = JSON.stringify([
+    p.message,
+    p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+    ...(workContext ? [workContext.snapshot] : []),
+    ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+  ]);
 
   const value: NormalizedChatSendRequest = {
     chatSendReceivedAtMs,
@@ -309,7 +300,7 @@ export function normalizeChatSendRequest(params: {
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
     explicitOrigin: explicitOriginResult.value,
-    inboundMessage: workContext ? modelMessage : inboundMessage,
+    inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
     systemInputProvenance,
     systemProvenanceReceipt,
@@ -319,23 +310,31 @@ export function normalizeChatSendRequest(params: {
     turnKind,
     normalizedAttachments,
     rawMessage: modelMessage,
-    requestIdentity,
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (p.intent && !params.goalResume) {
-    const goalStart = {
-      action: "start" as const,
-      operationId: p.idempotencyKey,
-      issuedAtMs: p.intent.issuedAtMs,
-      objective: p.message,
-    };
-    return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
-      (requestFingerprint) => ({
-        ok: true,
-        value: { ...value, goalOperation: { ...goalStart, requestFingerprint } },
-      }),
-    );
+  if (stopCommand) {
+    return { ok: true, value };
   }
-  return { ok: true, value };
+  return loadChatRequestIdentityKeyAsync().then((key) => {
+    // A keyed verifier survives redaction without storing an offline prompt digest.
+    const request: NormalizedChatSendRequest = key
+      ? { ...value, requestIdentity: createHmac("sha256", key).update(requestInput).digest("hex") }
+      : value;
+    if (p.intent && !params.goalResume) {
+      const goalStart = {
+        action: "start" as const,
+        operationId: p.idempotencyKey,
+        issuedAtMs: p.intent.issuedAtMs,
+        objective: p.message,
+      };
+      return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
+        (requestFingerprint) => ({
+          ok: true,
+          value: { ...request, goalOperation: { ...goalStart, requestFingerprint } },
+        }),
+      );
+    }
+    return { ok: true as const, value: request };
+  });
 }

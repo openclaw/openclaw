@@ -90,9 +90,6 @@ export class SwarmActivityTracker {
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {
-    if (!result) {
-      return result;
-    }
     return mapSessionResultRows(result, (row): GatewaySessionRow => {
       const phase = this.phaseByChild.get(row.key) ?? row.swarmPhase;
       const groupId = row.swarmGroupId?.trim();

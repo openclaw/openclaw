@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 
 /** Declare the private filesystem namespace shared by every rehearsal child. */
 export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
@@ -29,6 +30,10 @@ export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
 }
+
+/** Candidate-internal: one validation command's budget anchor, handed from its CLI to workers. */
+export const UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV =
+  "OPENCLAW_UPDATE_REHEARSAL_COMMAND_STARTED_AT_MS";
 
 /** Recognize the complete 9.3+ driver contract; update-in-progress alone is also used by live Doctor. */
 export function resolveUpdateRehearsalRoot(env: NodeJS.ProcessEnv): string | undefined {
@@ -60,6 +65,19 @@ export function isUpdateRehearsalReadOnlyPath(filePath: string, env: NodeJS.Proc
     !isPathInside(
       resolveIdentityPathViaExistingAncestorSync(root),
       resolveIdentityPathViaExistingAncestorSync(resolved),
+    )
+  );
+}
+
+/** Reuse prepared images only when the entire SQLite family stays in the disposable namespace. */
+export function isUpdateRehearsalPrivateDatabase(
+  filePath: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return (
+    resolveUpdateRehearsalRoot(env) !== undefined &&
+    resolveSqliteDatabaseFilePaths(filePath).every(
+      (file) => !isUpdateRehearsalReadOnlyPath(file, env),
     )
   );
 }

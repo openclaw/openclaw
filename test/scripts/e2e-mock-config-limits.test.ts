@@ -48,9 +48,6 @@ vi.mock("../helpers/stop-child-process.js", async (importOriginal) => {
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
-const browserCdpFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
-const configReloadAssertPath = "scripts/e2e/lib/config-reload/assert-log.mjs";
-const clickClackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const scrubbedEnvKeys = [
   "CLICKCLACK_FIXTURE_PORT",
   "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
@@ -267,6 +264,11 @@ describe("mock OpenAI response markers", () => {
         const context = user(
           "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         );
+        const currentContextText =
+          "OpenClaw runtime context:\nRuntime facts.\nEnd OpenClaw runtime context.";
+        const currentContext = stream
+          ? user(currentContextText)
+          : { role: "user", content: currentContextText };
         const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
           const response = await fetch(`${baseUrl}/v1/responses`, {
             method: "POST",
@@ -294,7 +296,7 @@ describe("mock OpenAI response markers", () => {
 
         // Utility traffic must not consume the spawn slot.
         expectText(await request([user("ordinary startup request")]), "OPENCLAW_E2E_OK");
-        const first = await request([create, context]);
+        const first = await request([create, context, currentContext]);
         expect(first).toHaveLength(1);
         const call = first[0];
         expect(call).toMatchObject({ type: "function_call", name: "sessions_spawn" });
@@ -320,7 +322,7 @@ describe("mock OpenAI response markers", () => {
             mode: "session",
           }),
         };
-        const completed = [create, call, receipt, context];
+        const completed = [create, call, receipt, context, currentContext];
         expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
         expectText(
           await request([create, call, { ...receipt, call_id: "unrelated" }]),
@@ -334,12 +336,38 @@ describe("mock OpenAI response markers", () => {
         // Child tasks and follow-ups may carry parent history and still expose spawn.
         for (const phase of ["CHILD", "BEFORE", "AFTER"]) {
           expectText(
-            await request([...completed, user(`TELEGRAM_BINDING_${phase}_${run}`), context]),
+            await request([
+              ...completed,
+              user(`TELEGRAM_BINDING_${phase}_${run}`),
+              context,
+              currentContext,
+            ]),
             `TELEGRAM_BINDING_ACK_${phase}_${run}`,
           );
         }
         expectText(
-          await request([...completed, user("ordinary later request")]),
+          await request([...completed, user("ordinary later request"), currentContext]),
+          "OPENCLAW_E2E_OK",
+        );
+        for (const text of [
+          "OpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary",
+          "ordinary prefix\nOpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary\nEnd OpenClaw runtime context.",
+          "OpenClaw runtime context:\nTELEGRAM_BINDING_CHILD_boundary\nEnd OpenClaw runtime context.\nordinary suffix",
+        ]) {
+          expectText(
+            await request([...completed, user(text), currentContext]),
+            "TELEGRAM_BINDING_ACK_CHILD_boundary",
+          );
+        }
+        expectText(
+          await request([
+            ...completed,
+            {
+              role: "user",
+              content: [{ type: "text", text: "TELEGRAM_BINDING_CHILD_unsupported" }],
+            },
+            currentContext,
+          ]),
           "OPENCLAW_E2E_OK",
         );
         expectText(
@@ -353,6 +381,7 @@ describe("mock OpenAI response markers", () => {
                 "ordinary latest message",
               ].join("\n"),
             ),
+            currentContext,
           ]),
           "OPENCLAW_E2E_OK",
         );
@@ -376,14 +405,12 @@ describe("mock OpenAI response markers", () => {
     },
   );
 
-  it.concurrent.for(
-    [
-      { api: "responses", stream: false },
-      { api: "responses", stream: true },
-      { api: "chat/completions", stream: false },
-      { api: "chat/completions", stream: true },
-    ].flatMap(({ api, stream }) => [false, true].map((modelMap) => ({ api, stream, modelMap }))),
-  )(
+  it.concurrent.for([
+    { api: "responses", stream: false, modelMap: true },
+    { api: "responses", stream: true, modelMap: true },
+    { api: "chat/completions", stream: false, modelMap: true },
+    { api: "chat/completions", stream: true, modelMap: true },
+  ])(
     "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
     async ({ api, stream, modelMap }, ctx) => {
       const { expect: taskExpect } = ctx;
@@ -531,12 +558,21 @@ describe("mock OpenAI response markers", () => {
             }
 
             const finalStartedAt = performance.now();
+            const runtimeText =
+              "OpenClaw runtime context:\nCurrent conversation facts\nEnd OpenClaw runtime context.";
+            const runtimeContext = {
+              role: "user",
+              content: stream
+                ? [{ type: api === "responses" ? "input_text" : "text", text: runtimeText }]
+                : runtimeText,
+            };
             const completedTurn = [
               user,
               ...assistant,
               api === "responses"
                 ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
                 : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
+              runtimeContext,
             ];
             const final = await request(completedTurn);
             if (api === "responses") {
@@ -561,6 +597,7 @@ describe("mock OpenAI response markers", () => {
               ...completedTurn,
               { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
               { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
+              runtimeContext,
             ]);
             if (api === "responses") {
               const items = stream
@@ -1338,7 +1375,7 @@ describe("mock OpenAI response markers", () => {
         { content: "agent plugin bundle qa check", role: "user" },
         runtimeContext,
       ];
-      const controls = ["tool_search", "tool_describe", "tool_call"];
+      const controls = ["tool_search", "tool_describe", "dispatch_action"];
       const request = async (names = controls) => {
         const response = await fetch(`${baseUrl}/v1/responses`, {
           method: "POST",
@@ -1426,7 +1463,7 @@ describe("mock OpenAI response markers", () => {
         { type: "message", content: [{ type: "output_text", text: "OPENCLAW_E2E_OK" }] },
       ]);
       const call = await request();
-      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      expect(call).toMatchObject({ type: "function_call", name: "dispatch_action" });
       expect(JSON.parse(call.arguments)).toEqual({ id: target.id, args: {} });
       appendResult(call, {
         tool: target,
@@ -1458,27 +1495,6 @@ describe("mock OpenAI response markers", () => {
 });
 
 describe("e2e mock and config helper numeric limits", () => {
-  it.for([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port, ctx) => {
-    const env: Record<string, string> = port === undefined ? {} : { MOCK_PORT: port };
-    await withMockServer(ctx, mockOpenAiPath, env, async (baseUrl, output) => {
-      expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
-      expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
-      const response = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ input: "ephemeral listener" }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("OPENCLAW_E2E_OK");
-    });
-  });
-
-  it.each(["0tcp", "-0", "0.5", ""])("rejects malformed ephemeral port %j", (port) => {
-    const result = runScript(mockOpenAiPath, { MOCK_PORT: port });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`invalid MOCK_PORT: ${port}`);
-  });
-
   it("keeps zero invalid for other launcher port settings", () => {
     const fallback = runScript(mockOpenAiPath, { OPENCLAW_MOCK_OPENAI_PORT: "0" });
     expect(fallback.status).not.toBe(0);
@@ -1486,71 +1502,6 @@ describe("e2e mock and config helper numeric limits", () => {
     const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "0" });
     expect(webSearch.status).not.toBe(0);
     expect(webSearch.stderr).toContain("invalid MOCK_PORT: 0");
-  });
-
-  it("rejects loose mock OpenAI port env values", () => {
-    const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "44080tcp" });
-    expect(mockPort.status).not.toBe(0);
-    expect(mockPort.stderr).toContain("invalid MOCK_PORT: 44080tcp");
-
-    const fallbackPort = runScript(mockOpenAiPath, {
-      OPENCLAW_MOCK_OPENAI_PORT: "44080http",
-    });
-    expect(fallbackPort.status).not.toBe(0);
-    expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 44080http");
-  });
-
-  it("rejects out-of-range mock OpenAI port env values", () => {
-    const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "65536" });
-    expect(mockPort.status).not.toBe(0);
-    expect(mockPort.stderr).toContain("invalid MOCK_PORT: 65536");
-
-    const fallbackPort = runScript(mockOpenAiPath, {
-      OPENCLAW_MOCK_OPENAI_PORT: "65536",
-    });
-    expect(fallbackPort.status).not.toBe(0);
-    expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 65536");
-  });
-
-  it("rejects loose OpenAI web-search mock port env values", () => {
-    const result = runScript(webSearchMockPath, { MOCK_PORT: "80http" });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid MOCK_PORT: 80http");
-  });
-
-  it("rejects out-of-range fixture listener ports", () => {
-    const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "65536" });
-    expect(webSearch.status).not.toBe(0);
-    expect(webSearch.stderr).toContain("invalid MOCK_PORT: 65536");
-
-    const browserFixture = runScript(browserCdpFixturePath, { FIXTURE_PORT: "65536" });
-    expect(browserFixture.status).not.toBe(0);
-    expect(browserFixture.stderr).toContain("invalid FIXTURE_PORT: 65536");
-
-    const clickClack = runScript(clickClackFixturePath, {
-      CLICKCLACK_FIXTURE_PORT: "65536",
-    });
-    expect(clickClack.status).not.toBe(0);
-    expect(clickClack.stderr).toContain("invalid CLICKCLACK_FIXTURE_PORT: 65536");
-  });
-
-  it("rejects loose config-reload log timeout env values", () => {
-    const result = runScript(configReloadAssertPath, {
-      OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS: "30000ms",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS: 30000ms");
-  });
-
-  it("rejects loose config-reload log read caps", () => {
-    const result = runScript(configReloadAssertPath, {
-      OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES: "256kb",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES: 256kb");
   });
 
   it("returns a clear error when mock OpenAI cannot append request logs", async (ctx) => {

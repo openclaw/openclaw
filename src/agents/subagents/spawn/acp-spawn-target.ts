@@ -39,7 +39,8 @@ export function resolveTargetAcpAgentId(params: {
   if (normalizedRequest && !normalizedRequest.ok) {
     return { ok: false, error: `agentId "${params.requestedAgentId}" was not found` };
   }
-  const requested = normalizedRequest?.value;
+  const requested =
+    normalizedRequest?.value ?? normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (requested) {
     const configuredAgent = resolveAgentEntry(params.cfg, requested);
     if (configuredAgent?.runtime?.type === "acp") {
@@ -63,17 +64,6 @@ export function resolveTargetAcpAgentId(params: {
       cfg: params.cfg,
       agentId: requested,
       ...(configuredAgent ? { configAgentId: requested } : {}),
-    });
-  }
-
-  const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
-  if (configuredDefault) {
-    const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
-    return resolveAcpAgentTarget({
-      cfg: params.cfg,
-      agentId: configuredDefault,
-      agentBackend:
-        configuredAgent?.runtime?.type === "acp" ? configuredAgent.runtime.acp?.backend : undefined,
     });
   }
 

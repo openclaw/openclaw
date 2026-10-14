@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
@@ -7,6 +6,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function resolveSkillsAgentWorkspace(
@@ -27,16 +27,10 @@ export function resolveSkillsAgentWorkspace(
     if (!(error instanceof AgentSelectionRequiredError)) {
       throw error;
     }
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
-    };
+    return invalidSessionRequest(error.message);
   }
   if (agentIdRaw && !listAgentIds(cfg).includes(agentId)) {
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
-    };
+    return invalidSessionRequest(`unknown agent id "${agentIdRaw}"`);
   }
   return {
     ok: true as const,

@@ -63,8 +63,10 @@ const inventorySchema = z
 
 export type CodexNativeSubagentPendingAssignment = z.infer<typeof assignmentSchema>;
 export type CodexNativeSubagentAssignmentStore = {
+  /** In-process binding ownership; use the async check before recovered work escapes. */
   assertCurrent(): void;
-  read(): readonly CodexNativeSubagentPendingAssignment[];
+  assertCurrentAsync(): Promise<void>;
+  read(): Promise<readonly CodexNativeSubagentPendingAssignment[]>;
   record(
     assignment: CodexNativeSubagentPendingAssignment,
     assertCurrent: () => void,

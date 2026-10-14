@@ -264,62 +264,54 @@ export function createConfigWriteReconciliation({
           reconcileAppliedRefresh();
           return;
         }
-        if (!canWriteDraft()) {
-          publish();
-          reconcileAppliedRefresh();
-          return;
-        }
-        clearInterruptedWrite();
-        if (interruptedRaw !== null && state.configSnapshot?.raw !== interruptedRaw) {
-          const snapshotRaw = state.configSnapshot?.raw;
-          const unchanged = draftBefore && snapshotRaw === draftBefore.originalRaw;
-          if (draftBefore && unchanged && !draftBefore.dirty) {
-            resetConfigPendingChanges(state);
-          }
-          // Original bytes do not fence a delayed commit; foreign bytes do not acknowledge it.
-          const foreign = typeof snapshotRaw === "string" && !unchanged;
-          if (foreign) {
-            state.configFormDirty = true;
-          }
-          state.configAutoSaveStatus = foreign ? "conflict" : "error";
-          state.lastError = foreign
-            ? "config changed since last load; re-run config.get and retry"
-            : t("configView.writeUnconfirmed");
-          publish();
-          reconcileAppliedRefresh();
-          return;
-        }
-        if (interrupted?.operation === "apply" && unacknowledgedDraftWrite() === interrupted) {
-          // Persisted bytes alone do not settle a failed runtime Apply.
-          state.configAutoSaveStatus = "error";
-          state.lastError ??= t("configView.writeUnconfirmed");
-          publish();
-          reconcileAppliedRefresh();
-          return;
-        }
-        // If the interrupted write DID commit, the fresh snapshot is
-        // exactly its bytes. Rebase a surviving draft onto the fresh hash
-        // so the retry doesn't false-conflict against our own write. Any
-        // other server content keeps the old base and conflicts instead
-        // of clobbering a foreign writer.
-        if (interruptedRaw !== null && state.configSnapshot?.raw === interruptedRaw) {
-          if (state.configSnapshot.appliedConfigHash === undefined) {
-            state.configNeedsApply = true;
-          }
-          const pendingDraft = state.configFormDirty ? captureDraft() : draftBefore;
-          // Rebase originals and hash together, then retain newer edits or
-          // a pre-ack revert. Raw bytes and mode stay manual-save-only.
-          if (pendingDraft && pendingDraft.submittedRaw !== interruptedRaw) {
-            rebaseConfigDraft(state);
-            state.configForm = pendingDraft.form;
-            state.configRaw = pendingDraft.raw;
-            state.configFormMode = pendingDraft.mode;
-            state.configFormDirty = true;
-            pauseAutoSaveDraftConnection();
-          } else {
-            resetConfigPendingChanges(state);
-            state.configAutoSaveStatus = "idle";
-            clearAutoSaveDraftConnection();
+        if (canWriteDraft()) {
+          clearInterruptedWrite();
+          if (interruptedRaw !== null && state.configSnapshot?.raw !== interruptedRaw) {
+            const snapshotRaw = state.configSnapshot?.raw;
+            const unchanged = draftBefore && snapshotRaw === draftBefore.originalRaw;
+            if (draftBefore && unchanged && !draftBefore.dirty) {
+              resetConfigPendingChanges(state);
+            }
+            // Original bytes do not fence a delayed commit; foreign bytes do not acknowledge it.
+            const foreign = typeof snapshotRaw === "string" && !unchanged;
+            if (foreign) {
+              state.configFormDirty = true;
+            }
+            state.configAutoSaveStatus = foreign ? "conflict" : "error";
+            state.lastError = foreign
+              ? "config changed since last load; re-run config.get and retry"
+              : t("configView.writeUnconfirmed");
+          } else if (
+            interrupted?.operation === "apply" &&
+            unacknowledgedDraftWrite() === interrupted
+          ) {
+            // Persisted bytes alone do not settle a failed runtime Apply.
+            state.configAutoSaveStatus = "error";
+            state.lastError ??= t("configView.writeUnconfirmed");
+          } else if (interruptedRaw !== null && state.configSnapshot?.raw === interruptedRaw) {
+            // If the interrupted write DID commit, the fresh snapshot is
+            // exactly its bytes. Rebase a surviving draft onto the fresh hash
+            // so the retry doesn't false-conflict against our own write. Any
+            // other server content keeps the old base and conflicts instead
+            // of clobbering a foreign writer.
+            if (state.configSnapshot.appliedConfigHash === undefined) {
+              state.configNeedsApply = true;
+            }
+            const pendingDraft = state.configFormDirty ? captureDraft() : draftBefore;
+            // Rebase originals and hash together, then retain newer edits or
+            // a pre-ack revert. Raw bytes and mode stay manual-save-only.
+            if (pendingDraft && pendingDraft.submittedRaw !== interruptedRaw) {
+              rebaseConfigDraft(state);
+              state.configForm = pendingDraft.form;
+              state.configRaw = pendingDraft.raw;
+              state.configFormMode = pendingDraft.mode;
+              state.configFormDirty = true;
+              pauseAutoSaveDraftConnection();
+            } else {
+              resetConfigPendingChanges(state);
+              state.configAutoSaveStatus = "idle";
+              clearAutoSaveDraftConnection();
+            }
           }
         }
         publish();

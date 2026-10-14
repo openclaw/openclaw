@@ -2,10 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
@@ -105,11 +106,8 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isDisabled()).toBe(false);
         await waitForGatewayRecoveryScope(page);
-        const owner = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          const { gateway: applicationGateway } = app.runtime.context;
+        const owner = await evaluateControlUiContext(page, (application) => {
+          const { gateway: applicationGateway } = application;
           return {
             gatewayUrl: applicationGateway.connection.gatewayUrl,
             recoveryScope: applicationGateway.snapshot.client!.recoveryScope,
@@ -135,12 +133,18 @@ suite.define(() => {
         );
         let moduleRequests = 0;
         let documentProbes = 0;
+        // Automatic recovery outlives the first failed probe. Keep the outage
+        // until the scenario has established the owner that must block reloads.
+        let documentReachable = false;
         await page.route("**/*", async (route) => {
-          if (route.request().method() === "HEAD" && ++documentProbes === 1) {
-            await route.fulfill({ status: 503 });
-          } else {
-            await route.fallback();
+          if (route.request().method() === "HEAD") {
+            documentProbes += 1;
+            if (!documentReachable) {
+              await route.fulfill({ status: 503 });
+              return;
+            }
           }
+          await route.fallback();
         });
         await page.route(
           controlUiE2eBuiltModuleRequest(
@@ -158,6 +162,7 @@ suite.define(() => {
         );
         await page.reload();
         await expect.poll(() => moduleRequests).toBe(1);
+        await expect.poll(() => documentProbes).toBeGreaterThan(0);
         const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
         try {
           await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
@@ -173,21 +178,21 @@ suite.define(() => {
           }
         }
         const readStartup = () =>
-          page.evaluate((key) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            return app.runtime.context.placementStartup.get(key);
-          }, sessionKey);
+          evaluateControlUiContext(
+            page,
+            (application, key) => application.placementStartup.get(key),
+            sessionKey,
+          );
         const failed = await readStartup();
         await expect.poll(() => page.evaluate(() => Date.now())).toBeGreaterThan(failed!.startedAt);
         for (const selectedKey of ["agent:main:another-task", sessionKey]) {
-          await page.evaluate((key) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.gateway.setSessionKey(key);
-          }, selectedKey);
+          await evaluateControlUiContext(
+            page,
+            (application, key) => {
+              application.gateway.setSessionKey(key);
+            },
+            selectedKey,
+          );
           expect(await readStartup()).toEqual(failed);
         }
         await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
@@ -197,15 +202,16 @@ suite.define(() => {
           await state.handleSendChat();
           return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
         });
-        expect(held).toEqual({ draft: "later ordinary turn", queued: [] });
+        expect(held).toEqual({ draft: "", queued: ["later ordinary turn"] });
+        await composer.fill("unfinished later draft");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (incognito) {
           const timeOrigin = await page.evaluate(() => performance.timeOrigin);
-          await page.locator(".sidebar-brand__new-thread").click();
+          await page.locator(".sidebar-rail .sidebar-new-session").click();
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "test-cloud", exact: true })
             .click();
           await page.getByRole("switch", { name: "Incognito" }).click();
@@ -231,6 +237,9 @@ suite.define(() => {
               });
             }
           }
+          // Restored connectivity must not bypass the live unsaved-start owner.
+          const blockedDocumentProbes = documentProbes;
+          documentReachable = true;
           await page.setViewportSize({ width: 390, height: 844 });
           // The resize event schedules the shell's mobile layout after the viewport RPC.
           await expect
@@ -286,7 +295,7 @@ suite.define(() => {
             });
           });
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-          expect(documentProbes).toBe(1);
+          expect(documentProbes).toBe(blockedDocumentProbes);
           expect(
             await page.evaluate(
               (text) =>
@@ -301,10 +310,10 @@ suite.define(() => {
           );
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
           if (escape === "toast") {
-            await page.locator(".sidebar-brand__new-thread").click();
+            await page.locator(".sidebar-rail .sidebar-new-session").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
-            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+            if (!(await privacy.isChecked())) {
               await privacy.click();
             }
             await page.locator(".new-session-page__message").fill(separateDraft);
@@ -323,7 +332,7 @@ suite.define(() => {
           await expect.poll(() => toast.textContent()).toContain(warning);
 
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-          expect(documentProbes).toBe(1);
+          expect(documentProbes).toBe(blockedDocumentProbes);
           if (captureUiProofEnabled) {
             await page.screenshot({
               animations: "disabled",
@@ -375,31 +384,41 @@ suite.define(() => {
               .click();
           }
         } else {
+          documentReachable = true;
           await alert.getByRole("button", { name: "Retry", exact: true }).click();
         }
         expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
           params: { key: sessionKey, message, idempotencyKey: messageId },
         });
         if (escape === "toast") {
+          // Retained requests do not establish readiness in the reloaded document.
+          await waitForControlUiGatewayReady(page);
           await navigateToControlUiSession(page, sessionKey);
         }
         await expect
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
         await page.locator(".chat-group.user", { hasText: message }).waitFor();
-        expect(await composer.inputValue()).toBe("later ordinary turn");
+        expect(await composer.inputValue()).toBe("unfinished later draft");
+        await gateway.emitChatFinal({
+          sessionKey,
+          runId: messageId,
+          text: "Initial turn finished.",
+        });
+        expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+          params: { sessionKey, message: "later ordinary turn" },
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         expect(moduleRequests).toBe(2);
         if (incognito) {
           expect(
-            await page.evaluate((key) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: ApplicationContext };
-              };
-              return app.runtime.context.placementStartup.hasPendingTurn(key);
-            }, privateKey),
+            await evaluateControlUiContext(
+              page,
+              (application, key) => application.placementStartup.hasPendingTurn(key),
+              privateKey,
+            ),
           ).toBe(false);
         }
         if (captureUiProofEnabled) {

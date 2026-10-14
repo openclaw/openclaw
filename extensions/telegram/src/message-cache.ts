@@ -126,13 +126,12 @@ type TelegramMessageCacheRetainedStore = Required<
 const RETAINED_MESSAGE_PAGE_SIZE = 256;
 const RETAINED_PROMOTION_BATCH_SIZE = 10_000;
 
-function telegramMessageCacheKey(params: {
-  scopeKey: string | undefined;
-  accountId: string;
-  chatId: string | number;
-  messageId: string;
-}) {
-  return `${telegramMessageCacheKeyPrefix(params)}${params.messageId}`;
+function parseHistoryCursor(cursor: string | undefined): number | undefined {
+  const id = parseStrictPositiveInteger(cursor);
+  if (cursor !== undefined && (id === undefined || !retainedMessageId(cursor))) {
+    throw new Error("Telegram history cursors must be native message IDs");
+  }
+  return id;
 }
 
 function telegramMessageCacheKeyPrefix(params: {
@@ -275,39 +274,6 @@ async function updateRetainedCacheNode(params: {
   }
 }
 
-async function persistCachedNode(params: {
-  bucket: TelegramMessageCacheBucket;
-  key: string;
-  node: TelegramCachedMessageNode;
-  botUserId?: number;
-  beforeWrite?: () => Promise<unknown>;
-}): Promise<void> {
-  const { persistentStore } = params.bucket;
-  if (!persistentStore) {
-    return;
-  }
-  try {
-    // A bounded insert may evict legacy group content until namespace promotion settles.
-    if (params.beforeWrite) {
-      await params.beforeWrite();
-    }
-    await persistentStore.register(params.key, persistedCacheNode(params.node, params.botUserId));
-  } catch (error) {
-    logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
-    const marker = params.node.promptContextProjectionMarker;
-    if (marker) {
-      params.node.promptContextProjectionMarker = {
-        kind: "invalid",
-        transcriptMessageId:
-          marker.kind === "valid"
-            ? marker.projection.transcriptMessageId
-            : marker.transcriptMessageId,
-      };
-      throw error;
-    }
-  }
-}
-
 export function createTelegramMessageCache(params?: {
   maxMessages?: number;
   scope?: string;
@@ -395,6 +361,37 @@ export function createTelegramMessageCache(params?: {
     return store;
   };
 
+  const persistCachedNode = async (options: {
+    key: string;
+    node: TelegramCachedMessageNode;
+    botUserId?: number;
+  }): Promise<void> => {
+    const store = bucket.persistentStore;
+    if (!store) {
+      return;
+    }
+    try {
+      // A bounded insert may evict legacy group content until namespace promotion settles.
+      if (hasRetainedStore && !bucket.promoted) {
+        await openRetainedStore();
+      }
+      await store.register(options.key, persistedCacheNode(options.node, options.botUserId));
+    } catch (error) {
+      logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
+      const marker = options.node.promptContextProjectionMarker;
+      if (marker) {
+        options.node.promptContextProjectionMarker = {
+          kind: "invalid",
+          transcriptMessageId:
+            marker.kind === "valid"
+              ? marker.projection.transcriptMessageId
+              : marker.transcriptMessageId,
+        };
+        throw error;
+      }
+    }
+  };
+
   const usesRetainedHistory = (accountId: string, chatId: string | number): boolean => {
     if (!hasRetainedStore) {
       return false;
@@ -416,10 +413,10 @@ export function createTelegramMessageCache(params?: {
         return null;
       }
       const store = await openRetainedStore();
-      const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
+      const key = `${telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId })}${id}`;
       return parseRetainedCacheNode(key, await store.lookup(key));
     }
-    const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
+    const key = `${telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId })}${messageId}`;
     const entry = messages.get(key);
     if (!entry) {
       return null;
@@ -539,16 +536,18 @@ export function createTelegramMessageCache(params?: {
         ...(threadBinding ? { threadBinding } : {}),
       });
       const currentObservation = observations.at(-1)!;
+      const keyPrefix = telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId });
       let recordedEntry = currentObservation.node;
       for (const { node, mode } of observations) {
         const { messageId } = node;
+        const id = store ? (retainedMessageId(messageId) ?? "") : messageId;
+        if (store && (!id || String(node.sourceMessage.chat?.id) !== String(chatId))) {
+          throw new Error("Telegram history requires a native message ID in the owning chat");
+        }
+        const key = `${keyPrefix}${id}`;
+        let cachedNode: TelegramCachedMessageNode | null;
         if (store) {
-          const id = retainedMessageId(messageId);
-          if (!id || String(node.sourceMessage.chat?.id) !== String(chatId)) {
-            throw new Error("Telegram history requires a native message ID in the owning chat");
-          }
-          const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
-          const cachedNode = await updateRetainedCacheNode({
+          cachedNode = await updateRetainedCacheNode({
             store,
             key,
             botUserId,
@@ -560,31 +559,19 @@ export function createTelegramMessageCache(params?: {
               return existing ? mergeCachedMessageNode(existing, node, mode) : node;
             },
           });
-          if (cachedNode && messageId === currentObservation.node.messageId) {
-            recordedEntry = cachedNode;
-          }
-          chatRetention.set(
-            telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId }),
-            "retained",
-          );
+          chatRetention.set(keyPrefix, "retained");
         } else {
-          const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
-          chatRetention.set(
-            telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId }),
-            "bounded",
-          );
-          const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
-          if (messageId === currentObservation.node.messageId) {
-            recordedEntry = cachedNode;
-          }
+          chatRetention.set(keyPrefix, "bounded");
+          cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
           pruneMapToMaxSize(messages, maxMessages);
           await persistCachedNode({
-            bucket,
             key,
             node: cachedNode,
             botUserId,
-            beforeWrite: hasRetainedStore && !bucket.promoted ? openRetainedStore : undefined,
           });
+        }
+        if (cachedNode && messageId === currentObservation.node.messageId) {
+          recordedEntry = cachedNode;
         }
       }
       return recordedEntry;
@@ -613,20 +600,18 @@ export function createTelegramMessageCache(params?: {
           throw new Error("Telegram history requires a native message ID");
         }
         const store = await openRetainedStore();
-        const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
+        const key = `${telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId })}${id}`;
         await updateRetainedCacheNode({ store, key, botUserId, update: withMedia });
         return;
       }
-      const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
+      const key = `${telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId })}${messageId}`;
       const node = withMedia(messages.get(key));
       messages.delete(key);
       messages.set(key, node);
       await persistCachedNode({
-        bucket,
         key,
         node,
         botUserId,
-        beforeWrite: hasRetainedStore && !bucket.promoted ? openRetainedStore : undefined,
       });
     },
     get,
@@ -682,10 +667,7 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0) {
         return [];
       }
-      const beforeId = parseStrictPositiveInteger(before);
-      if (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) {
-        throw new Error("Telegram history cursors must be native message IDs");
-      }
+      const beforeId = parseHistoryCursor(before);
       return (
         await readNodes({
           accountId,
@@ -703,14 +685,8 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0 || limit === Number.MAX_SAFE_INTEGER) {
         return { messages: [], hasMore: false };
       }
-      const beforeId = parseStrictPositiveInteger(before);
-      const afterId = parseStrictPositiveInteger(after);
-      if (
-        (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) ||
-        (after !== undefined && (afterId === undefined || !retainedMessageId(after)))
-      ) {
-        throw new Error("Telegram history cursors must be native message IDs");
-      }
+      const beforeId = parseHistoryCursor(before);
+      const afterId = parseHistoryCursor(after);
       const forward = after !== undefined && before === undefined;
       const nodes = await readNodes({
         accountId,
@@ -736,18 +712,6 @@ function normalizeSessionBoundaryTimestamp(timestampMs?: number): number | undef
   return Math.floor(timestampMs / 1000) * 1000;
 }
 
-function isAtOrAfterSessionBoundaryTimestamp(
-  node: TelegramCachedMessageNode,
-  boundaryTimestampMs?: number,
-): boolean {
-  if (boundaryTimestampMs === undefined) {
-    return true;
-  }
-  return typeof node.timestamp !== "number" || !Number.isFinite(node.timestamp)
-    ? true
-    : node.timestamp >= boundaryTimestampMs;
-}
-
 /**
  * Hard cap on reply-chain nodes rendered into the prompt. Model-visible context
  * must be bounded; every producer that appends chain entries shares this ceiling
@@ -766,14 +730,12 @@ export async function buildTelegramReplyChain(params: {
   if (!replyMessage?.message_id || String(replyMessage.chat?.id) !== String(params.chatId)) {
     return [];
   }
+  const get = (messageId: string) =>
+    params.cache.get({ accountId: params.accountId, chatId: params.chatId, messageId });
   const maxDepth = params.maxDepth ?? TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
   const visited = new Set<string>();
   const chain: TelegramCachedMessageNode[] = [];
-  let current: TelegramCachedMessageNode | null = await params.cache.get({
-    accountId: params.accountId,
-    chatId: params.chatId,
-    messageId: String(replyMessage.message_id),
-  });
+  let current: TelegramCachedMessageNode | null = await get(String(replyMessage.message_id));
   if (!current && params.msg.reply_to_message) {
     current = normalizeMessageNode(params.msg.reply_to_message, {
       threadId:
@@ -794,11 +756,7 @@ export async function buildTelegramReplyChain(params: {
     ) {
       break;
     }
-    const storedReply = await params.cache.get({
-      accountId: params.accountId,
-      chatId: params.chatId,
-      messageId: current.replyToId,
-    });
+    const storedReply = await get(current.replyToId);
     // Legacy retained roots can contain reply snapshots without separate ancestor rows.
     current =
       storedReply ??
@@ -828,18 +786,22 @@ export async function buildTelegramConversationContext(params: {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
-  const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
+  const addNode = (node: TelegramCachedMessageNode, replyTarget = false) => {
     if (!node.messageId || node.messageId === params.messageId) {
       return false;
     }
-    if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
+    if (
+      sessionBoundaryTimestamp !== undefined &&
+      typeof node.timestamp === "number" &&
+      Number.isFinite(node.timestamp) &&
+      !(node.timestamp >= sessionBoundaryTimestamp)
+    ) {
       return false;
     }
     const existing = selected.get(node.messageId);
-    const isReplyTarget = existing?.isReplyTarget === true || flags?.replyTarget === true;
     selected.set(node.messageId, {
       node: existing?.node ?? node,
-      isReplyTarget: isReplyTarget ? true : undefined,
+      isReplyTarget: existing?.isReplyTarget === true || replyTarget ? true : undefined,
     });
     return true;
   };
@@ -853,7 +815,7 @@ export async function buildTelegramConversationContext(params: {
       before: params.replyTargetWindowSize,
       after: params.replyTargetWindowSize,
     })) {
-      addNode(node, { replyTarget: node.messageId === messageId });
+      addNode(node, node.messageId === messageId);
     }
   };
 
@@ -872,7 +834,7 @@ export async function buildTelegramConversationContext(params: {
   }
 
   for (const [index, node] of params.replyChainNodes.entries()) {
-    const added = addNode(node, { replyTarget: index === 0 });
+    const added = addNode(node, index === 0);
     if (added && index === 0 && node.messageId) {
       await addReplyTargetWindow(node.messageId);
     }
@@ -888,7 +850,7 @@ export async function buildTelegramConversationContext(params: {
       messageId,
     });
     if (node) {
-      addNode(node, { replyTarget: true });
+      addNode(node, true);
     }
   }
 

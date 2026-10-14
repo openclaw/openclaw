@@ -20,7 +20,7 @@ async function handleMSTeamsFileConsentInvoke(
 
   const consentResponse = parseFileConsentInvoke(activity);
   if (!consentResponse) {
-    log.debug?.("invalid file consent invoke", { value: activity.value });
+    log.debug?.("invalid file consent invoke");
     return false;
   }
 

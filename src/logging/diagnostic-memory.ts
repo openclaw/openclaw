@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
+import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const WARNING_RATIO = 0.8;
@@ -48,6 +49,7 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
     ...sampleTrackedWorkerMemory(),
+    workerMessages: getWorkerMessageMetrics(),
   };
 }
 
@@ -167,7 +169,7 @@ function formatPressureSummary(pressure: MemoryPressure): string {
 function logMemoryPressure(pressure: MemoryPressure): void {
   const nextStep =
     pressure.level === "critical"
-      ? "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000."
+      ? "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000."
       : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +

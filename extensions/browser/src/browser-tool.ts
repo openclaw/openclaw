@@ -9,7 +9,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
@@ -450,6 +450,7 @@ export function createBrowserTool(
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({
+        agentId: opts?.agentId,
         sessionKey: opts?.agentSessionKey,
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
