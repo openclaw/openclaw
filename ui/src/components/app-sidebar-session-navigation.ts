@@ -105,6 +105,7 @@ import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snaps
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
   shouldPublishSessionData(): boolean {
     return this.sessionProjection.shouldPublishSessionData(this, {
+      snapshot: Boolean(this.sidebarSnapshot),
       sections: () =>
         this.zonedVisibleSections(this.selectedAgentSessionRows(this.getSessionNavigationState()))
           .sections,

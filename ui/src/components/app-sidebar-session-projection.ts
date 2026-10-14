@@ -1,5 +1,8 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import type { SidebarZoneEntry } from "../app-navigation.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
@@ -8,24 +11,27 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogSessionActivity,
   catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import { visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
-import { sidebarChildSessionParents } from "./app-sidebar-session-snooze-visibility.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
+  visibleSessionChildren,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
-import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import {
+  areSessionCatalogsSettled,
+  type SessionDataControllerHost,
+} from "./session-data-controller-catalog.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
@@ -76,8 +82,41 @@ export type SidebarVisibleSections = {
   visibleRows: SidebarRecentSession[];
 };
 
-type SidebarPresentationHost = Readonly<AppSidebarSessionNavigationElement>;
+type SidebarPresentationHost = Pick<
+  SessionDataControllerHost,
+  | "connected"
+  | "navigationView"
+  | "contextualSidebar"
+  | "sidebarAgentsMode"
+  | "sessionCatalogRowsVisible"
+  | "sessionDataContext"
+  | "expandedAgentId"
+> & {
+  readonly sessionData: SessionDataController;
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
+  readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
+  readonly rosterSessionSource: {
+    agentIds: readonly string[];
+    collapsedAgentIds: ReadonlySet<string>;
+  } | null;
+  activeChipAgent(): {
+    agents: readonly { id: string }[];
+    identity: ReturnType<ApplicationContext["agentIdentity"]["get"]>;
+    identities: ReadonlyMap<string, ReturnType<ApplicationContext["agentIdentity"]["get"]>>;
+  };
+  pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  getSessionNavigationState(): { toSidebarSession(row: GatewaySessionRow): SidebarRecentSession };
+  mainSessionRow(agentId: string): GatewaySessionRow | null;
+  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
+  agentUnreadCount(agentId: string): number;
+  otherAgentsHaveUnread(): boolean;
+  isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
+  isSessionChildrenFullyShown(key: string): boolean;
+  querySelectorAll: HTMLElement["querySelectorAll"];
+};
 type SidebarPresentationReaders = {
+  snapshot: boolean;
   sections(): SidebarVisibleSections["sections"];
   tree(): SidebarRecentSession[];
   catalogs(): SidebarSessionCatalog[];
@@ -109,7 +148,7 @@ export class SidebarSessionProjection {
     host: SidebarPresentationHost,
     readers: SidebarPresentationReaders,
   ): boolean {
-    if (host.sidebarSnapshot) {
+    if (readers.snapshot) {
       return true;
     }
     const data = host.sessionData;
@@ -264,7 +303,10 @@ export class SidebarSessionProjection {
   }
 
   visibleRowsInOrder(
-    zone: ReturnType<AppSidebarSessionNavigationElement["reconciledSidebarZone"]>,
+    zone: {
+      entries: readonly SidebarZoneEntry[];
+      sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+    },
     visibleRows: SidebarRecentSession[],
   ): SidebarRecentSession[] {
     const pinnedRows = zone.entries.flatMap((entry) => {
@@ -279,7 +321,28 @@ export class SidebarSessionProjection {
     const homeAgents = grouped
       ? grouped.agentIds.filter((id) => !grouped.collapsedAgentIds.has(id))
       : [host.expandedAgentId()];
-    return sidebarChildSessionParents(rows, homeAgents, host);
+    const revalidating = new Set<string>();
+    const pending = [...rows];
+    for (const session of pending) {
+      pending.push(...session.children);
+      if (
+        session.childLoadParentKeys?.length &&
+        (session.visuallyActive || host.isSessionChildrenExpanded(session))
+      ) {
+        for (const key of session.childLoadParentKeys) {
+          revalidating.add(key);
+        }
+      }
+    }
+    for (const agentId of homeAgents) {
+      const mainRow = host.mainSessionRow(agentId);
+      if (mainRow?.childSessions?.length) {
+        for (const key of host.projectHomeSession(mainRow, agentId).childLoadParentKeys ?? []) {
+          revalidating.add(key);
+        }
+      }
+    }
+    return revalidating;
   }
 
   mainSessionRow(

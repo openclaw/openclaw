@@ -6,7 +6,11 @@ import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../src/gateway/mcp-app-sandbox-http.js";
-import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
+import {
+  createColdLoadFrameProbe,
+  type ColdLoadProbeInput,
+} from "../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
+import { installColdLoadProbes } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -24,6 +28,10 @@ import {
   summarizeColdLoadTrace,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+
+function createColdLoadProbeInitScript(input: ColdLoadProbeInput): string {
+  return `(${installColdLoadProbes.toString()})(${JSON.stringify(input)}, ${createColdLoadFrameProbe.toString()});`;
+}
 
 const { values } = parseArgs({
   options: {

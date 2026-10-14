@@ -1,5 +1,3 @@
-import { installColdLoadProbes } from "./control-ui-cold-load-probes.ts";
-
 export type ColdLoadProbeInput = {
   latencyMs: number;
   frameGapMs: number;
@@ -120,8 +118,4 @@ export function createColdLoadFrameProbe(
     },
   };
   return frameProbe;
-}
-
-export function createColdLoadProbeInitScript(input: ColdLoadProbeInput): string {
-  return `(${installColdLoadProbes.toString()})(${JSON.stringify(input)}, ${createColdLoadFrameProbe.toString()});`;
 }
