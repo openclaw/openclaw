@@ -12,7 +12,8 @@ type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
   | ({ readonly node: Node; readonly path: readonly unknown[] } & (
       | { readonly kind: "scalar"; readonly value: unknown }
-      | { readonly kind: "map" | "seq" }
+      | { readonly kind: "map" }
+      | { readonly kind: "seq" }
       | { readonly kind: "pair"; readonly key: string; readonly value: unknown }
     ));
 
