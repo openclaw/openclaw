@@ -747,7 +747,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         bubbles: true,
         composed: true,
         detail: {
-          owner: this,
+          owner: this.element,
           onSlashCommand,
         },
       }),

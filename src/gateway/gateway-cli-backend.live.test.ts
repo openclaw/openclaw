@@ -64,7 +64,7 @@ import {
   verifyCliCronMcpProbe,
 } from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -729,7 +729,8 @@ describeLive("gateway live (cli backend)", () => {
             }>("chat.history", { sessionKey });
             // Imported history can be fully deduplicated against local rows; the persisted
             // binding, not imported-message metadata, owns native session continuity.
-            const { entry: continuityEntry } = loadGatewaySessionEntryReadOnly(sessionKey);
+            const { entry: continuityEntry } =
+              await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
             expectedCliSessionId = continuityEntry?.cliSessionBindings?.[providerId]?.sessionId;
             expect(expectedCliSessionId).toBeTruthy();
             // Native imports must keep private runtime context out of the visible transcript,
@@ -820,8 +821,9 @@ describeLive("gateway live (cli backend)", () => {
               expectedLiveSessionGeneration,
             );
             expect(
-              loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.[providerId]
-                ?.sessionId,
+              (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry?.cliSessionBindings?.[
+                providerId
+              ]?.sessionId,
             ).toBe(expectedCliSessionId);
           } else {
             expect(

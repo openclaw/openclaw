@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
@@ -230,19 +231,23 @@ function directoryState(directory: string): DirectoryState {
     sourceVersions: new Map(),
     dirty: false,
     publishChange: captureFileChangePublisher(),
-    observation: observeOwnedDirectory(directory, (filename) => {
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some(
-          (databasePath) =>
-            filename === path.basename(databasePath) ||
-            filename === `${path.basename(databasePath)}-wal`,
-        )
-      ) {
-        void refreshDirectory(directory, state);
-      }
-    }),
+    observation: observeOwnedDirectory(
+      directory,
+      (filename) => {
+        if (
+          filename === undefined ||
+          legacyNames.has(filename) ||
+          [...identities.keys()].some(
+            (databasePath) =>
+              filename === path.basename(databasePath) ||
+              filename === `${path.basename(databasePath)}-wal`,
+          )
+        ) {
+          void refreshDirectory(directory, state);
+        }
+      },
+      { recoveryIntervalMs: 30_000 },
+    ),
   };
   directories.set(directory, state);
   return state;
@@ -303,7 +308,7 @@ export function noteAuthProfileFileWrite(databasePath: string): void {
 }
 
 export function authProfileSourceExists(sourcePath: string): boolean {
-  if (isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
+  if (!isMainThread || isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
     return fs.existsSync(sourcePath);
   }
   const state = directoryState(path.dirname(sourcePath));

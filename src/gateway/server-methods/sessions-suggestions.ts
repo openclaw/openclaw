@@ -24,11 +24,9 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
+import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
-import {
-  prepareProjectedSessionSharing,
-  resolveSessionSharingTargetAsync,
-} from "../session-sharing.js";
+import { prepareProjectedSessionSharing } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import {
@@ -44,7 +42,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
-  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
+  target: SessionSharingTarget,
   suggestion: StoredSessionSuggestion,
 ): SessionSuggestion {
   return {
@@ -64,7 +62,7 @@ function protocolSuggestion(
 
 function publishSuggestion(
   context: GatewayRequestContext,
-  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
+  target: SessionSharingTarget,
   requestedSessionKey: string,
   action: SessionSuggestionEvent["action"],
   stored: StoredSessionSuggestion,

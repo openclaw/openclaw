@@ -85,7 +85,8 @@ function makePreparedSecretsSnapshot(config: OpenClawConfig) {
 }
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+  await withOpenClawTestState(profileState, async () => {
     const clock = createGatewaySchedulerClock(Date.now());
     const profile = ensureProfileForEmail("reload-model-reader@example.test");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

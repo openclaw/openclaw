@@ -4,7 +4,7 @@ import { createMemo, untrack } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { PanelRefreshStatus as PanelRefreshStatusView } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
@@ -12,7 +12,6 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 
 export function UsagePageShell(props: {
   context: ApplicationContext;
@@ -39,15 +38,11 @@ export function UsagePageShell(props: {
         title={header().title}
         subtitle={header().subtitle}
         actions={
-          <LitContent
-            render={() =>
-              renderAgentScopeControl({
-                agents: agents.read().agentsList?.agents ?? [],
-                additionalAgentIds: additionalAgentIds(),
-                selection: props.context.agentSelection,
-                selectedId: selection.read().state.scopeId,
-              })
-            }
+          <AgentScopeControl
+            agents={agents.read().agentsList?.agents ?? []}
+            additionalAgentIds={additionalAgentIds()}
+            selection={props.context.agentSelection}
+            selectedId={selection.read().state.scopeId}
           />
         }
       />

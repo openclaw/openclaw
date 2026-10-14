@@ -15,7 +15,7 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Person-owned reads retain visibility, row generation and the physical store through I/O. */
-export function retainSessionScopedRead(
+export async function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
   agentId: string,
@@ -39,7 +39,7 @@ export function retainSessionScopedRead(
   const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
     { sessionKey, agentId },
   ]);
-  const read = retainGatewaySessionEntryReadOnly(
+  const read = await retainGatewaySessionEntryReadOnly(
     sessionKey,
     agentId,
     readOptions.allowMetadataChanges

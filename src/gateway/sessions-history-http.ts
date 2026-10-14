@@ -11,6 +11,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
   type CapturedSessionActorStorageOwner,
 } from "../config/sessions/session-actor-storage-binding.js";
 import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
@@ -54,7 +55,7 @@ import {
   type PreparedSessionSourceFacts,
   type SessionFactsRead,
 } from "./session-sharing-preparation.js";
-import { prepareProjectedSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
+import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
@@ -233,7 +234,7 @@ async function serveAuthorizedSessionHistory(
   try {
     if (source) {
       assertSourceCurrent();
-      entry = source.owner?.readSession(sessionKey, source.authority)?.entry;
+      entry = readCapturedSessionActorEntry(source, sessionKey);
       target = {
         agentId: source.agentId,
         canonicalKey: sessionKey,
@@ -363,13 +364,19 @@ async function serveAuthorizedSessionHistory(
     }
     let currentTarget;
     try {
-      currentTarget = source
-        ? resolveSessionSharingTarget({
-            cfg: currentConfig,
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-          })
-        : sharing!.readCurrent(currentConfig).target;
+      if (source) {
+        const currentEntry = readCapturedSessionActorEntry(source, sessionKey);
+        currentTarget = currentEntry
+          ? {
+              agentId: source.agentId,
+              canonicalKey: sessionKey,
+              storePath: source.path,
+              entry: currentEntry,
+            }
+          : null;
+      } else {
+        currentTarget = sharing!.readCurrent(currentConfig).target;
+      }
     } catch {
       return false;
     }

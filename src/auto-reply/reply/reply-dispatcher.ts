@@ -168,6 +168,8 @@ export type ReplyDispatcherOptions = {
    * sends fall back to deliver(payload, info), retaining that adapter's raw contract.
    */
   deliverPrepared?: (plan: OutboundPayloadPlan, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
+  /** The delivery callback admits custody before external I/O and owns failure settlement. */
+  pendingFinalDeliveryAdmission?: "deliver";
   silentReplyContext?: {
     cfg?: OpenClawConfig;
     sessionKey?: string;
@@ -396,7 +398,12 @@ export function createReplyDispatcher(
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
-      if (settleCustody && deliveryStarted && !queueHeld) {
+      if (
+        settleCustody &&
+        deliveryStarted &&
+        !queueHeld &&
+        options.pendingFinalDeliveryAdmission !== "deliver"
+      ) {
         // Proven no-send restores replayable custody, including after direct
         // admission marked it unknown. An external queue keeps its own marker.
         await settleCustody(
@@ -430,7 +437,7 @@ export function createReplyDispatcher(
           await settleCustody("suppressed", ["prepared"]);
         }
       }
-      if (deliveryInput && settleCustody) {
+      if (deliveryInput && settleCustody && options.pendingFinalDeliveryAdmission !== "deliver") {
         // Claim direct-send custody before provider I/O; a non-prepared marker
         // means another owner already delivered, suppressed, or superseded this
         // final, so repeating the send would duplicate it.

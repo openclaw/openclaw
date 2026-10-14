@@ -66,7 +66,7 @@ function request(method: string, params: Record<string, unknown>): GatewayReques
 it.each(["main", "absent"] as const)(
   "refuses private provider continuation before session acquisition (%s)",
   async (agentId) => {
-    const target = vi.spyOn(sharing, "resolveSessionSharingTarget");
+    const target = vi.spyOn(sharing, "resolveSessionSharingTargetAsync");
     const sql = observeMainThreadSql();
     try {
       const options = request("sessions.providerReview.continue", {
@@ -137,7 +137,7 @@ it("reports private activity recaps unavailable without acquiring a source or sc
     handleLifecycle() {},
     async dispose() {},
   };
-  const target = vi.spyOn(sharing, "resolveSessionSharingTarget");
+  const target = vi.spyOn(sharing, "resolveSessionSharingTargetAsync");
   const sql = observeMainThreadSql();
   try {
     const options = request("sessions.activitySummary.ensure", {

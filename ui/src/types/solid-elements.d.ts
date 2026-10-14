@@ -42,6 +42,7 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
+      "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
       "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
       "wa-select": HTMLAttributes<WaSelect> & { "prop:value": WaSelect["value"] };
       "wa-option": HTMLAttributes<WaOption> & {
@@ -60,6 +61,7 @@ declare module "@solidjs/web" {
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
         PluginViewProperties & {
           "prop:defaultView": unknown;
+          "prop:replacementCompanion"?: unknown;
           "prop:presented": boolean;
         };
       "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
@@ -137,7 +139,16 @@ declare module "@solidjs/web" {
         ElementProperties<
           Pick<
             HTMLElementTagNameMap["openclaw-viewer-facepile"],
-            "staticParticipants" | "totalCount" | "maxVisible" | "personActivity"
+            | "staticParticipants"
+            | "staticUsers"
+            | "presencePayload"
+            | "selfUser"
+            | "selfInstanceId"
+            | "sessionKey"
+            | "excludeIdentities"
+            | "totalCount"
+            | "maxVisible"
+            | "personActivity"
           >
         > & { variant?: "session" };
       "openclaw-viewer-avatar": HTMLAttributes<HTMLElementTagNameMap["openclaw-viewer-avatar"]> &

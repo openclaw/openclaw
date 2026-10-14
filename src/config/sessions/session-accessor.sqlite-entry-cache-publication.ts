@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
@@ -63,7 +64,7 @@ export function bindPreparedSessionEntryPublication(
   preparedSharingChanges.changes.set(change, record);
 }
 
-export function bindSessionEntryPublicationSource<T extends SessionRowChange>(
+function bindSessionEntryPublicationSource<T extends SessionRowChange>(
   change: T,
   database: SessionEntryCacheDatabase,
 ): T {
@@ -96,7 +97,7 @@ export function emitPreparedSessionSharingChange(
   if (record.kind === "metadata") {
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
-      !stageSqliteTransactionState(database.db, {
+      !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
         stage() {},
         commit: seal,
         rollback() {},
@@ -118,7 +119,7 @@ export function invalidateSessionEntryCaches(databaseIdentity: string): void {
 }
 
 /** Retire all facts in a failed installation, including pending older worker receipts. */
-export function invalidateSessionEntryPublication(
+function invalidateSessionEntryPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   authorityChanged = true,
@@ -272,7 +273,29 @@ export function publishSessionEntryPlaceholderInsertion(
   });
 }
 
-export function publishSessionSharingFieldChange(
+/** Install a committed field from either a native transaction or a worker receipt. */
+export function commitSessionSharingFieldChange(
+  database: SessionEntryCacheDatabase | string,
+  sessionKey: string,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
+): void {
+  // A newer write invalidates a delayed cache receipt; the next read reloads it.
+  recordCommittedSessionMetadataPublication(database, sessionKey, change);
+  for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+    if (read.acquisition) {
+      if (change.kind === "member") {
+        recordAcquiringSessionMember(read.acquisition, change);
+      } else {
+        // A pending worker snapshot cannot establish which field assignment it read.
+        recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
+      }
+    } else if (read.facts) {
+      read.facts = updateSessionSharingField(read.facts, change);
+    }
+  }
+}
+
+function publishSessionSharingFieldChange(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
@@ -280,20 +303,7 @@ export function publishSessionSharingFieldChange(
   publishTrackedCacheUpdate(
     database,
     () => {
-      // A newer write invalidates a delayed cache receipt; the next read reloads it.
-      recordCommittedSessionMetadataPublication(database, sessionKey, change);
-      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-        if (read.acquisition) {
-          if (change.kind === "member") {
-            recordAcquiringSessionMember(read.acquisition, change);
-          } else {
-            // A pending worker snapshot cannot establish which field assignment it read.
-            recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
-          }
-        } else if (read.facts) {
-          read.facts = updateSessionSharingField(read.facts, change);
-        }
-      }
+      commitSessionSharingFieldChange(database, sessionKey, change);
     },
     () =>
       stageSessionSharingPublication(

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
+import type { ConfigMachineStateDatabase } from "../state/config-machine-state-row.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
 export const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";

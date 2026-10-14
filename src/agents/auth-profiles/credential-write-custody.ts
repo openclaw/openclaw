@@ -6,6 +6,7 @@ import {
   getStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../../infra/sqlite-database-admission.js";
 import { runWithSqliteCleanup } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -32,7 +33,7 @@ export function withAuthProfileCredentialOwner<T>(
   operation: (retainTransaction?: (database: DatabaseSync) => void) => T,
   database?: DatabaseSync,
 ): T {
-  const retained = database && retainedTransactions.get(database);
+  const retained = database && retainedTransactions.get(sqlPublicationAnchor(database));
   if (retained) {
     if (retained.unknown) {
       throw new Error("Auth profile credential write outcome is unknown; restart its owner");
@@ -74,17 +75,17 @@ export function withAuthProfileCredentialOwner<T>(
   const lease = acquireStateDatabaseSchemaLease(databasePath);
   let transactionOwnsLease = false;
   const retainTransaction = (db: DatabaseSync) => {
-    if (!hasSqlitePostCommitScope(db)) {
+    if (!hasSqlitePostCommitScope(sqlPublicationAnchor(db))) {
       return;
     }
     const owner = { lease, unknown: false };
     const release = () => {
-      retainedTransactions.delete(db);
+      retainedTransactions.delete(sqlPublicationAnchor(db));
       lease.release();
     };
     // Stage first so rollback releases after credential facts; commit release is an observer.
-    transactionOwnsLease = stageSqliteTransactionState(db, {
-      stage: () => retainedTransactions.set(db, owner),
+    transactionOwnsLease = stageSqliteTransactionState(sqlPublicationAnchor(db), {
+      stage: () => retainedTransactions.set(sqlPublicationAnchor(db), owner),
       commit() {},
       rollback: release,
       invalidate: () => {
@@ -92,7 +93,7 @@ export function withAuthProfileCredentialOwner<T>(
         owner.unknown = true;
       },
     });
-    deferSqlitePostCommitPublication(db, release);
+    deferSqlitePostCommitPublication(sqlPublicationAnchor(db), release);
   };
   return runWithSqliteCleanup(
     {
@@ -112,16 +113,13 @@ export function withAuthProfileCredentialWriteCustody<T>(
   database: DatabaseSync,
   operation: () => T,
 ): T {
-  if (database.isTransaction && !hasSqlitePostCommitScope(database)) {
+  if (database.isTransaction && !hasSqlitePostCommitScope(sqlPublicationAnchor(database))) {
     throw new Error("Credential writes require their owning transaction publication scope");
   }
-  const agent = findOpenClawAgentDatabaseIdentity({ db: database });
-  if (isMainThread && typeof agent?.identity === "symbol") {
-    // Incognito handles are process-private and have no durable root to exclude.
-    return operation();
-  }
+  const agent = findOpenClawAgentDatabaseIdentity({ db: sqlPublicationAnchor(database) });
   const databasePath =
-    agent?.ownerDatabasePath ?? readTrackedStateDatabaseIdentity(database)?.canonicalPath;
+    agent?.ownerDatabasePath ??
+    readTrackedStateDatabaseIdentity(sqlPublicationAnchor(database))?.canonicalPath;
   if (!databasePath) {
     throw new Error("Auth profile credential database has no captured state owner");
   }

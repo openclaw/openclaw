@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type {
-  ErrorShape,
-  SessionsPatchParams,
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+  type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -57,7 +59,7 @@ import type {
   MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
-import { prepareSessionWorkerPlacementPatchError } from "./sessions-shared.js";
+import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -107,6 +109,17 @@ export async function executeSessionPatchMutations(params: {
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
   const permissionErrors = new Map<number, ErrorShape>();
+  const placementChecks = new Map<
+    number,
+    Awaited<ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>>
+  >();
+  using _ = {
+    [Symbol.dispose]: () => {
+      for (const validation of placementChecks.values()) {
+        validation.release();
+      }
+    },
+  };
   const prepared: PreparedPatchTarget[] = [];
   const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
@@ -158,9 +171,11 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(expectationError);
       continue;
     }
-    let initialPlacementPatchError: string | undefined;
+    let placementValidation: Awaited<
+      ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>
+    >;
     try {
-      initialPlacementPatchError = await prepareSessionWorkerPlacementPatchError({
+      placementValidation = await prepareSessionWorkerPlacementPatchValidation({
         agentId: resolved.agentId,
         cfg,
         context: params.context,
@@ -174,10 +189,7 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: unexpectedPatchError(key, error) };
       continue;
     }
-    if (initialPlacementPatchError) {
-      outcomes[index] = invalidSessionRequest(initialPlacementPatchError);
-      continue;
-    }
+    placementChecks.set(index, placementValidation);
     const preparedTarget: PreparedPatchTarget = {
       archiveActor,
       canonicalKey,
@@ -195,7 +207,17 @@ export async function executeSessionPatchMutations(params: {
     preparedByIndex[index] = preparedTarget;
   }
 
-  const mutationTargets = params.targets.map((target) => ({ ...target }));
+  const mutationTargets = params.targets.map((target, index) => ({
+    ...target,
+    commitGuard: () => {
+      const error = target.commitGuard();
+      if (error) {
+        return error;
+      }
+      const placementError = placementChecks.get(index)?.validate();
+      return placementError ? errorShape(ErrorCodes.INVALID_REQUEST, placementError) : undefined;
+    },
+  }));
   const originalCommitGuards = mutationTargets.map((target) => target.commitGuard);
   await using preparation = await sessionPatchExpectations.prepareSessionPatchTargets({
     cfg,
@@ -359,6 +381,7 @@ export async function executeSessionPatchMutations(params: {
                       } = resolveCanonicalGatewaySessionStoreKey({
                         cfg,
                         key: target.key,
+                        target: target.initialTarget,
                         store: workingStore,
                         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                       });

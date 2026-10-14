@@ -1,6 +1,7 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -221,6 +222,10 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  beforeAll(async () => {
+    await prepareSharedAuthStoreOwnership();
+  });
+
   beforeEach(() => {
     providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
     providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(

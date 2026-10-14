@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -7,6 +8,7 @@ import type {
   PluginsInspectResult,
   PluginsReloadResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
@@ -48,31 +50,52 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
     return null;
   }
   const { callGateway } = await import("../gateway/call.js");
+  const { isGatewayProtocolResponseError } = await import("../gateway/client.js");
   const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-    const controller =
-      method === "plugins.reload" && params.waitForDrain === true
-        ? new AbortController()
-        : undefined;
+    const deadline = Date.now() + 600_000;
+    const waitForDrain = method === "plugins.reload" && params.waitForDrain === true;
+    const controller = new AbortController();
     const finished = createDeferredCore();
-    const releaseExitGate = controller
-      ? registerSignalExitGate(finished.promise, () => controller.abort())
-      : undefined;
+    const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
     try {
-      return await callGateway<T>({
-        method,
-        params,
-        localPortOverride: owner.port,
-        ignoreEnvUrlOverride: true,
-        requiredMethods: [...new Set([method, "plugins.reload"])],
-        timeoutMs: controller ? null : 600_000,
-        ...(controller ? { signal: controller.signal } : {}),
-        scopes: ["operator.admin"],
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      });
+      for (;;) {
+        try {
+          controller.signal.throwIfAborted();
+          return await callGateway<T>({
+            method,
+            params,
+            localPortOverride: owner.port,
+            ignoreEnvUrlOverride: true,
+            requiredMethods: [...new Set([method, "plugins.reload"])],
+            timeoutMs: waitForDrain ? null : Math.max(1, deadline - Date.now()),
+            signal: controller.signal,
+            scopes: ["operator.admin"],
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          });
+        } catch (error) {
+          // Release the rejected RPC so reload can drain it; never replay an uncertain effect.
+          if (
+            !isGatewayProtocolResponseError(error) ||
+            error.gatewayCode !== "UNAVAILABLE" ||
+            !error.retryable ||
+            !isRecord(error.details) ||
+            error.details.mutationAccepted !== false ||
+            error.retryAfterMs === undefined ||
+            error.retryAfterMs <= 0 ||
+            error.retryAfterMs >= deadline - Date.now()
+          ) {
+            throw error;
+          }
+          await sleepWithAbort(error.retryAfterMs, controller.signal);
+          if (Date.now() >= deadline) {
+            throw error;
+          }
+        }
+      }
     } finally {
       finished.resolve();
-      releaseExitGate?.();
+      releaseExitGate();
     }
   };
   return async <T>(

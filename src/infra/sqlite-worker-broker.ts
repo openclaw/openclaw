@@ -3,7 +3,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
-import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
+import { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
@@ -171,7 +171,10 @@ export class SqliteWorkerBroker {
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
     options.assertCurrent?.();
-    assertStateDatabaseAccessAllowed(options.stateDatabasePath ?? databasePath, {
+    const stateAccess = captureStateDatabaseAccess(
+      options.stateDatabasePath ?? identity.canonicalPath,
+    );
+    stateAccess.assertAccessAllowed({
       maintenanceScope: options.maintenanceScope,
     });
     const input = options.input;
@@ -245,6 +248,7 @@ export class SqliteWorkerBroker {
         initialized: false,
         backendClosed: false,
         databasePath,
+        stateAccess,
         stateContext: options.stateContext,
         stateDatabasePath: options.stateDatabasePath,
       };

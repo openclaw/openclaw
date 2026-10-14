@@ -220,6 +220,9 @@ it.each([
   "db.exec('DELETE FROM secret_store_entries WHERE name = ?');",
   "db.exec(`UPDATE secret_store_entries SET value = 'replacement'`);",
   "db.exec(`UPDATE secret_store_entries SET value = ${replacement}`);",
+  "db.exec('REPLACE INTO secret_store_entries (name) VALUES (?)');",
+  "db.exec('UPDATE OR REPLACE secret_store_entries SET value = ?');",
+  "db.replaceInto('secret_store_entries').values({ name: 'replacement' });",
 ])("rejects a newly introduced secret-store write: %s", (write) => {
   expect(inspect({ "src/new-writer.ts": `function write() { ${write} }` })).toHaveLength(1);
 });
@@ -243,6 +246,9 @@ it.each([
   "const key = 'authProfiles.store'; db.deleteFrom('config_machine_state').where('state_key', '=', key);",
   "db.deleteFrom('config_machine_state').where('state_key', 'in', ['authProfiles.state', 'authProfiles.store']);",
   "db.updateTable('config_machine_state').set({ state_key: 'authProfiles.store' }).where('state_key', '=', 'other');",
+  "db.replaceInto('config_machine_state').values({ state_key: 'authProfiles.store' });",
+  "db.insertInto('config_machine_state').values({ state_key: 'other' }).onConflict((conflict) => conflict.column('state_key').doUpdateSet({ state_key: 'authProfiles.store' }));",
+  "db.insertInto('config_machine_state').values({ state_key: 'other' }).onConflict((conflict) => { return conflict.column('state_key').doUpdateSet({ state_key: 'authProfiles.store' }); });",
   "db.exec('DELETE FROM config_machine_state WHERE state_key = ?');",
   "db.insertInto('config_machine_state').values({ state_key: unknownKey });",
 ])("rejects a synthetic shared or agent credential bypass: %s", (write) => {
@@ -255,6 +261,11 @@ it("permits bounded noncredential machine-state writes", () => {
       "src/new-writer.worker.ts": `
       const unrelated = 'authProfiles.state';
       db.insertInto('config_machine_state').values({ state_key: unrelated });
+      db.replaceInto('config_machine_state').values({ state_key: unrelated });
+      db.insertInto('config_machine_state').values({ state_key: unrelated })
+        .onConflict((conflict) => conflict.column('state_key').doUpdateSet({ value_json: '{}' }));
+      db.insertInto('config_machine_state').values({ state_key: unrelated })
+        .onConflict((conflict) => conflict.column('state_key').doUpdateSet({ state_key: 'other' }));
       db.deleteFrom('config_machine_state').where('state_key', '=', unrelated);
     `,
     }),
@@ -638,12 +649,12 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
 it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
   const sources = {
     [authCells]: `export function writeAuthProfileJsonCell() {}`,
-    "src/agents/auth-profiles/store-update-kernel.ts": `
+    "src/agents/auth-profiles/store-update.worker.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
       export function updateAuthProfileStoreInDatabase() { writeAuthProfileJsonCell(); }
     `,
     "src/agents/auth-profiles/store.worker.ts": `
-      import { updateAuthProfileStoreInDatabase } from './store-update-kernel.js';
+      import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
       export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
     `,
   };
@@ -652,7 +663,7 @@ it("closes raw-store and worker-kernel entries while preserving the named update
     inspect({
       ...sources,
       "src/new-writer.worker.ts": `
-        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update-kernel.js';
+        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
         updateAuthProfileStoreInDatabase();
       `,
     }),

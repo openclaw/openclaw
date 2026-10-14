@@ -156,7 +156,7 @@ export async function runSetupInferenceTurn(params: {
     if (cliError) {
       return failed("unavailable", cliError);
     }
-    const profileError = resolveSetupInferenceProfileError(route, workspaceDir, deps);
+    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir, deps);
     if (profileError) {
       return failed("auth", profileError);
     }
@@ -581,7 +581,7 @@ export async function verifySetupInferenceConfig(
     params.config,
     params.agentId,
     {
-      loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+      loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
       modelTarget: params.modelTarget,
     },
     params.configSnapshot,
@@ -639,7 +639,7 @@ export async function verifySetupInferenceConfig(
         currentConfig,
         route.agentId,
         {
-          loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+          loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
           modelTarget: params.modelTarget,
         },
         currentSnapshot,
@@ -712,7 +712,7 @@ export async function completeSetupInferenceConfig(
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime },
+    { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync },
     params.configSnapshot,
   );
   if (!route) {

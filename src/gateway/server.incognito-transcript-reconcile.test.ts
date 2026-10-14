@@ -3,8 +3,12 @@ import { expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -170,11 +174,25 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         }),
         { agentId: "main" },
       );
-      expect(durable).toEqual(
-        durable.found
-          ? { found: true, value: { events: { count: 0 }, nodes: { count: 0 } } }
-          : { found: false, reason: "database-missing" },
-      );
+      if (durable.found) {
+        expect(durable.value).toEqual({ events: { count: 0 }, nodes: { count: 0 } });
+      } else {
+        expect(["database-missing", "schema-missing"]).toContain(durable.reason);
+        if (durable.reason === "schema-missing") {
+          // Admission may reserve an empty file without creating durable session storage.
+          using empty = openNodeSqliteDatabase(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+            { readOnly: true },
+          );
+          expect(
+            empty
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('transcript_events', 'session_nodes')",
+              )
+              .all(),
+          ).toEqual([]);
+        }
+      }
     },
     async () => {
       if (gateway) {

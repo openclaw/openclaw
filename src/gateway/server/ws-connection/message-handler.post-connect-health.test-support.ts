@@ -262,7 +262,7 @@ export async function withGatewayTestState(
   options: Parameters<typeof withOpenClawTestState>[0],
   run: () => Promise<void>,
 ) {
-  await withOpenClawTestState(options, async () => {
+  await withOpenClawTestState({ ...options, prepareProfileCatalog: true }, async () => {
     try {
       await run();
     } finally {
@@ -278,6 +278,7 @@ export function attachGatewayHarness(options: {
   deferSocketSend?: boolean;
   socket?: WebSocket;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
+  publishPresence?: () => void;
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
@@ -422,7 +423,7 @@ export function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        publishPresence: vi.fn(),
+        publishPresence: options.publishPresence ?? vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:

@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -49,6 +50,7 @@ const TIMED_OUT = 3;
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
+  /** Canonical identity captured when the database owner was admitted. */
   databasePath: string;
   /** Only the broker can identify an initial open of its captured primary database. */
   coldOpenPath?: string;
@@ -161,7 +163,7 @@ function createOperationAdmission(
   let closed = false;
   let started = false;
   let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
-  let observeCommit: ((committed: { facts: unknown }) => void) | undefined;
+  const commitObservers: CommitObserver[] = [];
   let observingCommit = false;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let committed: SqliteWorkerNativeSettlementOwner["committed"];
@@ -199,7 +201,11 @@ function createOperationAdmission(
     committed = publication;
     observingCommit = true;
     try {
-      inOwnerContext(() => observeCommit?.(publication));
+      inOwnerContext(() => {
+        for (const observer of commitObservers) {
+          observer(publication);
+        }
+      });
     } catch (error) {
       recordFailure(
         Object.assign(
@@ -532,10 +538,7 @@ function createOperationAdmission(
           "closed",
         );
       }
-      databaseAuthority = {
-        ...authority,
-        databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
-      };
+      databaseAuthority = { ...authority };
     },
     get failure() {
       return failure?.error;
@@ -600,13 +603,10 @@ function createOperationAdmission(
     },
   };
   commitObserverBindings.set(admission, (observer) => {
-    if (closed || observeCommit || started) {
-      throw new SqliteWorkerError(
-        "SQLite commit observation is already bound or started",
-        "closed",
-      );
+    if (closed || started) {
+      throw new SqliteWorkerError("SQLite commit observation is closed or started", "closed");
     }
-    observeCommit = observer;
+    commitObservers.push(observer);
   });
   return admission;
 }
@@ -658,7 +658,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
 export function deferSqliteWorkerCommitReceipt(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement" = "commit",
 ): void {
@@ -670,9 +670,11 @@ export function deferSqliteWorkerCommitReceipt(
 }
 
 /** A typed fenced write cannot commit without its destination owner's settlement evidence. */
-export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): void {
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
   const scope = currentAdmission.getStore();
-  if (!scope?.active || !scope.owner.pendingReceipts?.get(database)) {
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
     throw new SqliteWorkerError(
       "SQLite source fence requires a destination commit receipt",
       "closed",

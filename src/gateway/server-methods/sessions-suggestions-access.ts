@@ -60,7 +60,7 @@ export function requireVisibleSuggestionRole(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   client: GatewayClient | null;
   sessionKey: string;
-  target: Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>;
+  target: SessionSharingTarget | null;
   respond: RespondFn;
   sharing: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {

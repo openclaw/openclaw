@@ -168,7 +168,20 @@ export async function patchSessionEntryInWorker(params: {
       committing = true;
       return commit(() => worker.execute({ type: "session.entry.patch.commit", input: prepared }));
     },
-    async onCommitted(committed, published, identity, _context, fileIdentity) {
+    onAcknowledged(committed, fileIdentity) {
+      if (committed.applied && committed.entry && committed.publication) {
+        params.onCommittedSource?.(
+          {
+            agentId: params.database.agentId,
+            path: params.database.path,
+            databaseIdentity: fileIdentity.physicalIdentity,
+            databaseBirthtime: fileIdentity.birthtime,
+          },
+          structuredClone(committed.entry),
+        );
+      }
+    },
+    async onCommitted(committed, published, identity) {
       try {
         if (committed.applied && committed.entry) {
           const entry = structuredClone(committed.entry);
@@ -176,17 +189,6 @@ export async function patchSessionEntryInWorker(params: {
             params.onCommitted?.(entry, committed.transcriptPredicate);
           } else {
             params.onCommitted?.(entry);
-          }
-          if (committed.publication) {
-            params.onCommittedSource?.(
-              {
-                agentId: params.database.agentId,
-                path: params.database.path,
-                databaseIdentity: fileIdentity.physicalIdentity,
-                databaseBirthtime: fileIdentity.birthtime,
-              },
-              structuredClone(committed.entry),
-            );
           }
         }
       } finally {
@@ -250,7 +252,7 @@ export async function runSessionEntryWorkerOperation<
     worker: AgentDatabaseExecutionScope,
     commit: (send: () => Promise<unknown>) => Promise<Result>,
   ): Promise<Result>;
-  onAcknowledged?: (candidate: Candidate) => void;
+  onAcknowledged?: (candidate: Candidate, fileIdentity: AgentDatabaseExecutionFileIdentity) => void;
   onTransactionFacts?: (facts: unknown) => boolean;
   onCommitted(
     candidate: Candidate,
@@ -344,7 +346,7 @@ export async function runSessionEntryWorkerOperation<
             const failures: unknown[] = [];
             try {
               if (committed) {
-                params.onAcknowledged?.(committed);
+                params.onAcknowledged?.(committed, identity);
               }
             } catch (error) {
               failures.push(error);

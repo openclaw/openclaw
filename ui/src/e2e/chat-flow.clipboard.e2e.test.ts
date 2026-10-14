@@ -322,9 +322,7 @@ suite.define(() => {
         } else if (dismissal === "navigation") {
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.locator(".sidebar-identity-card").click();
-          await sidebar
-            .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-            .click();
+          await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
         } else {
           const sockets = await gateway.getSocketCount();

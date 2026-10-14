@@ -19,6 +19,12 @@ import {
 import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
+import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import {
+  normalizeTrustedGroupMetadata,
+  resolveAgentSessionGroup,
+  type TrustedGroupMetadata,
+} from "../../../gateway/server-methods/agent-subagent-registration.js";
 import type { PreparedGatewaySessionLifecycle } from "../../../gateway/session-create-service.types.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
 import {
@@ -27,6 +33,10 @@ import {
 } from "../../../gateway/session-worktree-preparation.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
+import {
+  normalizeSessionDeliveryState,
+  type DeliveryContext,
+} from "../../../utils/delivery-context.shared.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
@@ -76,7 +86,11 @@ export async function createInitialSubagentSession(input: {
   swarmGroupId?: string;
   collect: boolean;
   outputSchema?: Record<string, unknown>;
-}): Promise<{ status: "ok"; entry?: SessionEntry } | { status: "error"; error: string }> {
+  firstAdmission?: { delivery?: DeliveryContext; group: TrustedGroupMetadata };
+}): Promise<
+  | { status: "ok"; entry?: SessionEntry; freshChild?: FreshChildSession }
+  | { status: "error"; error: string }
+> {
   const params = {
     ...input,
     assertActive: composeSessionSourceAssertion([
@@ -129,6 +143,24 @@ export async function createInitialSubagentSession(input: {
           const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
+          if (params.firstAdmission) {
+            const group = resolveAgentSessionGroup({
+              sessionKey: params.childSessionKey,
+              spawnedBy: params.requesterInternalKey,
+              stored: {},
+              inherited: normalizeTrustedGroupMetadata(parentEntry),
+              requested: params.firstAdmission.group,
+            });
+            const now = Date.now();
+            Object.assign(initialChildSessionPatch, {
+              sessionStartedAt: now,
+              lastInteractionAt: now,
+              delivery: normalizeSessionDeliveryState({ context: params.firstAdmission.delivery }),
+              groupId: group.groupId,
+              groupChannel: group.groupChannel,
+              space: group.groupSpace,
+            });
+          }
           const parentLineage = captureSpawnParentLineage({
             parentEntry,
             expectedParentSessionId: params.expectedParentSessionId,
@@ -332,7 +364,20 @@ export async function createInitialSubagentSession(input: {
           const entry = preparedWorktree?.withCommit
             ? await preparedWorktree.withCommit(commit)
             : await commit();
-          return { status: "ok" as const, entry: entry ?? undefined };
+          return {
+            status: "ok" as const,
+            entry: entry ?? undefined,
+            ...(params.firstAdmission && entry
+              ? {
+                  freshChild: {
+                    agentId: target.agentId,
+                    // Lifecycle admission uses the store selector, not the physical database path.
+                    storePath: target.storePath,
+                    entry,
+                  },
+                }
+              : {}),
+          };
         } finally {
           await childMemory?.actor.release();
         }

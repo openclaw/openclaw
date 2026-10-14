@@ -21,6 +21,7 @@ import {
   cleanupPath,
   createEnoentError,
   createErrnoError,
+  createTrashAssertions,
   deletionJournal,
   expectRecordFields,
   expectRespondErrorContaining,
@@ -73,7 +74,7 @@ const mocks = vi.hoisted(() => ({
   beginAgentDeletionRetire: vi.fn(),
   readSessionEntrySummariesInWorker: vi.fn(async () => []),
   closeDeletedAgentDatabases: vi.fn(async () => {}),
-  hasDeletedAgentDatabases: vi.fn(() => false),
+  captureDeletedAgentDatabaseFences: vi.fn<() => [string, string][]>(() => []),
   reviveAgentDatabases: vi.fn(async (_agentIds: readonly string[]) => {}),
   logGatewayWarn: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
@@ -243,6 +244,7 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
     "../../agents/auth-profiles/path-resolve.js",
   )),
   resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership: async () => mocks.sharedAuthStoreOwnership,
   resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
 }));
 
@@ -331,7 +333,7 @@ vi.mock("../../state/openclaw-agent-db-readers.js", () => ({
 
 vi.mock("../../infra/agent-database-readers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/agent-database-readers.js")>()),
-  hasDeletedAgentDatabases: mocks.hasDeletedAgentDatabases,
+  captureDeletedAgentDatabaseFences: mocks.captureDeletedAgentDatabaseFences,
 }));
 
 vi.mock("../../infra/exec-approvals.js", async (importOriginal) => ({
@@ -434,18 +436,9 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
 
-function expectTrashedWithinParent(pathname: string, declaredPath = pathname): void {
-  expect(mocks.movePathToTrash).toHaveBeenCalledWith(
-    pathname,
-    expect.objectContaining({
-      allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
-    }),
-  );
-}
-
-function expectNotTrashed(pathname: string): void {
-  expect(mocks.movePathToTrash.mock.calls.map(([target]) => target)).not.toContain(pathname);
-}
+const { expectTrashedWithinParent, expectNotTrashed } = createTrashAssertions(
+  mocks.movePathToTrash,
+);
 
 vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
@@ -455,7 +448,7 @@ vi.mock("../../utils.js", async () => {
   };
 });
 
-// mock-isolation: Preserve canonical key logic without bringing database lookup into this fixture.
+// mock-isolation: Keep deletion lifecycle tests on synthetic config and session metadata without opening databases.
 vi.mock("../session-utils.js", async () => ({
   resolveSessionStoreKey: (await import("../session-store-key.js")).resolveSessionStoreKey,
   listAgentsForGateway: mocks.listAgentsForGateway,
@@ -702,7 +695,7 @@ beforeEach(() => {
 describe("agents.create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.hasDeletedAgentDatabases.mockReturnValue(false);
+    mocks.captureDeletedAgentDatabaseFences.mockReturnValue([]);
     mocks.reviveAgentDatabases.mockReset().mockResolvedValue(undefined);
     mocks.loadConfigReturn = {
       agents: { entries: { main: {} } },

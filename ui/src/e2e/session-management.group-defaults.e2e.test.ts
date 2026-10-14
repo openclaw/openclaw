@@ -141,7 +141,7 @@ suite.define(() => {
         .poll(() => environment.getAttribute("data-session-group-environment"))
         .toBe("local");
       await expect
-        .poll(() => dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown").count())
+        .poll(() => dialog.locator(".session-group-defaults__mode-dropdown").count())
         .toBe(0);
       await expect.poll(() => environment.getByRole("button").count()).toBe(0);
       const localEnvironment = environment.locator(".session-group-defaults__resolved-mode");
@@ -212,7 +212,7 @@ suite.define(() => {
           text: await environment.textContent(),
         }))
         .toMatchObject({ state: "git" });
-      const modeDropdown = environment.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeDropdown = environment.locator(".session-group-defaults__mode-dropdown");
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
       await expect.poll(() => modeTrigger.textContent()).toContain("Current checkout");
@@ -221,7 +221,9 @@ suite.define(() => {
       const worktreeOption = modeDropdown.getByRole("menuitemradio", {
         name: /New worktree.*isolated Git worktree/i,
       });
-      await expect.poll(() => worktreeOption.locator('[slot="icon"]').count()).toBe(1);
+      await expect
+        .poll(() => worktreeOption.locator(".session-group-defaults__mode-option-icon").count())
+        .toBe(1);
       await page.keyboard.press("Escape");
       await expect.poll(() => modeTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
@@ -231,6 +233,15 @@ suite.define(() => {
       await modeTrigger.click();
       await worktreeOption.click();
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
+      await modeTrigger.focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => worktreeOption.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => modeTrigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await dialog.getByRole("button", { name: "Save" }).click();
       expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
         name: "Client work",
@@ -605,7 +616,7 @@ suite.define(() => {
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
       await dialog.waitFor({ state: "visible" });
-      const modeDropdown = dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeDropdown = dialog.locator(".session-group-defaults__mode-dropdown");
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await modeTrigger.waitFor({ state: "visible" });
       await modeTrigger.click();
@@ -669,7 +680,9 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.groups.defaults");
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const defaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const defaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await defaultsAction.waitFor({ state: "attached" });
       await expect.poll(() => defaultsAction.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
@@ -701,7 +714,9 @@ suite.define(() => {
 
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const readyDefaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const readyDefaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await expect.poll(() => readyDefaultsAction.textContent()).not.toContain("Retry");
       await expect.poll(() => readyDefaultsAction.isEnabled()).toBe(true);
       await readyDefaultsAction.click();

@@ -462,6 +462,16 @@ suite.define(() => {
         expect(
           await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
         ).toBe(true);
+        await summary.evaluate(
+          (element) =>
+            new Promise<void>((resolve) => {
+              const observer = new ResizeObserver(() => {
+                observer.disconnect();
+                resolve();
+              });
+              observer.observe(element);
+            }),
+        );
         const summaryScroll = await summary.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
           return {

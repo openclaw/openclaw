@@ -33,7 +33,6 @@ import { prepareSessionSharingProfiles } from "../session-sharing-read.js";
 import {
   prepareProjectedSessionSharing,
   createSessionListEntryFilter,
-  resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
 import {
   beginTaskSuggestionAcceptance,
@@ -372,39 +371,53 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const needsVisibilityFilter = hasOperatorBoundary(client, cfg);
       const suggestions = listTaskSuggestions({
         ...params,
         ...(sessionOwner ? { agentId: sessionOwner.agentId } : {}),
       });
-      const targets = needsVisibilityFilter
-        ? await Promise.all(
-            suggestions.map((suggestion) =>
-              resolveSessionSharingTargetAsync({
-                cfg,
-                sessionKey: suggestion.sessionKey,
-                agentId: suggestion.agentId,
-              }),
-            ),
-          )
-        : undefined;
-      const currentCfg = context.getRuntimeConfig();
-      const visibilityFilter = hasOperatorBoundary(client, currentCfg)
-        ? createSessionListEntryFilter({ client, cfg: currentCfg })
-        : undefined;
-      respond(
-        true,
-        {
-          suggestions: suggestions.filter((_, index) => {
-            const target = targets?.[index];
-            return (
-              !visibilityFilter ||
-              Boolean(target && visibilityFilter(target.storeKey, target.entry))
+      if (!hasOperatorBoundary(client, cfg) || !createSessionListEntryFilter({ client, cfg })) {
+        respond(true, { suggestions }, undefined);
+        return;
+      }
+      const reads = new Map<string, SessionFactsRead<PreparedSessionMutationFacts> | null>();
+      const sourceKey = (suggestion: TaskSuggestion) =>
+        JSON.stringify([suggestion.agentId, suggestion.sessionKey]);
+      try {
+        for (const suggestion of suggestions) {
+          const key = sourceKey(suggestion);
+          if (!reads.has(key)) {
+            const requestedAgent = resolveRequestedSessionAgentId(
+              cfg,
+              suggestion.sessionKey,
+              suggestion.agentId,
             );
-          }),
-        },
-        undefined,
-      );
+            reads.set(
+              key,
+              requestedAgent.ok
+                ? await prepareSessionMutationFacts({
+                    cfg,
+                    sessionKey: suggestion.sessionKey,
+                    agentId: requestedAgent.agentId,
+                    allowMissing: true,
+                  })
+                : null,
+            );
+          }
+        }
+        const currentConfig = context.getRuntimeConfig();
+        const visibilityFilter = createSessionListEntryFilter({ client, cfg: currentConfig });
+        const visible = visibilityFilter
+          ? suggestions.filter((suggestion) => {
+              const target = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig).target;
+              return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+            })
+          : suggestions;
+        respond(true, { suggestions: visible }, undefined);
+      } finally {
+        for (const read of reads.values()) {
+          read?.release();
+        }
+      }
     },
   ),
   "taskSuggestions.create": defineValidatedGatewayHandler(

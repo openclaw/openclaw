@@ -3,14 +3,15 @@ import {
   readSessionGroupCatalog,
 } from "../../gateway/session-group-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
-import { publishSessionEntryCacheCategoryUpdate } from "./session-accessor.sqlite-entry-cache.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
+import {
+  publishSessionCollaborationChanges,
+  runSessionCollaborationWrite,
+} from "./session-sharing-store.async.js";
 
 /** Prepared rows stay with the broker; only target identities cross the admission boundary. */
 export function updateSessionGroupCategoriesInWorker(params: {
@@ -101,21 +102,13 @@ export function updateSessionGroupCategoriesInWorker(params: {
       const current = currentKeys
         ? changed.filter(({ sessionKey }) => currentKeys.has(sessionKey))
         : changed;
-      if (database) {
-        publishSessionEntryCacheCategoryUpdate(database, current, to);
-      }
       const changes = current.map(({ sessionKey, sessionId }) => ({
         agentId: location.agentId,
         storePath: location.storePath,
         sessionKey,
         facts: { kind: "category" as const, sessionId, category: to?.trim() || null },
       }));
-      if (database) {
-        for (const change of changes) {
-          bindSessionEntryPublicationSource(change, database);
-        }
-      }
-      sessionChanges.emitBatch(changes, database?.db);
+      publishSessionCollaborationChanges(changes, database);
       return changed.length;
     },
     assertCurrent,

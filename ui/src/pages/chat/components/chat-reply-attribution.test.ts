@@ -2,8 +2,9 @@
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 const alice = { id: "alice", name: "Alice" };
@@ -96,8 +97,8 @@ function draw(
   };
   render(
     presentation === "frame"
-      ? renderAgentRunFrame(
-          {
+      ? solidContent(AgentRunFrame, {
+          frame: {
             kind: "agent-run-frame",
             key: "frame",
             runId: "run",
@@ -109,13 +110,13 @@ function draw(
               messages: [entry],
             })),
           },
-          {
+          options: {
             streamOptions: {},
             renderGroupOptions: () => options,
             isWorkExpanded: () => false,
             onToggleWork: () => undefined,
           },
-        )
+        })
       : renderMessageGroup(group, options),
     container,
   );

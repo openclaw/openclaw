@@ -12,6 +12,7 @@ import {
 import type {
   Overlay,
   OverlayFocusIntent,
+  OverlayLifecycleEvent,
   OverlayNativeAdapter,
   OverlayOptions,
   OverlayPhase,
@@ -144,7 +145,7 @@ export function createOverlay(
       try {
         children.forEach((child) => child.retire());
         if (opened && surface.isConnected) {
-          surface.dispatchEvent(new CustomEvent("overlay-hide", { bubbles: true, composed: true }));
+          dispatchLifecycleEvent("overlay-hide");
         }
       } finally {
         notifyingRetirement = false;
@@ -494,10 +495,17 @@ export function createOverlay(
     }
     listeners.forEach((listener) => listener(next));
   }
-  function propose(name: string) {
+  function dispatchLifecycleEvent(type: OverlayLifecycleEvent, cancelable = false) {
+    if (options.dispatchLifecycleEvent) {
+      return options.dispatchLifecycleEvent(type, cancelable);
+    }
+    const before = type === "overlay-show" || type === "overlay-hide";
     return surface.dispatchEvent(
-      new CustomEvent(name, { bubbles: true, composed: true, cancelable: true }),
+      new CustomEvent(type, { bubbles: before, composed: before, cancelable }),
     );
+  }
+  function propose(type: "overlay-show" | "overlay-hide") {
+    return dispatchLifecycleEvent(type, true);
   }
   function pendingPresentation() {
     return surface.getAnimations().filter((animation) => {
@@ -556,7 +564,7 @@ export function createOverlay(
           return;
         }
         setPhase(next ? "open" : "hidden");
-        surface.dispatchEvent(new CustomEvent(next ? "overlay-after-show" : "overlay-after-hide"));
+        dispatchLifecycleEvent(next ? "overlay-after-show" : "overlay-after-hide");
       });
     });
   }

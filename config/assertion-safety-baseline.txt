@@ -519,7 +519,6 @@ extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
-extensions/memory-core/src/memory/manager.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	1
@@ -1989,7 +1988,6 @@ src/gateway/server-methods/restart-request.ts	1
 src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
-src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
@@ -2025,7 +2023,6 @@ src/gateway/session-history-state.ts	2
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-recovery-service.ts	1
 src/gateway/session-transcript-derived-readers.ts	1
-src/gateway/session-transcript-title-reader.ts	1
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/talk/handlers/index.ts	3
@@ -2320,7 +2317,6 @@ src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
 src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
-src/plugin-state/plugin-state-store.ts	5
 src/plugin-state/plugin-store-validation.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
 src/plugins/api-facades.ts	1
@@ -2515,7 +2511,6 @@ src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
-src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
@@ -2621,15 +2616,7 @@ ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
-ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-render.ts	3
-ui/src/components/app-sidebar-session-catalog-render.ts	4
-ui/src/components/app-sidebar-session-list-render.ts	1
-ui/src/components/app-sidebar-session-menu-renderers.ts	3
 ui/src/components/app-sidebar-session-narration.ts	4
-ui/src/components/app-sidebar-session-row-render.ts	2
-ui/src/components/app-sidebar-session-section-header.ts	6
-ui/src/components/app-sidebar.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/config-form-copy-on-write.ts	1
@@ -2701,7 +2688,6 @@ ui/src/pages/chat/components/chat-thread-interactions.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
-ui/src/pages/chat/composer-dictation.ts	1
 ui/src/pages/chat/connect-error.ts	1
 ui/src/pages/chat/export.ts	1
 ui/src/pages/chat/input-history.ts	1
@@ -2718,7 +2704,7 @@ ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/new-session/draft-place-browser.ts	2
+ui/src/pages/new-session/draft-place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1

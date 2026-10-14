@@ -202,9 +202,9 @@ const mocks = vi.hoisted(() => ({
     entries: [],
   })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-  listWebSearchProviders: vi.fn<typeof import("../web-search/runtime.js").listWebSearchProviders>(
-    () => [],
-  ),
+  listWebSearchProvidersAsync: vi.fn<
+    typeof import("../web-search/runtime.js").listWebSearchProvidersAsync
+  >(async () => []),
   isWebSearchProviderConfigured: vi.fn<
     typeof import("../web-search/runtime.js").isWebSearchProviderConfigured
   >(() => false),
@@ -433,8 +433,9 @@ vi.mock("../tts/provider-registry.js", () => ({
   ),
 }));
 
+// mock-isolation: Command routing uses fixture providers without the auth and plugin runtime graph.
 vi.mock("../web-search/runtime.js", () => ({
-  listWebSearchProviders: mocks.listWebSearchProviders,
+  listWebSearchProvidersAsync: mocks.listWebSearchProvidersAsync,
   isWebSearchProviderConfigured: mocks.isWebSearchProviderConfigured,
   runWebSearch: vi.fn(),
 }));
@@ -853,7 +854,7 @@ describe("capability cli", () => {
       const provider = { id: "openai", envVars: ["OPENAI_API_KEY"], requiresCredential: true };
       const search = await import("../web-search/runtime.js");
       const fetch = await import("../web-fetch/runtime.js");
-      vi.mocked(search.listWebSearchProviders).mockReturnValue(
+      vi.mocked(search.listWebSearchProvidersAsync).mockResolvedValue(
         scoped
           ? ([provider] as never)
           : [

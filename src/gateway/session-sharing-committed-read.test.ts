@@ -100,7 +100,19 @@ describe("committed session mutation authorization", () => {
           | Awaited<ReturnType<NonNullable<typeof authorization.prepareWorkerGrant>>>
           | undefined;
         try {
-          grant = await authorization.prepareWorkerGrant!();
+          const messages = vi.spyOn(Worker.prototype, "postMessage");
+          const preparationSql = observeHostDataSql();
+          try {
+            grant = await authorization.prepareWorkerGrant!();
+            expect(preparationSql.queries).toEqual([]);
+            if (mode === "resident") {
+              expect(messages).not.toHaveBeenCalled();
+            }
+          } finally {
+            preparationSql.restore();
+            messages.mockRestore();
+          }
+          result.authorization?.release?.();
           const database = openOpenClawStateDatabase();
           const placements = createWorkerSessionPlacementStore({ database });
           const active = await advancePlacementFixtureToActive(placements, database, {
@@ -150,6 +162,7 @@ describe("committed session mutation authorization", () => {
           expect(await placements.getPlacementMoveAsync(sessionId)).toMatchObject({ operationId });
         } finally {
           await grant?.release();
+          result.authorization?.release?.();
           projection?.dispose();
         }
       });
@@ -208,12 +221,7 @@ describe("committed session mutation authorization", () => {
               warm.authorization!.assertCurrent();
             }
             expect(queries.queries).toHaveLength(0);
-            // Display backfill runs independently of the admission's worker reads.
-            expect(
-              messages.mock.calls.filter(
-                ([message]) => message.input?.kind !== "session-row-backfill",
-              ),
-            ).toEqual([]);
+            expect(messages).not.toHaveBeenCalled();
             if (resident) {
               await expect(
                 warm.authorization!.withCurrent!(() => Promise.resolve()),

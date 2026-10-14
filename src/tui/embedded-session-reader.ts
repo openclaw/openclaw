@@ -11,7 +11,7 @@ import type * as records from "../gateway/session-row-projection-record.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
-import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
+import { prepareGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -64,6 +64,13 @@ export async function readEmbeddedPrivateHistorySessionInfo(
     sessionEntry: entry,
     readPreparedPreviousSessionId: () => entry.previousSessionId,
   });
+  const readSourceEntry = runtimeOwnership?.modelRef
+    ? (key: string) => store[key]
+    : await prepareGatewaySessionEntryReader({
+        ...selected,
+        sessionKey: canonicalKey,
+        entry,
+      });
   return buildGatewaySessionRow({
     cfg,
     storePath,
@@ -73,7 +80,7 @@ export async function readEmbeddedPrivateHistorySessionInfo(
     preparedAcpMeta: acpMeta ?? null,
     preparedRuntimeOwnership: runtimeOwnership ?? null,
     agentId,
-    modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
+    modelSource: { entry, readSourceEntry },
     lightweightListRow: true,
   });
 }

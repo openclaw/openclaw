@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -31,6 +30,7 @@ import {
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   adoptCanonicalSessionValidationSchema,
@@ -47,6 +47,7 @@ import {
 } from "./openclaw-agent-db-resources.js";
 import {
   agentDatabaseValidationKey,
+  createOpenClawAgentDatabaseValidationReceipt,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-facts.js";
 
@@ -96,16 +97,20 @@ function observeValidationPath(pathname: string, admission: boolean): void {
       invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
     }
   };
-  const watched = observeOwnedDirectory(path.dirname(pathname), (filename) => {
-    if (
-      filename === undefined ||
-      (process.platform === "win32"
-        ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
-        : filename === path.basename(pathname))
-    ) {
-      revalidate();
-    }
-  });
+  const watched = observeOwnedDirectory(
+    path.dirname(pathname),
+    (filename) => {
+      if (
+        filename === undefined ||
+        (process.platform === "win32"
+          ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
+          : filename === path.basename(pathname))
+      ) {
+        revalidate();
+      }
+    },
+    { recoveryIntervalMs: 30_000 },
+  );
   // Retained proof outlives native handles; its cache owns observation cleanup.
   validationObservations.set(pathname, {
     revalidate,
@@ -591,7 +596,7 @@ export function hasOpenClawAgentCanonicalValidation(
   ) {
     return false;
   }
-  const canonical = createValidationReceipt({ ...database, path: pathname }, true);
+  const canonical = createOpenClawAgentDatabaseValidationReceipt(database, true);
   const entry: ValidationEntry = validatedPaths.get(pathname) ?? {
     integrityVerified: false,
   };
@@ -684,41 +689,17 @@ function isOpenClawAgentCanonicalStoreEmpty(database: { db: DatabaseSync }): boo
   );
 }
 
-function createValidationReceipt(
-  database: ValidationDatabase,
-  canonicalReady: boolean,
-): OpenClawAgentDatabaseValidation {
-  const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity !== "string" || birthtime === undefined) {
-    throw new Error("Only persistent agent databases retain integrity validation");
-  }
-  const validation = {
-    agentId: database.agentId,
-    identity,
-    birthtime,
-    receiptId: randomUUID(),
-    integrityVerifiedAt: readSqliteDatabaseIntegrityVerification(database.db)?.verifiedAt,
-    valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-  };
-  if (canonicalReady) {
-    Atomics.store(new Int32Array(validation.canonicalReady), 0, 1);
-  }
-  Atomics.store(new Int32Array(validation.valid), 0, 1);
-  return validation;
-}
-
 export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
   const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
   const revoked = hasRevokedOpenClawAgentDatabaseValidation(pathname);
-  let validation = createValidationReceipt(
+  let validation = createOpenClawAgentDatabaseValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
-        hasPersistedOpenClawAgentCanonicalValidation(database)),
+        loadOpenClawAgentCanonicalValidationReceipt(database)),
   );
   const entry = validatedPaths.get(pathname);
   if (

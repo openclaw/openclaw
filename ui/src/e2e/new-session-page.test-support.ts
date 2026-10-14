@@ -43,10 +43,10 @@ export function installMockGateway(
 // The scale-in animation moves inventory rows after they first become visible.
 // Wait for its public completion event before hovering a nested details card.
 export async function openEnvironmentPicker(page: Page) {
-  const afterShow = page.locator("wa-popover.new-session-page__where-popover").evaluate(
+  const afterShow = page.locator(".oc-popover.new-session-page__where-popover").evaluate(
     (element) =>
       new Promise<void>((resolve) => {
-        element.addEventListener("wa-after-show", () => resolve(), { once: true });
+        element.addEventListener("overlay-after-show", () => resolve(), { once: true });
       }),
   );
   await page.locator("#new-session-where-trigger").click();

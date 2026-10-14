@@ -3,10 +3,11 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { renderWorkGroupSummary } from "./chat-message-stream.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderRawOutputToggle } from "./chat-tool-content.ts";
+import { ChatToolRawOutput } from "./chat-tool-content.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -120,7 +121,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
                   )
                 : kind === "tool-output"
                   ? renderMessageGroup(output, options)
-                  : renderRawOutputToggle("Copyable output"),
+                  : solidContent(ChatToolRawOutput, { text: "Copyable output" }),
           container,
         );
       };
@@ -168,7 +169,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           },
           { showReasoning: false },
         )}
-        ${renderRawOutputToggle("Copyable output")}
+        ${solidContent(ChatToolRawOutput, { text: "Copyable output" })}
       `,
       container,
     );

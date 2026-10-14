@@ -356,14 +356,6 @@ serveOwnedWorkerTasks(
           await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
       }
-      if (request.kind === "session-row-backfill") {
-        const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.worker.js");
-        return {
-          kind: "session-row-backfill" as const,
-          fields: readSessionRowTranscriptFields(request.params),
-        };
-      }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");

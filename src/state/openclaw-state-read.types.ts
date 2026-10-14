@@ -193,10 +193,6 @@ export type OpenClawStateReadCommand =
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "exec-approvals.read" }
-  | {
-      type: "plugins.metadata.read";
-      input: { stateKeys: readonly ("plugins.installedIndex" | "plugins.bundledDiscovery")[] };
-    }
   | SqliteWorkerCommand<SkillLibraryReadOnlyOperations>
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
@@ -341,7 +337,6 @@ export type OpenClawStateReadResult =
   | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | { type: "operatorApprovals.placementGrant"; rows: PlacementGrantRows }
   | ReadResult<PluginBlobReadReply>
-  | { type: "plugins.metadata.read"; rows: Array<{ state_key: string; value_json: string }> }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;
@@ -400,7 +395,6 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
-      versions?: Map<string, string | null>;
       descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {

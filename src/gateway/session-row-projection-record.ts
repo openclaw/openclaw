@@ -38,11 +38,10 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
-  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
+  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -54,8 +53,8 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
       | "acpMeta"
       | "runtimeOwnership"
       | "runtimeOwnershipDependencies"
+      | "runtimeOwnershipRetryPending"
       | "repositoryWorkspace"
-      | "transcriptPreview"
     >
   >;
 
@@ -74,8 +73,9 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    facts.runtimeOwnershipDependencies.length > 0 ||
-    resolveSessionPinnedHarnessId(facts.entry) === undefined
+    !facts.runtimeOwnershipRetryPending &&
+    (facts.runtimeOwnershipDependencies.length > 0 ||
+      resolveSessionPinnedHarnessId(facts.entry) === undefined)
   );
 }
 
@@ -172,10 +172,9 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
-export type SnapshotOptions = Pick<
-  Inputs,
-  "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & {
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;

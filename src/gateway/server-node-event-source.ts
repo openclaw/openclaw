@@ -13,10 +13,10 @@ import type {
   NodeEventHandlerOptions,
   NodeEventHandleResult,
 } from "./server-node-events-types.js";
-import type { loadGatewaySessionEntry } from "./session-utils-store.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 
 export type NodeEventSessionSource = {
-  loaded: ReturnType<typeof loadGatewaySessionEntry>;
+  loaded: GatewaySessionEntryRead;
   assertCurrent(this: void): void;
   pending: Promise<unknown>[];
 };

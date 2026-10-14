@@ -76,6 +76,13 @@ internal maintenance against subsequent revocation; it is never retained across
 asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
 and update behavior are unchanged.
 
+Update-history workers bound commit-admission waits to one second. On timeout,
+the transaction rolls back before the same worker command retries, preserving
+FIFO ordering and rereading the current rows. Fresh admission waits outside
+`BEGIN IMMEDIATE`, leaving the serving Gateway's writer free while the updater
+host is busy. Authority refusals and uncertain rollback outcomes are not retried;
+required update and recovery records retain their existing durability.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
@@ -168,6 +175,12 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+Transcript history and search lanes likewise retire surplus workers after 30
+seconds idle. Each lane keeps one worker until its existing five-minute idle
+retirement, which waits for logical reader leases to be released. Surplus
+retirement preserves those leases and waits for active tasks; a later concurrent
+read starts another worker on demand.
+
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
 child reads current credential rows through its bounded native reader pool without
@@ -226,7 +239,10 @@ transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the published facts. Missing objects use the existing installation
 transaction, which publishes the new schema facts on commit; rollback cannot
-publish a schema that did not commit. Ordinary connection replacement and data
+publish a schema that did not commit. Admission publications use the active
+connection’s transaction state and the store’s shared publication anchor, so
+PostgreSQL transactions also defer facts until commit and discard them on rollback.
+Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
 
@@ -301,6 +317,17 @@ Placement projections read placement, move, pending-result, journal, and environ
 facts in one statement per bounded batch. Batches share the existing read
 transaction; journal and result-claim checks consume those same snapshot facts.
 Optional columns come from admitted schema facts and refresh with that owner.
+
+Placement retirement checks the inventory once at startup, then checks only IDs
+changed by placement receipts or session identity mutations. Clean idle passes
+perform no retirement reads. Unknown evidence and failed cleanup remain pending
+for the existing minute sweep. Config, store topology, and uncertain session
+storage publications request a fresh inventory scan. Retirement predicates and
+remote environment teardown keep their existing authority checks.
+
+Skills discovery shares installed-plugin inventory facts across the workspaces in
+one worker scan. Each new scan starts with a fresh plugin cache, so installed
+plugin changes remain visible without rereading the same index for every agent.
 
 Shared-state read operations retain their admission revision through their
 synchronous domain read. ACP metadata reuses at most 128 rows per connection
@@ -383,6 +410,12 @@ clean-close seals or performs the required full validation; a seal hit does not
 queue a post-ready verification scan. Doctor and explicit verification retain
 full checks. See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
 for the seven-day verification interval and operator-requested verification.
+
+Gateway startup and restart checks admit only configured agent database targets.
+Retained stores for unconfigured agents remain untouched for Doctor to inspect.
+An incompatible secondary agent database refuses that agent's sessions with
+`openclaw doctor --fix` guidance, without blocking healthy agents or restarting
+the Gateway. Shared-state and required system-agent checks remain strict.
 
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the

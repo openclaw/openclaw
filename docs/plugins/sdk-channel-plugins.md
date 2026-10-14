@@ -67,6 +67,16 @@ supplied context is public. Unknown audience metadata must deny publication.
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.
 
+For mutable source policy, the intent may also supply
+`prepare: async () => assertCurrent`. The host invokes it once at run admission
+and retains the returned synchronous guard for child publication. The channel
+must reacquire current authorization and routing with bounded retries and return
+`null` if the prepared prompt's route, access tier, or public-context proof is no
+longer valid. This drops the turn without trying another model or publishing a
+generic model-failure reply. Throw operational failures instead; these stop model
+fallback but produce a retryable access-verification error. Preparation cannot
+renew an already admitted run; use-time checks and revocation remain mandatory.
+
 An exact host resolver-to-context handoff binds the intent to one admitted
 run. Only its fresh immediate isolated visible children can receive public
 grants, in their creation commits before launch. Private/draft, incognito, existing,
@@ -409,6 +419,13 @@ when initialization must finish before the child runs.
       replies whose confirmed delivery the shared dispatcher will record. Channel
       adapters must skip their own transcript mirror for those replies, including
       fallback sends, while still reporting the delivery outcome normally.
+
+      The shared channel turn lifecycle owns pending-final delivery admission.
+      It records direct-send custody immediately before platform I/O, or transfers
+      custody to the durable delivery queue. Its reply dispatcher skips the
+      intermediate queued claim; terminal settlement and replay suppression remain
+      owned by the delivery lifecycle.
+
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.

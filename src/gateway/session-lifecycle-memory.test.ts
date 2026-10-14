@@ -4,7 +4,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { readSessionCreateTarget } from "./session-create-target.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 // Durable publication receipts have their own owner; this suite isolates memory lifecycle.
 vi.mock("../state/github-personal-publication-lifecycle.js", async (importOriginal) => ({
@@ -69,9 +69,9 @@ it("reads committed actor changes through Gateway target and creation preparatio
     },
     authority,
   );
-  expect(loadGatewaySessionEntryReadOnly(key, { agentId: "main" }, cfg).entry?.displayName).toBe(
-    "Current title",
-  );
+  expect(
+    (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg)).entry?.displayName,
+  ).toBe("Current title");
   expect(
     await readSessionCreateTarget({ cfg, commandSource: "test" }, target, "original", [key]),
   ).toMatchObject({ ok: true, value: { displayName: "Current title" } });
