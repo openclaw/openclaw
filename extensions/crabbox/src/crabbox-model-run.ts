@@ -6,6 +6,7 @@ import {
   withConfiguredModelEgress,
   type ConfiguredModelEgress,
 } from "openclaw/plugin-sdk/secret-egress-runtime";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 
 const UPSTREAM_PROXY_ENV = "CRABBOX_MODEL_PROXY";
@@ -64,11 +65,12 @@ export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Pr
     AbortSignal.timeout(params.timeoutMs),
     ...(params.signal ? [params.signal] : []),
   ]);
+  const { binary } = await ensureManagedCrabboxBinary({ binary: params.binary, signal });
   const command = (
     args: string[],
     options: Pick<CommandOptions, "env" | "input" | "onOutputChunk"> = {},
   ) =>
-    runCrabboxProcess([params.binary, "egress", "run", ...args], {
+    runCrabboxProcess([binary, "egress", "run", ...args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,

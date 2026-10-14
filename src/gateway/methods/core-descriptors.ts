@@ -740,4 +740,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     CONTROL_PLANE_WRITE,
   ],
   ["ui.command.result", "ui-command", "operator.read", "2026.10"],
+  ["mcp.events.list", "mcp-events", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

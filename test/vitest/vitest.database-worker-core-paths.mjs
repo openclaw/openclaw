@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/channels/message/ingress-drain.handoff.test.ts",
+  "src/channels/message/ingress-queue.authority.test.ts",
+  "src/agents/mcp-oauth-authorization.test.ts",
+  "src/agents/mcp-auth-profile-authorization.test.ts",
+  "src/agents/auth-profiles/authorization-observation.test.ts",
   "src/cli/plugin-invocation-resources.owner.test.ts",
   "src/gateway/config-revision-token.test.ts",
   "src/gateway/local-request-context.session-archive.test.ts",

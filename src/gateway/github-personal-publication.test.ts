@@ -667,11 +667,16 @@ describe("personal publication authority and recovery", () => {
       if (recovering && command === "git rev-parse --verify HEAD^{commit}") {
         return commandResult(NEW_HEAD);
       }
-      if (recovering && command === "git show -s --format=%B HEAD") {
+      if (
+        recovering &&
+        command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD"
+      ) {
         const row = openOpenClawStateDatabase()
           .db.prepare(`SELECT request_id FROM ${table}`)
           .get() as { request_id: string };
-        return commandResult(`OpenClaw-Publication: ${row.request_id}`);
+        return commandResult(
+          `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nOpenClaw-Publication: ${row.request_id}`,
+        );
       }
       if (recovering && argv.includes("state=all")) {
         return commandResult(

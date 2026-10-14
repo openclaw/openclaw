@@ -53,6 +53,9 @@ export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
   runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
+  prepareCapture: (
+    context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
+  ) => Promise<void>;
   policy?: CrabboxWarmImagePolicy;
 }) {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
@@ -671,6 +674,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       deleteImage,
       retireImage,
       checkpointCommand,
+      prepareCapture: dependencies.prepareCapture,
     }),
 
     startContext: createCrabboxWarmImageStartContext,
