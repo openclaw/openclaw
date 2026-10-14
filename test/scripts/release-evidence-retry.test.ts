@@ -25,6 +25,40 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
+  it("reads attempt jobs with smaller pages when GitHub 5xxs 100-job pages", async () => {
+    const jobs = Array.from({ length: 128 }, (_, index) => ({
+      id: index + 1,
+      name: `job ${index}`,
+    }));
+    transport.read.mockImplementation((_bin: string, args: string[]) => {
+      const match =
+        /^repos\/openclaw\/openclaw\/actions\/runs\/123\/attempts\/2\/jobs\?page=(\d+)&per_page=(\d+)$/u.exec(
+          args[1] ?? "",
+        );
+      if (args[0] !== "api" || !match) {
+        throw new Error(`unplanned evidence read: ${args.join(" ")}`);
+      }
+      const [page, perPage] = [Number(match[1]), Number(match[2])];
+      if (perPage === 100) {
+        throw Object.assign(new Error("gh failed"), { stderr: "gh: Server Error (HTTP 502)" });
+      }
+      return JSON.stringify({
+        total_count: jobs.length,
+        jobs: jobs.slice((page - 1) * perPage, page * perPage),
+      });
+    });
+
+    const listed = await createReleaseEvidenceClient("openclaw/openclaw").getRunAttemptJobs(
+      "123",
+      2,
+    );
+
+    expect(listed.map((job: { id: number }) => job.id)).toEqual(jobs.map((job) => job.id));
+    const pageSizes = transport.read.mock.calls.map((call) => call[1][1].split("per_page=")[1]);
+    expect(pageSizes).toEqual(["100", "50", "50", "50"]);
+    expect(transport.sleep).not.toHaveBeenCalled();
+  });
+
   it.each(["sync", "async"])("recovers a 502 followed by 200 (%s)", async (mode) => {
     const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     const failure = Object.assign(new Error("gh failed"), {
@@ -42,11 +76,12 @@ describe("release evidence API reads", () => {
       mode === "sync" ? client.getRunAttempt("42", 1) : await client.getRunAttemptJobs("42", 1);
     expect(result).toEqual(mode === "sync" ? { id: 42 } : [{ id: 7 }]);
     expect(transport.read).toHaveBeenCalledTimes(2);
+    // Job listings answer a 5xx with the next smaller page size instead of sleeping.
     expect(
       mode === "sync"
         ? wait.mock.calls.map((call) => call[3])
         : transport.sleep.mock.calls.map((call) => call[0]),
-    ).toEqual([2000]);
+    ).toEqual(mode === "sync" ? [2000] : []);
   });
 
   it.each(["sync", "async"])("fails after four 502 responses (%s)", async (mode) => {
@@ -63,7 +98,8 @@ describe("release evidence API reads", () => {
         mode === "sync" ? client.getRunAttempt("42", 1) : client.getRunAttemptJobs("42", 1),
       ),
     ).rejects.toBe(failure);
-    expect(transport.read).toHaveBeenCalledTimes(4);
+    // Job listings try 100- and 50-job pages once, then spend the full budget on 30.
+    expect(transport.read).toHaveBeenCalledTimes(mode === "sync" ? 4 : 6);
     expect(
       mode === "sync"
         ? wait.mock.calls.map((call) => call[3])
