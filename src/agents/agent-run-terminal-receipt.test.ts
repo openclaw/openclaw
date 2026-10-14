@@ -5,7 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
+  buildAgentRunFallbackReceipt,
   formatAgentRunRouteChange,
+  normalizeAgentRunTerminalReceipt,
   type AgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipt.js";
 import { isProviderModelRerouted } from "./provider-model-route.js";
@@ -237,6 +239,17 @@ describe("formatAgentRunRouteChange", () => {
     );
   });
 
+  it("includes the canonical fallback category without provider error text", () => {
+    expect(
+      formatAgentRunRouteChange(
+        { ...visibleRerouteReceipt, fallback: { occurred: true, reason: "overloaded" } },
+        "run-1",
+      ),
+    ).toBe(
+      "Model route changed: provider/requested → provider/actual (fallback reason: overloaded).",
+    );
+  });
+
   it.each([
     {
       name: "stale run",
@@ -279,5 +292,37 @@ describe("formatAgentRunRouteChange", () => {
 
     expect(routeChange).not.toContain(secret);
     expect(routeChange?.length).toBeLessThanOrEqual(320);
+  });
+});
+
+describe("buildAgentRunFallbackReceipt", () => {
+  it("reports a successful route as having no fallback", () => {
+    expect(buildAgentRunFallbackReceipt({ attempts: [] })).toEqual({ occurred: false });
+  });
+
+  it("reports the first canonical fallback reason", () => {
+    expect(
+      buildAgentRunFallbackReceipt({
+        attempts: [{ reason: "overloaded" }, { reason: "timeout" }],
+      }),
+    ).toEqual({ occurred: true, reason: "overloaded" });
+  });
+
+  it("leaves unavailable fallback metadata unavailable", () => {
+    const receipt = normalizeAgentRunTerminalReceipt(visibleRerouteReceipt);
+    expect(receipt?.fallback).toBeUndefined();
+    expect(formatAgentRunRouteChange(receipt, "run-1")).toBe(
+      "Model route changed: provider/requested → provider/actual.",
+    );
+  });
+
+  it("drops an unrecognized fallback reason before formatting", () => {
+    const secret = `sk-${"s".repeat(32)}`;
+    const receipt = normalizeAgentRunTerminalReceipt({
+      ...visibleRerouteReceipt,
+      fallback: { occurred: true, reason: secret },
+    });
+    expect(receipt?.fallback).toEqual({ occurred: true });
+    expect(formatAgentRunRouteChange(receipt, "run-1")).not.toContain(secret);
   });
 });
