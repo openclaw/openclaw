@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
@@ -17,7 +18,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -190,7 +191,7 @@ describe("renderChatAvatar", () => {
     } as const;
     render(
       html`
-        ${renderWelcomeState({ currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
+        ${solidContent(ChatWelcome, { currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
         ${renderChatAvatar("assistant", { agentId: "scout", name: "Scout", avatar: null })}
         ${renderForwardedAvatar("scout", { agentId: "main", agents: [{ id: "scout" }] })}
         ${renderChatAuthorAvatar(sender)} ${renderChatAvatar("user", undefined, undefined, sender)}
@@ -253,7 +254,7 @@ describe("renderChatAvatar", () => {
     const container = document.createElement("div");
     const avatar = "/avatar/main?v=1";
     const welcome = (assistantAvatar: string | null, assistantAvatarUrl?: string) =>
-      renderWelcomeState({
+      solidContent(ChatWelcome, {
         assistantName: "Main",
         assistantAvatar,
         assistantAvatarUrl,

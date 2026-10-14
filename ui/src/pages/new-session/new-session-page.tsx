@@ -7,7 +7,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-content.tsx";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
@@ -15,7 +15,7 @@ import "../../styles/new-session-attachment-panel.css";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { ChatWelcome } from "../chat/components/chat-welcome.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -189,9 +189,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   };
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // The retained Lit slot must not republish identical Solid inputs on each
-  // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -270,11 +267,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
             <Show
               when={Boolean(completed())}
               fallback={
-                <LitContent
-                  value={renderWelcomeState({
-                    ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, draftProps),
-                  })}
+                <ChatWelcome
+                  {...page().welcomeOptions()}
+                  composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }
             >
