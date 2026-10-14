@@ -58,6 +58,14 @@ import {
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
 
+class WorkboardClaimRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    // The name lets Gateway tool invocation return the actionable message.
+    this.name = "ToolInputError";
+  }
+}
+
 function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
   const token = normalizeOptionalString(input.token);
   const ownerId = normalizeOptionalString(input.ownerId);
@@ -121,21 +129,23 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const parentIds = cardParentIds(guarded);
       if (parentIds.length > 0 && guarded.status !== "ready" && !activeClaim) {
         if (guarded.status === "blocked") {
-          throw new Error("card is blocked; use workboard_unblock before claiming.");
+          throw new WorkboardClaimRefusedError(
+            "card is blocked; use workboard_unblock before claiming.",
+          );
         }
         // Dependency promotion skips review and running cards, so judge the parents.
         if (!(await this.parentsDone(parentIds))) {
-          throw new Error("card dependencies are not done.");
+          throw new WorkboardClaimRefusedError("card dependencies are not done.");
         }
       }
       if (guarded.status === "scheduled") {
-        throw new Error("card is scheduled for later.");
+        throw new WorkboardClaimRefusedError("card is scheduled for later.");
       }
       if (retryBudgetExhausted(guarded)) {
-        throw new Error("card exhausted its retry budget.");
+        throw new WorkboardClaimRefusedError("card exhausted its retry budget.");
       }
       if (activeClaim) {
-        throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
+        throw new WorkboardClaimRefusedError(`card already claimed by ${activeClaim.ownerId}.`);
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const card = await this.updateCard(

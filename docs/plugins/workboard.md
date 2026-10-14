@@ -636,6 +636,10 @@ terminal, active, idle, missing, and stale session state. Each store mutation em
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
 the stored card instead of writing its own lifecycle projection.
 
+Archiving a linked session does not hide its terminal outcome from this sweep.
+After a restart or missed completion hook, Workboard still reconciles active cards linked
+to archived sessions into `review` or `blocked`.
+
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived
 titles or message previews, to reconcile their terminal outcomes.

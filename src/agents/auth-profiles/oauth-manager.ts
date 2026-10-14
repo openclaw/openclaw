@@ -139,9 +139,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           context.validateCredential?.(current),
         )
       : credential;
-    if (context.personalStore) {
-      context.validateCredential?.(accepted);
-    }
     return { apiKey, credential: accepted };
   }
 
@@ -987,7 +984,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       resolveOwnedOAuthAccess({ ...prepared, personalStore });
     return prepared.personalStore
       ? resolve(prepared.personalStore)
-      : ((await withPersonalAuthProfileStore(prepared.profileId, resolve)) ?? null);
+      : ((await withPersonalAuthProfileStore(prepared.profileId, async (owner) => {
+          await owner.read();
+          return resolve(owner);
+        })) ?? null);
   }
 
   async function resolveOwnedOAuthAccess(
@@ -996,10 +996,8 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     params.signal?.throwIfAborted();
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     let credential = params.credential;
-    if (personalProfile) {
-      const owned = (
-        await loadStoredOAuthRefreshStore(params.agentDir, params.profileId, params.personalStore)
-      ).profiles[params.profileId];
+    if (params.personalStore) {
+      const owned = params.personalStore.readCurrentCredential();
       if (owned?.type !== "oauth") {
         return null;
       }

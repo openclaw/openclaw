@@ -137,6 +137,8 @@ export async function dispatchSqliteWorkerJob(
       request.timing.postFinished = performance.now();
     }
   } catch (error) {
+    // A refused dispatch may have captured a publication without delivering it.
+    databaseAdmissionCursors.delete(slot);
     onRejected(error, job.custody.postAttempted);
   }
 }

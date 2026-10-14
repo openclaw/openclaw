@@ -341,18 +341,12 @@ export function readUserModelAuthProfile(
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAuthProfile | undefined {
   return withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) => readUserModelAuthProfileInDatabase(db, authProfileId),
+    ({ db }) =>
+      readPersonalCatalogProfilesInDatabase(db, { profileId: authProfileId }).profiles[
+        authProfileId
+      ],
     options,
   );
-}
-
-export function readUserModelAuthProfileInDatabase(
-  db: EngineConnection,
-  authProfileId: string,
-): UserModelAuthProfile | undefined {
-  return readPersonalCatalogProfilesInDatabase(db, { profileId: authProfileId }).profiles[
-    authProfileId
-  ];
 }
 
 /** The catalog reads only explicit pins or linked credentials from its admitted reader. */
