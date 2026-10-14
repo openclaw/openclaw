@@ -85,8 +85,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   const managedList = (scope: SessionListScope) =>
-    getManagedSessionList(managedLists, scope, (entry, isCurrent) =>
-      refreshManagedList(entry, { append: false, invalidated: true, background: true }, isCurrent),
+    getManagedSessionList(managedLists, scope, (entry, isCurrent, immediate) =>
+      refreshManagedList(
+        entry,
+        { append: false, invalidated: true, background: true, immediate },
+        isCurrent,
+      ),
     );
 
   const primaryWindows = createSessionPrimaryWindows(
@@ -100,19 +104,19 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const scheduleManagedLists = (
     matches: (entry: ManagedSessionList) => boolean,
     excludedKey?: string,
-    immediate = false,
+    options: { foreground?: boolean; immediate?: boolean } = {},
   ) => {
     // Dormant primary windows cannot close event gaps until selection revalidates them.
     primaryWindows.retire((entry) => entry.key !== excludedKey && matches(entry));
     for (const entry of managedLists.values()) {
       if (entry.key !== excludedKey && matches(entry)) {
         entry.readGeneration += 1;
-        if (immediate && pageActive && entry.listeners.size > 0) {
-          // User actions and new sessions need authoritative membership now,
+        if (options.foreground && pageActive && entry.listeners.size > 0) {
+          // Accepted user actions need authoritative membership now,
           // independently of a slow primary read or background bootstrap.
           void refreshManagedList(entry, { append: false, invalidated: true });
         } else {
-          entry.coordinator.schedule();
+          entry.coordinator.schedule(options.immediate);
         }
       }
     }
@@ -129,7 +133,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     immediate = false,
   ) => {
     const matches = sessionListEventMatcher({ agentId, session: row });
-    const sourceKey = sourceListScope && sessionListQueryKey(sourceListScope);
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
     scheduleManagedLists(
@@ -141,8 +144,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           observedReadRevision !== undefined &&
           entry.readRevision >= observedReadRevision
         ) && matches(entry.query, entry.snapshot.result),
-      sourceKey,
-      immediate,
+      sourceListScope && sessionListQueryKey(sourceListScope),
+      { foreground: immediate },
     );
   };
 
@@ -668,7 +671,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     ) {
       const matchesAgent = sessionListAgentMatcher(options.agentId);
       const affected = options.affectedLists;
-      // Server events can invalidate a read; accepted row observations are reconciled into it.
       primaryWindows.invalidate(
         (entry) => affected?.has(entry) ?? matchesAgent(entry.query.agentId),
         lastListOptions,
@@ -676,14 +678,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (options.primarySnapshotApplied) {
         eventRefreshCoordinator.scheduleFallback();
       } else if (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId)) {
-        if (options.immediate && pageActive) {
-          void refresh(replacementOptions());
-        } else {
-          eventRefreshCoordinator.schedule();
-        }
+        eventRefreshCoordinator.schedule(options.immediate);
       }
       if (affected) {
-        scheduleManagedLists((entry) => affected.has(entry), undefined, options.immediate);
+        scheduleManagedLists((entry) => affected.has(entry), undefined, {
+          immediate: options.immediate,
+        });
         for (const entry of managedLists.values()) {
           if (
             !affected.has(entry) &&
