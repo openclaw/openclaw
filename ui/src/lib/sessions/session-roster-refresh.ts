@@ -98,6 +98,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     managedLists,
     managedList,
     host.onWarmListsRetired,
+    host.readState,
   );
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) =>
     primaryWindows.invalidate(matches, lastListOptions);
@@ -558,20 +559,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return requestRevision;
     },
     list: listReader.list,
-    listSnapshot(this: void, scope: SessionListScope): SessionListSnapshot {
-      if (isPrimarySessionListQuery(scope)) {
-        const { result, agentId, loading, error, startupPending } = host.readState();
-        return { result, agentId, loading, error, startupPending };
-      }
-      return (
-        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
-          result: null,
-          agentId: null,
-          loading: false,
-          error: null,
-        }
-      );
-    },
+    listSnapshot: primaryWindows.snapshot,
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
       return primaryWindows.subscribe(managedList(scope), listener, pageActive);
     },
@@ -640,12 +628,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
       if (result !== state.result) {
         host.publish({ ...state, result });
-      }
-      for (const entry of managedLists.values()) {
-        const decorated = host.decorate(entry.snapshot.result, entry);
-        if (decorated !== entry.snapshot.result) {
-          publishManagedList(entry, { ...entry.snapshot, result: decorated });
-        }
       }
       staged.notify();
     },
