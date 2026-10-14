@@ -159,6 +159,8 @@ limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
 
+<a id="inspect-and-preview"></a>
+
 ## Inspect and Add
 
 Inspect a source before using it:

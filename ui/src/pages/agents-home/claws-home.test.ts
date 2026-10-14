@@ -71,6 +71,28 @@ describe("Claws on Agents Home", () => {
     });
   });
 
+  it("clears a selected Claw when the detail route changes", async () => {
+    const { provider, request } = createPage({ clawsEnabled: true });
+    const detail = new ClawsCatalogDialog.Element();
+    detail.pageMode = true;
+    detail.initialPackageName = workflowOperator.packageName;
+    provider.append(detail);
+
+    await vi.waitFor(() =>
+      expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
+    );
+    detail.initialPackageName = "@openclaw/another-claw";
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("claws.catalog.search", {
+        query: "@openclaw/another-claw",
+        limit: 100,
+      }),
+    );
+    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());
+    expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")).toBeNull();
+  });
+
   it("asks before acknowledging a ClawHub trust warning", async () => {
     const { provider, request, navigate } = createPage({
       clawsEnabled: true,

@@ -99,6 +99,7 @@ class ClawsCatalogModel {
   private searchRevision = 0;
   private previewRevision = 0;
   private detailRevision = 0;
+  private routedPackageName = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   onIdentityChange() {
     this.entries = [];
@@ -147,6 +148,18 @@ class ClawsCatalogModel {
     initialPackageName: string,
     pageMode: boolean,
   ) {
+    if (pageMode && initialPackageName !== this.routedPackageName) {
+      this.routedPackageName = initialPackageName;
+      this.detailRevision += 1;
+      this.searchRevision += 1;
+      this.onIdentityChange();
+      if (initialEntry?.packageName === initialPackageName) {
+        this.select(initialEntry);
+      } else {
+        void this.loadCatalog();
+      }
+      return;
+    }
     if (
       initialEntry &&
       (this.selected?.packageName !== initialEntry.packageName ||

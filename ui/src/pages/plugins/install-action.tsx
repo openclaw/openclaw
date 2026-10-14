@@ -167,7 +167,11 @@ function InstallActionContent(
           ? (props.actionLabel ?? t("pluginsPage.install"))
           : active() && !failed()
             ? (props.busyLabel ?? t("pluginsPage.installing"))
-            : t(failed() ? "pluginsPage.retryInstall" : "pluginsPage.installProgress.viewStatus")}
+            : t(
+                failed() && canInstall()
+                  ? "pluginsPage.retryInstall"
+                  : "pluginsPage.installProgress.viewStatus",
+              )}
         {progress() ? <Icon name="chevronDown" /> : undefined}
       </button>
       {progress() && button() ? (
