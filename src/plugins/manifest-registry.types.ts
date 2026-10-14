@@ -41,6 +41,7 @@ export type PluginThemeArtwork = {
   icons?: Record<string, { svg: string }>;
   hats?: Record<string, { svg: string }>;
   critters?: Record<string, { svg: string; title?: string; crossMs?: number }>;
+  backgrounds?: Partial<Record<"light" | "dark", { image: Buffer }>>;
 };
 
 export type PluginManifestRecord = PluginManifestRecordStatic & {

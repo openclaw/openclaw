@@ -250,22 +250,22 @@ describe("manifest theme catalog", () => {
     expect(withPluginMetadataSnapshotScope(before, listPluginThemes)[0]).toEqual(original);
     expect(
       withPluginMetadataSnapshotScope(before, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "hat", "beret"),
+        resolvePluginThemeArtwork(plugin.id, "neon", "hat", "beret")?.body.toString("utf8"),
       ),
     ).toBe(svg);
     expect(
       withPluginMetadataSnapshotScope(after, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "hat", "beret"),
+        resolvePluginThemeArtwork(plugin.id, "neon", "hat", "beret")?.body.toString("utf8"),
       ),
     ).toBe(replacement);
     expect(
       withPluginMetadataSnapshotScope(before, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
+        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket")?.body.toString("utf8"),
       ),
     ).toBe(svg);
     expect(
       withPluginMetadataSnapshotScope(after, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
+        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket")?.body.toString("utf8"),
       ),
     ).toBe(replacement);
     after.index.plugins[0]!.enabled = false;
@@ -274,6 +274,38 @@ describe("manifest theme catalog", () => {
         resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
       ),
     ).toBeUndefined();
+  });
+
+  it("projects mode backgrounds and serves their captured raster bytes", () => {
+    const plugin = fixture();
+    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+    fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), webp);
+    fs.writeFileSync(
+      path.join(plugin.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: plugin.id,
+        configSchema: { type: "object" },
+        themes: [{ ...plugin.declaration, backgrounds: { dark: "night.webp" } }],
+      }),
+    );
+    const snapshot = plugin.readSnapshot();
+    const [theme] = withPluginMetadataSnapshotScope(snapshot, listPluginThemes);
+    expect(theme?.artwork).toEqual({
+      backgrounds: {
+        dark: {
+          url: expect.stringMatching(
+            /^\/__openclaw__\/plugin-theme-art\/space\/neon\/background\/dark\?v=[a-f0-9]{12}$/,
+          ),
+        },
+      },
+    });
+    const resolve = (artId: string) =>
+      withPluginMetadataSnapshotScope(snapshot, () =>
+        resolvePluginThemeArtwork(plugin.id, "neon", "background", artId),
+      );
+    expect(resolve("dark")?.body).toEqual(webp);
+    expect(resolve("light")).toBeUndefined();
+    expect(resolve("constructor")).toBeUndefined();
   });
 
   it.each([
