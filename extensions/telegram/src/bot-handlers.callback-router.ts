@@ -40,6 +40,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import {
   resolveTelegramForumFlag,
@@ -616,6 +617,7 @@ export function createTelegramCallbackRouter({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
         text: callbackCommandText,
+        date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
       });
       const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
       await processMessageWithReplyChain({

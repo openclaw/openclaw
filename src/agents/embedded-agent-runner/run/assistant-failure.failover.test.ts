@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../failover/user-copy.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -114,6 +116,75 @@ describe("assistant failure recovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("explains retry exhaustion without replacing the raw provider failure", async () => {
+    const providerError = "429 rate limit exceeded. Please try again in 221ms.";
+    const input = makeInput(providerError);
+    input.rateLimitRetriesExhausted = 9;
+    const failure = await expectFailure(input);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("9 automatic retries"),
+      rateLimitRetriesExhausted: 9,
+      reason: "rate_limit",
+      status: 429,
+      rawError: providerError,
+    });
+    expect(input.normalizedAttempt.attemptAssistant?.errorMessage).toBe(providerError);
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: failure,
+        sessionCtx: {},
+        resolvedVerboseLevel: "off",
+      })?.text,
+    ).toContain("9 automatic retries");
+  });
+
+  it.each([
+    { errorMessage: "Pending input is no longer active in its admitted transcript" },
+    { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
+    { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
+    {
+      errorMessage: "invalid_prompt: rejected",
+      errorType: "invalid_request_error",
+      errorCode: "invalid_prompt",
+    },
+  ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    const run = vi.fn(async () => {
+      const input = makeInput(fields.errorMessage);
+      const assistant = input.normalizedAttempt.attemptAssistant!;
+      Object.assign(assistant, fields, { content: [] });
+      input.normalizedAttempt.attempt.assistantTexts = [];
+      input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: input.normalizedAttempt.attempt,
+        assistant,
+      });
+      for (;;) {
+        const outcome = await handleEmbeddedAssistantFailure(input);
+        if (outcome.action !== "retry") {
+          throw new Error("failure was not surfaced");
+        }
+        input.emptyErrorRetries = outcome.emptyErrorRetries;
+      }
+    });
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        fallbacksOverride: ["openai/fixture-next", "groq/fixture-last"],
+        skipAuthProfileRuntime: true,
+        run,
+      }),
+    ).rejects.toThrow();
+    expect(run).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      "Assistant attempt failed",
+      expect.objectContaining({
+        message: fields.errorMessage,
+      }),
+    );
   });
 
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {

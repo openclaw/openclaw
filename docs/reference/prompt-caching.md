@@ -39,12 +39,23 @@ the session and keep both stable. Start a new session for a planned change.
 Invalidating reuse means the next request misses that cached state; it does not
 necessarily delete the provider's older cache entry before its normal expiry.
 
+## Stable tools between turns
+
+WebChat keeps the `message` reaction description and schema stable between runs
+in the same conversation, including runs without a current-prompt reaction grant.
+Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
+changes. Its current callable index and capability guidance follow the stable
+prompt prefix; supported in-history prompt updates append changes to the
+conversation. Reaction
+execution still requires the current prompt's live authority; an advertised
+action does not grant permission to execute it.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
-bounded text instead of introducing a different truncation notice. Redaction
-still runs before model-visible output is recorded. Large batches can exceed
+bounded text instead of introducing a different truncation notice. Tool text
+is preserved without secret masking. Large batches can exceed
 the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
@@ -53,6 +64,11 @@ OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable
 request inputs support cache reuse; actual hits still depend on the provider.
+
+Responses replay derives synthetic assistant message IDs from recorded source-turn
+identity when available. Retiring earlier history therefore preserves the IDs of
+retained failed-turn markers. Error diagnostics remain transcript metadata and do
+not enter the provider request.
 
 Internal browser conversations reuse their opaque session cache key for private
 subagent completions, so the completion does not switch to a different affinity
@@ -70,7 +86,7 @@ The Gateway retains these facts with the admitted turn, rather than accepting a
 worker-provided cache key or deriving one from trimmed replay history.
 
 Delivered worker skills use stable session-scoped, content-addressed paths and a
-deterministic catalog order. Unchanged skills therefore keep the system prompt
+fixed catalog order. Unchanged skills therefore keep the system prompt
 prefix stable between turns. Skill refreshes still deliver current verified bytes;
 a content change intentionally changes that skill's path. Worker and local prompts
 remain different in scope: workers load bounded workspace `AGENTS.md` and the
@@ -313,7 +329,7 @@ separate transient carrier; they do not become permanent first-message context.
 - Subagent completion turns reuse the session's generic conversation metadata and direct/group guidance, so native Ollama does not lose the tools-and-history prefix just because the turn arrived through an announcement. Channel formatting follows the resolved delivery account and is omitted for turns without channel delivery. Custom channel-supplied group instructions, changed delivery policy, and explicit lightweight bootstrap contexts can still produce different prompts.
 - User-message metadata stays intact when an active turn becomes history, including conversation context and reply targets. Timestamping uses the message's recorded time so subsequent requests replay the same text.
 - Prompt-hook prepend/append context and model-prompt replacements are captured on their original user transcript record before dispatch. Later requests and reopened sessions replay those bytes while user-visible history keeps the original text. Legacy rows without a recorded projection retain their previous replay behavior; see [stored projection compatibility](/reference/database-schemas/layout#user-turn-model-prompt-projections).
-- Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Bundled MCP tool catalogs are sorted by server name, then tool name before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
 - Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
 - Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
@@ -459,6 +475,7 @@ OpenClaw also checks that each converted request history extends the previous re
 - **High `cacheWrite` on most turns**: check for volatile system-prompt inputs; verify the model/provider supports your cache settings.
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request. A volatile system-suffix change can preserve the stable system-prefix checkpoint while invalidating later conversation checkpoints; cache observations report `systemPromptSuffix` for that change.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache. A volatile system-suffix change can cause a one-turn drop that recovers on the next request; enable cache tracing and look for `systemPromptSuffix` in the `[prompt-cache]` warning. A small or stepwise shortfall can reflect provider granularity, but does not rule out prompt changes or cache availability.
+  The warning's `requests` field pairs the last measured cache hit with the dropping request. For encoded HTTP requests, it includes cache-key presence and hash, continuation-ID presence, exact request bytes, a SHA-256 hash of the first 4096 bytes (or the whole request if smaller), model and route hashes, and the number of encoded attempts within that model call. Available response metadata includes HTTP status, numeric `openai-processing-ms`, and hashes of allowlisted request-ID, model, account, and region headers. Raw keys, IDs, headers, and prompt content are never included. Missing fields mean the transport did not supply that evidence; retries across model calls and unobserved transport retries are not counted.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 

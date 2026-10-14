@@ -43,6 +43,11 @@ import {
   TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
+import {
+  finalizeTsdownRuntimeCaches,
+  TSDOWN_CACHE_GROUPS_ENV,
+  TSDOWN_CACHE_PENDING_ENV,
+} from "./lib/tsdown-runtime-cache.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -1310,7 +1315,84 @@ async function executeTsdownInvocation(
   count: number,
 ): Promise<number> {
   const startedAt = performance.now();
-  const result = await runTsdownBuildInvocation(invocation);
+  const pendingRoot = createTsdownCachePendingRoot(invocation);
+  try {
+    return await executeValidatedTsdownInvocation(invocation, index, count, startedAt, pendingRoot);
+  } finally {
+    if (pendingRoot) {
+      fs.rmSync(pendingRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+function createTsdownCachePendingRoot(invocation: TsdownBuildInvocation) {
+  const args = invocation.args.slice(1);
+  const env = invocation.options.env;
+  if (env.OPENCLAW_BUILD_CACHE === "0" || env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1") {
+    return undefined;
+  }
+  // Unknown CLI overrides may affect output bytes or selection. Let tsdown own
+  // those builds unchanged; only the wrapper's normal release plan is cached.
+  const valued = new Set([
+    "--config-loader",
+    "--logLevel",
+    "--concurrency",
+    "--filter",
+    "-F",
+    "--config",
+    "-c",
+  ]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (valued.has(arg)) {
+      index++;
+      continue;
+    }
+    if (arg === "--no-clean" || arg === "--no-dts") {
+      continue;
+    }
+    return undefined;
+  }
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  if (config && !["tsdown.config.ts", "tsdown.ai.config.ts"].includes(config)) {
+    return undefined;
+  }
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  if (
+    filters.some(
+      (filter) => ![TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP].includes(filter),
+    )
+  ) {
+    return undefined;
+  }
+  fs.mkdirSync(".artifacts", { recursive: true });
+  return fs.mkdtempSync(path.resolve(".artifacts/tsdown-cache-pending-"));
+}
+
+async function executeValidatedTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+  startedAt: number,
+  pendingRoot: string | undefined,
+): Promise<number> {
+  const cachedInvocation = pendingRoot
+    ? {
+        ...invocation,
+        options: {
+          ...invocation.options,
+          env: {
+            ...invocation.options.env,
+            [TSDOWN_CACHE_PENDING_ENV]: pendingRoot,
+            [TSDOWN_CACHE_GROUPS_ENV]: readForwardedOptions(invocation.args, [
+              "--filter",
+              "-F",
+            ]).join(","),
+          },
+        },
+      }
+    : invocation;
+  const result = await runTsdownBuildInvocation(cachedInvocation);
   if (result.error) {
     throw result.error;
   }
@@ -1335,6 +1417,9 @@ async function executeTsdownInvocation(
     return 124;
   }
 
+  if (result.status === 0 && pendingRoot) {
+    finalizeTsdownRuntimeCaches(pendingRoot);
+  }
   return result.status ?? 1;
 }
 

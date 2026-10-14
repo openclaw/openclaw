@@ -1285,6 +1285,28 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TAVILY_API_KEY");
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
   });
+
+  it("preserves Windows startup tracing while regenerating managed service values", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_GATEWAY_PORT: "3000" } });
+
+    const plan = await buildNodePlan({
+      env: { HOME: tmpDir },
+      platform: "win32",
+      existingEnvironment: {
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_CONFIG_READONLY: "1",
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_GATEWAY_RESTART_TRACE: "1",
+        CUSTOM_TOOL_HOME: "/custom-tool",
+      },
+    });
+
+    expect(plan.environment.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+    expect(plan.environment.OPENCLAW_CONFIG_READONLY).toBe("1");
+    expect(plan.environment.OPENCLAW_GATEWAY_PORT).toBe("3000");
+    expect(plan.environment.OPENCLAW_GATEWAY_RESTART_TRACE).toBeUndefined();
+    expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/custom-tool");
+  });
 });
 
 describe("gatewayInstallErrorHint", () => {

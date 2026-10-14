@@ -145,6 +145,16 @@ describe("Codex initialization through the registered session deletion owner", (
                 readinessCommitRefused = true;
                 throw new Error("injected readiness failure");
               }
+              if (
+                failure === "rollback commit" &&
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-native-binding"
+              ) {
+                rollbackCommitRefused = true;
+                throw new Error("injected rollback failure");
+              }
               const offsets = reads.calls.map((call) => call.mock.contexts.length);
               try {
                 admit(request, grant);
@@ -249,12 +259,17 @@ describe("Codex initialization through the registered session deletion owner", (
                   context.agentId,
                 );
               }
-              if (failure === "import") {
-                openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-                  "CREATE TEMP TRIGGER reject_import BEFORE INSERT ON transcript_events BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
-                );
+              let patch: Awaited<ReturnType<NonNullable<typeof input.afterCreate>>>;
+              try {
+                patch = await input.afterCreate!(context);
+              } finally {
+                if (failure === "import") {
+                  // The import fault must not alter schema admission during rollback.
+                  openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+                    "DROP TRIGGER reject_import",
+                  );
+                }
               }
-              const patch = await input.afterCreate!(context);
               if (!patch) {
                 throw new Error("Codex initializer did not return its final patch");
               }
@@ -318,16 +333,6 @@ describe("Codex initialization through the registered session deletion owner", (
               "main",
             );
           }
-          if (failure === "rollback commit") {
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            database.db.function("observe_rollback_refusal", () => {
-              rollbackCommitRefused = true;
-              return 0;
-            });
-            database.db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 BEGIN SELECT observe_rollback_refusal(); SELECT RAISE(ABORT, 'injected rollback failure'); END",
-            );
-          }
           if (
             [
               "after binding",
@@ -368,6 +373,12 @@ describe("Codex initialization through the registered session deletion owner", (
           return attached;
         });
 
+        if (failure === "import") {
+          // Allow the child header so the callback captures identity before imported messages fail.
+          openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+            "CREATE TRIGGER reject_import BEFORE INSERT ON transcript_events WHEN NEW.navigation_type = 'message' BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
+          );
+        }
         const result = await withPluginRuntimeRegistryScope(
           registry,
           flow === "fork" ? invokeFork : fixture.adopt,
@@ -375,6 +386,9 @@ describe("Codex initialization through the registered session deletion owner", (
 
         if (failure === "rollback commit") {
           expect(rollbackCommitRefused).toBe(true);
+        }
+        if (failure === "import") {
+          expect(result.message).toContain("injected import failure");
         }
         if (failure === "final readiness") {
           expect(readinessCommitRefused).toBe(true);

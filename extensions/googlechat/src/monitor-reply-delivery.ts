@@ -10,6 +10,7 @@ import {
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
+import { formatGoogleChatTextChunks } from "./format.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;
@@ -89,7 +90,18 @@ export async function deliverGoogleChatReply(params: {
     );
   }
 
-  if (reply.hasMedia && !reply.hasText) {
+  const chunkLimit = account.config.textChunkLimit ?? 4000;
+  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
+  const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+    core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
+  );
+  const rejection =
+    reply.hasMedia && !reply.hasText
+      ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
+      : reply.hasText && !chunks.some((chunk) => chunk)
+        ? "Google Chat reply has no visible text after formatting."
+        : undefined;
+  if (rejection) {
     try {
       if (typingMessage) {
         await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
@@ -99,14 +111,9 @@ export async function deliverGoogleChatReply(params: {
     }
     // Permanent policy rejection before any recipient-visible send; the typed
     // contract keeps delivery custody from recording a false ambiguous attempt.
-    throw new PlatformMessageNotDispatchedError(
-      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
-      { cause: undefined, retryable: false },
-    );
+    throw new PlatformMessageNotDispatchedError(rejection, { cause: undefined, retryable: false });
   }
 
-  const chunkLimit = account.config.textChunkLimit ?? 4000;
-  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
   const recordOutboundStatus = () => {
     try {
       statusSink?.({ lastOutboundAt: Date.now() });
@@ -130,7 +137,6 @@ export async function deliverGoogleChatReply(params: {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
-  const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
   for (const chunk of chunks) {
     if (!chunk) {
       continue;

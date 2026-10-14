@@ -73,17 +73,18 @@ export async function assertDirectoryIdentity(
   directoryPath: string,
   expectedIdentity: FileIdentityStat,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath, {
-    bigint: typeof expectedIdentity.dev === "bigint",
-  });
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
   }
 }
 
-export function assertDirectoryIdentitySync(directoryPath: string, expectedIdentity: Stats): void {
-  const currentIdentity = fsSync.lstatSync(directoryPath);
+export function assertDirectoryIdentitySync(
+  directoryPath: string,
+  expectedIdentity: FileIdentityStat,
+): void {
+  const currentIdentity = fsSync.lstatSync(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`SQLite staging directory changed during operation: ${directoryPath}`);
@@ -97,9 +98,7 @@ export async function assertTrustedStagingRoot(
 ): Promise<string> {
   const resolvedRootPath = path.resolve(rootPath);
   const trustedRootPath = await fs.realpath(resolvedRootPath);
-  const rootIdentity = await fs.lstat(trustedRootPath, {
-    bigint: typeof expectedIdentity.dev === "bigint",
-  });
+  const rootIdentity = await fs.lstat(trustedRootPath, { bigint: true });
   assertDirectory(rootIdentity, trustedRootPath, "Private SQLite staging root");
   if (!sameFileIdentity(rootIdentity, expectedIdentity)) {
     throw new Error(`Private SQLite staging root changed during operation: ${resolvedRootPath}`);
@@ -127,10 +126,10 @@ export async function assertTrustedStagingRoot(
 }
 
 export async function assertPrivateStagingDirectory(
-  expectedIdentity: Stats,
+  expectedIdentity: FileIdentityStat,
   directoryPath: string,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(directoryPath);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true });
   assertDirectory(currentIdentity, directoryPath, "Private SQLite staging directory");
   if (!sameFileIdentity(currentIdentity, expectedIdentity)) {
     throw new Error(`Private SQLite staging directory changed during operation: ${directoryPath}`);
@@ -141,7 +140,11 @@ export async function assertPrivateStagingDirectory(
     return;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined || currentIdentity.uid !== uid || (currentIdentity.mode & 0o077) !== 0) {
+  if (
+    uid === undefined ||
+    Number(currentIdentity.uid) !== uid ||
+    (currentIdentity.mode & 0o077n) !== 0n
+  ) {
     throw new Error(`Private SQLite staging directory permissions are unsafe: ${directoryPath}`);
   }
   if (process.platform === "darwin") {

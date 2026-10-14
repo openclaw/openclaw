@@ -17,6 +17,7 @@ import {
   readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
+import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -25,20 +26,20 @@ import {
 } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
-import {
-  ensureProfileForEmail,
-  readUserProfileAliases,
-  resolveUserProfileId,
-} from "./user-profiles.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const roots = createTempDirTracker();
 const statePaths: string[] = [];
+const catalogReleases: Array<() => void> = [];
 function stateOptions() {
   const pathname = path.join(roots.make("profile-aliases-"), "state", "openclaw.sqlite");
   statePaths.push(pathname);
   return { path: pathname };
 }
 afterEach(() => {
+  for (const release of catalogReleases.splice(0)) {
+    release();
+  }
   for (const pathname of statePaths.splice(0)) {
     closeOpenClawStateDatabaseByPath(pathname);
   }
@@ -63,7 +64,7 @@ function readUserProfileEmailBindingIds(
 describe("profile alias reader lifecycle", () => {
   it.each(["email", "github"])(
     "publishes committed %s merges, not rollbacks or canonical no-ops",
-    (producer) => {
+    async (producer) => {
       const options = stateOptions();
       const source = ensureProfileForEmail("source@aliases.test", options);
       const target = ensureProfileForEmail("target@aliases.test", options);
@@ -80,6 +81,7 @@ describe("profile alias reader lifecycle", () => {
       }
       const sourceBindings = readUserProfileEmailBindingIds(source.id, options);
       const targetBindings = readUserProfileEmailBindingIds(target.id, options);
+      catalogReleases.push((await prepareUserProfileCatalog(options)).release);
       const merge = () =>
         producer === "email"
           ? linkEmail("source@aliases.test", target.id, options)
@@ -175,10 +177,11 @@ describe("profile alias reader lifecycle", () => {
     },
   );
 
-  it("keeps profiles separate and renews an email binding when ownership moves away and back", () => {
+  it("keeps profiles separate and renews an email binding when ownership moves away and back", async () => {
     const options = stateOptions();
     const source = ensureProfileForEmail("source@aliases.test", options);
     const target = ensureProfileForEmail("target@aliases.test", options);
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     const originalBindings = readUserProfileEmailBindingIds(source.id, options);
     const targetBindings = readUserProfileEmailBindingIds(target.id, options);
     const aliasRevision = readUserProfileAliasRevision();
@@ -253,10 +256,11 @@ describe("profile alias reader lifecycle", () => {
     expect(recreatedBindings).not.toEqual(providerBindings);
   });
 
-  it("keeps alias access stable across profile creation, cosmetics and same-head GitHub refresh", () => {
+  it("keeps alias access stable across profile creation, cosmetics and same-head GitHub refresh", async () => {
     const options = stateOptions();
     const aliasRevision = readUserProfileAliasRevision();
     const profile = ensureProfileForEmail("cosmetic@aliases.test", options);
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     const bindings = readUserProfileEmailBindingIds(profile.id, options);
     expect(bindings).toEqual([expect.any(String)]);
     linkEmail("cosmetic@aliases.test", profile.id, options);
@@ -274,11 +278,12 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileEmailBindingIds(profile.id, options)).toEqual(bindings);
   });
 
-  it("compresses tombstones so durable profile references resolve to the merge head", () => {
+  it("compresses tombstones so durable profile references resolve to the merge head", async () => {
     const options = stateOptions();
     const a = ensureProfileForEmail("a@example.com", options);
     const b = ensureProfileForEmail("b@example.com", options);
     const c = ensureProfileForEmail("c@example.com", options);
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     const aliasRevision = readUserProfileAliasRevision();
 
     linkEmail("a@example.com", b.id, options);
@@ -287,8 +292,9 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileAliasRevision()).toBe(aliasRevision + 2);
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
-    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
-    expect(readUserProfileSnapshotSync(options).profiles).toEqual(
+    const { profiles } = readUserProfileSnapshotSync(options);
+    expect(profiles.find(({ id }) => id === a.id)?.mergedInto).toBe(c.id);
+    expect(profiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),
         expect.objectContaining({ id: b.id, mergedInto: c.id }),
@@ -298,7 +304,7 @@ describe("profile alias reader lifecycle", () => {
 
   it.each([false, true])(
     "leaves absent storage untouched and observes its later creation (database=%s)",
-    (exists) => {
+    async (exists) => {
       const options = stateOptions();
       const db = exists ? openOpenClawStateDatabase(options).db : undefined;
       expect(readUserProfileAliases("missing", options)).toEqual(new Set(["missing"]));
@@ -310,26 +316,31 @@ describe("profile alias reader lifecycle", () => {
       const source = ensureProfileForEmail("source@aliases.test", options);
       const target = ensureProfileForEmail("target@aliases.test", options);
       linkEmail("source@aliases.test", target.id, options);
+      catalogReleases.push((await prepareUserProfileCatalog(options)).release);
       expect(readUserProfileAliases(target.id, options)).toEqual(new Set([source.id, target.id]));
     },
   );
 
-  it("honors explicit paths and env roots, and drops handle-bound aliases after reopen", () => {
+  it("honors explicit paths and env roots, and drops handle-bound aliases after reopen", async () => {
     const options = stateOptions();
     const other = stateOptions();
     const source = ensureProfileForEmail("source@aliases.test", options);
     const target = ensureProfileForEmail("target@aliases.test", options);
     linkEmail("source@aliases.test", target.id, options);
+    const catalog = await prepareUserProfileCatalog(options);
+    catalogReleases.push(catalog.release);
     const env = { OPENCLAW_STATE_DIR: path.dirname(path.dirname(other.path)) };
     expect(readUserProfileAliases(target.id, { ...options, env })).toEqual(
       new Set([source.id, target.id]),
     );
     expect(readUserProfileAliases(target.id, { env })).toEqual(new Set([target.id]));
     expect(fs.existsSync(other.path)).toBe(false);
+    catalog.release();
     closeOpenClawStateDatabaseByPath(options.path);
     // Fixture-only external change while closed; this does not promise external-process polling.
     const reopened = openOpenClawStateDatabase(options).db;
     reopened.prepare("DELETE FROM user_profiles WHERE id = ?").run(source.id);
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
   });
 });

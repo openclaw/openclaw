@@ -274,6 +274,8 @@ async function seedRestoredRequesters(
       return {
         runId,
         childSessionKey: `agent:main:subagent:gateway-restored-settle-${index}`,
+        childAgentId: "main",
+        childSessionIdentity: { sessionId: `gateway-restored-child-${index}` },
         requesterSessionKey,
         requesterAgentId: "main",
         requesterStorePath,

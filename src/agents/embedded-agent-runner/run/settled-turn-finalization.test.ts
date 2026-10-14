@@ -505,6 +505,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         trigger === "cron" ? [] : [expect.objectContaining({ text: expectedText })],
       );
       expect(result.prepared.finalAssistantRawText).toBe(expectedText);
+      // The host-synthesized fallback is delivery text, never model-authored
+      // data; diagnostics must not capture it in any delivery mode.
+      expect(result.prepared.finalAssistantMessageRawText).toBe("");
       if (trigger === "user") {
         expect(
           getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {}),

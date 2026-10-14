@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -32,12 +33,19 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
-import type { SessionSourceAssertion } from "./session-source-authority.js";
+import {
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import {
   assertLegacyTranscriptPreparation,
@@ -57,14 +65,73 @@ import type {
   SqliteSessionTurnOptions,
 } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   requestedOptions: SqliteSessionTurnOptions,
+  ownerScope: SessionTranscriptWriteScope = scope,
+): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  // Keep the admitted logical locator while the worker pins its physical database.
+  const assertOwnedWrite = captureOwnedTranscriptWriteAssertion({
+    ...ownerScope,
+    sessionId: requestedOptions.expectedSessionId,
+  });
+  const target = { ...scope, sessionId: requestedOptions.expectedSessionId };
+  const memory = getSessionActorStorageBinding(target);
+  if (!memory) {
+    const assertCurrent = () => {
+      assertOwnedWrite();
+      requestedOptions.assertCurrent?.();
+    };
+    const authority = { assertCurrent, authorize: assertCurrent };
+    if (captureSessionActorStorageOwner(target, authority)) {
+      const result = await withSessionActorStorage(
+        target,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          create: Boolean(requestedOptions.initialSessionEntry),
+        },
+        () => appendExpectedSessionTranscriptTurn(scope, requestedOptions, ownerScope),
+      );
+      if (!result) {
+        throw new IncognitoSessionMissingError();
+      }
+      return result;
+    }
+  }
+  if (requestedOptions.ownerSource) {
+    return appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
+  }
+  const ownerSource = await prepareSessionSourceAuthority(assertOwnedWrite);
+  const errors: unknown[] = [];
+  try {
+    return await appendPreparedSessionTranscriptTurn(
+      scope,
+      { ...requestedOptions, ownerSource },
+      assertOwnedWrite,
+    );
+  } catch (error) {
+    errors.push(error);
+    throw error;
+  } finally {
+    await releaseSessionSourceAuthorities([ownerSource], errors);
+  }
+}
+
+async function appendPreparedSessionTranscriptTurn(
+  scope: SessionTranscriptWriteScope,
+  requestedOptions: SqliteSessionTurnOptions,
+  assertOwnedWrite: SessionSourceAssertion,
   nativeReservation?: true,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
-  const options = nativeReservation
+  const memory = getSessionActorStorageBinding({
+    ...scope,
+    sessionId: requestedOptions.expectedSessionId,
+  });
+  let options = nativeReservation
     ? requestedOptions
     : {
         ...requestedOptions,
@@ -85,7 +152,6 @@ export async function appendExpectedSessionTranscriptTurn(
       "Awaited transcript preparation requires one message without transaction predicates",
     );
   }
-  const memory = getSessionActorStorageBinding(scope);
   const resolved = memory
     ? {
         agentId: memory.agentId,
@@ -115,17 +181,14 @@ export async function appendExpectedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const incognito = memory
-    ? undefined
-    : captureIncognitoSessionOperation({ ...scope, storePath: resolved.path });
   const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
   if (
     !nativeReservation &&
     independentPreparation &&
-    isMainThread &&
-    (inputActor ||
-      incognito ||
-      supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) &&
+    !options.ownerSource?.nativeSource &&
+    !options.ownerSource?.hasOpaqueCheck &&
+    (isMainThread || (inputActor && inputActor.actor.target.database.kind === "memory")) &&
+    (inputActor || supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) &&
     options.messages.every((message) => {
       const guard: SessionSourceAssertion | undefined =
         message.workerPreparation?.beforeFreshMessageCommit;
@@ -138,29 +201,46 @@ export async function appendExpectedSessionTranscriptTurn(
     })
   ) {
     return appendSessionTurnInWorker(resolved, options, context, (messages) =>
-      appendExpectedSessionTranscriptTurn(
+      appendPreparedSessionTranscriptTurn(
         { ...scope, storePath: resolved.path, env: resolved.env },
         { ...options, messages },
+        assertOwnedWrite,
         true,
       ),
     );
   }
-  if (incognito || inputActor) {
+  if (memory || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
   }
+  if (options.ownerSource?.checks.length) {
+    throw new Error(
+      "Prepared transcript owner authority requires worker-compatible message preparation",
+    );
+  }
+  const assertRequestedCurrent = options.assertCurrent;
+  options = {
+    ...options,
+    assertCurrent: () => {
+      assertOwnedWrite();
+      assertRequestedCurrent?.();
+    },
+  };
+  options.assertCurrent?.();
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {
     await prepareSessionTurnPredicates();
   }
-  // Released opaque callbacks, maintenance, and process-held incognito keep native execution.
+  // Released durable callbacks and maintenance retain their native transaction contract.
   const { readEntry, resolveExpectedEntry } = createSessionTranscriptTurnKernel(resolved, options);
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
   const rebound = new Error("Session changed before cold transcript restoration");
   let restoreEntry: ResolvedSessionEntryRow | undefined;
   try {
+    options.assertCurrent?.();
     await restoreSessionColdTranscript(
       { ...scope, sessionId: options.expectedSessionId },
       options.keyFormat === "agent-qualified"
         ? () => {
+            options.assertCurrent?.();
             options.sessionTurnMutation?.assertCurrent?.();
             const current = withOpenClawAgentDatabaseReadOnly(
               (database) =>
@@ -184,7 +264,7 @@ export async function appendExpectedSessionTranscriptTurn(
             }
             throw rebound;
           }
-        : undefined,
+        : options.assertCurrent,
     );
   } catch (error) {
     if (error !== rebound) {
@@ -200,6 +280,7 @@ export async function appendExpectedSessionTranscriptTurn(
     resolved,
     async () => {
       const mutation = options.sessionTurnMutation;
+      options.assertCurrent?.();
       mutation?.assertCurrent?.();
       const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env)?.(preparedDatabase);

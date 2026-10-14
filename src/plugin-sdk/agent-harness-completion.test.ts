@@ -49,8 +49,10 @@ vi.mock(
     ...(await importOriginal<
       typeof import("../agents/subagents/announce/subagent-announce-delivery.runtime.js")
     >()),
-    captureRequesterSessionEntryCurrent: (sessionKey: string, agentId?: string) => () =>
-      mocks.loadRequester(sessionKey, agentId).entry,
+    captureRequesterSessionEntryCurrent: async (sessionKey: string, agentId?: string) => ({
+      readCurrent: () => mocks.loadRequester(sessionKey, agentId).entry,
+      release() {},
+    }),
   }),
 );
 vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({

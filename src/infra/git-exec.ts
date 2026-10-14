@@ -16,6 +16,7 @@ import { withGitProcessOperation, type GitProcessOperation } from "../process/sp
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  gitCommandName,
   retryableGitNetworkOperation,
   withGitNetworkRetry,
   type GitOperationStarter,
@@ -23,6 +24,22 @@ import {
 import { startGitOperationTiming } from "./git-operation-timing.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
+
+/** Inspection consumes local objects; only explicit transfers may hydrate a partial clone. */
+export function gitReadOnlyEnvironment(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const command = gitCommandName(args);
+  return command &&
+    (/^(?:cat-file|check-attr|check-ignore|config|describe|diff|diff-files|diff-index|diff-tree|for-each-ref|log|ls-files|ls-tree|merge-base|name-rev|rev-list|rev-parse|show|show-ref|status)$/.test(
+      command,
+    ) ||
+      (command === "worktree" && args[args.indexOf(command) + 1] === "list") ||
+      (command === "branch" && args.includes("--list")))
+    ? { ...env, GIT_NO_LAZY_FETCH: "1" }
+    : env;
+}
 
 export class GitCommandTimeoutError extends Error {
   override name = "GitCommandTimeoutError";
@@ -186,6 +203,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   args: string[],
   options: GitCommandOptions,
 ): Promise<Result & { timeoutMs: number }> {
+  const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = gitExecutionArgv(cwd, args, options);
   if (options.waitForExit === true) {
@@ -193,6 +211,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
       options.beforeRun?.();
       return run(argv, {
         ...options,
+        env,
         timeoutMs: undefined,
       });
     };
@@ -205,6 +224,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     (attemptTimeoutMs) =>
       run(argv, {
         ...options,
+        env,
         timeoutMs: attemptTimeoutMs,
       }),
   );
@@ -224,6 +244,7 @@ export async function executeGitCommandBuffered(
   args: string[],
   options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
+  const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const argv = gitExecutionArgv(cwd, args, {
     ...options,
     killProcessTree: options.killProcessTree !== false,
@@ -232,7 +253,7 @@ export async function executeGitCommandBuffered(
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) => runCommandBuffered(argv, { ...options, timeoutMs }),
+      (timeoutMs) => runCommandBuffered(argv, { ...options, env, timeoutMs }),
     ),
   );
 }

@@ -72,10 +72,7 @@ async function dependencyOwner(
       return directory;
     }
     if (
-      await fs.stat(path.join(directory, "package.json")).then(
-        () => true,
-        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
-      )
+      await fs.stat(path.join(directory, "package.json")).catch(ignoreMissingUpdateCandidateFile)
     ) {
       return directory;
     }
@@ -255,15 +252,12 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             break;
           }
           const dependency = path.join(modulesDir, ...name.split("/"));
-          const exists = await fs.stat(dependency).then(
-            () => true,
-            (error: unknown) => {
-              if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-                return false;
-              }
-              throw error;
-            },
-          );
+          const exists = await fs.stat(dependency).catch((error: unknown) => {
+            if (hasNodeErrorCode(error, "ENOTDIR")) {
+              return undefined;
+            }
+            return ignoreMissingUpdateCandidateFile(error);
+          });
           if (exists) {
             const realModules = await fs.realpath(modulesDir);
             assertUpdateCandidatePluginCopySource(modulesDir, privateRoot);
@@ -406,15 +400,12 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     const discovered: Array<{ source: string; real?: string }> = [];
     for (const owner of moduleOwners) {
       const source = path.join(owner, "openclaw");
-      const exists = await fs.lstat(source).then(
-        () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-            return false;
-          }
-          throw error;
-        },
-      );
+      const exists = await fs.lstat(source).catch((error: unknown) => {
+        if (hasNodeErrorCode(error, "ENOTDIR")) {
+          return undefined;
+        }
+        return ignoreMissingUpdateCandidateFile(error);
+      });
       if (!exists) {
         continue;
       }
@@ -523,8 +514,11 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {
-        throw new Error(
-          `Cannot privately copy host-owned plugin link ${file} -> ${real}; use the openclaw package/SDK import or a separately owned plugin dependency.`,
+        throw Object.assign(
+          new Error(
+            `Cannot privately copy host-owned plugin link ${file} -> ${real}; this dependency reaches OpenClaw-owned files. Repair the link before retrying the update.`,
+          ),
+          { code: "host-owned-plugin-link" },
         );
       }
       assertUpdateCandidatePluginCopySource(owner, privateRoot);

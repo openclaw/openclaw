@@ -23,6 +23,12 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+If the Dashboard cannot load, it shows a recovery page with **Reload** and
+**Connection Settings…**. Choose **Navigate → Reload** or press **Cmd-R** while a
+Dashboard window is active to reload its current page. Gateway HTTP errors with
+plain-text or JSON bodies use the recovery page; HTML sign-in pages from an
+authenticated proxy remain available in the window.
+
 The native chat features below connect to the Gateway and default to the primary
 session for the selected agent (`main`, or `global` when `session.scope` is
 `global`). Quick Chat remains a native floating composer in either experience.
@@ -37,6 +43,11 @@ roster, Cmd-K palette, menus, window management, and Gateway selection remain
 native. Selecting a thread in the sidebar or palette navigates the existing web
 pane without reloading it. **New Thread** stays in the sidebar and on Shift-Cmd-N:
 it creates the session through the native owner, then opens it in that pane.
+
+The Web experience shares the desktop web rail and panel layout with the Tauri desktop app on macOS, Linux, and Windows.
+Its panel header and content header occupy the same 52px titlebar row, with back/forward before the content title and search in the rail.
+On macOS, the panel title clears the traffic lights and the rail starts below them; Linux/Windows keep the rail aligned with the top row and reserve the top-right caption buttons.
+Sessions, Pages, and Online each have a trailing Collapse sidebar button; collapsing leaves only expand-sidebar beside the rail, which continues to own New session and search.
 
 The web pane owns sending, drafts, queues, history, read acknowledgements, Find,
 and export. Pane-local keys such as Cmd-F, Return, Shift-Return, and Escape go to

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   publishSqliteCommittedState,
   stageSqliteTransactionState,
@@ -45,14 +46,17 @@ export function publishTrackedCacheUpdate(
   };
   // Committed cache state must settle before observers can reenter with newer writes.
   if (
-    stageSqliteTransactionState(database.db, {
-      stage: () => {
-        settle = stage?.();
+    stageSqliteTransactionState(
+      isPostgresSqlConnection(database.db) ? database.db.anchor : database.db,
+      {
+        stage: () => {
+          settle = stage?.();
+        },
+        rollback: () => settle?.(),
+        commit,
+        invalidate,
       },
-      rollback: () => settle?.(),
-      commit,
-      invalidate,
-    })
+    )
   ) {
     return true;
   }

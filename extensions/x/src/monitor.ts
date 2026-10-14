@@ -18,7 +18,7 @@ import {
 } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
-import { resolveXIngress, xMentionFacts } from "./ingress.js";
+import { createXPublicationPreparation, resolveXIngress, xMentionFacts } from "./ingress.js";
 import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
 import type { XVisibleWorkSession } from "./reply.js";
@@ -26,6 +26,7 @@ import { getXRuntime } from "./runtime.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
 type IngressPayload = { version: number; rawEvent: string };
@@ -261,6 +262,17 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         publicationSnapshot && publicThread
           ? {
               audience: "public" as const,
+              prepare: createXPublicationPreparation({
+                accountId: account.accountId,
+                post,
+                cfg,
+                readConfig,
+                route,
+                assertActive: () => {
+                  lifecycle.abortSignal.throwIfAborted();
+                  assertCurrent();
+                },
+              }),
               assertCurrent: () => {
                 lifecycle.abortSignal.throwIfAborted();
                 assertCurrent();
@@ -310,8 +322,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       if (guest && !(await admitGuest(authorization, cfg))) {
         return;
       }
-      const handle =
-        thread.users.find((user) => user.id === post.author_id)?.username ?? post.author_id;
+      const author = thread.users.find((user) => user.id === post.author_id);
+      const handle = author?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress,
         access: {
@@ -360,9 +372,32 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         ctxPayload,
         ...bindIngressLifecycleToReplyOptions(lifecycle),
         replyOptions: {
-          onVisibleWorkSessions: (visible) => {
+          onVisibleWorkSessions: async (visible, creation) => {
             if (!guest) {
-              sessions.push(...visible);
+              if (!author?.username) {
+                throw new Error(
+                  "X work-session origin requires the author's handle; retry the mention.",
+                );
+              }
+              const childKeys = new Set(visible.map((session) => session.sessionKey));
+              if (creation) {
+                childKeys.add(creation.createdSessionKey);
+              }
+              for (const childKey of childKeys) {
+                await openXWorkOrigins(core).registerIfAbsent(childKey, {
+                  accountId: account.accountId,
+                  postId: post.id,
+                  postUrl: `https://x.com/${handle}/status/${post.id}`,
+                  authorHandle: handle,
+                  conversationId: post.conversation_id,
+                  senderTier: authorization.tier,
+                });
+              }
+              for (const session of visible) {
+                if (!sessions.some((existing) => existing.sessionKey === session.sessionKey)) {
+                  sessions.push(session);
+                }
+              }
             }
           },
         },

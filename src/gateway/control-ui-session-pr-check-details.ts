@@ -159,15 +159,6 @@ export async function loadControlUiSessionPullRequestChecks(
       try {
         await assertHead();
         const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
-        // Do not label old-head job steps as current after a push during the request.
-        if (
-          !(
-            details.error instanceof gitHubPublicApi.ControlUiGitHubError &&
-            details.error.statusCode === 429
-          )
-        ) {
-          await assertHead();
-        }
         const result: ControlUiSessionPullRequestCheckDetails = {
           ...target,
           checks: details.checks,

@@ -1,9 +1,12 @@
 import CoreLocation
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError?
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -40,6 +43,10 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
     private let computerAction = ComputerActionService()
+
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
+        await PermissionManager.missingPermissions(capabilities, disabled: disabled)
+    }
 
     func snapshotScreen(
         screenIndex: Int?,

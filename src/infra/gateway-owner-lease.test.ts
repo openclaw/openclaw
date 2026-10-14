@@ -13,6 +13,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
@@ -33,6 +34,7 @@ import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -591,6 +593,10 @@ describe("Gateway owner lease", () => {
         state: "live",
         expired: false,
       });
+      expect(readGatewayOwnerLease({ env })?.listeningAt).toBeUndefined();
+      const beforeListening = Date.now();
+      lock.markListening?.();
+      expect(readGatewayOwnerLease({ env })?.listeningAt).toBeGreaterThanOrEqual(beforeListening);
     } finally {
       await lock.release();
     }
@@ -681,45 +687,53 @@ describe("Gateway owner lease", () => {
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
-  it("publishes a readable owner while holding the physical process owner and releases its publication", async () => {
-    await using owner = fixture();
-    const { env } = owner;
-    const lease = owner.acquire({ owner: "gateway-generation" });
-    await lease.ready;
-    expect(tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env))).toBeNull();
-    expect(readGatewayOwnerLease({ env })).toEqual({
-      owner: "gateway-generation",
-      pid: process.pid,
-      host: hostname(),
-      processNamespace: readGatewayLockProcessNamespace(),
-      heartbeatAt: expect.any(Number),
-      startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
-      port: 19483,
-      mode: "foreground",
-      supervisor: null,
-      state: "live",
-      expired: false,
-    });
-    expect(readGatewayOwnerLease({ env, port: 19484 })).toBeUndefined();
-    const heartbeat = withOpenClawStateStartupMigrationCheckpointDatabase(
-      (db) =>
-        db
-          .prepare(
-            "SELECT created_at, heartbeat_at FROM state_leases WHERE scope = 'gateway-owner'",
-          )
-          .get(),
-      { env },
-    );
-    expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
+  it.each([false, true])(
+    "publishes and releases its owner with cached state=%s",
+    async (cached) => {
+      await using owner = fixture();
+      const { env } = owner;
+      const lease = owner.acquire({ owner: "gateway-generation" });
+      await lease.ready;
+      expect(tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env))).toBeNull();
+      expect(readGatewayOwnerLease({ env })).toEqual({
+        owner: "gateway-generation",
+        pid: process.pid,
+        host: hostname(),
+        processNamespace: readGatewayLockProcessNamespace(),
+        heartbeatAt: expect.any(Number),
+        startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
+        port: 19483,
+        mode: "foreground",
+        supervisor: null,
+        state: "live",
+        expired: false,
+      });
+      expect(readGatewayOwnerLease({ env, port: 19484 })).toBeUndefined();
+      const heartbeat = withOpenClawStateStartupMigrationCheckpointDatabase(
+        (db) =>
+          db
+            .prepare(
+              "SELECT created_at, heartbeat_at FROM state_leases WHERE scope = 'gateway-owner'",
+            )
+            .get(),
+        { env },
+      );
+      expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
 
-    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
-    await closeOpenClawStateDatabaseAsync();
-    expect(readGatewayOwnerLease({ env })?.owner).toBe("gateway-generation");
+      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+      const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
+      if (!cached) {
+        await closeOpenClawStateDatabaseAsync();
+      }
+      expect(readGatewayOwnerLease({ env })?.owner).toBe("gateway-generation");
 
-    await lease.release();
-    expect(readGatewayOwnerLease({ env })).toBeUndefined();
-    await closeOpenClawStateDatabaseAsync();
-  });
+      await lease.release();
+      expect(held?.db.isOpen ?? false).toBe(false);
+      expect(readGatewayOwnerLease({ env })).toBeUndefined();
+      expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(env))).toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+    },
+  );
 
   it.each([
     { label: "dead", pid: 2_147_483_647, startedAt: 1 },
@@ -802,6 +816,8 @@ describe("Gateway owner lease", () => {
       },
       { env },
     );
+    expect(() => lease.markListening()).toThrow("owner changed before listening publication");
+    expect(readGatewayOwnerLease({ env })?.listeningAt).toBeUndefined();
     await lease.release();
     expect(readGatewayOwnerLease({ env })?.owner).toBe("replacement");
   });

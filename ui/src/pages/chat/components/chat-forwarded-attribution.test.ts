@@ -3,8 +3,8 @@ import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

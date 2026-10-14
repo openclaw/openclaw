@@ -18,6 +18,7 @@ import {
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
+import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
@@ -58,11 +59,11 @@ const witnessSchema = z
 type OpenClawMigrationWitness = z.infer<typeof witnessSchema>;
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
 
-const predicateColumns = new Map<string, ReadonlySet<string>>(
-  Object.entries(AGENT_JSON_PREDICATE_COLUMNS).map(([table, columns]) => [
-    table,
-    new Set<string>(columns),
-  ]),
+const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
+  Object.entries({
+    ...AGENT_JSON_PREDICATE_COLUMNS,
+    session_windows: ["row_transcript_json", "row_transcript_updated_at"],
+  }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
 function assertUnique(values: readonly string[]): void {
@@ -94,7 +95,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
       !(
         witness.role === "agent" &&
         (["schema_meta", "session_key_contract"].includes(table.name) ||
-          predicateColumns.has(table.name))
+          derivedMigrationColumns.has(table.name))
       ) &&
       !(
         witness.role === "global" &&
@@ -108,7 +109,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   }
   if (
     (witness.role === "agent" &&
-      (witness.agentId === null || ![24, 25, 26].includes(witness.schemaVersion))) ||
+      (witness.agentId === null || ![24, 25, 26, 27].includes(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -145,7 +146,7 @@ function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, 
     ((table === "schema_meta" &&
       ["schema_version", "app_version", "updated_at"].includes(column)) ||
       (table === "session_key_contract" && column === "canonical_ready") ||
-      predicateColumns.get(table)?.has(column))
+      derivedMigrationColumns.get(table)?.has(column))
   );
 }
 
@@ -177,10 +178,7 @@ function hashCell(hash: Hash, type: unknown, value: unknown): void {
   hash.update(`${type}:${bytes.byteLength}:`).update(bytes).update(";");
 }
 
-function witnessIdentifier(name: string, allowedNames: readonly string[], qualifier?: "witness") {
-  if (!allowedNames.includes(name)) {
-    throw new Error(`Migration witness identifier is outside its schema inventory: ${name}`);
-  }
+function witnessIdentifier(name: string, qualifier?: "witness") {
   return /* kysely-allow-raw: closed schema inventory, preserving literal dots and empty names. */ sql.id(
     ...(qualifier ? [qualifier, name] : [name]),
   );
@@ -190,7 +188,6 @@ function captureTable(
   database: DatabaseSync,
   role: OpenClawMigrationWitness["role"],
   table: string,
-  tableNames: readonly string[],
   withoutRowid: boolean,
   registry?: RegistryMigrationContext,
 ): OpenClawMigrationWitness["tables"][number] {
@@ -214,7 +211,11 @@ function captureTable(
   if (columns.length === 0 || columns.length > 256) {
     throw new Error(`Unsupported migration witness columns: ${table}`);
   }
-  const names = columns.map(({ name }) => name);
+  const outbox = role === "agent" && table === "context_engine_turn_outbox";
+  // The named sequence aliases rowid; hash it once, retaining the old witness layout.
+  const names = columns
+    .map(({ name }) => name)
+    .filter((name) => !outbox || name !== "enqueue_sequence");
   if (!withoutRowid) {
     const rowid = ["rowid", "_rowid_", "oid"].find(
       (alias) => !names.some((name) => name.toLowerCase() === alias),
@@ -233,11 +234,11 @@ function captureTable(
   let query = db
     .selectFrom(
       // kysely-allow-raw: table and columns come from the pinned schema inventory, including plugin stores.
-      sql<Record<string, Cell>>`${witnessIdentifier(table, tableNames)}`.as("witness"),
+      sql<Record<string, Cell>>`${witnessIdentifier(table)}`.as("witness"),
     )
     .select(
       names.flatMap((name, index) => {
-        const column = witnessIdentifier(name, names, "witness");
+        const column = witnessIdentifier(name, "witness");
         return [
           // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
           sql<string>`typeof(${column})`.as(`type_${index}`),
@@ -251,9 +252,9 @@ function captureTable(
       }),
     );
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
-  const primaryNames = primary.map(({ name }) => name);
+  const primaryNames = outbox ? ["advancement_key"] : primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {
-    query = query.orderBy(witnessIdentifier(column, names, "witness"));
+    query = query.orderBy(witnessIdentifier(column, "witness"));
   }
   let rowCount = 0;
   const expectedRegistrations = new Set(
@@ -405,7 +406,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26].includes(schemaVersion)) {
+        if (![24, 25, 26, 27].includes(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -465,7 +466,6 @@ export function captureOpenClawMigrationWitness(
         database,
         role,
         name,
-        tableNames,
         kind.withoutRowid,
         name === "agent_databases" ? registry : undefined,
       );
@@ -495,9 +495,14 @@ export function captureOpenClawMigrationWitness(
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" || predicateColumns.has(object.name))
+        (object.name === "session_key_contract" || derivedMigrationColumns.has(object.name))
       ) {
-        const definition = parseSqliteTableDefinition(object.sql, object.name);
+        const definition = parseSqliteTableDefinition(
+          object.name === "context_engine_turn_outbox" && object.sql
+            ? withoutOutboxEnqueueSequence(object.sql)
+            : object.sql,
+          object.name,
+        );
         for (const column of definition.columns.keys()) {
           if (!migrationColumn(role, object.name, column)) {
             definition.columns.delete(column);

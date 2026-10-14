@@ -144,7 +144,7 @@ profiling results to this inventory.
 Source-checkout campaign tools can import `resolveResourceGatewayRuntime` and
 `runResourceGatewayCase` from `scripts/e2e/kitchen-sink-rpc-walk.mts`. Kitchen Sink
 uses this same host lifecycle. Run from one frozen, built OpenClaw package root
-per process; this is a testing seam, not a published plugin SDK API.
+per process; this is a testing interface, not a published plugin SDK API.
 
 The preparation callback receives an isolated config path, loopback port, test
 token and a local-archive installer that verifies the supplied SHA-256. Enable
@@ -435,6 +435,8 @@ count model/global controlled responses and automatic tool/text branches, not co
 responses. Auxiliary model requests remain included; neither total is a count
 of agent turns. Missing, regressing, or replaced-server checkpoints fail instead
 of becoming zero. Reports retain counters, not raw prompts or request bodies.
+The mock request journal lives in a separate telemetry directory so its writes
+do not feed the Gateway's config and skill ancestor watchers during measurement.
 
 `--agent-count N` distributes the same session inventory round-robin across
 1–128 configured agents. It defaults to one agent and cannot exceed the larger

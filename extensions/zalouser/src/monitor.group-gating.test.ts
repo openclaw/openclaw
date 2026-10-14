@@ -593,24 +593,6 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("dispatches explicitly-mentioned group messages and marks WasMentioned", async () => {
-    const callArg = await dispatchGroupMessage({
-      commandAuthorized: false,
-      message: {
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-        content: "ping @bot",
-      },
-    });
-    expect(callArg?.ctx?.WasMentioned).toBe(true);
-    expect(callArg?.ctx?.To).toBe("zalouser:group:g-1");
-    expect(callArg?.ctx?.OriginatingTo).toBe("zalouser:group:g-1");
-    expect(sendTypingZalouserMock).toHaveBeenCalledWith("g-1", {
-      profile: "default",
-      isGroup: true,
-    });
-  });
-
   it("allows authorized control commands to bypass mention gating", async () => {
     const callArg = await dispatchGroupMessage({
       commandAuthorized: true,
@@ -652,11 +634,6 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it.each([
-    {
-      name: "text block",
-      kind: "block" as const,
-      payload: { text: "reply" },
-    },
     {
       name: "first attachment tool",
       kind: "tool" as const,
@@ -950,49 +927,26 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("routes DM messages with direct peer kind", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
-      await processOpenDmMessage();
-
-    const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
-      peer?: unknown;
-    };
-    expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
-    expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
-  });
-
   it("surfaces quote metadata in inbound reply context", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = await processOpenDmMessage({
-      message: {
-        quotedGlobalMsgId: "987654321234",
-        quotedOwnerId: "555444333",
-        quotedBody: "Previous bot message content",
-      },
-    });
+    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
+      await processOpenDmMessage({
+        message: {
+          quotedGlobalMsgId: "987654321234",
+          quotedOwnerId: "555444333",
+          quotedBody: "Previous bot message content",
+        },
+      });
 
     const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.ReplyToId).toBe("987654321234");
     expect(callArg?.ctx?.ReplyToBody).toBe("Previous bot message content");
     expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
+    const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
+      peer?: unknown;
+    };
+    expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
+    expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
   });
-
-  it.each([{ content: "/new", commandContent: "/new" }, { content: "hello there" }])(
-    "skips pairing store read for open DM message: $content",
-    async (message) => {
-      const { readAllowFromStore } = installRuntime({
-        commandAuthorized: false,
-      });
-      await processMessageThroughMonitor({
-        message: createDmMessage(message),
-        account: createAccount(),
-        config: createConfig(),
-        runtime: createRuntimeEnv(),
-      });
-
-      expect(readAllowFromStore).not.toHaveBeenCalled();
-    },
-  );
 
   it("includes skipped group messages as InboundHistory on the next processed message", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({

@@ -84,7 +84,7 @@ The retrieval boundary is narrower than general session search:
 - only the same agent's recognized private conversations are eligible
 - the conversation being answered is excluded
 - groups and channels are excluded as sources and destinations
-- unknown conversation kinds fail closed
+- unknown conversation kinds block recall
 - sandboxed recall cannot use the special cross-conversation authorization
 
 The setting does not change `tools.sessions.visibility`, session keys,
@@ -96,6 +96,15 @@ reply.
 ---
 
 ## Provider selection
+
+Use `openclaw configure --section memory` for optional interactive provider/model
+and credential setup. Local guided and classic onboarding offer the same step.
+The selected cloud or local HTTP route must return a valid vector for synthetic text before
+you can save it. Existing settings and per-agent overrides survive skipping or
+failed verification; SecretRefs stay references in the saved config. The check
+does not open the memory index, download a local model, or re-index your files.
+Ollama and LM Studio use their running servers and already-downloaded embedding
+models; see [interactive memory setup](/cli/configure#memory-section).
 
 | Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
 | ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -129,7 +138,7 @@ When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
 
-Explicit non-local providers fail closed. If you set `memory.search.provider` to
+Explicit non-local providers do not fall back to FTS-only recall. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
 Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
 custom provider, and that provider is unavailable at runtime, `memory_search`
@@ -198,6 +207,20 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
 </ParamField>
+
+OpenAI-compatible, Gemini, and LM Studio embeddings use the same private-network policy as model inference.
+For OpenAI-compatible and Gemini embeddings, configured custom and local origins are
+trusted by default, without extending that trust to redirects to another origin.
+LM Studio defaults to allowing private-network requests, including redirects, matching
+its inference behavior. The selected provider's
+`models.providers.<id>.request.allowPrivateNetwork` also applies: `false` blocks private
+destinations, while `true` explicitly permits private-network requests. Known provider hostnames
+that resolve to private addresses (for example, Azure OpenAI private endpoints or
+split-horizon DNS) require `models.providers.<id>.request.allowPrivateNetwork: true`
+after upgrading. Set this on the embedding provider's ID: `openai` for OpenAI,
+`google` for Gemini, or the configured LM Studio provider ID. A setting on a
+differently named chat provider does not carry over.
+
 <ParamField path="remote.apiKey" type="string">
   API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
 </ParamField>
@@ -480,10 +503,10 @@ file entries are indexed exactly. Entries with the same resolved directory share
 scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
 conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
-configuring its canonical absolute directory instead.
+configuring its resolved absolute directory instead.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
-canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
 migration through a symlink.
 
 If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and

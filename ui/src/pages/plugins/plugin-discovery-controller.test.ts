@@ -1,5 +1,4 @@
 // @vitest-environment node
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -31,12 +30,7 @@ function setup(
   responses: Array<PluginDiscoveryResult | Promise<PluginDiscoveryResult>>,
   responder?: (method: string, params: unknown) => Promise<unknown>,
 ) {
-  const host = {
-    addController() {},
-    removeController() {},
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost;
+  const notify = vi.fn();
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
     if (responder) {
@@ -51,7 +45,7 @@ function setup(
     }
     return response;
   });
-  const controller = new PluginDiscoveryController(host, {
+  const controller = new PluginDiscoveryController(notify, {
     getClient: () => client,
     isConnected: () => true,
   });

@@ -1,11 +1,17 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -52,6 +58,11 @@ const { useClientVoiceDigestHarness } = await vi.hoisted(
 describe("client voice digest physical sources", () => {
   const harness = useClientVoiceDigestHarness();
   const { sendDurableMessageBatch, settleDigestAttempts } = harness;
+
+  beforeEach(({ onTestFinished }) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
+  });
 
   it("records a missing conversation instead of silently completing its digest", async () => {
     const sessionKey = "agent:main:main";
@@ -680,15 +691,16 @@ describe("client voice digest physical sources", () => {
     { phase: "publication", replacement: false },
     { phase: "publication", replacement: true },
   ])(
-    "does not open a displaced metadata file after $phase (replacement=$replacement)",
+    "leaves displaced metadata untouched after $phase (replacement=$replacement)",
     async ({ phase, replacement }) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
       await seedSession(target.sessionKey);
       const voiceSessionId = await createVoiceSession({ now: 1 });
       const metadataPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const savedPath = `${metadataPath}.displaced`;
       const displace = async () => {
         await closeOpenClawAgentDatabasesAsync(harness.stateDir);
-        await fs.rename(metadataPath, `${metadataPath}.displaced`);
+        await fs.rename(metadataPath, savedPath);
         if (replacement) {
           await fs.writeFile(metadataPath, new Uint8Array());
         }
@@ -724,6 +736,7 @@ describe("client voice digest physical sources", () => {
           ).toBe(0);
           expect(warn).toHaveBeenCalledOnce();
         } else {
+          // Transcript and voice confirmation commit together before publication.
           await expect(
             appendClientVoiceTranscript({
               ...target,
@@ -733,13 +746,38 @@ describe("client voice digest physical sources", () => {
               role: "user",
               text: "persisted before replacement",
             }),
-          ).rejects.toThrow("Agent database execution admission is closed");
+          ).resolves.toBeUndefined();
         }
         expect(boundary).toHaveBeenCalledOnce();
         if (replacement) {
           expect(await fs.readFile(metadataPath)).toHaveLength(0);
         } else {
           await expect(fs.stat(metadataPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        if (phase === "publication") {
+          await fs.rm(metadataPath, { force: true });
+          await fs.rename(savedPath, metadataPath);
+          expect(readVoiceSessionRecord("main", voiceSessionId)).toMatchObject({
+            sessionKey: target.sessionKey,
+            hasUserTranscript: true,
+            transcriptFailureKeys: [],
+          });
+          const sessionId = await voiceSessionReads.resolveClientVoiceAgentSessionId(target);
+          assert(sessionId);
+          const transcript = await readSessionTranscriptBoundedMessageTailPageAsync(
+            { ...target, sessionId },
+            { maxBytes: 4096, maxMessages: 10, offset: 0 },
+          );
+          expect(transcript.events).toEqual([
+            expect.objectContaining({
+              event: expect.objectContaining({
+                message: expect.objectContaining({
+                  role: "user",
+                  content: [{ type: "text", text: "persisted before replacement" }],
+                }),
+              }),
+            }),
+          ]);
         }
       } finally {
         boundary.mockRestore();

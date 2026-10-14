@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUsage } from "../../agents/usage.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -18,7 +19,6 @@ import type {
   PreparedTranscriptReport,
   SelectedTranscriptReport,
   TranscriptReportSelection,
-  TranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
@@ -26,6 +26,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "./session-entry-codec.js";
+import { projectSessionUsageSnapshot } from "./session-entry-usage.js";
 import {
   decodeSessionTranscriptReportFacts,
   projectSessionTranscriptReportFacts,
@@ -41,22 +42,20 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
-  function rows() {
-    return iterateSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select((eb) => [
-          "seq",
-          "event_json",
-          eb
-            .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
-            .as("report_json"),
-        ])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    );
-  }
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        "seq",
+        "event_json",
+        eb
+          .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
+          .as("report_json"),
+      ])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  );
   function compressedFacts(reportJson: string | null): SessionTranscriptReportFacts {
     const facts =
       reportJson === null ? undefined : decodeSessionTranscriptReportFacts(JSON.parse(reportJson));
@@ -66,36 +65,33 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
     return facts;
   }
   let hasRows = false;
-  const header = findSessionTranscriptHeader(
+  let header: ReturnType<typeof findSessionTranscriptHeader>;
+  const navigation = new TranscriptReportNavigation(
     (function* () {
-      for (const row of rows()) {
+      for (const row of rows) {
         hasRows = true;
-        if (row.event_json !== null) {
-          yield JSON.parse(row.event_json) as unknown;
-        } else {
-          compressedFacts(row.report_json);
+        if (row.event_json === null) {
+          yield { seq: row.seq, facts: compressedFacts(row.report_json) };
+          continue;
         }
+        const event: unknown = JSON.parse(row.event_json);
+        if (!header) {
+          header = findSessionTranscriptHeader([event]);
+          if (header) {
+            assertCurrentSessionTranscriptHeader(header);
+          }
+        }
+        yield { seq: row.seq, facts: projectSessionTranscriptReportFacts(event) };
       }
     })(),
   );
   if (hasRows) {
     assertCurrentSessionTranscriptHeader(header);
   }
-  return new TranscriptReportNavigation(
-    (function* () {
-      for (const row of rows()) {
-        yield {
-          seq: row.seq,
-          facts:
-            row.event_json === null
-              ? compressedFacts(row.report_json)
-              : projectSessionTranscriptReportFacts(JSON.parse(row.event_json)),
-        };
-      }
-    })(),
-  ).facts();
+  return navigation.facts();
 }
 
+// Only the report worker calls the selection and aborted-partial readers below.
 function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq: number) {
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -119,37 +115,6 @@ export function prepareTranscriptReportSelection(
     (seq) => readReportEvent(database, resolved.sessionId, seq),
     selection,
   );
-}
-
-/** Process-held reports select and append without crossing their native transaction boundary. */
-export function appendSessionTranscriptReportInTransaction(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  report: TranscriptReport,
-): void {
-  const facts = prepareTranscriptReportSelection(
-    database,
-    resolved,
-    report.kind === "assistant"
-      ? { kind: "assistant", responseId: report.message.responseId }
-      : report,
-  );
-  if (facts.suppressed) {
-    return;
-  }
-  if (report.kind === "assistant") {
-    appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
-    return;
-  }
-  const selected = report.selectReport(facts.latest);
-  if (selected) {
-    appendSelectedTranscriptReportInTransaction(
-      database,
-      resolved,
-      facts.appendParentId,
-      prepareCustomTranscriptReport(selected, facts.appendParentId),
-    );
-  }
 }
 
 /** The producer has settled; only its committed answer may replace the buffered fallback. */
@@ -210,7 +175,15 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     writeSessionEntry(
       database,
       resolved.sessionKey,
-      { ...current, updatedAt: Math.max(current.updatedAt ?? 0, Date.now()) },
+      {
+        ...current,
+        // The fallback and its unavailable usage are one committed observation.
+        ...projectSessionUsageSnapshot(
+          normalizeUsage(asOptionalRecord(preparedMessage.persistedMessage.usage)),
+          undefined,
+        ),
+        updatedAt: Math.max(current.updatedAt ?? 0, Date.now()),
+      },
       { canonicalPreviousEntry: current },
     );
   }

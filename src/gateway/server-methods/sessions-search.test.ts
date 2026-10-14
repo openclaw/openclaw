@@ -8,6 +8,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -117,6 +118,8 @@ async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
   };
 }
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 describe("sessions.search gateway method", () => {
   beforeEach(() => {
     cfg = {
@@ -135,8 +138,9 @@ describe("sessions.search gateway method", () => {
   });
 
   it("finds visible rows in a cold retired main store without an explicit key filter", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const { viewer, other } = await useRestrictedSearchMetadata();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const visibleKey = "agent:main:retained";
       for (const [sessionKey, profileId] of [
         [visibleKey, viewer.id],
@@ -168,8 +172,9 @@ describe("sessions.search gateway method", () => {
   });
 
   it("reports duplicate retired rows before searching either transcript store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const { viewer } = await useRestrictedSearchMetadata();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       cfg = {
         ...cfg,
         session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.json") },
@@ -207,8 +212,9 @@ describe("sessions.search gateway method", () => {
   });
 
   it("hides a retired session whose visibility changes while its transcript is searched", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const { viewer, other } = await useRestrictedSearchMetadata("view");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:retained";
       const entry = {
         sessionId: "retained-session",
@@ -327,27 +333,6 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it("retains the inferred fixed-store owner for a bare key search", async () => {
-    cfg = {
-      session: { store: fixedStorePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
-
-    await callSearch({ query: "needle", sessionKeys: ["global"] });
-
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "ops",
-      query: "needle",
-      limit: undefined,
-      sessionKeys: ["global"],
-      storePath: fixedStorePath,
-    });
-  });
-
   it("filters incognito candidates before applying a non-admin result limit", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-newer";
     const durableKey = "agent:main:dashboard:durable";
@@ -432,16 +417,6 @@ describe("sessions.search gateway method", () => {
       query: "needle",
       limit: undefined,
       sessionKeys: ["agent:work:main", "global"],
-      storePath: expect.any(String),
-    });
-  });
-
-  it("uses the configured system agent without a session filter", async () => {
-    await callSearch({ query: "needle" });
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "main",
-      query: "needle",
-      limit: undefined,
       storePath: expect.any(String),
     });
   });

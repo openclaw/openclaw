@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
@@ -31,13 +31,13 @@ const retainedTables = [
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function readObligations(db: DatabaseSync) {
+function readObligations(db: EngineConnection) {
   return Object.fromEntries(
     retainedTables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
   );
 }
 
-function readSnapshot(db: DatabaseSync) {
+function readSnapshot(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta").all(),

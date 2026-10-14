@@ -1,7 +1,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { extractQueryTerms } from "./helpers.ts";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
 
 function csvEscape(value: string, neutralizeFormulas = true): string {
   const safeValue =
@@ -38,6 +38,13 @@ function buildCsv<Entry>(
   ].join("\n");
 }
 
+function usageCsvValue(
+  value: number | undefined,
+  report?: CostDailyEntry["usageReport"],
+): CsvValue {
+  return report?.state === "unavailable" ? undefined : value;
+}
+
 const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
   buildCsv(sessions, {
     key: (session) => session.key,
@@ -51,27 +58,29 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
     messages: (session) => session.usage?.messageCounts?.total,
     errors: (session) => session.usage?.messageCounts?.errors,
     toolCalls: (session) => session.usage?.messageCounts?.toolCalls,
-    inputTokens: (session) => session.usage?.input,
-    outputTokens: (session) => session.usage?.output,
-    cacheReadTokens: (session) => session.usage?.cacheRead,
-    cacheWriteTokens: (session) => session.usage?.cacheWrite,
-    totalTokens: (session) => session.usage?.totalTokens,
-    totalCost: (session) => session.usage?.totalCost,
+    inputTokens: (session) => usageCsvValue(session.usage?.input, session.usage?.usageReport),
+    outputTokens: (session) => usageCsvValue(session.usage?.output, session.usage?.usageReport),
+    cacheReadTokens: (session) =>
+      usageCsvValue(session.usage?.cacheRead, session.usage?.usageReport),
+    cacheWriteTokens: (session) =>
+      usageCsvValue(session.usage?.cacheWrite, session.usage?.usageReport),
+    totalTokens: (session) => usageCsvValue(session.usage?.totalTokens, session.usage?.usageReport),
+    totalCost: (session) => usageCsvValue(session.usage?.totalCost, session.usage?.usageReport),
   });
 
 const buildDailyCsv = (daily: CostDailyEntry[]): string =>
   buildCsv(daily, {
     date: (day) => day.date,
-    inputTokens: (day) => day.input,
-    outputTokens: (day) => day.output,
-    cacheReadTokens: (day) => day.cacheRead,
-    cacheWriteTokens: (day) => day.cacheWrite,
-    totalTokens: (day) => day.totalTokens,
-    inputCost: (day) => day.inputCost,
-    outputCost: (day) => day.outputCost,
-    cacheReadCost: (day) => day.cacheReadCost,
-    cacheWriteCost: (day) => day.cacheWriteCost,
-    totalCost: (day) => day.totalCost,
+    inputTokens: (day) => usageCsvValue(day.input, day.usageReport),
+    outputTokens: (day) => usageCsvValue(day.output, day.usageReport),
+    cacheReadTokens: (day) => usageCsvValue(day.cacheRead, day.usageReport),
+    cacheWriteTokens: (day) => usageCsvValue(day.cacheWrite, day.usageReport),
+    totalTokens: (day) => usageCsvValue(day.totalTokens, day.usageReport),
+    inputCost: (day) => usageCsvValue(day.inputCost, day.usageReport),
+    outputCost: (day) => usageCsvValue(day.outputCost, day.usageReport),
+    cacheReadCost: (day) => usageCsvValue(day.cacheReadCost, day.usageReport),
+    cacheWriteCost: (day) => usageCsvValue(day.cacheWriteCost, day.usageReport),
+    totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
 type QuerySuggestion = {
@@ -79,41 +88,10 @@ type QuerySuggestion = {
   value: string;
 };
 
-type UsageFilterOptions = Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
-
-function appendFilterValues<T>(
-  values: string[],
-  entries: readonly T[],
-  read: (entry: T) => string | undefined,
-  limit = 12,
-): void {
-  for (const entry of entries) {
-    if (values.length >= limit) {
-      break;
-    }
-    const value = read(entry);
-    if (value && !values.includes(value)) {
-      values.push(value);
-    }
-  }
-}
-
-export function buildUsageFilterOptions(
-  sessions: readonly UsageSessionEntry[],
-  aggregates?: UsageAggregates | null,
-): UsageFilterOptions {
-  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
-  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
-  appendFilterValues(options.channel, sessions, (session) => session.channel);
-  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
-  // Overrides follow every observed provider, preserving the menu's first-seen order.
-  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
-  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
-  appendFilterValues(options.model, sessions, (session) => session.model);
-  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
-  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
-  return options;
-}
+export type UsageFilterOptions = Record<
+  "agent" | "channel" | "provider" | "model" | "tool",
+  string[]
+>;
 
 const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
   const trimmed = query.trim();

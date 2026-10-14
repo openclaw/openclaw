@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { nothing, render } from "lit";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { renderBoardSessionSurface } from "./board-session-surface.ts";
+import { renderBoardSessionSurface } from "./board-session-surface.tsx";
 
 const containers: HTMLElement[] = [];
 
@@ -46,6 +47,7 @@ describe("board session shell", () => {
       };
 
       render(renderBoardSessionSurface(props), container);
+      flush();
       const board = container.querySelector("openclaw-board-view");
       expect(board?.active).toBe(true);
 
@@ -55,6 +57,7 @@ describe("board session shell", () => {
       } else {
         render(renderBoardSessionSurface({ ...props, active: false }), container);
       }
+      flush();
       const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
       expect(hiddenSurface?.hidden).toBe(true);
       expect(hiddenSurface?.hasAttribute("inert")).toBe(true);
@@ -67,6 +70,7 @@ describe("board session shell", () => {
       } else {
         render(renderBoardSessionSurface(props), container);
       }
+      flush();
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
       expect(board?.active).toBe(true);
@@ -76,11 +80,13 @@ describe("board session shell", () => {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
         expect(board?.active).toBe(true);
         render(renderBoardSessionSurface(props), container);
+        flush();
         const replacement = container.querySelector("openclaw-board-view");
         expect(replacement).not.toBe(board);
         expect(replacement?.active).toBe(false);
         active = true;
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        flush();
         expect(replacement?.active).toBe(true);
       }
     },

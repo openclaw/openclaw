@@ -162,6 +162,19 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
+Successful Ollama, LM Studio, and shared OpenAI-compatible discovery can flag a
+configured model ID that the server did not list. `models list` warns to pull or
+download the model on that server,
+or fix its configured name, then run `openclaw models list --refresh`.
+`models status` and Doctor's `core/doctor/model-references` check read the same
+prepared Gateway facts without starting provider discovery. Editing configured model
+references recomputes these warnings against the retained listing on hot reload;
+no restart or catalog refresh is needed unless the server inventory changed. Their warnings do
+not change model availability, configuration validity, or selection. Offline
+servers and catalogs that have not been discovered produce no missing-ID warning.
+When the Gateway is stopped, Doctor and status have no live inventory to compare;
+use `models list --refresh` to inspect a local refresh instead.
+
 A provider that rejects catalog authentication produces a separate CLI diagnostic
 with its provider and, when available, profile ID. Open **Models** in the Control
 UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
@@ -172,7 +185,9 @@ refresh warning, even when another provider needs sign-in.
 Discovery diagnostics go to stderr in every output mode. JSON output also includes
 `providerOutcomes` when the Gateway or local catalog publishes them: each entry
 contains `provider`, optional `profileId`, and `status` (`ready`, `auth-rejected`,
-or `unavailable`). These are catalog-wide outcomes, independent of model-row
+or `unavailable`). Successful outcomes may also include advisory
+`unlistedConfiguredModelIds`, including references that have no inventory row.
+These are catalog-wide outcomes, independent of model-row
 filters such as `--provider` and `--local`. Provider error bodies and credentials
 are not included. Plain stdout remains one model key per line.
 
@@ -437,7 +452,7 @@ openclaw models auth order clear --provider <id>
 
 `models auth add` is the interactive auth helper. It can launch a provider auth flow (OAuth/API key) or guide you into manual token paste, depending on the provider you choose.
 
-`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
+`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Active subscription blocks include their reason, source, expiry, and whether they apply to the whole profile or one model; expired blocks are omitted. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 

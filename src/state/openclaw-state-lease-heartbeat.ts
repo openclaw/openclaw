@@ -122,7 +122,16 @@ export function startOpenClawStateLeaseTimer(params: {
 
 type PendingHeartbeatRequest = {
   deferred: ReturnType<typeof createDeferredCore<number>>;
-  remainingMs(): number;
+  operation: LeaseHeartbeatRequest["operation"];
+  budget: {
+    remainingMs(): number;
+    unresponsive(
+      trigger: "reply" | "deadline" | "ack",
+      phase: LeaseHeartbeatRequest["operation"] | "ack",
+      requestId: number | bigint,
+      returnedExpiresAt?: number,
+    ): Error;
+  };
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -227,8 +236,9 @@ export function startOpenClawStateLeaseHeartbeat(
   const responseBudget = (leaseRemaining: () => number, maximumMs: number, requestId?: bigint) => {
     let observedProgress = Atomics.load(renewalProgress, 0);
     let responseDeadline = performance.now() + WORKER_RESPONSE_TIMEOUT_MS;
+    const requestedAt = responseDeadline - WORKER_RESPONSE_TIMEOUT_MS;
     const operationDeadline = performance.now() + maximumMs;
-    return () => {
+    const remainingMs = () => {
       const progress = Atomics.load(renewalProgress, 0);
       if (progress !== observedProgress) {
         observedProgress = progress;
@@ -242,6 +252,35 @@ export function startOpenClawStateLeaseHeartbeat(
         operationDeadline - performance.now(),
         completed || progress % 2n === 1n ? Infinity : responseDeadline - performance.now(),
       );
+    };
+    return {
+      remainingMs,
+      unresponsive(
+        trigger: "reply" | "deadline" | "ack",
+        phase: LeaseHeartbeatRequest["operation"] | "ack",
+        id: number | bigint,
+        returnedExpiresAt?: number,
+      ) {
+        // Sample before fail() overwrites status. Diagnostics never refresh the budget.
+        const now = performance.now();
+        const details = [
+          `phase=${phase}`,
+          `trigger=${trigger}`,
+          `requestId=${id}`,
+          `elapsedMs=${Math.round(now - requestedAt)}`,
+          `responseRemainingMs=${Math.round(responseDeadline - now)}`,
+          `operationRemainingMs=${Math.round(operationDeadline - now)}`,
+          `leaseRemainingMs=${Math.round(leaseRemaining())}`,
+          `status=${Atomics.load(shared, state.status)}`,
+          `renewalProgress=${Atomics.load(renewalProgress, 0)}`,
+          `completedRequestId=${Atomics.load(completedRequest, 0)}`,
+          ...(trigger === "ack" ? [`ack=${Atomics.load(shared, state.ack)}`] : []),
+          ...(returnedExpiresAt === undefined
+            ? []
+            : [`returnedLeaseRemainingMs=${Math.round(returnedExpiresAt - Date.now())}`]),
+        ];
+        return new Error(`state lease heartbeat is not responsive (${details.join(", ")})`);
+      },
     };
   };
   const watchExpiry = () => {
@@ -511,8 +550,8 @@ export function startOpenClawStateLeaseHeartbeat(
     if (!request) {
       return;
     }
-    if (reply.ok && (request.remainingMs() <= 0 || reply.expiresAt <= Date.now())) {
-      fail(new Error("state lease heartbeat is not responsive"));
+    if (reply.ok && (request.budget.remainingMs() <= 0 || reply.expiresAt <= Date.now())) {
+      fail(request.budget.unresponsive("reply", request.operation, reply.id, reply.expiresAt));
       return;
     }
     pending.delete(reply.id);
@@ -542,7 +581,8 @@ export function startOpenClawStateLeaseHeartbeat(
     const deferred = createDeferredCore<number>();
     const awaiting: PendingHeartbeatRequest = {
       deferred,
-      remainingMs: responseBudget(
+      operation,
+      budget: responseBudget(
         remainingLeaseMs,
         Math.max(WORKER_RESPONSE_TIMEOUT_MS, params.leaseMs),
         BigInt(id),
@@ -550,9 +590,9 @@ export function startOpenClawStateLeaseHeartbeat(
     };
     pending.set(id, awaiting);
     const checkDeadline = () => {
-      const remainingMs = awaiting.remainingMs();
+      const remainingMs = awaiting.budget.remainingMs();
       if (remainingMs <= 0) {
-        fail(new Error("state lease heartbeat is not responsive"));
+        fail(awaiting.budget.unresponsive("deadline", operation, id));
       } else {
         // Renewal completion only wakes synchronous waiters. Observe it here even
         // when the occupied worker never sends the outstanding async reply.
@@ -597,13 +637,13 @@ export function startOpenClawStateLeaseHeartbeat(
         ) {
           return;
         }
-        const remainingMs = remainingBudget();
+        const remainingMs = remainingBudget.remainingMs();
         if (remainingMs <= 0) {
           break;
         }
         Atomics.wait(shared, state.ack, ack, Math.min(25, remainingMs));
       }
-      const error = new Error("state lease heartbeat is not responsive");
+      const error = remainingBudget.unresponsive("ack", "ack", requestNumber);
       fail(error);
       throw error;
     },

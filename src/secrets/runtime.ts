@@ -5,10 +5,12 @@ import {
   loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
+  registerRuntimeAuthProfileExternalRefresh,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -48,6 +50,7 @@ import {
   getActiveSecretsRuntimeRefreshContext,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
+  hasActiveSecretsRuntimeAuthStorePath,
   graftActiveSecretsRuntimeAuthState,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
   prepareSecretsRuntimeDisplaySnapshot,
@@ -130,6 +133,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  await prepareSharedAuthStoreOwnership(runtimeEnv);
   const displaySnapshot =
     !params.assignmentConfig &&
     params.includeConfigRefs !== false &&
@@ -242,7 +246,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   });
 
   if (includeConfigRefs) {
-    collectConfigAssignments({
+    await collectConfigAssignments({
       config: resolvedConfig,
       context,
       loadablePluginOrigins,
@@ -659,6 +663,13 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     }
   }
 }
+
+registerRuntimeAuthProfileExternalRefresh(async (paths) => {
+  if (!paths.some(hasActiveSecretsRuntimeAuthStorePath)) {
+    return false;
+  }
+  return refreshActiveProviderAuthRuntimeSnapshot();
+});
 
 export {
   getActiveSecretsRuntimeSnapshotState as getActiveSecretsRuntimeSnapshot,

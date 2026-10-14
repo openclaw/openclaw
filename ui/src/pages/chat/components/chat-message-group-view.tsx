@@ -1,13 +1,10 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
+import { PersonName } from "../../../components/person-activity-link-solid.tsx";
+import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import {
-  emptyLegacyContent as litNothing,
-  LitContent,
-  solidContent,
-} from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -46,7 +43,7 @@ import {
   resolveGroupReplyLine,
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
-import { renderSessionActivity } from "./chat-session-activity.ts";
+import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -144,9 +141,7 @@ export function ActivityGroup(props: {
 }) {
   return (
     <ActivityGroupContent
-      groups={props.groups}
-      options={props.options}
-      presentation={props.presentation}
+      {...props}
       renderEntries={(overrides) => (
         <For each={props.groups} keyed={(group) => group.key}>
           {(group) => (
@@ -220,6 +215,7 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
                     }
                   : undefined,
                 frame().group.sender,
+                options().channelAvatar,
               )
         }
       />
@@ -239,7 +235,7 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
   return (
     <>
       <Show when={frame().showSenderName}>
-        <LitContent value={renderPersonName(frame().who, activityLink(), "chat-sender-name")} />
+        <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
       </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
@@ -464,7 +460,14 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <LitContent value={renderChatAuthorAvatar(props.group.sender)} />
+                <LitContent
+                  value={renderChatAuthorAvatar(
+                    props.group.sender,
+                    "chat-author-avatar",
+                    undefined,
+                    options().channelAvatar,
+                  )}
+                />
               ) : undefined}
               <SenderIdentity frame={frame()} />
               <ChatSendStatus status={frame().sendStatus} actions={options()} />
@@ -500,30 +503,32 @@ function SessionActivityGroup(props: {
 }) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
-    <LitContent
-      value={renderSessionActivity(props.group, options(), (item, index) => {
-        const prepared = prepareGroupMessage(props.group, item, options());
+    <ChatSessionActivity
+      group={props.group}
+      options={options()}
+      renderEntry={(item, index) => {
+        const prepared = createMemo(() => prepareGroupMessage(props.group, item(), options()));
         return {
-          content: solidContent(PreparedMessage, {
-            group: props.group,
-            item,
-            index,
-            prepared,
-            options: {
-              ...options(),
-              isForwarded: true,
-              onToggleUserMessageExpanded: undefined,
-              replyLine: resolveGroupReplyLine(
-                { ...props.group, messages: [item] },
-                options().resolveReplyPreview,
-              ),
-            },
-          }),
-          actions: prepared.actions
-            ? solidContent(MessageActions, { details: prepared.actions, options: options() })
-            : litNothing,
+          content: (
+            <PreparedMessage
+              group={props.group}
+              item={item()}
+              index={index()}
+              prepared={prepared()}
+              options={{
+                ...options(),
+                isForwarded: true,
+                onToggleUserMessageExpanded: undefined,
+                replyLine: resolveGroupReplyLine(
+                  { ...props.group, messages: [item()] },
+                  options().resolveReplyPreview,
+                ),
+              }}
+            />
+          ),
+          actions: <MessageActions details={prepared().actions} options={options()} />,
         };
-      })}
+      }}
     />
   );
 }

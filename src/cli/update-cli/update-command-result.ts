@@ -1,10 +1,10 @@
 // Update failures and control-plane results share one reporting boundary.
-import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import {
   attachErrorDiagnostic,
@@ -12,6 +12,7 @@ import {
 } from "../../infra/error-diagnostics.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
@@ -41,7 +42,7 @@ import {
   resolveUpdateRunVerifiedServingVersion,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import { GitCleanupReportingError } from "../../infra/update-runner-git-cleanup.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -49,7 +50,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
+import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -328,6 +329,21 @@ export function createUpdateCommandFailureResult(
   };
 }
 
+export function isUpdateStateReadContention(error: unknown): boolean {
+  return (
+    collectNestedErrorCandidates(error).some(isStateDatabaseMaintenanceContention) &&
+    classifyDoctorMaintenanceRefusal(error).kind !== "data-at-risk"
+  );
+}
+
+export const withUpdateStateRead = <T>(read: () => Promise<T>, timeoutMs: number) =>
+  acquireWithWait({
+    acquire: read,
+    shouldRetry: isUpdateStateReadContention,
+    deadlineMs: performance.now() + timeoutMs,
+    pollIntervalMs: 250,
+  });
+
 /** Mutable exceptions cannot authorize recovery while command cleanup is unknown. */
 export async function resolveMutableUpdateFailure(params: {
   cause: unknown;
@@ -369,7 +385,7 @@ export async function resolveMutableUpdateFailure(params: {
       mode: params.mode,
       root: params.root,
       recovery:
-        primary instanceof UpdatePreMutationError
+        primary instanceof UpdatePreMutationError || isUpdateStateReadContention(params.cause)
           ? await params.originalRecovery()
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       failure,
@@ -441,18 +457,15 @@ export async function withUpdateAdmissionReporting<T>(
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
-  readonly automaticTriage?: TriageFailureContext;
-
   constructor(
     readonly result: UpdateRunResult,
     readonly exitCode = 1,
     readonly detail?: string,
-    options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
+    options?: ErrorOptions,
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
     this.result = normalizeUpdateFailureResult(result, options?.cause);
     this.name = "UpdateCommandFailure";
-    this.automaticTriage = options?.automaticTriage;
   }
 }
 
@@ -467,7 +480,9 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
           result.status === "error"
             ? (result.reason ?? "update-recovery-pending")
             : "update-recovery-pending",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: isUpdateStateReadContention(options?.cause)
+          ? result.recovery
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       },
       1,
       detail,
@@ -503,7 +518,7 @@ export function mergeWindowsTaskRecoveryFailure(
         { ...failure.error.result, status: "error" },
         1,
         `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(recoveryError)}`,
-        { cause: recoveryError, automaticTriage: failure.error.automaticTriage },
+        { cause: recoveryError },
       ),
     };
   }
@@ -516,51 +531,6 @@ export function mergeWindowsTaskRecoveryFailure(
         )
       : recoveryError,
   };
-}
-
-export function resolveAutomaticUpdateTriage(
-  result: UpdateRunResult,
-  detail: string | undefined,
-  params: {
-    mutationStarted: boolean;
-    root: string;
-    installKindChanged: boolean;
-    expectedVersion?: string;
-    gateway: TriageFailureContext["gateway"];
-    preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
-  },
-): TriageFailureContext | undefined {
-  // Triage follows a failed update, never a verified rollback: the restored
-  // generation is serving, and an autonomous repair turn there is unwanted.
-  const eligible =
-    !isVerifiedUpdateRollback(result) &&
-    (params.mutationStarted || result.reason === "restart-unhealthy") &&
-    result.reason !== "service-revalidation-failed" &&
-    !(
-      result.recovery?.serviceRestartSafe === false &&
-      result.recovery.reason === "rollback-checkout-dirty"
-    ) &&
-    !result.postUpdate?.plugins?.npm.outcomes.some(
-      (outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-    ) &&
-    params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-    !result.steps.some((step) => step.termination === "signal");
-  const failedStep = result.steps.find(isFailedUpdateStep);
-  const phase = result.reason ?? "update";
-  return eligible
-    ? {
-        kind: "update",
-        phase,
-        error: detail ?? failedStep?.stderrTail ?? failedStep?.stdoutTail ?? phase,
-        // Global exposure, not the candidate checkout, identifies a package-to-Git target.
-        installationRoot:
-          params.installKindChanged && result.mode === "git"
-            ? params.root
-            : (result.root ?? params.root),
-        expectedVersion: params.expectedVersion ?? result.after?.version ?? undefined,
-        gateway: params.gateway,
-      }
-    : undefined;
 }
 
 export type UpdateAdmissionReportParams = {
@@ -668,7 +638,7 @@ export function recordUpdateResultNextAction(
         result.verification === undefined
           ? result
           : { ...result, recovery: verification.recovery ?? undefined },
-      restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
+      restart: params.opts.restart,
       serviceRunning: verification.serviceRunning,
       runningVersion: verification.runningVersion,
       verifiedServingVersion: resolveUpdateRunVerifiedServingVersion(

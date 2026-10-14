@@ -112,30 +112,6 @@ suite.define(() => {
     return gateway;
   }
 
-  it("renders hero, identity, and a Usage statistics link without loading usage", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await openProfilePage(page);
-
-      await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
-      await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
-        "Test Person",
-      );
-      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain(
-        "test@example.com",
-      );
-      await expect(page.locator(".profile-hero").textContent()).resolves.not.toContain("Clipper");
-      await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
-      await expect(
-        page.getByRole("button", { name: /Usage statistics/u }).textContent(),
-      ).resolves.toContain("View activity, costs, and usage trends.");
-      expect(await gateway.getRequests("usage.cost")).toEqual([]);
-      expect(await gateway.getRequests("sessions.usage")).toEqual([]);
-      expect(await page.locator(".profile-stats, .profile-heatmap, .profile-tools").count()).toBe(
-        0,
-      );
-    });
-  });
-
   it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
     const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
@@ -676,14 +652,11 @@ suite.define(() => {
           await picker.locator(".picker-select__trigger").click();
           if (captureUiProof) {
             await expect(picker.locator('[role="option"][data-value="xai"]')).toBeVisible();
-            // Web Awesome exposes the options before the owning popup finishes fading in.
             await writeFile(
               path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
-              await takeControlUiViewportScreenshot(
-                page,
-                picker.locator('wa-popup [part="popup"]'),
-                [picker.locator('[role="option"][data-value="xai"]')],
-              ),
+              await takeControlUiViewportScreenshot(page, picker.locator(".picker-select__menu"), [
+                picker.locator('[role="option"][data-value="xai"]'),
+              ]),
             );
           }
           await picker.locator(`[role="option"][data-value="${providerId}"]`).click();

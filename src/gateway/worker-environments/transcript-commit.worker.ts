@@ -3,6 +3,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -25,7 +26,11 @@ export type WorkerTranscriptOperations = {
   };
   "transcript.commit": {
     input: { messages: readonly CommittedAgentMessage[] };
-    output: { result: ApplyTranscriptCommitResult; projectionNeedsReconcile: boolean };
+    output: {
+      result: ApplyTranscriptCommitResult;
+      projectionNeedsReconcile: boolean;
+      entry?: SessionEntry;
+    };
   };
 };
 
@@ -78,11 +83,20 @@ export function bindSqliteWorkerBackend(
           }
           context.admit("transaction");
           let projectionNeedsReconcile = false;
-          const result = applyPreparedTranscriptCommit(input, plan, command.input.messages, () => {
-            projectionNeedsReconcile = true;
-          });
+          let entry: SessionEntry | undefined;
+          const result = applyPreparedTranscriptCommit(
+            input,
+            plan,
+            command.input.messages,
+            () => {
+              projectionNeedsReconcile = true;
+            },
+            (updatedEntry) => {
+              entry = updatedEntry;
+            },
+          );
           context.admit("commit");
-          return { result, projectionNeedsReconcile };
+          return { result, projectionNeedsReconcile, entry };
         },
         toDatabaseOptions(resolveSqliteTranscriptScope(input.scope)),
         { operationLabel: "worker.transcript.commit" },

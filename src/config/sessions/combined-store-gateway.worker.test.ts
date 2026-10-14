@@ -16,13 +16,16 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "./combined-store-gateway-read.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 
 const boundary = vi.hoisted(
   (): {
@@ -256,7 +259,7 @@ it("retains selection and sentinel options while the worker read is queued", asy
   });
 });
 
-it("keeps stored addresses and foreign lineage stable after main-alias changes", async () => {
+it("prepares foreign lineage without host SQL after main-alias changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
     for (const [index, parent] of [...parents, "global"].entries()) {
@@ -283,21 +286,80 @@ it("keeps stored addresses and foreign lineage stable after main-alias changes",
       };
       for (const options of [{}, { agentId: "work" }]) {
         const expected = loadCombinedSessionStoreForGatewayCore(cfg, options);
-        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
-        expect(result.store).toEqual(expected.store);
-        for (const [index, parent] of parents.entries()) {
-          const key = `agent:work:child-${index}`;
-          expect(result.store[key]).toMatchObject({
-            parentSessionKey: parent,
-            spawnedBy: parent,
-          });
-          expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
-            sessionId: `parent-${index}`,
-          });
-          if (!options.agentId) {
-            expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+        const observed = observeHostDataSql();
+        try {
+          const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
+          expect(result.store).toEqual(expected.store);
+          for (const [index, parent] of parents.entries()) {
+            const key = `agent:work:child-${index}`;
+            expect(result.store[key]).toMatchObject({
+              parentSessionKey: parent,
+              spawnedBy: parent,
+            });
+            expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+              sessionId: `parent-${index}`,
+            });
+            if (!options.agentId) {
+              expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+            }
           }
+          expect(observed.queries).toEqual([]);
+        } finally {
+          observed.restore();
         }
+      }
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parents[0]! },
+      { sessionId: "parent-after-write", updatedAt: 3 },
+    );
+    const observed = observeHostDataSql();
+    try {
+      const result = await loadCombinedSessionStoreForGatewayCoreAsync(
+        { agents: { entries: { main: {}, work: {} } } },
+        { agentId: "work" },
+      );
+      expect(
+        result.targetsBySessionKey.get("agent:work:child-0")?.readSourceEntry(parents[0]!)
+          ?.sessionId,
+      ).toBe("parent-after-write");
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+});
+
+it("refreshes foreign parent aliases after committed writes without host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, work: {} } },
+      session: { scope: "global" },
+    };
+    const parent = "agent:main:main";
+    const key = "agent:work:child";
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: key },
+      { sessionId: "child", updatedAt: 1, parentSessionKey: parent, spawnedBy: parent },
+    );
+    for (const model of ["before", "after"]) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "parent", updatedAt: 2, modelOverride: model },
+      );
+      const observed = observeHostDataSql();
+      try {
+        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "work" });
+        expect(result.store[key]).toMatchObject({
+          parentSessionKey: "global",
+          spawnedBy: "global",
+        });
+        expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)?.modelOverride).toBe(
+          model,
+        );
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
       }
     }
   });
@@ -355,7 +417,7 @@ it("federates worker rows under the same physical owners and keeps incognito pro
         },
       );
     }
-    replaceSessionEntrySync(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-list" },
       {
         sessionId: "private",
@@ -377,5 +439,74 @@ it("federates worker rows under the same physical owners and keeps incognito pro
       (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "missing" })).store,
     ).toEqual({});
     expect(fs.existsSync(missingPath)).toBe(false);
+  });
+});
+
+it("lists current memory entries and owner changes alongside durable targets", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const key = "agent:main:dashboard:incognito-listing";
+    const read = () =>
+      loadCombinedSessionStoreForGatewayCoreAsync(cfg, { configuredAgentsOnly: true });
+    expect((await read()).store[key]).toBeUndefined();
+    const location = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+    };
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: key },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const authority = { assertCurrent() {}, authorize() {} };
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: {
+                entry: {
+                  sessionId: "private",
+                  updatedAt: 1,
+                  incognito: true,
+                  label: "first",
+                  skillsSnapshot: { prompt: "private snapshot", skills: [] },
+                },
+              },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      const first = (await read()).store[key];
+      expect(first).toMatchObject({ sessionId: "private", label: "first" });
+      expect(first).not.toHaveProperty("skillsSnapshot");
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.patch",
+              input: { operation: { kind: "fields", patch: { label: "updated" } } },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      expect((await read()).store[key]).toMatchObject({ label: "updated" });
+      expect(
+        loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true }).store[key],
+      ).toMatchObject({ label: "updated" });
+      expect(
+        (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { includeIncognito: false })).store[
+          key
+        ],
+      ).toBeUndefined();
+      memorySessionActorOwners.closeDatabase(location);
+      expect((await read()).store[key]).toBeUndefined();
+    } finally {
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
+    }
   });
 });

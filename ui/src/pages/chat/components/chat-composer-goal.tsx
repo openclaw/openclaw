@@ -1,10 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createEffect, untrack } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -12,10 +12,10 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { composerScrollStateRef } from "./chat-composer-menu.tsx";
 
-registerChatGoalsEnglish();
+registerEnglishCatalog(registerChatGoalsEnglish);
 
-const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
 function GoalIcon() {
   return (
     <svg
@@ -43,45 +43,6 @@ const goalStatusIcons = {
   complete: "check",
 } as const;
 
-function createGoalScrollRef(objective: () => string) {
-  let element: HTMLElement | undefined;
-  const sync = () => {
-    if (!element?.isConnected) {
-      return;
-    }
-    const scrollable = element.scrollHeight > element.clientHeight + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
-    element.dataset.atEnd = String(
-      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-    );
-  };
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
-  createEffect(objective, sync);
-  onSettled(() => {
-    if (element) {
-      observer?.observe(element);
-    }
-    sync();
-  });
-  onCleanup(() => {
-    observer?.disconnect();
-    element?.removeEventListener("scroll", sync);
-  });
-  return (next: HTMLElement) => {
-    element = next;
-    element.addEventListener("scroll", sync);
-  };
-}
-
-function clearGoalElapsedTimer(element: HTMLElement) {
-  const timer = goalElapsedTimers.get(element);
-  if (timer !== undefined) {
-    clearInterval(timer);
-    goalElapsedTimers.delete(element);
-  }
-}
-
 // Keep the one-second clock local to its span; it must not invalidate the composer.
 function createGoalElapsedRef(goal: () => SessionGoal) {
   let element: HTMLElement | undefined;
@@ -101,8 +62,8 @@ function createGoalElapsedRef(goal: () => SessionGoal) {
       if (!clock.active) {
         return undefined;
       }
-      goalElapsedTimers.set(bound, setInterval(sync, 1000));
-      return () => clearGoalElapsedTimer(bound);
+      const timer = setInterval(sync, 1000);
+      return () => clearInterval(timer);
     },
   );
   return (next: HTMLElement) => {
@@ -115,6 +76,8 @@ type ChatGoalProps = {
   goal?: SessionGoal;
   expanded: boolean;
   canAct: boolean;
+  resumeRecovery?: ChatGoalRecovery;
+  connected?: boolean;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalEdit?: (goal: SessionGoal) => void;
   onExpandedChange: (expanded: boolean) => void;
@@ -129,11 +92,15 @@ const goalActionIcons = {
 } as const;
 
 function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
-  const canResume = () =>
-    ["paused", "blocked", "usage_limited", "budget_limited"].includes(props.goal.status);
+  const canResume = () => props.goal.status !== "active";
   const pauseReason = () =>
-    canResume() && !props.expanded ? props.goal.lastStatusNote : undefined;
+    canResume() && !props.expanded && !props.resumeRecovery ? props.goal.lastStatusNote : undefined;
+  const statusLabel = () =>
+    props.resumeRecovery
+      ? t(props.resumeRecovery.pending ? "chat.goals.resuming" : "chat.goals.resumeUnconfirmed")
+      : formatGoalStatusLabel(props.goal.status);
   const visibleAction = (action: (typeof goalActions)[number]) =>
+    !props.resumeRecovery &&
     props.canAct &&
     Boolean(props.onGoalAction) &&
     (action === "edit"
@@ -145,14 +112,21 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           : true);
   return (
     <div
-      class={`agent-chat__goal agent-chat__goal--${props.goal.status}`}
+      class={`agent-chat__goal agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`}
       data-expanded={String(props.expanded)}
       role="group"
-      aria-label={formatGoalDetail(props.goal)}
+      aria-label={
+        props.resumeRecovery
+          ? `${statusLabel()}: ${props.goal.objective}`
+          : formatGoalDetail(props.goal)
+      }
+      aria-busy={props.resumeRecovery?.pending ? "true" : "false"}
     >
       <div class="agent-chat__goal-row">
         <span class="agent-chat__goal-icon" aria-hidden="true">
-          {props.goal.status === "active" ? (
+          {props.resumeRecovery?.pending ? (
+            <span class="session-run-spinner" />
+          ) : props.goal.status === "active" ? (
             <GoalIcon />
           ) : (
             <Icon name={goalStatusIcons[props.goal.status]} />
@@ -160,8 +134,12 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         </span>
         <span class="agent-chat__goal-copy">
           <openclaw-tooltip prop:content={pauseReason() ?? ""} disabled={!pauseReason()}>
-            <span class="agent-chat__goal-label" tabindex={pauseReason() ? "0" : undefined}>
-              {formatGoalStatusLabel(props.goal.status)}
+            <span
+              class="agent-chat__goal-label"
+              role="status"
+              tabindex={pauseReason() ? "0" : undefined}
+            >
+              {statusLabel()}
             </span>
           </openclaw-tooltip>
           <span class="agent-chat__goal-objective">{props.goal.objective}</span>
@@ -169,6 +147,17 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         <span class="agent-chat__goal-elapsed" ref={createGoalElapsedRef(() => props.goal)} />
         <span class="agent-chat__goal-actions">
           <span class="agent-chat__goal-command-actions">
+            <Show when={props.resumeRecovery && !props.resumeRecovery.pending}>
+              <button
+                class="agent-chat__goal-action agent-chat__goal-resume"
+                type="button"
+                disabled={!props.connected}
+                onClick={() => void props.resumeRecovery?.onCheck()}
+              >
+                <Icon name="play" />
+                <span class="agent-chat__goal-action-label">{t("chat.goals.retryResume")}</span>
+              </button>
+            </Show>
             <For each={goalActions}>
               {(action) => (
                 <>
@@ -217,10 +206,10 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         <div class="agent-chat__goal-detail-content">
           <div
             class="agent-chat__goal-detail-objective"
-            ref={createGoalScrollRef(() => props.goal.objective)}
+            ref={composerScrollStateRef(() => props.goal.objective)}
             textContent={props.goal.objective}
           />
-          {props.goal.lastStatusNote ? (
+          {props.goal.lastStatusNote && !props.resumeRecovery ? (
             <div class="agent-chat__goal-detail-note">{props.goal.lastStatusNote}</div>
           ) : null}
           <div class="agent-chat__goal-detail-meta">
@@ -249,19 +238,14 @@ export function ChatGoal(props: ChatGoalProps) {
         goal={props.goal!}
         expanded={props.expanded}
         canAct={props.canAct}
+        resumeRecovery={props.resumeRecovery}
+        connected={props.connected}
         onGoalAction={props.onGoalAction}
         onGoalEdit={props.onGoalEdit}
         onExpandedChange={props.onExpandedChange}
       />
     </Show>
   );
-}
-
-export function clearGoalElapsedTimers(): void {
-  for (const timer of goalElapsedTimers.values()) {
-    clearInterval(timer);
-  }
-  goalElapsedTimers.clear();
 }
 
 export function renderChatGoalRecoverySolid(

@@ -2,16 +2,16 @@ import { html, nothing, render } from "lit";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
+import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
@@ -57,7 +57,6 @@ describe("composer overflow presentation", () => {
     container.remove();
     styles.remove();
     resetChatComposerState();
-    clearGoalElapsedTimers();
   });
 
   it.each([390, 2048])(
@@ -526,7 +525,11 @@ describe("composer overflow presentation", () => {
       expect(rail()).toBe(element);
       expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
       await expectEdges(element, true);
+      // The reconnect measurement can precede the native observer's first delivery.
+      await afterLayout();
       container.style.width = "760px";
+      await afterLayout();
+      expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth + 1);
       await expectEdges(element, false);
     },
   );
@@ -574,7 +577,13 @@ describe("composer overflow presentation", () => {
       );
       flush();
       const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
-      expect(getComputedStyle(commands).display).toBe("none");
+      const visibleCommands = () =>
+        [...commands.querySelectorAll<HTMLButtonElement>("button")]
+          .filter((button) => button.checkVisibility())
+          .map((button) => button.getAttribute("aria-label"));
+      const collapsedCommands = status === "active" ? [] : ["Resume goal"];
+      await afterLayout();
+      expect(visibleCommands()).toEqual(collapsedCommands);
       await page.getByRole("button", { name: "Show goal details", exact: true }).click();
       await afterLayout();
       const objective = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
@@ -635,7 +644,7 @@ describe("composer overflow presentation", () => {
       await afterLayout();
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
       await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
-      expect(getComputedStyle(commands).display).toBe("none");
+      expect(visibleCommands()).toEqual(collapsedCommands);
     },
   );
 

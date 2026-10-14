@@ -914,3 +914,113 @@ describe("pin helpers", () => {
     expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
   });
 });
+
+describe("message mutation retries", () => {
+  const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
+  const unknownMessage = Object.assign(new Error("Unknown Message"), {
+    status: 404,
+    discordCode: 10008,
+  });
+  const lostResponse = Object.assign(new Error("response lost"), { name: "AbortError" });
+  const notConnected = Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" });
+  const mutations = [
+    {
+      name: "edit",
+      mock: "patchMock",
+      run: (opts: ReturnType<typeof discordClientOpts>) =>
+        editMessageDiscord("chan1", "1", { content: "hello" }, opts),
+    },
+    { name: "delete", mock: "deleteMock", run: deleteMessageDiscord.bind(null, "chan1", "1") },
+    { name: "pin", mock: "putMock", run: pinMessageDiscord.bind(null, "chan1", "1") },
+    { name: "unpin", mock: "deleteMock", run: unpinMessageDiscord.bind(null, "chan1", "1") },
+  ] as const;
+
+  it.each(mutations)("retries a transient $name failure", async ({ mock, run }) => {
+    const mocks = makeDiscordRest();
+    mocks[mock]
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "m1" });
+
+    await run({ ...discordClientOpts(mocks.rest), retry });
+    expect(mocks[mock]).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(mutations)("recovers when the $name response is lost", async ({ mock, run }) => {
+    const mocks = makeDiscordRest();
+    mocks[mock].mockRejectedValueOnce(lostResponse).mockResolvedValueOnce({ id: "m1" });
+
+    await run({ ...discordClientOpts(mocks.rest), retry });
+    expect(mocks[mock]).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(mutations)("stops the $name retry when the caller aborts during backoff", async (m) => {
+    vi.useFakeTimers();
+    try {
+      const mocks = makeDiscordRest();
+      mocks[m.mock].mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+      const controller = new AbortController();
+      const reason = new Error("caller aborted");
+      const settled = expect(
+        m.run({
+          ...discordClientOpts(mocks.rest),
+          retry: { attempts: 3, minDelayMs: 1_000, maxDelayMs: 1_000, jitter: 0 },
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settled;
+      expect(mocks[m.mock]).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats Unknown Message as deleted after a lost delete response", async () => {
+    const { rest, deleteMock } = makeDiscordRest();
+    deleteMock.mockRejectedValueOnce(lostResponse).mockRejectedValueOnce(unknownMessage);
+
+    await expect(
+      deleteMessageDiscord("chan1", "1", { ...discordClientOpts(rest), retry }),
+    ).resolves.toEqual({ ok: true });
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads Unknown Message from a real Discord error response", async () => {
+    let calls = 0;
+    const loopback = await createDiscordLoopbackRest({
+      status: () => (++calls === 1 ? 502 : 404),
+      respond: () =>
+        calls === 1 ? { message: "Bad Gateway" } : { message: "Unknown Message", code: 10008 },
+    });
+    try {
+      await expect(
+        deleteMessageDiscord("chan1", "1", { ...discordClientOpts(loopback.rest), retry }),
+      ).resolves.toEqual({ ok: true });
+      expect(loopback.requests.map((request) => request.method)).toEqual(["DELETE", "DELETE"]);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each([
+    ["on the first attempt", [unknownMessage]],
+    ["after a failure that never reached Discord", [notConnected, unknownMessage]],
+    [
+      "for another 404 after a lost response",
+      [lostResponse, Object.assign(new Error("Unknown Channel"), { status: 404 })],
+    ],
+  ])("still fails a delete with %s", async (_label, failures) => {
+    const { rest, deleteMock } = makeDiscordRest();
+    for (const failure of failures) {
+      deleteMock.mockRejectedValueOnce(failure);
+    }
+
+    await expect(
+      deleteMessageDiscord("chan1", "1", { ...discordClientOpts(rest), retry }),
+    ).rejects.toBe(failures.at(-1));
+  });
+});

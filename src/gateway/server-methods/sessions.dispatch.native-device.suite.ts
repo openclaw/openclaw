@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,7 +15,6 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
 import type { WorkerPlacementDispatchService } from "../worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -59,6 +59,7 @@ export function registerNativeDeviceDispatchTests({
           },
         },
       };
+      setRuntimeConfigSnapshot(config, config);
       const node = connectedNode("scenario2-paired-node", 2);
       const runtime = createDeviceWorkerRuntime({
         getPairedDevice: async (id) => (id === node.nodeId ? pairedNode(id) : null),
@@ -97,8 +98,11 @@ export function registerNativeDeviceDispatchTests({
             worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
           },
         );
+        const { resolveGatewaySessionStoreTargetInWorker } = await vi.importActual<
+          typeof import("../session-utils-store-worker.js")
+        >("../session-utils-store-worker.js");
         getDispatchTestMocks().resolveTarget.mockImplementation(
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         );
         // Exercise RPC admission and the real profile/provider lifecycle; workspace sync
         // and placement activation remain the existing dispatch fixture boundary.
@@ -234,7 +238,7 @@ export function registerNativeDeviceDispatchTests({
       { deviceId: "device-1" },
     );
 
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatch, JSON.stringify(vi.mocked(respond).mock.calls)).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "device:device-1",
         deviceId: "device-1",

@@ -297,8 +297,9 @@ describe("agent database recreation product proof", () => {
           }
         } finally {
           releaseRead.resolve();
+          // The body observes read failures; cleanup must preserve an earlier failure.
+          await pendingRead.catch(() => {});
           await readers.close();
-          await pendingRead;
         }
 
         await expect(

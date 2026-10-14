@@ -15,6 +15,7 @@ import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { monitorSingleAccount } from "./monitor.account.js";
+import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   register: vi.fn(),
@@ -60,7 +61,20 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.warmup.mockResolvedValue(0);
   mocks.parseMessage.mockReturnValue({ content: "hello" });
-  mocks.createDispatcher.mockReturnValue({ register: mocks.register });
+  mocks.createDispatcher.mockImplementation(() => {
+    const dispatcher = new EventDispatcher({});
+    const register = dispatcher.register.bind(dispatcher);
+    vi.spyOn(dispatcher, "register").mockImplementation((handlers) => {
+      mocks.register(handlers);
+      return register(handlers);
+    });
+    return dispatcher;
+  });
+  mocks.runtime.mockReturnValue(
+    createPluginRuntimeMock({
+      state: { openChannelIngressQueue: createFeishuTestIngressQueue },
+    }),
+  );
   mocks.menu.mockResolvedValue(true);
   mocks.forget.mockResolvedValue(true);
   mocks.createBindings.mockReturnValue({ stop: mocks.stopBindings });

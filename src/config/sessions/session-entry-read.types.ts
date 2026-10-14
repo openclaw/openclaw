@@ -20,6 +20,7 @@ import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,
+  SessionSourceValidation,
 } from "./session-source-authority.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
@@ -60,6 +61,10 @@ export type SessionEntryListWorkerResult = {
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
   revision?: string;
   unchanged?: true;
+  /** Oldest cron run in the requested logical agent; null means no run rows. */
+  nextCronRunUpdatedAt?: number | null;
+  /** Last scanned cron key when another retention page may remain. */
+  nextCronRunSessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -88,6 +93,11 @@ export type SessionExactEntriesWorkerSelection =
     }
   | {
       sessionKeys?: never;
+      selection: { kind: "children"; parentSessionKeys: readonly string[] };
+      projection: "list" | "full";
+    }
+  | {
+      sessionKeys?: never;
       selection:
         | { kind: "session-id-or-key"; sessionIdOrKey: string }
         | { kind: "label"; label: string };
@@ -95,6 +105,8 @@ export type SessionExactEntriesWorkerSelection =
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+  /** Validate current entry and conversation predicates in one reader snapshot. */
+  sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };
   expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"];
   /** Omitted retains the complete entry; an empty selection reads metadata only. */
@@ -109,6 +121,11 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
+  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
+    sessionKey: string;
+    /** Captured logical owner; the executor still selects the physical database. */
+    agentId?: string;
+  };
 };
 
 /** Bounded foreground facts read through an already admitted session executor. */
@@ -119,6 +136,7 @@ export type SessionEntryCohortRequest = Pick<
   | "includeMembers"
   | "includeParticipantRecords"
   | "lifecycleSessionKey"
+  | "transcript"
 > & {
   sessionKeys: readonly string[];
   includeAuthProfileSource?: boolean;
@@ -133,11 +151,6 @@ export type SessionEntryCohortRequest = Pick<
       lifecycleRevision: string | undefined;
     }[];
   };
-  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
-    sessionKey: string;
-    /** Captured logical owner; the executor still selects the physical database. */
-    agentId?: string;
-  };
 };
 
 export type SessionExactEntriesWorkerResult = {
@@ -145,6 +158,7 @@ export type SessionExactEntriesWorkerResult = {
   source?: SessionEntryListWorkerResult["source"];
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
+  sourceValidation?: SessionSourceValidation;
   manualCompact?: {
     archive?: Omit<SessionColdArchive, "archive_blob">;
     refusedSource?: { index: number; facts: SessionSourcePredicateFacts };

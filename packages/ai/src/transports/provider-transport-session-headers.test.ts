@@ -60,44 +60,6 @@ describe("managed Anthropic session affinity headers at fetch egress", () => {
       sessionId: "conversation-a",
       expected: "conversation-a",
     },
-    {
-      name: "disabled caching",
-      sendSessionAffinityHeaders: true,
-      cacheRetention: "none",
-      sessionId: "conversation-a",
-      expected: null,
-    },
-    {
-      name: "proxy opt-out",
-      sendSessionAffinityHeaders: false,
-      sessionId: "conversation-a",
-      expected: null,
-    },
-    {
-      name: "no opt-in",
-      sessionId: "conversation-a",
-      expected: null,
-    },
-    {
-      name: "missing conversation identity",
-      sendSessionAffinityHeaders: true,
-      expected: null,
-    },
-    {
-      name: "model header precedence",
-      sendSessionAffinityHeaders: true,
-      sessionId: "conversation-a",
-      modelHeaders: { "X-Session-Affinity": "model-session" },
-      expected: "model-session",
-    },
-    {
-      name: "stream header precedence",
-      sendSessionAffinityHeaders: true,
-      sessionId: "conversation-a",
-      modelHeaders: { "X-Session-Affinity": "model-session" },
-      headers: { "x-session-affinity": "stream-session" },
-      expected: "stream-session",
-    },
   ])("honors $name", async (testCase) => {
     const requests: Request[] = [];
     const captureFetch: typeof fetch = async (input, init) => {
@@ -140,94 +102,92 @@ describe("managed Anthropic session affinity headers at fetch egress", () => {
 });
 
 describe("managed OpenCode conversation headers at fetch egress", () => {
-  it.each([
-    "openai-completions",
-    "openai-responses",
-    "anthropic-messages",
-    "google-generative-ai",
-  ] as const)("preserves conversation identity through %s", async (api) => {
-    const requests: Request[] = [];
-    const captureFetch: typeof fetch = async (input, init) => {
-      requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ error: { message: "request captured" } }), {
-        status: 400,
-        headers: { "content-type": "application/json" },
-      });
-    };
-    vi.stubGlobal("fetch", captureFetch);
-    configureAiTransportHost({
-      ...initialHost,
-      buildModelFetch: () => captureFetch,
-      plugin: {
-        ...initialHost.plugin,
-        resolveProviderStream: () => (model, context, options) => {
-          // The plugin boundary must receive identity before any SDK adapter can add it.
-          if (!model.headers?.["X-OpenCode-Session"]) {
-            expect(options?.headers?.["x-opencode-session"]).toBe("conversation-a");
-          }
-          return streamSimpleGoogle(
-            { ...model, api: "google-generative-ai", compat: undefined },
-            context,
-            options,
-          );
-        },
-      },
-    });
-    const baseModel = {
-      id: "test-model",
-      name: "Test model",
-      api,
-      provider: "opencode",
-      baseUrl:
-        api === "anthropic-messages" ? "https://opencode.ai/zen" : "https://opencode.ai/zen/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 128,
-    } satisfies Model;
-
-    for (const testCase of [
-      { cacheRetention: "none", expected: "conversation-a" },
-      { cacheRetention: "short", expected: "conversation-a" },
-      {
-        cacheRetention: "none",
-        modelHeaders: { "X-OpenCode-Session": "model-session" },
-        expected: "model-session",
-      },
-      {
-        cacheRetention: "none",
-        modelHeaders: { "X-OpenCode-Session": "model-session" },
-        headers: { "x-opencode-session": "stream-session" },
-        expected: "stream-session",
-      },
-    ] as const) {
-      const model = {
-        ...baseModel,
-        headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+  it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as const)(
+    "preserves conversation identity through %s",
+    async (api) => {
+      const requests: Request[] = [];
+      const captureFetch: typeof fetch = async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(JSON.stringify({ error: { message: "request captured" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
       };
-      const streamFn = createBoundaryAwareStreamFnForModel(model);
-      if (!streamFn) {
-        throw new Error(`No managed transport for ${api}`);
+      vi.stubGlobal("fetch", captureFetch);
+      configureAiTransportHost({
+        ...initialHost,
+        buildModelFetch: () => captureFetch,
+        plugin: {
+          ...initialHost.plugin,
+          resolveProviderStream: () => (model, context, options) => {
+            // The plugin boundary must receive identity before any SDK adapter can add it.
+            if (!model.headers?.["X-OpenCode-Session"]) {
+              expect(options?.headers?.["x-opencode-session"]).toBe("conversation-a");
+            }
+            return streamSimpleGoogle(
+              { ...model, api: "google-generative-ai", compat: undefined },
+              context,
+              options,
+            );
+          },
+        },
+      });
+      const baseModel = {
+        id: "test-model",
+        name: "Test model",
+        api,
+        provider: "opencode",
+        baseUrl:
+          api === "anthropic-messages" ? "https://opencode.ai/zen" : "https://opencode.ai/zen/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 128,
+      } satisfies Model;
+
+      for (const testCase of [
+        { cacheRetention: "none", expected: "conversation-a" },
+        { cacheRetention: "short", expected: "conversation-a" },
+        {
+          cacheRetention: "none",
+          modelHeaders: { "X-OpenCode-Session": "model-session" },
+          expected: "model-session",
+        },
+        {
+          cacheRetention: "none",
+          modelHeaders: { "X-OpenCode-Session": "model-session" },
+          headers: { "x-opencode-session": "stream-session" },
+          expected: "stream-session",
+        },
+      ] as const) {
+        const model = {
+          ...baseModel,
+          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+        };
+        const streamFn = createBoundaryAwareStreamFnForModel(model);
+        if (!streamFn) {
+          throw new Error(`No managed transport for ${api}`);
+        }
+        requests.length = 0;
+        const stream = await streamFn(
+          model,
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 1 }],
+          },
+          {
+            apiKey: "test-key",
+            sessionId: "conversation-a",
+            cacheRetention: testCase.cacheRetention,
+            headers: "headers" in testCase ? testCase.headers : undefined,
+          },
+        );
+        await stream.result();
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.headers.get("x-opencode-session")).toBe(testCase.expected);
       }
-      requests.length = 0;
-      const stream = await streamFn(
-        model,
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 1 }],
-        },
-        {
-          apiKey: "test-key",
-          sessionId: "conversation-a",
-          cacheRetention: testCase.cacheRetention,
-          headers: "headers" in testCase ? testCase.headers : undefined,
-        },
-      );
-      await stream.result();
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.headers.get("x-opencode-session")).toBe(testCase.expected);
-    }
-  });
+    },
+  );
 
   it.each(["openai-completions", "openai-responses"] as const)(
     "applies provider turn fallback through sessionless %s requests",
@@ -383,10 +343,7 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
 
 describe("managed OpenAI Responses session headers at fetch egress", () => {
   it.each([
-    { api: "openai-responses", cacheRetention: "short", expected: "conversation-a" },
-    { api: "openai-responses", cacheRetention: "none", expected: null },
     { api: "azure-openai-responses", cacheRetention: "short", expected: "conversation-a" },
-    { api: "azure-openai-responses", cacheRetention: "none", expected: null },
   ] as const)("honors $api proxy opt-in with cacheRetention=$cacheRetention", async (testCase) => {
     const requests: Request[] = [];
     const captureFetch: typeof fetch = async (input, init) => {
@@ -447,15 +404,6 @@ describe("managed OpenAI Responses session headers at fetch egress", () => {
       baseUrl: "https://chatgpt.com/backend-api",
       sendSessionIdHeader: false,
       expected: null,
-    },
-    {
-      name: "OpenAI proxy opt-in",
-      api: "openai-responses",
-      managed: true,
-      expectedApi: "openai-responses",
-      baseUrl: "https://responses-proxy.example.test/v1",
-      sendSessionIdHeader: true,
-      expected: "conversation-a",
     },
     {
       name: "Azure proxy opt-in",

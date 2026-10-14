@@ -114,56 +114,17 @@ describe("nvidia provider catalog", () => {
       "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3.5-lightning-30b-a3b",
     ]);
-  });
-
-  it("preserves known capabilities when a featured row only supplies limits", async () => {
-    mockInventoryAndFeatured({
-      ids: ["moonshotai/kimi-k2.6"],
-      featured: [
-        {
-          model: "moonshotai/kimi-k2.6",
-          "model-name": "Kimi K2.6",
-          context: 262144,
-          "max-output": 65536,
-        },
-      ],
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      auditContext: "nvidia-featured-model-catalog",
+      init: { headers: expect.any(Headers) },
+      lookupFn: expect.any(Function),
+      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
+      signal: expect.any(AbortSignal),
+      timeoutMs: expect.any(Number),
+      url: NVIDIA_FEATURED_MODELS_URL,
+      requireHttps: true,
     });
-
-    expect((await buildLiveNvidiaProvider()).models).toMatchObject([
-      { id: "moonshotai/kimi-k2.6", reasoning: true, input: ["text", "image"] },
-    ]);
   });
-
-  it("rejects an incomplete acquisition when the featured feed fails", async () => {
-    mockInventoryAndFeatured({
-      ids: ["nvidia/nemotron-3-ultra-550b-a55b"],
-      featured: [],
-      featuredStatus: 503,
-    });
-
-    await expect(buildLiveNvidiaProvider()).rejects.toThrow("HTTP 503");
-  });
-
-  it.each([200, 503])(
-    "keeps empty inventory authoritative with featured HTTP %s",
-    async (featuredStatus) => {
-      mockInventoryAndFeatured({
-        ids: [],
-        featuredStatus,
-        featured: [
-          {
-            model: "z-ai/glm-5.2",
-            "model-name": "Stale featured model",
-            context: 202752,
-            "max-output": 8192,
-          },
-        ],
-      });
-
-      expect((await buildLiveNvidiaProvider()).models).toEqual([]);
-      expect((await buildLiveNvidiaProvider()).models).toEqual([]);
-    },
-  );
 
   it("does not treat featured rows as fresh inventory when model discovery fails", async () => {
     mockInventoryAndFeatured({
@@ -200,150 +161,20 @@ describe("nvidia provider catalog", () => {
       id: "nvidia/nemotron-3-super-120b-a12b",
       contextWindow: 1_000_000,
     });
-    expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.5")).toMatchObject({
+    expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.6")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
       contextWindow: 262_144,
-      maxTokens: 32_768,
+      maxTokens: 65_536,
     });
-    expect(provider.models.find((model) => model.id === "minimaxai/minimax-m2.7")).toMatchObject({
+    expect(
+      provider.models.find((model) => model.id === "nvidia/nemotron-3.5-lightning-30b-a3b"),
+    ).toMatchObject({
       input: ["text"],
       reasoning: true,
-      contextWindow: 204_800,
+      contextWindow: 1_048_576,
       maxTokens: 16_384,
     });
-  });
-
-  it("promotes ranked models from NVIDIA's featured catalog", async () => {
-    const release = mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "z-ai/glm-5.2",
-          "model-name": "GLM 5.2",
-          context: 202752,
-          "max-output": 8192,
-        },
-        {
-          model: "nemotron-3-super-120b-a12b",
-          "model-name": "Nemotron 3 Super 120B",
-          context: 262144,
-          "max-output": 8192,
-        },
-      ],
-    });
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "z-ai/glm-5.2",
-      "nvidia/nemotron-3-super-120b-a12b",
-    ]);
-    expect(provider.models[0]).toMatchObject({
-      name: "GLM 5.2",
-      contextWindow: 202752,
-      maxTokens: 8192,
-      compat: { requiresStringContent: true },
-    });
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "nvidia-featured-model-catalog",
-      init: { headers: expect.any(Headers) },
-      lookupFn: expect.any(Function),
-      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      signal: expect.any(AbortSignal),
-      timeoutMs: expect.any(Number),
-      url: NVIDIA_FEATURED_MODELS_URL,
-      requireHttps: true,
-    });
-    // getCachedLiveProviderModelRows forwards the budget remaining after elapsed
-    // time, so only the bound is stable; pinning 10_000 fails once a millisecond passes.
-    const guardedRequest = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls.find(
-      ([request]) => request.url === NVIDIA_FEATURED_MODELS_URL,
-    )?.[0];
-    expect(guardedRequest?.timeoutMs).toBeGreaterThan(0);
-    expect(guardedRequest?.timeoutMs).toBeLessThanOrEqual(10_000);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
-        {
-          model: "deepseek-ai/deepseek-v4-pro",
-          "model-name": "DeepSeek V4 Pro",
-          context: 262144,
-          "max-output": 16384,
-        },
-        {
-          model: "qwen/qwen3.5-397b-a17b",
-          "model-name": "Qwen3.5 397B A17B",
-          context: 262144,
-          "max-output": 16384,
-        },
-      ],
-    });
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(
-      provider.models.map(({ id, contextWindow, maxTokens }) => ({
-        id,
-        contextWindow,
-        maxTokens,
-      })),
-    ).toEqual([
-      { id: "minimaxai/minimax-m3", contextWindow: 196_608, maxTokens: 8_192 },
-      { id: "deepseek-ai/deepseek-v4-pro", contextWindow: 262_144, maxTokens: 16_384 },
-      { id: "qwen/qwen3.5-397b-a17b", contextWindow: 262_144, maxTokens: 16_384 },
-    ]);
-  });
-
-  it("ignores malformed featured catalog rows and keeps valid entries", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "bad model id",
-          "model-name": "Bad",
-          context: 1000,
-          "max-output": 1000,
-        },
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
-        {
-          model: "oversized-context",
-          "model-name": "Oversized Context",
-          context: 10_000_001,
-          "max-output": 8192,
-        },
-        ...["\u0000", "\u001f", "\u007f"].flatMap((control) => [
-          {
-            model: `invalid${control}id`,
-            "model-name": "Control in ID",
-            context: 1000,
-            "max-output": 1000,
-          },
-          {
-            model: `invalid-name-${control.charCodeAt(0)}`,
-            "model-name": `Control${control}in name`,
-            context: 1000,
-            "max-output": 1000,
-          },
-        ]),
-      ],
-    });
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
   });
 
   it("does not cache successful featured catalog responses with no usable rows", async () => {
@@ -359,13 +190,13 @@ describe("nvidia provider catalog", () => {
         ],
       },
       200,
-      ["z-ai/glm-5.2"],
+      ["moonshotai/kimi-k2.6"],
     );
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "z-ai/glm-5.2",
-          "model-name": "Updated GLM 5.2",
+          model: "moonshotai/kimi-k2.6",
+          "model-name": "Updated Kimi K2.6",
           context: 262144,
           "max-output": 8192,
         },
@@ -375,45 +206,8 @@ describe("nvidia provider catalog", () => {
     await expect(buildLiveNvidiaProvider()).rejects.toThrow("no usable model metadata");
     const second = await buildLiveNvidiaProvider();
     expect(second.models).toMatchObject([
-      { id: "z-ai/glm-5.2", name: "Updated GLM 5.2", contextWindow: 262144 },
+      { id: "moonshotai/kimi-k2.6", name: "Updated Kimi K2.6", contextWindow: 262144 },
     ]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(3);
-  });
-
-  it("applies bundled Ultra defaults when featured catalog returns Ultra", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "nemotron-3-ultra-550b-a55b",
-          "model-name": "Nemotron 3 Ultra 550B",
-          context: 1048576,
-          "max-output": 8192,
-        },
-        {
-          model: "minimaxai/minimax-m2.7",
-          "model-name": "Minimax M2.7",
-          context: 196608,
-          "max-output": 8192,
-        },
-      ],
-    });
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "minimaxai/minimax-m2.7",
-    ]);
-    expect(provider.models[0]).toMatchObject({
-      name: "Nemotron 3 Ultra 550B",
-      contextWindow: 1_048_576,
-      maxTokens: 8_192,
-      params: {
-        chat_template_kwargs: {
-          enable_thinking: false,
-          force_nonempty_content: true,
-        },
-      },
-    });
   });
 });

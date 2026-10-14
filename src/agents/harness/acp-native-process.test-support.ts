@@ -7,11 +7,15 @@ import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
-import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -57,6 +61,7 @@ export function useNativeProcessFixture() {
   });
   afterEach(async () => {
     await lifetime.cleanup();
+    clearRuntimeConfigSnapshot();
     restoreActivePluginRegistrySnapshot(snapshot);
     vi.restoreAllMocks();
   });
@@ -77,6 +82,8 @@ export async function registerNative(
     receiptEndpoint?: string;
   } = {},
 ) {
+  // Transcript writes read the Gateway-published runtime config; the test state resets it on exit.
+  setRuntimeConfigSnapshot(config);
   const peer = fileURLToPath(
     {
       "owner-agent.mjs": new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
@@ -135,7 +142,7 @@ export async function registerNative(
       config: { current: getRuntimeConfig },
       state: {
         resolveStateDir: () => state.stateDir,
-        openKeyedStore: (options) => createPluginStateKeyedStore("acpx", options),
+        openKeyedStoreV2: createPluginStateRuntimeStores("acpx", () => {}).openKeyedStoreV2,
       },
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),

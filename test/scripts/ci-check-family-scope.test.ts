@@ -13,6 +13,17 @@ const scoped: ScopeCase["expected"] = {
   types: true,
 };
 const cases: ScopeCase[] = [
+  ...[
+    ["packages/gateway-protocol/README.md", false],
+    ["packages/gateway-protocol/README.mdx", false],
+    ["packages/gateway-protocol/src/schema.ts", true],
+    ["packages/gateway-protocol/test/fixtures/README.md", true],
+    ["packages/gateway-protocol/prompts/runtime.md", true],
+  ].map(([file, selected]): ScopeCase => ({
+    paths: [String(file), "src/utils/absolute-deadline.test.ts"],
+    expected: { fastTasks: selected ? ["bundled-protocol"] : [] },
+  })),
+
   {
     paths: ["src/agents/session.test.ts"],
     expected: {
@@ -116,6 +127,10 @@ const cases: ScopeCase[] = [
     expected: { madgeImportCycles: true, kyselyGuardrails: false },
   },
   { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
+  {
+    paths: ["src/infra/sqlite-existing-database.ts"],
+    expected: { fastTasks: ["bun-launcher"] },
+  },
 ];
 
 describe("narrow PR check families", () => {

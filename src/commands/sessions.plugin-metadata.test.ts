@@ -18,7 +18,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 mockSessionsConfig();
 
-const sessionMeta = await import("../acp/runtime/session-meta.js");
+const sessionMeta = await import("../acp/runtime/session-meta-readonly.js");
 const runtimeMetadata = await import("../agents/agent-runtime-metadata.js");
 const { sessionsCommand } = await import("./sessions.js");
 
@@ -71,7 +71,7 @@ describe("sessions plugin metadata preparation", () => {
       ]),
     );
     const store = await writeStore(entries, "sessions-plugin-metadata");
-    const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaBatch");
+    const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaForEntries");
     const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
 
     const payload = await runSessionsJson<{

@@ -206,6 +206,7 @@ export function createMusicGenerateTool(
             acquired?.assertOpen();
             const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
             const loadedReferenceImages = await loadMediaToolReferences({
+              workspaceReadiness: context.workspaceReadiness,
               inputs: imageInputs,
               toolName: "music_generate",
               expectedKind: "image",
@@ -265,6 +266,7 @@ export function createMusicGenerateTool(
                       timeoutMs,
                     },
                     filename,
+                    sandbox: context.acquireOutputSandbox,
                     loadedReferenceImages,
                     taskHandle,
                     timeoutNormalization: timeout.normalization,

@@ -13,7 +13,13 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
-import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -37,24 +43,58 @@ export type ConfigPreflightSnapshotRead = {
 // Match the five-minute startup migration lease budget, including slow cold starts.
 const STARTUP_STATE_ADMISSION_TIMEOUT_MS = 5 * 60_000;
 
-export async function readConfigPreflightSnapshot(params: {
-  purpose: "startup" | "doctor";
-  allowCurrentPluginMetadata: boolean;
-  includePluginMetadata: boolean;
-  isolateEnv?: boolean;
-  measure?: ConfigSnapshotReadMeasure;
-  observe?: boolean;
-  skipPluginValidation: boolean;
-  /** Complete a private update snapshot before Doctor contract modules are inspected. */
-  prepareSnapshot?: (snapshot: ConfigFileSnapshot) => Promise<void>;
-  preparePluginMigrations?: (
-    snapshot: ConfigFileSnapshot,
-  ) => Promise<readonly DeferredPluginMigration[]>;
-  deferredPluginMigrations?: readonly DeferredPluginMigration[];
-}): Promise<ConfigPreflightSnapshotRead> {
+/** Own executable inspection caches until a final snapshot transfers to its caller. */
+export function createConfigPreflightSnapshotReader() {
+  const caches = new Set<PluginCache>();
+  return {
+    async [Symbol.asyncDispose]() {
+      await Promise.all([...caches].map((cache) => cache[Symbol.asyncDispose]()));
+      caches.clear();
+    },
+    read(params: Parameters<typeof readConfigPreflightSnapshot>[0]) {
+      const cache = params.allowCurrentPluginMetadata ? getPluginCache() : createPluginCache();
+      if (!params.allowCurrentPluginMetadata) {
+        caches.add(cache);
+      }
+      return readConfigPreflightSnapshot(params, cache);
+    },
+    async takePluginCache(
+      snapshot: PluginMetadataSnapshot | undefined,
+    ): Promise<PluginCache | undefined> {
+      const selected = snapshot && getPluginMetadataSnapshotCache(snapshot);
+      await Promise.all(
+        [...caches]
+          .filter((cache) => cache !== selected)
+          .map(async (cache) => {
+            await cache[Symbol.asyncDispose]();
+            caches.delete(cache);
+          }),
+      );
+      return selected && caches.delete(selected) ? selected : undefined;
+    },
+  };
+}
+
+async function readConfigPreflightSnapshot(
+  params: {
+    purpose: "startup" | "doctor";
+    allowCurrentPluginMetadata: boolean;
+    includePluginMetadata: boolean;
+    isolateEnv?: boolean;
+    measure?: ConfigSnapshotReadMeasure;
+    observe?: boolean;
+    skipPluginValidation: boolean;
+    /** Complete a private update snapshot before Doctor contract modules are inspected. */
+    prepareSnapshot?: (snapshot: ConfigFileSnapshot) => Promise<void>;
+    preparePluginMigrations?: (
+      snapshot: ConfigFileSnapshot,
+    ) => Promise<readonly DeferredPluginMigration[]>;
+    deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  },
+  cache: PluginCache,
+): Promise<ConfigPreflightSnapshotRead> {
   // Explicit management rereads cross a lease or mutation boundary. A resolver's
   // allowCurrent:false still reuses facts within an existing operation generation.
-  const cache = params.allowCurrentPluginMetadata ? getPluginCache() : createPluginCache();
   return withPluginCache(cache, async () => {
     const sharedOptions = {
       ...(params.isolateEnv ? { isolateEnv: true } : {}),
@@ -200,7 +240,11 @@ export async function readAdmittedConfigSnapshot(params: {
             }
             return { ...read, ...(recovery ? { recovery } : {}) };
           },
-          { env: params.env, admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS },
+          {
+            env: params.env,
+            admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
+            reuseCleanClose: true,
+          },
         ),
       );
       if (

@@ -1,7 +1,6 @@
 import { asOptionalRecord, filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -17,7 +16,7 @@ import {
   validateTalkSpeakParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
-import { readConfigFileSnapshot } from "../../../config/config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../../config/config.js";
 import { redactConfigObject } from "../../../config/redact-snapshot.js";
 import {
   buildTalkConfigResponse,
@@ -32,7 +31,6 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../../config/types.js";
 import { resolveProviderRawConfig } from "../../../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoicePublicClientHints } from "../../../plugins/provider-policy-surface.js";
-import { canonicalizeRealtimeTranscriptionProviderId } from "../../../realtime-transcription/provider-registry.js";
 import {
   assertSecretOwnerAvailable,
   isSecretOwnerAvailable,
@@ -66,25 +64,25 @@ import {
 import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../../tts/speech-text.js";
 import { synthesizeTalkSpeech } from "../../../tts/tts-synthesis.js";
 import {
-  getResolvedSpeechProviderConfig,
+  isTtsProviderConfiguredAsync,
   resolveTtsConfig,
   type TtsDirectiveOverrides,
 } from "../../../tts/tts.js";
-import { getVoiceProviderConfig, providerMatchesId } from "../../../tts/voice-models.js";
+import { providerMatchesId } from "../../../tts/voice-models.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../../operator-scopes.js";
 import { respondUnavailable } from "../../server-methods/response.js";
 import { inferSpeechMimeType } from "../../server-methods/speech-mime.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
+import { withPreparedSessionResolve } from "../../sessions-resolve.js";
 import { formatForLog } from "../../ws-log.js";
-import {
-  buildTalkRealtimeConfig,
-  buildTalkTranscriptionConfig,
-  configuredOrFalseAsync,
-  listTalkTranscriptionProviders,
-  resolveConfiguredRealtimeTranscriptionProvider,
-} from "../session-config.js";
+import { buildTalkRealtimeConfig, configuredOrFalseAsync } from "../session-config.js";
 import { talkClientHandlers } from "./client.js";
+import {
+  buildTalkTranscriptionCatalog,
+  resolveCatalogProviderSelection,
+} from "./provider-catalog.js";
 import { talkSessionHandlers } from "./session.js";
 import { talkVoiceHandlers } from "./voice.js";
 
@@ -93,25 +91,6 @@ type TalkSpeakReason =
   | "talk_provider_unsupported"
   | "synthesis_failed"
   | "invalid_audio_result";
-
-async function resolveCatalogProviderSelection(
-  configuredProvider: string | undefined,
-  resolveAutomaticProvider: () => string | Promise<string>,
-): Promise<{ activeProvider?: string; ready: boolean }> {
-  // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
-  try {
-    const resolvedProvider = await resolveAutomaticProvider();
-    return {
-      activeProvider: resolvedProvider,
-      ready: true,
-    };
-  } catch {
-    return {
-      ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
-      ready: false,
-    };
-  }
-}
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -229,23 +208,9 @@ function buildTalkTtsConfig(
 
 async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
-  const realtimeAgentId = resolveTalkSessionAgentId(config);
+  const realtimeAgentId = resolveTalkSessionAgentId(config, params.sessionKey);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
-  const transcriptionConfig = await buildTalkTranscriptionConfig(config);
-  const transcriptionSelection = await resolveCatalogProviderSelection(
-    canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
-    async () =>
-      (
-        await resolveConfiguredRealtimeTranscriptionProvider({
-          config,
-          configuredProviderId: transcriptionConfig.provider,
-          providerConfigs: transcriptionConfig.providers,
-          defaultModel: transcriptionConfig.model,
-        })
-      ).provider.id,
-  );
-  const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const requestedProvider = normalizeOptionalString(params.provider);
   const requestedModel = normalizeOptionalString(params.model);
   const realtimeConfig = await buildTalkRealtimeConfig(config, requestedProvider, requestedModel);
@@ -274,153 +239,92 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     async () => {
       assertSecretOwnerAvailable("capability", "talk:realtime");
-      return (
-        await resolveConfiguredRealtimeVoiceProviderAsync({
-          ...realtimeResolveContext,
-          configuredProviderId: realtimeConfig.provider,
-          providerConfigs: realtimeConfig.providers,
-          ...realtimeModelOverride,
-          defaultModel: realtimeConfig.model,
-        })
-      ).provider.id;
+      return resolveConfiguredRealtimeVoiceProviderAsync({
+        ...realtimeResolveContext,
+        configuredProviderId: realtimeConfig.provider,
+        providerConfigs: realtimeConfig.providers,
+        ...realtimeModelOverride,
+        defaultModel: realtimeConfig.model,
+      });
     },
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
   const speechAvailable = isSecretOwnerAvailable("capability", "talk:speech");
 
-  return {
-    modes: ["realtime", "stt-tts", "transcription"],
-    transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
-    brains: ["agent-consult", "direct-tools", "none"],
-    speech: {
-      ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
-      providers: await Promise.all(
-        listSpeechProviders(config).map(async (provider) => {
-          const entry: Record<string, unknown> = {
-            id: provider.id,
-            label: provider.label,
-            configured:
-              speechAvailable &&
-              (await configuredOrFalseAsync(() => {
-                const setup =
-                  provider.id === activeSpeechProvider ? buildTalkTtsConfig(config) : undefined;
-                const speechConfig = setup && !("error" in setup) ? setup.cfg : config;
-                const effectiveTts = resolveTtsConfig(speechConfig);
-                const context = {
-                  cfg: speechConfig,
-                  providerConfig: getResolvedSpeechProviderConfig(
-                    effectiveTts,
-                    provider.id,
-                    speechConfig,
-                  ),
-                  timeoutMs: effectiveTts.timeoutMs,
-                };
-                return (
-                  provider.isConfiguredAsync?.(context) ?? provider.isConfigured?.(context) ?? false
-                );
-              })),
-            modes: ["stt-tts"],
-            brains: ["agent-consult"],
-          };
-          if (provider.models) {
-            entry.models = [...provider.models];
-          }
-          if (provider.aliases?.length) {
-            entry.aliases = [...provider.aliases];
-          }
-          if (provider.voices) {
-            entry.voices = [...provider.voices];
-          }
-          return entry;
-        }),
-      ),
-    },
-    transcription: {
-      ready: transcriptionSelection.ready,
-      ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
-      providers: await Promise.all(
-        listTalkTranscriptionProviders(config, [
-          transcriptionConfig.provider,
-          ...Object.keys(transcriptionConfig.providers),
-        ]).map(async (provider) => {
-          const rawConfig = getVoiceProviderConfig({
-            providerConfigs: transcriptionConfig.providers,
-            provider,
-            configuredProviderId:
-              activeTranscriptionProvider &&
-              normalizeOptionalLowercaseString(provider.id) ===
-                normalizeOptionalLowercaseString(activeTranscriptionProvider)
-                ? transcriptionConfig.provider
-                : undefined,
-          });
-          const rawConfigWithModel =
-            transcriptionConfig.model && rawConfig.model === undefined
-              ? { ...rawConfig, model: transcriptionConfig.model }
-              : rawConfig;
-          const providerConfig =
-            provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-            rawConfigWithModel;
-          const entry: Record<string, unknown> = {
-            id: provider.id,
-            label: provider.label,
-            configured: await configuredOrFalseAsync(
-              () =>
-                provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
-                provider.isConfigured?.({ cfg: config, providerConfig }) ??
-                false,
-            ),
-            modes: ["transcription"],
-            transports: ["gateway-relay"],
-            brains: ["none"],
-          };
-          if (provider.models?.length) {
-            entry.models = [...provider.models];
-          }
-          if (provider.defaultModel) {
-            entry.defaultModel = provider.defaultModel;
-          }
-          if (provider.aliases?.length) {
-            entry.aliases = [...provider.aliases];
-          }
-          return entry;
-        }),
-      ),
-    },
-    realtime: {
-      ready: realtimeSelection.ready,
-      ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
-      providers: await Promise.all(
-        listRealtimeVoiceProviders(config, realtimeProviderIds).map(async (provider) => {
-          const available = isSecretOwnerAvailable("capability", "talk:realtime");
-          const rawConfig = resolveProviderRawConfig({
-            providerConfigs: realtimeConfig.providers ?? {},
-            providerId: provider.id,
-            providerAliases: provider.aliases,
-            configuredProviderId:
-              provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
-          });
-          // Top-level talk.realtime.model overrides provider-level config, matching
-          // talk.client.create's providerConfigOverrides precedence at session time.
-          const model =
-            provider.id === activeRealtimeProvider ? realtimeModel : realtimeConfig.model;
-          const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
-          const defaultRawConfig = { ...rawConfig };
-          delete defaultRawConfig.model;
-          const resolveConfig = async (rawInput: typeof defaultRawConfig) =>
-            available
-              ? ((await (provider.resolveConfigAsync?.({
-                  ...realtimeResolveContext,
-                  rawConfig: rawInput,
-                }) ??
-                  provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: rawInput }))) ??
-                rawInput)
-              : rawInput;
-          const defaultProviderConfig = await resolveConfig(defaultRawConfig);
-          const providerConfig =
-            available && rawConfigWithModel.model === undefined
-              ? defaultProviderConfig
-              : await resolveConfig(rawConfigWithModel);
-          const capabilities: InternalRealtimeVoiceProviderCapabilities | undefined = available
+  const [speechProviders, transcription, realtimeProviders] = await Promise.all([
+    Promise.all(
+      listSpeechProviders(config).map(async (provider) => {
+        const entry: Record<string, unknown> = {
+          id: provider.id,
+          label: provider.label,
+          configured:
+            speechAvailable &&
+            (await configuredOrFalseAsync(() => {
+              const setup =
+                provider.id === activeSpeechProvider ? buildTalkTtsConfig(config) : undefined;
+              const effectiveConfig = setup && !("error" in setup) ? setup.cfg : config;
+              const effectiveTts = resolveTtsConfig(effectiveConfig);
+              return isTtsProviderConfiguredAsync(effectiveTts, provider);
+            })),
+          modes: ["stt-tts"],
+          brains: ["agent-consult"],
+        };
+        if (provider.models) {
+          entry.models = [...provider.models];
+        }
+        if (provider.aliases?.length) {
+          entry.aliases = [...provider.aliases];
+        }
+        if (provider.voices) {
+          entry.voices = [...provider.voices];
+        }
+        return entry;
+      }),
+    ),
+    buildTalkTranscriptionCatalog(config, realtimeAgentId),
+    Promise.all(
+      listRealtimeVoiceProviders(config, realtimeProviderIds).map(async (provider) => {
+        const available = isSecretOwnerAvailable("capability", "talk:realtime");
+        const selected =
+          available && provider.id === activeRealtimeProvider
+            ? realtimeSelection.resolved
+            : undefined;
+        const rawConfig = resolveProviderRawConfig({
+          providerConfigs: realtimeConfig.providers ?? {},
+          providerId: provider.id,
+          providerAliases: provider.aliases,
+          configuredProviderId:
+            provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
+        });
+        // Top-level talk.realtime.model overrides provider-level config, matching
+        // talk.client.create's providerConfigOverrides precedence at session time.
+        const model = provider.id === activeRealtimeProvider ? realtimeModel : realtimeConfig.model;
+        const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
+        const defaultRawConfig = { ...rawConfig };
+        delete defaultRawConfig.model;
+        const resolveConfig = async (rawInput: typeof defaultRawConfig) =>
+          available
+            ? ((await (provider.resolveConfigAsync?.({
+                ...realtimeResolveContext,
+                rawConfig: rawInput,
+              }) ??
+                provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: rawInput }))) ??
+              rawInput)
+            : rawInput;
+        // Selection already prepared this request's effective config and capabilities.
+        // Only an explicit model needs a separate discovery-default resolution.
+        const defaultProviderConfig =
+          selected && rawConfigWithModel.model === undefined
+            ? selected.providerConfig
+            : await resolveConfig(defaultRawConfig);
+        const providerConfig =
+          selected?.providerConfig ??
+          (available && rawConfigWithModel.model === undefined
+            ? defaultProviderConfig
+            : await resolveConfig(rawConfigWithModel));
+        const capabilities: InternalRealtimeVoiceProviderCapabilities | undefined = selected
+          ? selected.capabilities
+          : available
             ? await resolveRealtimeVoiceProviderCapabilitiesAsync({
                 provider,
                 providerConfig,
@@ -429,11 +333,12 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
                 surface: realtimeSurface,
               })
             : provider.capabilities;
-          const entry: Record<string, unknown> = {
-            id: provider.id,
-            label: provider.label,
-            configured:
-              available &&
+        const entry: Record<string, unknown> = {
+          id: provider.id,
+          label: provider.label,
+          configured:
+            available &&
+            (selected !== undefined ||
               (await configuredOrFalseAsync(() =>
                 isRealtimeVoiceProviderConfiguredAsync({
                   provider,
@@ -442,61 +347,75 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
                   agentId: realtimeAgentId,
                   surface: realtimeSurface,
                 }),
-              )),
-            modes: ["realtime"],
-            brains:
-              capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true
-                ? ["none"]
-                : ["agent-consult"],
-            supportsBrowserSession: Boolean(
-              capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
-            ),
-          };
-          const defaultModel =
-            normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
-          if (defaultModel) {
-            entry.defaultModel = defaultModel;
+              ))),
+          modes: ["realtime"],
+          brains:
+            capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true
+              ? ["none"]
+              : ["agent-consult"],
+          supportsBrowserSession: Boolean(
+            capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
+          ),
+        };
+        const defaultModel =
+          normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
+        if (defaultModel) {
+          entry.defaultModel = defaultModel;
+        }
+        if (provider.models?.length) {
+          entry.models = [...provider.models];
+        }
+        if (provider.voices) {
+          entry.voices = [...provider.voices];
+        }
+        if (capabilities?.voices) {
+          entry.activeVoices = [...capabilities.voices];
+        }
+        if (capabilities?.voiceSelectionPolicy) {
+          entry.activeVoiceSelectionPolicy = capabilities.voiceSelectionPolicy;
+        }
+        if (capabilities?.voicesByModel) {
+          entry.voicesByModel = capabilities.voicesByModel;
+        }
+        if (provider.aliases?.length) {
+          entry.aliases = [...provider.aliases];
+        }
+        if (capabilities?.transports) {
+          entry.transports = [...capabilities.transports];
+        }
+        for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
+          const formats = capabilities?.[key];
+          if (formats) {
+            entry[key] = formats.map((format) => Object.assign({}, format));
           }
-          if (provider.models?.length) {
-            entry.models = [...provider.models];
+        }
+        for (const key of [
+          "supportsBargeIn",
+          "supportsToolCalls",
+          "supportsVideoFrames",
+          "supportsSessionResumption",
+        ] as const) {
+          if (capabilities?.[key] !== undefined) {
+            entry[key] = capabilities[key];
           }
-          if (provider.voices) {
-            entry.voices = [...provider.voices];
-          }
-          if (capabilities?.voices) {
-            entry.activeVoices = [...capabilities.voices];
-          }
-          if (capabilities?.voiceSelectionPolicy) {
-            entry.activeVoiceSelectionPolicy = capabilities.voiceSelectionPolicy;
-          }
-          if (capabilities?.voicesByModel) {
-            entry.voicesByModel = capabilities.voicesByModel;
-          }
-          if (provider.aliases?.length) {
-            entry.aliases = [...provider.aliases];
-          }
-          if (capabilities?.transports) {
-            entry.transports = [...capabilities.transports];
-          }
-          for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
-            const formats = capabilities?.[key];
-            if (formats) {
-              entry[key] = formats.map((format) => Object.assign({}, format));
-            }
-          }
-          for (const key of [
-            "supportsBargeIn",
-            "supportsToolCalls",
-            "supportsVideoFrames",
-            "supportsSessionResumption",
-          ] as const) {
-            if (capabilities?.[key] !== undefined) {
-              entry[key] = capabilities[key];
-            }
-          }
-          return entry;
-        }),
-      ),
+        }
+        return entry;
+      }),
+    ),
+  ]);
+  return {
+    modes: ["realtime", "stt-tts", "transcription"],
+    transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
+    brains: ["agent-consult", "direct-tools", "none"],
+    speech: {
+      ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
+      providers: speechProviders,
+    },
+    transcription,
+    realtime: {
+      ready: realtimeSelection.ready,
+      ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
+      providers: realtimeProviders,
     },
   };
 }
@@ -757,14 +676,68 @@ export const talkHandlers: GatewayRequestHandlers = {
   ...talkVoiceHandlers,
   ...talkSessionHandlers,
   ...talkClientHandlers,
-  "talk.catalog": async ({ params, respond, context }) => {
+  "talk.catalog": async ({ params, respond, context, client }) => {
     const catalogParams = params ?? {};
     if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
       return;
     }
 
     try {
-      respond(true, await buildTalkCatalog(context.getRuntimeConfig(), catalogParams), undefined);
+      const config = context.getRuntimeConfig();
+      if (!catalogParams.sessionKey) {
+        respond(true, await buildTalkCatalog(config, catalogParams), undefined);
+        return;
+      }
+      const projection = getSessionRowProjection(context);
+      if (!projection) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Session rows are initializing; try again"),
+        );
+        return;
+      }
+      const agentId = resolveTalkSessionAgentId(config, catalogParams.sessionKey);
+      const resolveSession = () =>
+        withPreparedSessionResolve(
+          {
+            projection,
+            client,
+            isCurrent: () => getSessionRowProjection(context) === projection,
+            p: {
+              key: catalogParams.sessionKey,
+              agentId,
+              includeGlobal: true,
+              includeUnknown: true,
+            },
+          },
+          (session) => {
+            if (!session.ok) {
+              respond(false, undefined, session.error);
+            } else if ("missing" in session || "ambiguous" in session) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `No session found: ${catalogParams.sessionKey}`,
+                ),
+              );
+            } else {
+              return session.key;
+            }
+            return undefined;
+          },
+        );
+      const sessionKey = await resolveSession();
+      if (!sessionKey) {
+        return;
+      }
+      const catalog = await buildTalkCatalog(config, { ...catalogParams, sessionKey });
+      // Provider readiness can yield; publish only while the session is still visible.
+      if (await resolveSession()) {
+        respond(true, catalog, undefined);
+      }
     } catch (err) {
       respond(
         false,
@@ -796,8 +769,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const snapshot = await readConfigFileSnapshot();
     const runtimeConfig = context.getRuntimeConfig();
+    const sourceConfig = projectConfigOntoRuntimeSourceSnapshot(runtimeConfig);
     const configPayload: Record<string, unknown> = {};
 
     let talk: TalkConfigResponse | undefined;
@@ -805,7 +778,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     try {
       const resolved = await resolveTalkResponseFromConfig({
         includeSecrets,
-        sourceConfig: snapshot.config,
+        sourceConfig,
         runtimeConfig,
       });
       talk = resolved?.talk;
@@ -821,7 +794,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       configPayload.clientHints = { realtime: realtimeClientHints };
     }
 
-    const sessionMainKey = snapshot.config.session?.mainKey;
+    const sessionMainKey = runtimeConfig.session?.mainKey;
     if (typeof sessionMainKey === "string") {
       configPayload.session = { mainKey: sessionMainKey };
     }
@@ -836,7 +809,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       : undefined;
     // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
     const seamColor =
-      profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
+      profileAccent ?? runtimeConfig.ui?.prefs?.accent ?? runtimeConfig.ui?.seamColor;
     if (typeof seamColor === "string" && seamColor !== "theme") {
       configPayload.ui = { seamColor };
     }

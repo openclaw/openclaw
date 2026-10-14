@@ -297,9 +297,9 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   if (!capture) {
     return true;
   }
-  const deadline = Date.now() + Math.max(0, options.timeoutMs);
+  const deadline = performance.now() + Math.max(0, options.timeoutMs);
   while (toolCallCaptures.get(normalizedKey) === capture) {
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       return false;
     }

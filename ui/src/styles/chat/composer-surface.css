@@ -24,6 +24,7 @@
   gap: 6px;
   min-width: 0;
 }
+
 .agent-chat__composer-notices:not(
   :has(
     > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
@@ -505,9 +506,11 @@
   flex: 0 0 auto;
 }
 
-/* Keep settings, split view, and run status together in the footer's middle
-   track. The track is sized to content, so this group shrinks before it ever
-   pushes mic and send off the right edge. */
+.agent-chat__composer-context:not(:has(> .context-usage)) {
+  display: none;
+}
+
+/* Model controls shrink before pushing mic and send off the right edge. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -1062,8 +1065,6 @@
    stretching the model control long before the row is under pressure. */
 @container chat-composer (max-width: 480px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    flex: 1 1 0;
-    min-width: 0;
     order: 3;
   }
   .agent-chat__composer-footer {
@@ -1102,10 +1103,20 @@
 /* Density follows the composer, including narrow split panes in wider windows.
    Plus and Send retain their targets while model and effort remain separate. */
 @container chat-composer (max-width: 560px) {
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    flex: 1 1 0;
-    min-width: 0;
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
     margin-inline-start: auto;
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .agent-chat__composer-context:not(:has(> .context-usage))
+    + .agent-chat__composer-controls {
+    margin-inline-start: auto;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
+    flex: 0 1 auto;
+    gap: var(--chat-composer-chip-gap);
+    min-width: 0;
     overflow: visible;
   }
   .agent-chat__input--mobile-toolbar {
@@ -1169,8 +1180,7 @@
     transform: rotate(-45deg);
   }
 
-  .agent-chat__input--mobile-toolbar .context-ring,
-  .agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
+  .agent-chat__input.agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
     width: var(--chat-composer-control-size);
     min-width: var(--chat-composer-control-size);
@@ -1178,7 +1188,15 @@
     border-radius: var(--radius-full);
   }
 
-  /* Mobile icon controls own a real 32px target; Plus uses its explicit 36px
+  /* The small dial keeps a 24px-wide target so both pickers and actions remain
+     separate even when a desktop side panel narrows the composer. */
+  .agent-chat__input.agent-chat__input--mobile-toolbar .context-ring {
+    width: 24px;
+    min-width: 24px;
+    height: var(--chat-mobile-row-target-size);
+  }
+
+  /* Mobile action controls own a real 32px target; Plus uses its explicit 36px
      role token. Adjacent controls never compete for one tap. */
   .agent-chat__input--mobile-toolbar
     :is(

@@ -48,15 +48,8 @@ suite.define(() => {
         .poll(() => picker.locator(".agent-select__label").textContent())
         .toBe("research");
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      await expect
-        .poll(() =>
-          picker
-            .locator("wa-dropdown")
-            .evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
-        .toBe(false);
-      // The open property clears before the closing popup retires.
-      await picker.locator('wa-dropdown-item[aria-label="research"]').waitFor({ state: "hidden" });
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      await option.waitFor({ state: "hidden" });
 
       await trigger.focus();
       await page.keyboard.press("Enter");
@@ -70,7 +63,7 @@ suite.define(() => {
     });
   });
 
-  it("protects an open agent dropdown before an item receives focus", async () => {
+  it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
     await suite.withPage({}, async ({ page }) => {
       await installMockGateway(page, {
         defaultAgentId: "main",
@@ -90,26 +83,27 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.waitFor({ state: "visible" });
 
-      const result = await page.evaluate(() => {
-        const dropdown = document.querySelector<HTMLElement & { open: boolean }>(
-          ".new-session-page__select--agent wa-dropdown",
-        );
-        const main = document.querySelector<HTMLElement>("main");
-        if (!dropdown || !main) {
-          throw new Error("missing real agent dropdown fixture");
-        }
-        dropdown.open = true;
-        main.focus();
-        main.dispatchEvent(
-          new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
-        );
-        return {
-          activeTag: document.activeElement?.localName,
-          dropdownOpen: dropdown.open,
-        };
-      });
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      const trigger = picker.locator(".agent-select__trigger");
+      const menu = picker.locator(".agent-select__menu");
+      await trigger.click();
+      await menu.waitFor({ state: "visible" });
+      await trigger.focus();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await page.keyboard.press("Space");
 
-      expect(result).toEqual({ activeTag: "main", dropdownOpen: true });
+      await expect
+        .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
+      await expect
+        .poll(() =>
+          picker
+            .getByRole("menuitemradio", { name: "research", exact: true })
+            .evaluate((element) => document.activeElement === element),
+        )
+        .toBe(true);
       await expect.poll(() => composer.inputValue()).toBe("");
     });
   });
@@ -138,23 +132,6 @@ suite.define(() => {
       await page.keyboard.type("x");
 
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await expect.poll(() => composer.inputValue()).toBe("x");
-      await expect
-        .poll(() => composer.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-    });
-  });
-
-  it("preserves the first character typed outside the new-session composer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-
-      const composer = page.locator(".new-session-page__message");
-      await composer.waitFor({ state: "visible" });
-      await page.locator("main").click({ position: { x: 5, y: 5 } });
-      await page.keyboard.type("x");
-
       await expect.poll(() => composer.inputValue()).toBe("x");
       await expect
         .poll(() => composer.evaluate((element) => document.activeElement === element))

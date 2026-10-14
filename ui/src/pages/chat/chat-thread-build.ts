@@ -1,7 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -21,7 +24,7 @@ import {
   canvasPreviewsMatch,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -182,6 +185,10 @@ export function buildChatItems(
   const hiddenHistoryKeys = new Set<string>();
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
+  const permissionInMessage = (message: unknown) =>
+    extractToolCardsCached(message).some((card) =>
+      readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
+    );
   const historyItems = buildMessageItems(history);
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
@@ -223,6 +230,28 @@ export function buildChatItems(
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const fallback = readModelFallbackNotice(msg);
+    if (fallback) {
+      items.push({
+        kind: "divider",
+        key: `divider:model-fallback:${itemKey}`,
+        label: t(
+          fallback.phase === "restored"
+            ? "chat.composer.modelRestoredEvent"
+            : "chat.composer.modelFallbackEvent",
+          { from: fallback.fromModel, to: fallback.toModel },
+        ),
+        ...(fallback.reason
+          ? {
+              description: t("chat.composer.fallbackReason", {
+                reason: fallback.reason.replace(/_/g, " "),
+              }),
+            }
+          : {}),
+        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
+      });
+      continue;
+    }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
       const divider = buildCompactionDividerItem(
@@ -293,7 +322,13 @@ export function buildChatItems(
       });
     }
 
-    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
+    if (
+      !props.showToolCalls &&
+      isToolResult &&
+      !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
+      !hasSessionsYieldCall(msg) &&
+      !permissionInMessage(msg)
+    ) {
       continue;
     }
 
@@ -440,10 +475,26 @@ export function buildChatItems(
   ): TurnInsertionBounds | undefined =>
     boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
   if (!searchFiltering) {
+    const recordedPermissions = new Set(
+      props.guardianNotices?.some((notice) => notice.permissionMissing)
+        ? [...props.messages, ...props.toolMessages].flatMap((message) =>
+            extractToolCardsCached(message).flatMap((card) => {
+              const request = readNodePermissionRequest(asRecord(card.details)?.permissionMissing);
+              return request ? [JSON.stringify(request)] : [];
+            }),
+          )
+        : [],
+    );
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
     }
     for (const notice of props.guardianNotices ?? []) {
+      if (
+        notice.permissionMissing &&
+        recordedPermissions.has(JSON.stringify(notice.permissionMissing))
+      ) {
+        continue;
+      }
       projections.push({
         item: buildGuardianNoticeItem(notice),
         bounds: resolveProjectionBounds(notice.runId),
@@ -498,7 +549,12 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
+    if (
+      tool &&
+      (props.showToolCalls ||
+        hasSessionsYieldCall(tool.projection.item.message) ||
+        permissionInMessage(tool.projection.item.message))
+    ) {
       tool.projection.bounds = resolveProjectionBounds(
         tool.runId,
         normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),

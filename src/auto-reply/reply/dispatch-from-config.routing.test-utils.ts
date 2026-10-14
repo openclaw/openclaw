@@ -27,6 +27,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
+import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
 import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -674,18 +675,19 @@ describe("dispatchReplyFromConfig", () => {
 
   it("allows group tool summaries when verbose is enabled during the run", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
+    const sessionKey = "agent:main:whatsapp:group:789@g.us";
     const ctx = buildTestCtx({
       ChatType: "group",
       From: "whatsapp:group:789@g.us",
-      SessionKey: "agent:main:whatsapp:group:789@g.us",
+      SessionKey: sessionKey,
     });
 
+    await using session = await createDispatchVerboseSession(sessionKey, "off");
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
-      sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+      session.writeLevel("on");
       await onToolResult({ text: "🔧 exec: whoami" });
       return { text: "hi" } satisfies ReplyPayload;
     };
@@ -705,17 +707,18 @@ describe("dispatchReplyFromConfig", () => {
 
   it("hides failed tool progress when verbose is disabled during the run", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
+    const sessionKey = "agent:main:whatsapp:group:789@g.us";
     const ctx = buildTestCtx({
       ChatType: "group",
       From: "whatsapp:group:789@g.us",
-      SessionKey: "agent:main:whatsapp:group:789@g.us",
+      SessionKey: sessionKey,
     });
+    await using session = await createDispatchVerboseSession(sessionKey, "on");
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
-      sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+      session.writeLevel("off");
       await onToolResult({ text: "🔧 exec: failed", isError: true });
       return { text: "done" } satisfies ReplyPayload;
     };

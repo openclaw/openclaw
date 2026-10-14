@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
@@ -10,7 +11,10 @@ import {
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
 } from "./user-profile-events.js";
-import { retainUserProfileMutationPublication } from "./user-profile-list.js";
+import {
+  readResidentGatewayOwnerProfile,
+  retainUserProfileMutationPublication,
+} from "./user-profile-list.js";
 import {
   isUserProfileMutationPublication,
   type UserProfileMutationPublication,
@@ -21,6 +25,7 @@ import {
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
+import type { UserProfile } from "./user-profiles.types.js";
 import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
@@ -258,8 +263,19 @@ export async function syncCanonicalGitHubIdentity(
   return unwrap(await write("userProfiles.syncGitHub", input, options));
 }
 export async function ensureCanonicalGatewayOwnerProfile(
-  displayName: string | null,
+  displayName: string | null | (() => Promise<string | null>),
   options: ProfileWriteOptions = {},
-) {
+): Promise<UserProfile> {
+  const owner = readResidentGatewayOwnerProfile(resolveDatabasePath(options));
+  if (
+    owner &&
+    (owner.displayName?.trim() || (typeof displayName !== "function" && !displayName?.trim()))
+  ) {
+    options.assertCurrent?.();
+    return owner;
+  }
+  if (typeof displayName === "function") {
+    return ensureCanonicalGatewayOwnerProfile(await displayName(), options);
+  }
   return unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
 }

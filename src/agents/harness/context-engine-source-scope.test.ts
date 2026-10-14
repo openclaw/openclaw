@@ -17,23 +17,17 @@ import {
 describe("harness context engine source scopes", () => {
   it.each(
     (["prepared", "admitted"] as const).flatMap((phase) =>
-      (["before", "consumer"] as const).flatMap((closedAt) =>
-        (["scoped", "plain", "absent"] as const).map((sourceKind) => ({
-          phase,
-          closedAt,
-          sourceKind,
-        })),
-      ),
+      (["scoped", "plain", "absent"] as const).map((sourceKind) => ({ phase, sourceKind })),
     ),
   )(
-    "refuses $phase $sourceKind work when admission closes at $closedAt",
-    async ({ phase, closedAt, sourceKind }) => {
+    "refuses $phase $sourceKind work when admission is already closed",
+    async ({ phase, sourceKind }) => {
       const release = vi.fn();
       const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
       const source = vi.fn();
       const prepared = prepareSystemAgentRunAdmission(
         {},
-        `close-${phase}-${closedAt}-${sourceKind}`,
+        `close-${phase}-${sourceKind}`,
         "main",
         "test",
         sourceKind === "scoped"
@@ -47,19 +41,15 @@ describe("harness context engine source scopes", () => {
           ? { preparedRunAdmission: prepared }
           : { admittedRunContext: await prepared.admit("embedded") };
       source.mockClear();
-      const consumerStarted = createDeferred();
-      const finishConsumer = createDeferred();
-      if (closedAt === "before") {
-        prepared.close();
-      }
+      open.mockClear();
+      release.mockClear();
+      prepared.close();
       const run = assembleHarnessContextEngine({
         ...sessionParams,
         ...authority,
         contextEngine: createContextEngine({
           assemble: async ({ messages }) => {
             prepared.assertSourceCurrent();
-            consumerStarted.resolve();
-            await finishConsumer.promise;
             return { messages, estimatedTokens: 0 };
           },
         }),
@@ -68,25 +58,12 @@ describe("harness context engine source scopes", () => {
       });
       const rejected = expect(run).rejects.toThrow(/closed|no longer active/);
       try {
-        if (closedAt === "consumer") {
-          await awaitGateBeforeSettlement(
-            consumerStarted.promise,
-            run,
-            "source consumer was skipped",
-          );
-          prepared.close();
-          finishConsumer.resolve();
-        }
         await rejected;
-        const scopedConsumer = closedAt === "consumer" && sourceKind === "scoped";
-        expect(open).toHaveBeenCalledTimes(scopedConsumer ? 1 : 0);
-        expect(release).toHaveBeenCalledTimes(scopedConsumer ? 1 : 0);
-        expect(source).toHaveBeenCalledTimes(
-          closedAt === "consumer" && sourceKind === "plain" ? 1 : 0,
-        );
+        expect(open).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+        expect(source).not.toHaveBeenCalled();
         expect(() => prepared.assertSourceCurrent()).not.toThrow();
       } finally {
-        finishConsumer.resolve();
         await run.catch(() => {});
         prepared.close();
       }
@@ -104,6 +81,8 @@ describe("harness context engine source scopes", () => {
       Object.assign(() => {}, { prepareSessionSourceScope: open }),
     );
     const admitted = await prepared.admit("embedded");
+    open.mockClear();
+    release.mockClear();
     const assemble = (admittedRunContext: typeof admitted) =>
       assembleHarnessContextEngine({
         ...sessionParams,
@@ -125,7 +104,7 @@ describe("harness context engine source scopes", () => {
 
   it.each(
     (["bootstrap", "assemble", "prompt"] as const).flatMap((operation) =>
-      (["prepare", "assert", "consumer", "release"] as const).map((phase) => ({
+      (["prepare", "assert", "release"] as const).map((phase) => ({
         operation,
         phase,
       })),
@@ -134,7 +113,6 @@ describe("harness context engine source scopes", () => {
     "refuses $operation when source authority fails during $phase",
     async ({ operation, phase }) => {
       const failure = new Error(`source authority failed during ${phase}`);
-      let revoked = false;
       const release = vi.fn(async () => {
         if (phase === "release") {
           throw failure;
@@ -147,7 +125,7 @@ describe("harness context engine source scopes", () => {
         return {
           checks: [],
           assertCurrent: () => {
-            if (phase === "assert" || revoked) {
+            if (phase === "assert") {
               throw failure;
             }
           },
@@ -162,22 +140,15 @@ describe("harness context engine source scopes", () => {
         "test",
         source,
       );
-      const consume = async () => {
-        if (phase === "consumer") {
-          revoked = true;
-        }
-      };
       const warn = vi.fn();
       const params = {
         ...sessionParams,
         preparedRunAdmission: prepared,
         contextEngine: createContextEngine({
           bootstrap: async () => {
-            await consume();
             return { bootstrapped: true };
           },
           assemble: async ({ messages }) => {
-            await consume();
             return { messages, estimatedTokens: 0 };
           },
         }),

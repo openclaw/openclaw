@@ -31,6 +31,7 @@ import {
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
@@ -382,6 +383,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "result"),
+    sourcePackageAlias("normalization-core", "session-key-comparison"),
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
@@ -433,46 +435,142 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
-function normalizeViteImporterPath(importer: string): string {
-  return path.normalize(importer.replace(/[?#].*$/u, ""));
+const controlUiBuildInfoScriptId = "openclaw-control-ui-build-info";
+
+function controlUiBuildIdentityHtml(html: string, buildInfo: ControlUiBuildInfo, cacheId?: string) {
+  const script = `<script data-cfasync="false" id="${controlUiBuildInfoScriptId}">globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(buildInfo).replaceAll("<", "\\u003c")};</script>`;
+  const withoutIdentity = html
+    .replace(/<script\b[^>]*\bid="openclaw-control-ui-build-info"[^>]*>[\s\S]*?<\/script>/u, "")
+    .replace(new RegExp(` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "u"), "");
+  const insertion =
+    withoutIdentity.match(/<head\b[^>]*>/iu) ?? withoutIdentity.match(/<html\b[^>]*>/iu);
+  const withIdentity = insertion
+    ? withoutIdentity.replace(insertion[0], `${insertion[0]}${script}`)
+    : `${script}${withoutIdentity}`;
+  return cacheId
+    ? withIdentity.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+    : withIdentity;
 }
 
-export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
-  const sharedRedactImporters = new Set([
-    path.join(repoRoot, "src/agents/tool-display-common.ts"),
-    path.join(repoRoot, "src/agents/tool-display-exec.ts"),
-    path.join(repoRoot, "src/agents/tool-display.ts"),
-  ]);
-  return {
-    name: "control-ui-browser-only-shared-module-aliases",
-    enforce: "pre",
-    resolveId(source, importer) {
-      if (
-        source === "../logging/redact.js" &&
-        importer &&
-        sharedRedactImporters.has(normalizeViteImporterPath(importer))
-      ) {
-        return browserRedactPath;
+/** Refresh only release identity; the immutable bundles and compressed variants stay byte-identical. */
+export async function refreshControlUiBuildOutput(
+  buildOutDir: string,
+  buildInfo: ControlUiBuildInfo = resolveControlUiBuildInfo(),
+  bootAssets?: string[],
+  publicDir: string | false = path.join(here, "public"),
+) {
+  const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
+  const publicAssets = publicContent?.paths ?? [];
+  const cacheId = publicContent ? `${buildInfo.buildId}-${publicContent.hash}` : undefined;
+  let selectedBootAssets = bootAssets;
+  if (!selectedBootAssets) {
+    // Reuse the build-owned graph already serialized by this producer, never a fetched document.
+    const worker = fs.readFileSync(path.join(buildOutDir, "sw.js"), "utf8");
+    const encoded = worker.match(/^const OFFLINE_BOOT = (.+);$/mu)?.[1];
+    if (!encoded) {
+      throw new Error("Cached Control UI service worker has no offline build inventory");
+    }
+    const previous = JSON.parse(encoded) as { assets: Array<{ path: string }> };
+    selectedBootAssets = previous.assets
+      .map((asset) => asset.path)
+      .filter((asset) => asset.startsWith("assets/"));
+  }
+  const htmlPath = path.join(buildOutDir, "index.html");
+  fs.writeFileSync(
+    htmlPath,
+    controlUiBuildIdentityHtml(fs.readFileSync(htmlPath, "utf8"), buildInfo, cacheId),
+  );
+  if (publicDir) {
+    for (const asset of publicAssets) {
+      const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
+      if (!fontStylesheet && asset !== "manifest.webmanifest") {
+        continue;
       }
-      return null;
-    },
+      const filePath = path.join(buildOutDir, asset);
+      const assetSource = fs.readFileSync(path.join(publicDir, asset), "utf8");
+      if (fontStylesheet) {
+        // Relative CSS URLs do not inherit their parent stylesheet's query.
+        const versioned = assetSource.replace(
+          /url\("([^"/?#]+\.woff2)"\)/gu,
+          `url("$1?v=${cacheId}")`,
+        );
+        fs.writeFileSync(filePath, versioned);
+      } else {
+        const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+        for (const icon of manifest.icons) {
+          icon.src += `?v=${cacheId}`;
+        }
+        fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+    }
+  }
+  const swPath = path.join(buildOutDir, "sw.js");
+  const publicSwPath = path.join(here, "public/sw.js");
+  const source = fs.readFileSync(publicSwPath, "utf8");
+  const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
+  // Embed only build-owned HTML, never a fetched Gateway document (which may
+  // contain identity, route metadata, or an HTTP login response). The measured
+  // route graph also warms assets loaded before the first worker controls a tab.
+  const offlineShell = {
+    html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
+    // Public fonts and theme styles are selected at runtime by preferences.
+    // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
+    assets: [
+      ...new Set([
+        ...selectedBootAssets,
+        ...publicAssets.filter(
+          (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
+        ),
+      ]),
+    ]
+      .toSorted()
+      .map((file) => ({
+        path: file.startsWith("assets/") ? file : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+        integrity:
+          "sha256-" +
+          createHash("sha256")
+            .update(fs.readFileSync(path.join(buildOutDir, file)))
+            .digest("base64"),
+      })),
   };
+  // Same-commit source rebuilds must not pair a new document with an old shell.
+  const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
+    path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
+    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+  );
+  const offlineBuild = {
+    ...offlineShell,
+    csp: csp.buildControlUiCspHeader({
+      inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
+    }),
+    publicAssetVersion: cacheId,
+    publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
+    id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
+  };
+  const offlinePlaceholder = "const OFFLINE_BOOT = null;";
+  if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
+    throw new Error(`Control UI service worker build placeholders missing in ${swPath}`);
+  }
+  const updated = source
+    .replace(placeholder, JSON.stringify(buildInfo.buildId))
+    .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
+  fs.mkdirSync(buildOutDir, { recursive: true });
+  fs.writeFileSync(swPath, updated);
 }
 
-function controlUiBuildOutputPlugin(buildId: string): Plugin {
-  let publicAssets: string[] = [];
-  let cacheId: string | undefined;
+function controlUiBuildOutputPlugin(
+  buildInfo: ControlUiBuildInfo,
+  copiedInputs: Set<string>,
+): Plugin {
+  let publicDir: string | false = false;
   return {
     name: "control-ui-build-output",
     apply: "build",
     configResolved(config) {
-      const publicDir = config.build.copyPublicDir && config.publicDir;
-      const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
-      publicAssets = publicContent?.paths ?? [];
-      // Public bytes can change during same-commit source rebuilds; the runtime
-      // build identity stays separate from this immutable URL namespace.
-      cacheId = publicContent ? `${buildId}-${publicContent.hash}` : undefined;
+      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
+      for (const file of config.configFileDependencies) {
+        copiedInputs.add(file);
+      }
     },
     transformIndexHtml: {
       order: "post",
@@ -483,9 +581,7 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
           /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
           '<script data-cfasync="false"',
         );
-        return cacheId
-          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
-          : marked;
+        return controlUiBuildIdentityHtml(marked, buildInfo);
       },
     },
     async writeBundle({ dir: buildOutDir }, bundle) {
@@ -522,85 +618,25 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      for (const asset of publicAssets) {
-        const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
-        if (!fontStylesheet && asset !== "manifest.webmanifest") {
-          continue;
-        }
-        const filePath = path.join(buildOutDir, asset);
-        const assetSource = fs.readFileSync(filePath, "utf8");
-        if (fontStylesheet) {
-          // Relative CSS URLs do not inherit their parent stylesheet's query.
-          const versioned = assetSource.replace(
-            /url\("([^"/?#]+\.woff2)"\)/gu,
-            `url("$1?v=${cacheId}")`,
-          );
-          fs.writeFileSync(filePath, versioned);
-        } else {
-          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
-          for (const icon of manifest.icons) {
-            icon.src += `?v=${cacheId}`;
-          }
-          fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
-        }
-      }
-      const swPath = path.join(buildOutDir, "sw.js");
-      const publicSwPath = path.join(here, "public/sw.js");
-      const source = fs.readFileSync(publicSwPath, "utf8");
-      const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
-      // Embed only build-owned HTML, never a fetched Gateway document (which may
-      // contain identity, route metadata, or an HTTP login response). The measured
-      // route graph also warms assets loaded before the first worker controls a tab.
+      const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
+        .map((file) => file.split("?")[0])
+        .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
+        .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+        .filter(
+          (file) =>
+            !file.startsWith("../") &&
+            !file.includes("node_modules/") &&
+            fs.statSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isFile(),
+        )
+        .toSorted();
+      fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
       const bootAssets = collectControlUiBootAssets(bundle);
-      const offlineShell = {
-        html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
-        // Public fonts and theme styles are selected at runtime by preferences.
-        // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
-        assets: [
-          ...new Set([
-            ...bootAssets.chat,
-            ...bootAssets.new,
-            ...bootAssets.login,
-            ...publicAssets.filter(
-              (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
-            ),
-          ]),
-        ]
-          .toSorted()
-          .map((file) => ({
-            path: file.startsWith("assets/")
-              ? file
-              : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
-            integrity:
-              "sha256-" +
-              createHash("sha256")
-                .update(fs.readFileSync(path.join(buildOutDir, file)))
-                .digest("base64"),
-          })),
-      };
-      // Same-commit source rebuilds must not pair a new document with an old shell.
-      const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
-        path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
-        { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+      await refreshControlUiBuildOutput(
+        buildOutDir,
+        buildInfo,
+        [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+        publicDir,
       );
-      const offlineBuild = {
-        ...offlineShell,
-        csp: csp.buildControlUiCspHeader({
-          inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
-        }),
-        publicAssetVersion: cacheId,
-        publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
-        id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
-      };
-      const offlinePlaceholder = "const OFFLINE_BOOT = null;";
-      if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
-        throw new Error(`Control UI service worker build placeholders missing in ${swPath}`);
-      }
-      const updated = source
-        .replace(placeholder, JSON.stringify(buildId))
-        .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
-      fs.mkdirSync(buildOutDir, { recursive: true });
-      fs.writeFileSync(swPath, updated);
     },
   };
 }
@@ -636,18 +672,19 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
 }
 
 export default function controlUiViteConfig(
-  options: { outDir?: string; command?: "serve" | "build" } = {},
+  options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const buildInfo = resolveControlUiBuildInfo();
+  const buildInfo = options.buildInfo ?? resolveControlUiBuildInfo();
   const devGateway =
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const copiedInputs = new Set<string>();
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -657,10 +694,17 @@ export default function controlUiViteConfig(
     if (context.hostType !== "js") {
       return pending;
     }
-    // The executing importer has already loaded its direct static JS imports.
+    // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = staticImports.get(context.hostId);
-    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(context.hostId) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return pending.filter((dep) => !loaded.has(dep));
   };
   return {
     base,
@@ -672,7 +716,9 @@ export default function controlUiViteConfig(
       },
     },
     define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
+      ...(options.command === "serve"
+        ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
+        : {}),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
         ? JSON.stringify(devGateway.gateway)
         : "undefined",
@@ -740,9 +786,9 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
-      controlUiBrowserOnlySharedModuleAliases(),
+      controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
-      controlUiBuildOutputPlugin(buildInfo.buildId),
+      controlUiBuildOutputPlugin(buildInfo, copiedInputs),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

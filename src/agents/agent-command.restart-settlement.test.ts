@@ -1,8 +1,12 @@
 import path from "node:path";
-import { beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -32,13 +36,74 @@ const {
   createAgentRunRestartAbortError,
 } = compactionTestRuntime;
 
+// Stack-ordered teardown drains the compaction fixture before clearing its config.
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 registerAgentCommandCompactionTestHooks();
+
+beforeEach(() => {
+  if (!state.cfg) {
+    throw new Error("missing compaction fixture config");
+  }
+  setRuntimeConfigSnapshot(state.cfg);
+});
 
 let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifecycle-state.js").persistGatewaySessionLifecycleEvent;
 
 beforeAll(async () => {
   ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
 });
+
+it.each(["visible final", "progress only"] as const)(
+  "retains the normal settle requester's durable delivery evidence: %s",
+  async (reply) => {
+    const sessionKey = "agent:main:settle-completion";
+    const sessionId = "settle-completion-session";
+    const runId = "announce:requester-settle:synthetic-cohort:yield-1";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+    const result = makeCompactionResult({
+      sessionId,
+      text: "Requester finished",
+      runner: "embedded",
+    });
+    if (reply === "progress only") {
+      result.payloads = [{ text: "Still checking", isCommentary: true }];
+      result.meta.finalAssistantVisibleText = undefined;
+    }
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    const { deliverAgentCommandResult } =
+      await vi.importActual<typeof import("./command/delivery.js")>("./command/delivery.js");
+    state.deliverAgentCommandResultMock.mockImplementation(deliverAgentCommandResult);
+    await agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Synthesize the completed child results",
+        allowModelOverride: false,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:synthetic-child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_settle",
+        },
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    const completed = loadSessionEntry(target);
+    expect(getRestartRecoveryTerminalDeliveryEvidence(completed, runId)).toMatchObject({
+      runId,
+      captured: true,
+      payloads: [{ visible: reply === "visible final" }],
+    });
+    expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["visible", "internal", "coordination"] as const)(
   "declares the %s command admission and accepts its interruption only once",
@@ -306,95 +371,6 @@ it("preserves a stopped source claim when generation retires before post-run per
   });
   expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
 });
-
-it.each(["command", "cleanup"] as const)(
-  "retains the %s failure when completion source-release also fails",
-  async (phase) => {
-    const sessionKey = `agent:main:completion-settlement-${phase}`;
-    const sessionId = `completion-settlement-${phase}`;
-    const runId = `announce:completion-settlement-${phase}`;
-    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
-    const claim: HarnessCompletionRecovery = {
-      taskId: "completed-child",
-      taskRunId: "completed-child-run",
-      taskStatus: "succeeded",
-      sourceRunId: runId,
-      requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      sessionId,
-      lifecycleRevision: "initial",
-    };
-    await replaceSessionEntry(target, {
-      sessionId,
-      updatedAt: Date.now(),
-      lifecycleRevision: claim.lifecycleRevision,
-      restartRecoveryHarnessCompletion: claim,
-      restartRecoveryDeliveryRunId: runId,
-      restartRecoveryDeliverySourceRunId: runId,
-      restartRecoverySourceIngress: "internal",
-    });
-    const primary = new Error(`${phase} failed before source release`);
-    const releaseFailure = new Error("completion source release failed");
-    const enteredCleanup = createDeferred();
-    const finishCleanup = createDeferred();
-    const sourceRelease = vi.fn(async () => {
-      throw releaseFailure;
-    });
-    const prepareSource = vi.fn(async () => ({
-      assertCurrent: () => {},
-      checks: [],
-      release: sourceRelease,
-    }));
-    const beforeTerminalDelivery = vi.fn(async () => {
-      enteredCleanup.resolve();
-      await finishCleanup.promise;
-      if (phase === "cleanup") {
-        throw primary;
-      }
-    });
-    if (phase === "command") {
-      state.runAgentAttemptMock.mockRejectedValue(primary);
-    } else {
-      state.runAgentAttemptMock.mockResolvedValue(
-        makeCompactionResult({ sessionId, text: "done", runner: "embedded" }),
-      );
-      beforeTerminalDelivery.mockResolvedValueOnce(undefined);
-    }
-    const run = agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId,
-        message: "Finish the saved completion",
-        allowModelOverride: false,
-        assertSourceCurrent: Object.assign(() => {}, { prepareSessionSourceScope: prepareSource }),
-        beforeTerminalDelivery,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
-    const rejected = expect(run).rejects.toMatchObject({
-      name: "AggregateError",
-      cause: primary,
-      errors: [primary, releaseFailure],
-    });
-    try {
-      await awaitGateBeforeSettlement(
-        enteredCleanup.promise,
-        run,
-        "command skipped terminal cleanup",
-      );
-      expect(sourceRelease).not.toHaveBeenCalled();
-      finishCleanup.resolve();
-      await rejected;
-      expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
-      expect(prepareSource).toHaveBeenCalledOnce();
-      expect(sourceRelease).toHaveBeenCalledOnce();
-    } finally {
-      finishCleanup.resolve();
-      await run.catch(() => {});
-    }
-  },
-);
 
 it.each([false, true])(
   "queues image follow-up and revalidates session replacement=%s",

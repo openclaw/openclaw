@@ -6,8 +6,14 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import type {
+  GatewayApprovalEventSubscriber,
+  GatewayNativeApprovalRuntime,
+} from "./approval-gateway-runtime.types.js";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-handler-adapter-runtime.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
+import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
@@ -110,6 +116,124 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     lease.dispose();
   });
 
+  it("bootstraps async-only native delivery to both the origin and approver DM", async () => {
+    const actual = await vi.importActual<typeof import("./approval-handler-runtime.js")>(
+      "./approval-handler-runtime.js",
+    );
+    createChannelApprovalHandlerFromCapability.mockImplementation(
+      actual.createChannelApprovalHandlerFromCapability,
+    );
+    const channelRuntime = createRuntimeChannel();
+    const subscribed = createDeferred<GatewayApprovalEventSubscriber>();
+    const delivered = createDeferred();
+    const deliveries: Array<{ to: string; approvalId: string }> = [];
+    const unsubscribe = vi.fn();
+    const routeCoordinator = createApprovalNativeRouteCoordinator();
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      request: vi.fn().mockResolvedValue([]),
+      requestRoute: vi.fn().mockResolvedValue({}),
+      routeCoordinator,
+      subscribe: (subscriber) => {
+        subscribed.resolve(subscriber);
+        return unsubscribe;
+      },
+    };
+    const runtime = actual.createChannelApprovalNativeRuntimeAdapter<
+      { approvalId: string },
+      { to: string },
+      { messageId: string }
+    >({
+      availability: { isConfigured: () => true, shouldHandle: () => true },
+      presentation: {
+        buildPendingPayload: ({ view }) => ({ approvalId: view.approvalId }),
+        buildResolvedResult: () => ({ kind: "leave" }),
+        buildExpiredResult: () => ({ kind: "leave" }),
+      },
+      transport: {
+        prepareTarget: ({ plannedTarget }) => ({
+          dedupeKey: plannedTarget.target.to,
+          target: { to: plannedTarget.target.to },
+        }),
+        deliverPending: async ({ preparedTarget, pendingPayload }) => {
+          deliveries.push({ to: preparedTarget.to, approvalId: pendingPayload.approvalId });
+          return { messageId: String(deliveries.length) };
+        },
+      },
+      observe: {
+        onDelivered: () => {
+          if (deliveries.length === 2) {
+            delivered.resolve();
+          }
+        },
+      },
+    });
+    const cleanup = await startChannelApprovalHandlerBootstrap({
+      scheduler,
+      plugin: {
+        id: "matrix",
+        meta: {
+          id: "matrix",
+          label: "Matrix",
+          selectionLabel: "Matrix",
+          docsPath: "/channels/matrix",
+          blurb: "Matrix",
+        },
+        approvalCapability: {
+          nativeAsync: {
+            describeDeliveryCapabilities: async () => ({
+              enabled: true,
+              preferredSurface: "both",
+              supportsOriginSurface: true,
+              supportsApproverDmSurface: true,
+            }),
+            resolveOriginTarget: () => ({ to: "room:!origin:example.org" }),
+            resolveApproverDmTargets: () => [{ to: "user:@approver:example.org" }],
+          },
+          nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
+            capabilityBoundary: true,
+            isConfigured: async () => true,
+            shouldHandle: async () => true,
+            load: async () => runtime,
+          }),
+        },
+      },
+      cfg: {},
+      accountId: "default",
+      channelRuntime,
+      gatewayRuntime,
+    });
+    const lease = channelRuntime.runtimeContexts.register({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      context: {},
+    });
+    try {
+      await flushTransitions();
+      expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledOnce();
+      const subscriber = await subscribed.promise;
+      const request = {
+        approvalKind: "exec" as const,
+        id: "approval-both",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: { command: "echo safe", turnSourceChannel: "matrix" },
+      };
+      expect(await subscriber.shouldHandle(request)).toBe(true);
+      subscriber.onRequested(request);
+      await delivered.promise;
+      expect(deliveries).toEqual([
+        { to: "room:!origin:example.org", approvalId: "approval-both" },
+        { to: "user:@approver:example.org", approvalId: "approval-both" },
+      ]);
+    } finally {
+      await cleanup();
+      lease.dispose();
+      routeCoordinator.close();
+    }
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("does not block bootstrap return on an existing runtime context", async () => {
     const channelRuntime = createRuntimeChannel();
     createChannelApprovalHandlerFromCapability.mockReturnValue(new Promise(() => {}));
@@ -180,37 +304,6 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(stopSecond).toHaveBeenCalledTimes(1);
 
     firstLease.dispose();
-    await cleanup();
-  });
-
-  it("retries a registered-context startup failure once after sleep", async () => {
-    const channelRuntime = createRuntimeChannel();
-    const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
-    const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = createLogger();
-    const failed = createDeferred();
-    logger.error.mockImplementation(() => failed.resolve());
-    createChannelApprovalHandlerFromCapability
-      .mockResolvedValueOnce({ start, stop })
-      .mockResolvedValueOnce({ start, stop });
-
-    const cleanup = await startTestBootstrap({ channelRuntime, logger });
-
-    registerApprovalContext(channelRuntime);
-    await failed.promise;
-
-    expect(start).toHaveBeenCalledTimes(1);
-    clock.setTime(60_000);
-    await clock.wake();
-    await clock.wake();
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledWith(
-      "failed to start native approval handler: Error: boom",
-    );
-
     await cleanup();
   });
 

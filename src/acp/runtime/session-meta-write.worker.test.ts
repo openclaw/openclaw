@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   replaceSessionEntry,
@@ -12,7 +13,7 @@ import { retainPreparedSessionSharingFacts } from "../../config/sessions/session
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import * as entryPublication from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import * as historyMaintenance from "../../config/sessions/session-history-eviction.js";
-import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
@@ -27,6 +28,8 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryWorker from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { readAcpSessionEntryAsync } from "./session-meta-read.js";
+import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
 import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "./session-meta.js";
 
@@ -132,26 +135,20 @@ it.each(["incognito", "file"] as const)(
             ? "agent:main:dashboard:incognito-private"
             : "agent:main:acp:worker",
         };
-        if (incognito) {
-          await replaceSessionEntry(scope, {
-            sessionId: "private-session",
-            lifecycleRevision: "private-revision",
-            updatedAt: 100,
-            label: "private-session-label",
-            skillsSnapshot: { prompt: "private-session-prompt", skills: [] },
-          });
-        }
-        const initial = incognito ? loadExactSessionEntry(scope)?.entry : undefined;
         const paths = [
           resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
           resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
         ].flatMap((database) => [database, `${database}-wal`, `${database}-shm`]);
         paths.push(path.join(state.sessionsDir("main"), "sessions.json"));
         if (incognito) {
-          expect(initial).toBeDefined();
           expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
         }
         const observe = observeHostDataSql();
+        const readMetadata = (entry: SessionEntry) =>
+          readAcpSessionMetaForEntries({
+            env: state.env,
+            entries: [{ sessionKey: scope.sessionKey, agentId: scope.agentId, entry }],
+          });
         let latestAcp: Extract<SessionRowFacts, { kind: "acp" }> | undefined;
         const observedAcp: Array<Extract<SessionRowFacts, { kind: "acp" }>> = [];
         const releaseFacts = sessionChanges.subscribeFacts((change) => {
@@ -193,7 +190,9 @@ it.each(["incognito", "file"] as const)(
             throw new Error("Expected the initialized ACP session");
           }
           if (incognito) {
-            expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
+            expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(META);
+          } else {
+            expect(await readMetadata(created)).toEqual([META]);
           }
           const retainedMembership: boolean[] = [];
           const releases: Array<() => void> = [];
@@ -224,8 +223,9 @@ it.each(["incognito", "file"] as const)(
             expect(updated?.acp).toEqual(updatedMeta);
             expect(observedAcp.at(-1)?.acp).toEqual(updatedMeta);
             if (incognito) {
-              expect(readAcpSessionEntry(scope)?.acp).toEqual(updatedMeta);
+              expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(updatedMeta);
             } else {
+              expect(await readMetadata(created)).toEqual([updatedMeta]);
               expect(retainedMembership.length).toBeGreaterThan(0);
               expect(retainedMembership.every(Boolean)).toBe(true);
             }
@@ -242,29 +242,25 @@ it.each(["incognito", "file"] as const)(
           expect(cleared?.acp).toBeUndefined();
           expect(observedAcp.at(-1)?.acp).toBeNull();
           if (!incognito) {
-            expect(observe.queries).toEqual([]);
+            expect(await readMetadata(created)).toEqual([null]);
             expect(maintenance.mock.calls.length).toBeGreaterThan(0);
             expect(
               maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
             ).toBe(true);
           }
+          expect(observe.queries).toEqual([]);
         } finally {
           releaseFacts();
           releaseObservers();
           observe.restore();
           maintenance.mockRestore();
         }
-        expect(readAcpSessionEntry(scope)?.acp).toBeUndefined();
-        const persisted = loadExactSessionEntry(scope)?.entry;
+        const result = await readAcpSessionEntryAsync(scope);
+        expect(result?.acp).toBeUndefined();
+        const persisted = result?.entry;
         expect(persisted?.sessionId).toBeTruthy();
         expect(persisted?.acp).toBeUndefined();
         if (incognito) {
-          expect(persisted).toMatchObject({
-            sessionId: initial?.sessionId,
-            lifecycleRevision: initial?.lifecycleRevision,
-            label: initial?.label,
-            skillsSnapshot: initial?.skillsSnapshot,
-          });
           expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
         } else {
           expect(
@@ -302,6 +298,7 @@ it.each([
       async (state) => {
         const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           cfg,
           env: state.env,
@@ -434,6 +431,7 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
     async (state) => {
       const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const scope = {
         cfg,

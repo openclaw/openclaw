@@ -174,20 +174,24 @@ describe("openai completions params", () => {
       );
     });
 
-    it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
-      const params = buildOpenAICompletionsParams(
-        geminiModel,
-        geminiToolReplayContext(geminiModel),
-        undefined,
-      ) as { messages: Array<Record<string, unknown>> };
+    it.each(["gemini-3-flash-preview", "gemini-3.8-flash", "gemini-4-argon"])(
+      "uses the skip-validator signature for unsigned %s replay",
+      (id) => {
+        const target = { ...geminiModel, id };
+        const params = buildOpenAICompletionsParams(
+          target,
+          geminiToolReplayContext(target),
+          undefined,
+        ) as { messages: Array<Record<string, unknown>> };
 
-      const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
-        | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
-        "skip_thought_signature_validator",
-      );
-    });
+        const assistant = params.messages.find((message) => message.role === "assistant") as
+          | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+          | undefined;
+        expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+          "skip_thought_signature_validator",
+        );
+      },
+    );
 
     it("drops the field when the model is not Gemini 3 and the captured same-route signature is truncated", () => {
       // gemini-2.5-pro: requiresGoogleCompatToolCallThoughtSignature returns false,

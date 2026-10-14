@@ -63,11 +63,7 @@ suite.define(() => {
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor({ state: "visible" });
       }
       await page.locator(".sidebar-identity-card").click();
-      await page
-        .locator(
-          'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
-        )
-        .click();
+      await page.locator('.sidebar-identity-menu [data-value="command:retry-connect"]').click();
       await expect.poll(() => rows.count()).toBe(2);
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       expect(await sidebar.locator('[data-session-key="agent:main:foreign"]').count()).toBe(0);

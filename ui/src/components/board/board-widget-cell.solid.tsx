@@ -1,6 +1,5 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
-import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { createErrorBoundary } from "@solidjs/signals";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -12,7 +11,6 @@ import {
   Match,
   untrack,
 } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -23,14 +21,13 @@ import {
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
 import {
   CORE_BOARD_WIDGET_ELEMENTS,
   getPluginWidgetKindContribution,
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -38,6 +35,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-brid
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
+import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import {
@@ -46,19 +44,18 @@ import {
 } from "./board-widget-capabilities.solid.tsx";
 import {
   BOARD_SIZE_PRESETS,
-  closeBoardWidgetMenu,
   type BoardWidgetCellHandle,
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
 import {
   BoardDisabledPlugin,
-  BoardWidgetError,
-  BoardWidgetMenu,
+  BoardCoreWidget,
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
+import { BoardWidgetError } from "./board-widget-error.tsx";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
-import "../web-awesome.ts";
+import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
@@ -67,15 +64,7 @@ function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
   host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
 ) {
-  let context: ApplicationContext | undefined;
-  try {
-    context = useApplication();
-  } catch (error) {
-    // Standalone capless cells have no application provider.
-    if (!(error instanceof ContextNotFoundError)) {
-      throw error;
-    }
-  }
+  const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
     get: () => cells.get(host)?.presentationReady ?? false,
@@ -89,6 +78,7 @@ function BoardWidgetCellContent(
   };
   let actionError = "";
   let actionPending = false;
+  let menu: MenuHandle | undefined;
   let bodyErrored = false;
   let resetBodyError: (() => void) | undefined;
   let connected = true;
@@ -125,7 +115,7 @@ function BoardWidgetCellContent(
   const frame = new BoardWidgetFrameLifecycle({
     active: () => untrack(active),
     connected: () => connected,
-    loadingCovered: () => untrack(() => props.loadingCovered ?? false),
+    loadingCovered: () => props.loadingCovered ?? false,
     bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
     context: () => context,
     refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
@@ -134,7 +124,7 @@ function BoardWidgetCellContent(
     scrollBy: (deltaY) =>
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
     requestUpdate,
-    resolveFrameUrl: () => untrack(() => props.widgetFrameUrl),
+    resolveFrameUrl: () => props.widgetFrameUrl,
     root: () => host,
     widget: () => untrack(() => props.widget),
   });
@@ -156,29 +146,6 @@ function BoardWidgetCellContent(
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null;
-  const CoreElement = dynamic(() => contribution()?.tagName);
-  const CoreWidget = () => {
-    let element!: HTMLElement & {
-      widget?: BoardWidget;
-      session?: BoardGetParams;
-      active?: boolean;
-    };
-    createEffect(
-      () => ({ widget: props.widget, session: props.session, active: active() }),
-      (value) => {
-        element.widget = value.widget;
-        element.session = value.session ?? { sessionKey: "" };
-        element.active = value.active;
-      },
-    );
-    return (
-      <CoreElement
-        ref={(node: typeof element) => {
-          element = node;
-        }}
-      />
-    );
-  };
 
   async function runAction(action: () => Promise<void>, failureMessage?: string) {
     if (actionPending || props.busy) {
@@ -187,7 +154,7 @@ function BoardWidgetCellContent(
     actionPending = true;
     actionError = "";
     requestUpdate();
-    closeBoardWidgetMenu(host);
+    menu?.close();
     try {
       await action();
     } catch (error) {
@@ -289,7 +256,15 @@ function BoardWidgetCellContent(
       }),
   );
   createEffect(
-    () => [revision(), props.widget, active(), props.loadingCovered, props.bridgeEnabled] as const,
+    () =>
+      [
+        revision(),
+        props.widget,
+        active(),
+        props.loadingCovered,
+        props.bridgeEnabled,
+        props.widgetFrameUrl,
+      ] as const,
     () =>
       untrack(() => {
         appView.observe(
@@ -427,7 +402,12 @@ function BoardWidgetCellContent(
                 when={(revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
-                <CoreWidget />
+                <BoardCoreWidget
+                  tagName={contribution()?.tagName}
+                  widget={props.widget}
+                  session={props.session}
+                  active={active()}
+                />
               </Show>
             }
           >
@@ -622,7 +602,10 @@ function BoardWidgetCellContent(
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
                 disabled={props.busy || state().pending}
-                onSelect={(event) => selectMenuItem(event.detail.item.value)}
+                onSelect={selectMenuItem}
+                ref={(handle) => {
+                  menu = handle;
+                }}
               />
             </Show>
           </header>

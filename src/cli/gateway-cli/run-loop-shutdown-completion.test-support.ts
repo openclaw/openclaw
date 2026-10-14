@@ -97,6 +97,7 @@ export function registerGracefulGatewayShutdownTests({
         await localServiceStopStarted.promise;
 
         expect(close).toHaveBeenCalledWith({
+          retainSharedState: true,
           reason: "gateway stopping",
           restartExpectedMs: null,
         });
@@ -152,6 +153,7 @@ export function registerGracefulGatewayShutdownTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           if (!restart) {
             expect(close).toHaveBeenCalledExactlyOnceWith({
+              retainSharedState: true,
               reason: "gateway stopping",
               restartExpectedMs: null,
             });
@@ -296,10 +298,11 @@ export function registerGracefulGatewayShutdownTests({
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
         onSnapshot: expect.any(Function),
       });
       expect(close).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
       });

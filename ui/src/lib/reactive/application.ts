@@ -1,19 +1,19 @@
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import { projectSource } from "./projection.ts";
+import type { MentionsCapability } from "../../app/mentions.ts";
+import type { ApplicationOverlays } from "../../app/overlays-types.ts";
+import type { SidebarAttentionStore } from "../../app/sidebar-attention-store.ts";
+import type { WebPushCapability } from "../../app/web-push.ts";
+import { projectOwner, projectSource } from "./projection.ts";
 
 /** Connection identity and its snapshot publish through the same owner subscription. */
 export function projectGateway(source: ApplicationGateway) {
-  return projectSource(source, {
-    read: (gateway) => ({
-      snapshot: gateway.snapshot,
-      connection: gateway.connection,
-      connectionRevision: gateway.connectionRevision,
-    }),
-    subscribe: (gateway, notify) => gateway.subscribe(notify),
-    equality: "revision",
-  });
+  return projectOwner(source, (gateway) => ({
+    snapshot: gateway.snapshot,
+    connection: gateway.connection,
+    connectionRevision: gateway.connectionRevision,
+  }));
 }
 
 /** Acquiring this projection enables diagnostic capture; the last reader releases it. */
@@ -26,17 +26,28 @@ export function projectGatewayEventLog(source: ApplicationGateway) {
 }
 
 export function projectApplicationConfig(source: ApplicationConfigCapability) {
-  return projectSource(source, {
-    read: (config) => config.current,
-    subscribe: (config, notify) => config.subscribe(notify),
-    equality: "revision",
-  });
+  return projectOwner(source, (config) => config.current);
 }
 
 export function projectAgentSelection(source: AgentSelectionCapability) {
-  return projectSource(source, {
-    read: (selection) => ({ state: selection.state, intentRevision: selection.intentRevision }),
-    subscribe: (selection, notify) => selection.subscribe(notify),
-    equality: "revision",
-  });
+  return projectOwner(source, (selection) => ({
+    state: selection.state,
+    intentRevision: selection.intentRevision,
+  }));
+}
+
+export function projectOverlays(source: ApplicationOverlays) {
+  return projectOwner(source, (overlays) => overlays.snapshot);
+}
+
+export function projectMentions(source: MentionsCapability) {
+  return projectOwner(source, (mentions) => mentions.snapshot);
+}
+
+export function projectSidebarAttention(source: SidebarAttentionStore) {
+  return projectOwner(source, (attention) => attention.entries);
+}
+
+export function projectWebPush(source: WebPushCapability) {
+  return projectOwner(source, (push) => push.snapshot);
 }

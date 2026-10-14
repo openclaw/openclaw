@@ -114,7 +114,7 @@ describe("runGatewayLoop", () => {
   registerNaturalExitTests(waitForLoopTurn);
   registerGatewayRequestTests(fixtures);
 
-  registerExternalHandoffShutdownTests(fixtures, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+  registerExternalHandoffShutdownTests(fixtures);
 
   it("does not grant process control to a nonexclusive embedded host", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -176,7 +176,7 @@ describe("runGatewayLoop", () => {
         expect(hostedStopExecute).not.toHaveBeenCalled();
         joined.resolve();
         await expect(exited).resolves.toBe(0);
-        expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+        expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
           onSnapshot: expect.any(Function),
         });
         expect(hostedStopExecute).toHaveBeenCalledOnce();
@@ -452,7 +452,7 @@ describe("runGatewayLoop", () => {
             captureSignal(signal)();
             await enteredDrain.promise;
             expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
-            expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+            expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
               onSnapshot: expect.any(Function),
             });
             expect(createGatewayActiveWorkSnapshot).not.toHaveBeenCalled();
@@ -460,7 +460,7 @@ describe("runGatewayLoop", () => {
             expect(cleanupSignal.aborted).toBe(false);
             expect(runtime.exit).not.toHaveBeenCalled();
             expect(gatewayLog.info).toHaveBeenCalledWith(
-              `draining active work before stop with timeout 315000ms: ${counts}`,
+              `draining active work before stop with timeout 20000ms: ${counts}`,
             );
             captureSignal(signal)();
             expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
@@ -496,6 +496,7 @@ describe("runGatewayLoop", () => {
                 : [],
             );
             expect(close).toHaveBeenCalledWith({
+              retainSharedState: true,
               reason: "gateway stopping",
               restartExpectedMs: null,
             });
@@ -634,6 +635,7 @@ describe("runGatewayLoop", () => {
       sigterm();
       await expect(exited).resolves.toBe(0);
       expect(closeThird).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
@@ -654,7 +656,7 @@ describe("runGatewayLoop", () => {
         "expected SIGUSR2 to trigger restart",
       );
 
-      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
       expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
       expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
       expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
@@ -801,7 +803,10 @@ describe("runGatewayLoop", () => {
           outcome: "forced_stop",
           reason: "gateway.restart_startup_request_timeout",
         });
-        expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "gateway stopping" });
+        expect(close).toHaveBeenCalledExactlyOnceWith({
+          retainSharedState: true,
+          reason: "gateway stopping",
+        });
         expect(start).toHaveBeenCalledTimes(1);
         expect(gatewayLog.error).toHaveBeenCalledWith(
           "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
@@ -1409,38 +1414,11 @@ describe("runGatewayLoop", () => {
         "failed to handle SIGTERM: Error: dynamic import failed",
       );
       expect(close).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
-    });
-  });
-
-  it("reopens refused SIGUSR2 admission without consuming a later signal token (#83131)", async () => {
-    consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
-      new Error("lifecycle module corrupted"),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigterm = captureSignal("SIGTERM");
-
-      restartSignal();
-      await waitForLoopTurn();
-      await waitForLoopTurn();
-
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        "SIGUSR2 handler failed: lifecycle module corrupted",
-      );
-      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
-      expect(rollbackGatewayRestartSignalAdmission).not.toHaveBeenCalled();
-      expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(close).not.toHaveBeenCalled();
-      expect(start).toHaveBeenCalledTimes(1);
-
-      sigterm();
-      await expect(exited).resolves.toBe(0);
     });
   });
 

@@ -40,6 +40,15 @@ previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
 
+## Connection permissions
+
+The Control UI uses the granted scopes returned by the Gateway handshake.
+Session readers can open shared chats without polling operator-only dashboards,
+scheduled tasks, voice catalogs, or provider authentication status. Restricted
+surfaces are hidden or show an access message. A dashboard `FORBIDDEN` response
+stops automatic retries; reconnecting replaces the connection's granted scopes.
+The Gateway continues to authorize every request and subscription.
+
 ## Public transcript boundary
 
 Public threads use the same `/chat/...` URL as the authenticated Control UI.
@@ -65,7 +74,7 @@ no Gateway or session access.
 
 The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies best-effort credential-pattern redaction. A restrictive
+metadata. Included text preserves credentials; review it before publishing. A restrictive
 content security policy permits only the fixed reader script; transcript HTML
 cannot execute. Responses retain `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
@@ -142,7 +151,8 @@ ticket; replacing the file or restarting the Gateway requires a new allowance.
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
 - `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
+- Saved message attachments also carry `messageId`. Readers with `operator.sessions.read` can open an attachment only when its current, visible message belongs to a conversation they can read, including retained queued or stopped inputs. The Gateway verifies the source against that message’s saved attachment references or supported assistant media directives; a session key or filename alone never grants file access. These reads retain the same filesystem restrictions. Standalone file reads still require `operator.read`.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file, session, and message when applicable. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
 Tickets remain bound to the issuing reader's current access. Losing session

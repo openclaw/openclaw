@@ -366,9 +366,7 @@ suite.define(() => {
           expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
         }
         await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
-        await page
-          .locator('openclaw-app-sidebar wa-dropdown-item[value="command:settings"]')
-          .click();
+        await page.locator('openclaw-app-sidebar [data-value="command:settings"]').click();
         await page.locator(".settings-sidebar__back").waitFor();
         const parked = {
           frameConnected: await originalFrame.evaluate((element) => element.isConnected),

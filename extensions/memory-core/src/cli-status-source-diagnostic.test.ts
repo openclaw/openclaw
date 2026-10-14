@@ -14,9 +14,9 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 
 // mock-isolation: exercise CLI diagnostics without opening a native SQLite memory manager.
 vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfig(),
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),

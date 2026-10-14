@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -24,8 +24,6 @@ import {
 import {
   deferTurnClaimRelease,
   deferWorkerTurnClaimClosed,
-  removeTurnClaimReleaseWaiter,
-  waitersFor,
 } from "./placement-turn-claim-events.js";
 import {
   assertSessionWorkspaceUnreserved,
@@ -42,9 +40,8 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
-export { registerWorkerTurnClaimClosedHandler } from "./placement-turn-claim-events.js";
 
-const workspaceJournalQuery = (db: DatabaseSync) =>
+const workspaceJournalQuery = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
 export class ActiveTurnClaimError extends Error {
@@ -54,7 +51,7 @@ export class ActiveTurnClaimError extends Error {
   }
 }
 
-function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
+function releaseTurnQuery(db: EngineConnection, nowMs: number) {
   return query(db)
     .updateTable("worker_session_placements")
     .set({
@@ -64,7 +61,7 @@ function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
 }
 
 export function clearLocalTurnClaimsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   nowMs: number,
 ): WorkerSessionPlacementRecord[] {
@@ -80,20 +77,20 @@ export function clearLocalTurnClaimsInDatabase(
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
-  const { instanceId, path, now, read, write } = runtime;
+  const { instanceId, path, now, write } = runtime;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
     error: string,
   ): WorkerSessionPlacementRecord;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
   ): WorkerSessionPlacementRecord | undefined;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
     error?: string,
@@ -112,7 +109,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     return updated;
   }
   const claimTurnInDatabase = (
-    db: DatabaseSync,
+    db: EngineConnection,
     input: WorkerTurnClaimInput,
     updatedAtMs: number,
     options: { allowDraining?: boolean } = {},
@@ -286,7 +283,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       return claim;
     });
 
-  const releaseTurnInDatabase = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+  const releaseTurnInDatabase = (db: EngineConnection, claim: WorkerSessionTurnClaim) => {
     const sessionId = required(claim.sessionId, "session id");
     const claimId = required(claim.claimId, "turn claim id");
     const runId = required(claim.runId, "turn claim run id");
@@ -485,75 +482,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           `Session ${sessionId} workspace result changed during cancellation`,
         );
       });
-    },
-
-    clearLocalTurnClaimsAfterRestart(this: void): number {
-      return write((db) => clearLocalTurnClaimsInDatabase(db, path, now()).length);
-    },
-
-    async waitForTurnClaimRelease(
-      this: void,
-      sessionIdInput: string,
-      waitOptions: { timeoutMs?: number; signal?: AbortSignal },
-    ): Promise<void> {
-      const sessionId = required(sessionIdInput, "session id");
-      if (
-        waitOptions.timeoutMs !== undefined &&
-        (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0)
-      ) {
-        throw new Error("Worker session turn claim wait timeout must be a non-negative integer");
-      }
-      if (!find(read(), sessionId)?.turnClaim) {
-        return;
-      }
-      if (waitOptions.signal?.aborted) {
-        throw new Error(`Turn claim wait aborted for session ${sessionId}`);
-      }
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const waiters = waitersFor(path, sessionId);
-        const finish = (error?: Error) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-          }
-          waitOptions.signal?.removeEventListener("abort", onAbort);
-          removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        };
-        const onRelease = (error?: Error) => finish(error);
-        const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
-        const timer =
-          waitOptions.timeoutMs === undefined
-            ? undefined
-            : setTimeout(
-                () =>
-                  finish(
-                    new Error(`Timed out waiting for session ${sessionId} turn claim release`),
-                  ),
-                waitOptions.timeoutMs,
-              );
-        waiters.add(onRelease);
-        waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
-        // Register first, then reread. This closes the release-between-check-and-wait race.
-        if (!find(read(), sessionId)?.turnClaim) {
-          finish();
-        } else if (waitOptions.signal?.aborted) {
-          onAbort();
-        }
-      });
-    },
-
-    validateTurnClaim(this: void, claim: WorkerSessionTurnClaim): boolean {
-      const current = find(read(), required(claim.sessionId, "session id"));
-      return current ? isCurrentPlacementTurnClaim(current, claim) : false;
     },
 
     updateWorkspaceBaseManifest(input: {

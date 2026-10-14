@@ -63,6 +63,7 @@ import {
   MAX_CARD_NOTIFICATIONS,
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
+  MAX_RUN_ID_LENGTH,
 } from "./store-constants.js";
 import type {
   WorkboardAttachmentInput,
@@ -116,7 +117,7 @@ export function normalizeNotificationSubscription(
   const boardId = normalizeBoardId(input.boardId) ?? "default";
   const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
   const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-  const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+  const runId = normalizeRunId(input.runId);
   const target = normalizeBoundedString(input.target, undefined, 240, "notification target");
   if (!cardId && !sessionKey && !runId && !target) {
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
@@ -173,6 +174,10 @@ export function normalizeBoundedString(
     );
   }
   return normalized;
+}
+
+export function normalizeRunId(value: unknown): string | undefined {
+  return normalizeBoundedString(value, undefined, MAX_RUN_ID_LENGTH, "run id");
 }
 
 export function capText(value: string | undefined, max: number): string | undefined {
@@ -277,7 +282,7 @@ export function normalizeWorkspace(
 export function normalizeAutomation(
   value: unknown,
   fallback: WorkboardAutomation = {},
-  options: { allowLaunchState?: boolean } = {},
+  options: { launch?: WorkboardLaunchState } = {},
 ): WorkboardAutomation | undefined {
   const record = isRecord(value) ? value : {};
   const timestamp = (key: "scheduledAt" | "dispatchCount" | "lastDispatchAt") =>
@@ -318,9 +323,7 @@ export function normalizeAutomation(
     createdCardIds: strings("createdCardIds", "created card ids", 120),
     dispatchCount: timestamp("dispatchCount") || undefined,
     lastDispatchAt: timestamp("lastDispatchAt") || undefined,
-    launch: normalizeLaunchState(
-      options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
-    ),
+    launch: options.launch ? normalizeLaunchState(options.launch) : fallback.launch,
   };
   // Legacy imports can retain empty workspace or authority objects.
   for (const [key, entry] of Object.entries(next)) {
@@ -337,12 +340,12 @@ function normalizeLaunchTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
+export function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const requestedSessionKey = normalizeBoundedOptionalString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeBoundedOptionalString(value.provisionalRunId, 160);
+  const provisionalRunId = normalizeRunId(value.provisionalRunId);
   const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
   if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
     return undefined;
@@ -354,7 +357,7 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   if (value.phase === "accepted") {
     const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
     const acceptedSessionKey = normalizeBoundedOptionalString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeBoundedOptionalString(value.acceptedRunId, 160);
+    const acceptedRunId = normalizeRunId(value.acceptedRunId);
     return acceptedAt === undefined || !acceptedSessionKey
       ? undefined
       : {
@@ -423,6 +426,7 @@ function normalizeEvent(record: Record<string, unknown>): WorkboardEvent | null 
   const fromStatus = normalizeEnumValue(record.fromStatus, WORKBOARD_STATUSES, undefined);
   const toStatus = normalizeEnumValue(record.toStatus, WORKBOARD_STATUSES, undefined);
   const sessionKey = normalizeOptionalString(record.sessionKey);
+  // Historical events retain identities admitted before the run-ID limit.
   const runId = normalizeOptionalString(record.runId);
   return {
     id,
@@ -581,7 +585,7 @@ export function workerLogEntry(
       ? record.level
       : "info";
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
-  const runId = normalizeBoundedString(record.runId, undefined, 160, "run id");
+  const runId = normalizeRunId(record.runId);
   return {
     id: id ?? randomUUID(),
     level,
@@ -738,7 +742,7 @@ function normalizeNotification(record: Record<string, unknown>): WorkboardNotifi
     return null;
   }
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
-  const runId = normalizeBoundedString(record.runId, undefined, 120, "run id");
+  const runId = normalizeRunId(record.runId);
   return {
     id,
     kind,
@@ -831,14 +835,15 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
-    allowAutomationLaunch?: boolean;
+    automationLaunch?: WorkboardLaunchState;
     preserveProofId?: string;
+    preserveNotificationId?: string;
   } = {},
 ): WorkboardMetadata {
-  if (!isRecord(value)) {
+  if (!isRecord(value) && !options.automationLaunch) {
     return trimMetadataToBudget(fallback, options);
   }
-  const record = value;
+  const record = isRecord(value) ? value : {};
   const stale = isRecord(record.stale) ? record.stale : null;
   // Archival is a transition owned by archive(), which appends the matching
   // `archived` event. Callers that cannot produce that event (create) must not
@@ -904,7 +909,7 @@ export function normalizeMetadata(
     automation: normalizeAutomation(
       Object.hasOwn(record, "automation") ? record.automation : {},
       fallback.automation,
-      { allowLaunchState: options.allowAutomationLaunch },
+      { launch: options.automationLaunch },
     ),
     claim: Object.hasOwn(record, "claim")
       ? record.claim
@@ -957,7 +962,7 @@ export function normalizeExecution(record: unknown): WorkboardExecution | undefi
   const model = normalizeBoundedString(record.model, undefined, 160, "execution model");
   const normalizedId = normalizeOptionalString(record.id);
   const sessionKey = normalizeOptionalString(record.sessionKey);
-  const runId = normalizeOptionalString(record.runId);
+  const runId = normalizeRunId(record.runId);
   if (!normalizedId && !engine && !model && !sessionKey && !runId) {
     return undefined;
   }
@@ -1069,7 +1074,7 @@ export function appendLinkPreservingDependencies(
 
 export function trimMetadataToBudget(
   metadata: WorkboardMetadata,
-  options: { preserveProofId?: string } = {},
+  options: { preserveProofId?: string; preserveNotificationId?: string } = {},
 ): WorkboardMetadata {
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
@@ -1089,11 +1094,10 @@ export function trimMetadataToBudget(
       if (!entries?.length) {
         continue;
       }
+      const preserveId = key === "proof" ? options.preserveProofId : options.preserveNotificationId;
       const index =
-        key === "proof"
-          ? (next.proof?.findIndex(
-              (proof) => !options.preserveProofId || proof.id !== options.preserveProofId,
-            ) ?? -1)
+        key === "proof" || key === "notifications"
+          ? (next[key]?.findIndex((entry) => entry.id !== preserveId) ?? -1)
           : key === "links"
             ? (next.links?.findIndex((link) => !isDependencyLink(link)) ?? -1)
             : 0;
@@ -1102,16 +1106,18 @@ export function trimMetadataToBudget(
       }
       next = removeUndefinedMetadataFields({
         ...next,
-        [key]:
-          key === "proof" || key === "links"
-            ? entries.filter((_, entryIndex) => entryIndex !== index)
-            : entries.slice(1),
+        [key]: entries.filter((_, entryIndex) => entryIndex !== index),
       });
       break;
     }
     if (metadataByteSize(next) >= currentSize) {
       if (options.preserveProofId) {
         throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
+      }
+      if (options.preserveNotificationId) {
+        throw new Error(
+          `card metadata cannot retain notification: ${options.preserveNotificationId}`,
+        );
       }
       break;
     }

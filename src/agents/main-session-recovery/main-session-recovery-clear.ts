@@ -64,17 +64,21 @@ export function buildMainSessionRecoverySettlementPatch(
   };
 }
 
-export function clearMainSessionRecoveryAfterAgentRun(
+export function buildMainSessionRecoveryAfterAgentRunPatch(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
-): void {
+): Partial<SessionEntry> {
   if (entry.abortedLastRun === true) {
-    return;
+    return {};
   }
-  if (clearForceSafeTools) {
-    entry.restartRecoveryForceSafeTools = undefined;
-  }
-  Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+  return {
+    ...(clearForceSafeTools ? { restartRecoveryForceSafeTools: undefined } : {}),
+    // Accepted queued turns retain independent claims. Their release owner clears
+    // the recovery cycle after the last claim, not a preceding model completion.
+    ...(entry.mainRestartRecovery?.foregroundClaims
+      ? {}
+      : buildMainSessionRecoveryClearPatch(entry)),
+  };
 }
 
 export type { MainRecoveryStateFields };

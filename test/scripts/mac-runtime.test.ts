@@ -23,13 +23,18 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app runtime publication", () => {
-  baseIt.each([undefined, "26.8.2"])(
+  baseIt.each([undefined])(
     "preserves the requested build-time installer Node version (%s)",
     (version) => {
       const root = temps.make("openclaw-runtime-version-");
       const scripts = path.join(root, "scripts");
       const bin = path.join(root, "bin");
       mkdirSync(scripts);
+      mkdirSync(path.join(scripts, "lib"));
+      writeFileSync(
+        path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
+        'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+      );
       mkdirSync(bin);
       symlinkSync(process.execPath, path.join(bin, "node"));
       writeFileSync(

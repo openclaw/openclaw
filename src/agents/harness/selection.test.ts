@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -32,6 +33,7 @@ import {
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -67,13 +69,14 @@ import {
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
   clearAgentHarnesses,
@@ -692,14 +695,16 @@ describe("runAgentHarnessAttempt", () => {
         },
         { ownerPluginId: "native" },
       );
+      const config = providerRuntimeConfig("codex", "native");
       const params = {
-        ...createAttemptParams(providerRuntimeConfig("codex", "native")),
+        ...createAttemptParams(config),
         ...target,
         workspaceDir,
         cwd,
         sessionTarget: target,
         userTurnTranscriptRecorder: recorder,
       };
+      setRuntimeConfigSnapshot(config);
       try {
         await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
         const admission = recorder.getAdmissionReceipt();
@@ -987,40 +992,67 @@ describe("runAgentHarnessAttempt", () => {
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("persists plugin trajectory events through the selected harness host capability", async () => {
-    const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const trajectoryRecorder = await createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-    });
-    if (!trajectoryRecorder) {
-      throw new Error("Expected SQLite trajectory recorder");
-    }
-    registerHarness({
-      runAttempt: async (attempt) => {
-        const trajectory = attempt.hostCapabilities?.trajectory;
-        if (!trajectory) {
-          throw new Error("Expected host trajectory capability");
-        }
-        trajectory.recordEvent("plugin.selected");
-        await trajectory.flush();
-        return createAttemptResult("codex");
-      },
-    });
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    params.sessionKey = sessionKey;
-    params.trajectoryRecorder = trajectoryRecorder;
+  it.each(["active", "work ended", "restart"])(
+    "persists accepted plugin trajectory events when %s without admitting late events",
+    async (lifetime) => {
+      const work = new AsyncWorkScope();
+      selectionAdmission.close();
+      selectionAdmission = prepareAgentRunAdmission({
+        cfg: {},
+        facts: {
+          runId: "run-trajectory",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "harness-trajectory-test", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef("run-trajectory"),
+        assertSourceCurrent: () => work.signal.throwIfAborted(),
+      });
+      selectionAdmittedRunContext = await selectionAdmission.admit("plugin-harness");
+      const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
+      const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:main";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "session-1", updatedAt: 10 },
+      );
+      const trajectoryRecorder = await createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+      });
+      if (!trajectoryRecorder) {
+        throw new Error("Expected SQLite trajectory recorder");
+      }
+      registerHarness({
+        runAttempt: async (attempt) => {
+          const trajectory = attempt.hostCapabilities?.trajectory;
+          if (!trajectory) {
+            throw new Error("Expected host trajectory capability");
+          }
+          trajectory.recordEvent("plugin.selected");
+          if (lifetime !== "active") {
+            work.beginClose(lifetime === "restart" ? createAgentRunRestartAbortError() : undefined);
+            expect(() => trajectory.recordEvent("plugin.late")).toThrow();
+          }
+          await trajectory.flush();
+          return createAttemptResult("codex");
+        },
+      });
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      params.sessionKey = sessionKey;
+      params.trajectoryRecorder = trajectoryRecorder;
 
-    await runAgentHarnessAttempt(params);
+      try {
+        await work.track(() => runAgentHarnessAttempt(params));
+      } finally {
+        await work.drain();
+      }
 
-    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual([
-      expect.objectContaining({ source: "runtime", type: "plugin.selected" }),
-    ]);
-  });
+      expect(
+        await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+      ).toEqual([expect.objectContaining({ source: "runtime", type: "plugin.selected" })]);
+    },
+  );
 
   it.each([
     { boundary: "missing admission", selection: "host", ownership: "none" },
@@ -1758,7 +1790,7 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: testCase.sessionKey,
         swarmCollector: testCase.swarmCollector,
       };
-      nativeRestrictions.push(resolveAgentHarnessNativeToolPolicyRestricted(params, harness));
+      nativeRestrictions.push(await prepareAgentHarnessNativeToolPolicyRestricted(params, harness));
       await runAgentHarnessAttempt(params);
     }
 

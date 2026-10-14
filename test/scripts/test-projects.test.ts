@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
-import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
+import {
+  readRuntimeWorkerDescriptorReads,
+  readTestSelectorSourceFacts,
+} from "../../scripts/lib/test-selector-source-facts.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestPretestBuildMode,
@@ -51,6 +54,7 @@ import {
   isSharedVitestExcludedPath,
   matchesVitestCliSelection,
 } from "../vitest/vitest.pattern-file.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
@@ -77,12 +81,10 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling and infra own shared fixtures; the extension catch-all retains
-    // separate plugin processes. The other projects share setup within one part.
+    // Tooling and infra own shared fixtures. Other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.infra.config.ts",
-      "test/vitest/vitest.extensions.config.ts",
     ]);
   });
 });
@@ -139,7 +141,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
     ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
@@ -728,6 +731,104 @@ describe("scripts/test-projects changed-target routing", () => {
         expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).not.toBe(borrowed);
         expect(fs.existsSync(borrowed)).toBe(false);
       });
+    },
+  );
+
+  it.each([
+    { name: "Git inventory", withRepo: withTinyGitRepo },
+    { name: "filesystem inventory", withRepo: withTinyFileTree },
+  ])(
+    "attributes runtime-worker fixtures to their executing descriptor readers ($name)",
+    ({ withRepo }) => {
+      const aggregator = "src/workers/entrypoints.test-support.ts";
+      const dep = "src/workers/fixtures/dep-a.ts";
+      const readerA = "src/workers/read-a.test.ts";
+      const readerAll = "src/workers/read-all.test.ts";
+      const readerB = "src/workers/read-b.test.ts";
+      const readerSingle = "src/workers/read-single.test.ts";
+      const readerSingleChild = "src/workers/read-single-child.test.ts";
+      const readerInline = "src/workers/read-inline.test.ts";
+      const readerManifest = "test/scripts/manifest.test.ts";
+      const expected = [readerA, readerAll];
+      withRepo(
+        {
+          [aggregator]: `export const group = {
+  a: { currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/a.test-support" },
+  b: { sourceWorkerName: "fixtures/b.test-support", currentModuleUrl: import.meta.url },
+} as const;
+export const single = {
+  currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/single.test-support",
+  child: { currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/b.test-support" },
+} as const;`,
+          "src/workers/fixtures/a.test-support.ts": 'import "./dep-a.js";',
+          "src/workers/fixtures/b.test-support.ts": 'import "./dep-b.js";',
+          "src/workers/fixtures/single.test-support.ts": 'import "./dep-single.js";',
+          "src/workers/fixtures/inline.test-support.ts": 'import "./dep-inline.js";',
+          [dep]: "export {};",
+          "src/workers/fixtures/dep-b.ts": "export {};",
+          "src/workers/fixtures/dep-single.ts": "export {};",
+          "src/workers/fixtures/dep-inline.ts": "export {};",
+          [readerA]:
+            'import { group as workers } from "./entrypoints.test-support.js"; void workers.a;',
+          [readerB]: 'import { group } from "./entrypoints.test-support.js"; void group.b;',
+          [readerAll]:
+            'import { group } from "./entrypoints.test-support.js"; Object.values(group);',
+          [readerSingle]:
+            'import { single } from "./entrypoints.test-support.js"; void single.distWorkerPath;',
+          [readerSingleChild]:
+            'import { single } from "./entrypoints.test-support.js"; void single.child;',
+          [readerInline]: `const worker = {
+  currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/inline.test-support",
+}; void worker;`,
+          "scripts/lib/manifest.mts":
+            'import { group } from "../../src/workers/entrypoints.test-support.js"; Object.values(group);',
+          [readerManifest]: 'import "../../scripts/lib/manifest.mjs";',
+        },
+        (cwd) => {
+          const options = { tooling: true, resolveAliases: true, runtimeOnly: true };
+          // The aggregator may already be visited when its executing consumer is reached.
+          expect(hasImportGraphImpactOnTargets([dep], [aggregator, readerA], cwd, options)).toBe(
+            true,
+          );
+          expect(hasImportGraphImpactOnTargets([dep], [readerAll], cwd, options)).toBe(true);
+          for (const unrelated of [
+            readerB,
+            readerSingle,
+            readerSingleChild,
+            readerInline,
+            readerManifest,
+          ]) {
+            expect(hasImportGraphImpactOnTargets([dep], [unrelated], cwd, options), unrelated).toBe(
+              false,
+            );
+          }
+          expect(resolveChangedTestTargetPlan([dep], { cwd, broad: true })).toEqual({
+            mode: "targets",
+            targets: expected,
+          });
+          expect(
+            resolveAffectedTestsFromImportGraph([dep], cwd, { ...options, forceFull: true }),
+          ).toEqual(expected);
+          for (const [dependency, reader] of [
+            ["dep-b", readerB],
+            ["dep-single", readerSingle],
+            ["dep-inline", readerInline],
+          ] satisfies [string, string][]) {
+            expect(
+              resolveAffectedTestsFromImportGraph([`src/workers/fixtures/${dependency}.ts`], cwd, {
+                ...options,
+                forceFull: true,
+              }),
+            ).toEqual(
+              dependency === "dep-b"
+                ? [readerAll, reader, readerSingleChild].toSorted((left, right) =>
+                    left.localeCompare(right),
+                  )
+                : [reader],
+            );
+          }
+        },
+      );
     },
   );
 
@@ -1957,7 +2058,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
         "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
-        "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
         "src/gateway/server.cron.test.ts",
@@ -2111,13 +2211,13 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           encoding: "utf8",
           // Keep the native help probe inside its invocation-owned temporary directory.
-          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          env: testRunnerFixtureEnv({ TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir }),
           timeout: 5_000,
         },
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stdout).toContain("Usage: node scripts/test-projects.mts");
       expect(result.stderr).not.toContain("[test] starting");
     });
   });
@@ -2297,10 +2397,11 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       directory: "extensions/matrix/src/matrix/sdk",
-      selected: [
-        "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
-        "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
-      ],
+      // Worker membership belongs to the database lane; this case protects the
+      // directory intersection as that membership grows.
+      selected: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/matrix/src/matrix/sdk/"),
+      ),
       inherited: ["extensions/matrix/**/*.test.ts"],
     },
   ])(
@@ -3200,6 +3301,131 @@ describe("changed export mock consumers", () => {
 });
 
 describe("test selector native source facts", () => {
+  it("classifies runtime-worker descriptors by their declaration and self-reads", () => {
+    const descriptor =
+      '{ currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/worker", package: { name: "worker" } }';
+    const sources = {
+      "inline.ts": `function run() { return ${descriptor}; }`,
+      "single.ts": `export const worker = ${descriptor} as const;`,
+      "group.ts": `export const workers = {
+        first: ${descriptor},
+        second: { nested: { sourceWorkerName: "fixtures/second", package: {}, currentModuleUrl: import.meta.url } },
+      } as const;`,
+      "array.ts": `export const workers = [${descriptor}];`,
+      "call.ts": `export const workers = register(${descriptor});`,
+      "local.ts": `const worker = ${descriptor}; export { worker };`,
+      "default.ts": `export default ${descriptor};`,
+      "wrong-base.ts":
+        'export const worker = { currentModuleUrl: someVariable, sourceWorkerName: "fixtures/wrong" };',
+      "dynamic.ts":
+        "export const worker = { currentModuleUrl: import.meta.url, sourceWorkerName: workerName };",
+      "nested-base.ts":
+        'const worker = { sourceWorkerName: "fixtures/wrong", nested: { currentModuleUrl: import.meta.url } };',
+      "literal-reference.ts": `export const worker = ${descriptor}; const label = "worker"; unrelated.worker;`,
+      "jsx.tsx":
+        'export const view = <View />; const worker = { currentModuleUrl: otherUrl, sourceWorkerName: "fixtures/conservative" };',
+      ...Object.fromEntries(
+        ["worker", "worker.distWorkerPath", "worker[key]", "({ ...worker })"].map((read, index) => [
+          `self-read-${index}.ts`,
+          `export const worker = ${descriptor}; void ${read};`,
+        ]),
+      ),
+    };
+    withTinyFileTree(sources, (cwd) => {
+      const facts = new Map(
+        readTestSelectorSourceFacts(
+          cwd,
+          Object.keys(sources).map((file) => ({ file, parseImports: true })),
+          [],
+          1024 * 1024,
+        ).map(({ file, imports, typeOnlyImports, workerExports }) => [
+          file,
+          { imports, typeOnlyImports, workerExports },
+        ]),
+      );
+      const inline = { imports: ["./fixtures/worker.js"], typeOnlyImports: [], workerExports: [] };
+      for (const file of [
+        "inline.ts",
+        "local.ts",
+        "default.ts",
+        ...[0, 1, 2, 3].map((index) => `self-read-${index}.ts`),
+      ]) {
+        expect(facts.get(file), file).toEqual(inline);
+      }
+      const expectedExports: Record<string, [string, string][]> = {
+        "single.ts": [["worker", "fixtures/worker"]],
+        "group.ts": [
+          ["workers.first", "fixtures/worker"],
+          ["workers.second", "fixtures/second"],
+        ],
+        "array.ts": [["workers", "fixtures/worker"]],
+        "call.ts": [["workers", "fixtures/worker"]],
+        "literal-reference.ts": [["worker", "fixtures/worker"]],
+      };
+      for (const [file, workerExports] of Object.entries(expectedExports)) {
+        expect(facts.get(file), file).toEqual({
+          imports: [],
+          typeOnlyImports: [],
+          workerExports,
+        });
+      }
+      for (const file of ["wrong-base.ts", "dynamic.ts", "nested-base.ts"]) {
+        expect(facts.get(file), file).toEqual({
+          imports: [],
+          typeOnlyImports: [],
+          workerExports: [],
+        });
+      }
+      expect(facts.get("jsx.tsx")).toEqual({
+        imports: ["./fixtures/conservative.js"],
+        typeOnlyImports: [],
+        workerExports: [],
+      });
+    });
+  });
+
+  const descriptorReads: Array<[string, Array<[string, string[]]>]> = [
+    ['import { group as local } from "source"; void local.member;', [["source", ["group.member"]]]],
+    [
+      'import { group } from "source"; Object.values(group); void group[key];',
+      [["source", ["group"]]],
+    ],
+    ['import { group } from "source"; void { ...group };', [["source", ["group"]]]],
+    [
+      'import { group } from "source"; void { ...group }; void { group }; const { member } = group; typeof group; group?.member;',
+      [["source", ["group"]]],
+    ],
+    [
+      'import * as ns from "source"; void ns.group.member; void ns.single;',
+      [["source", ["group.member", "single"]]],
+    ],
+    ['import * as ns from "source"; void ns[key];', [["source", ["*"]]]],
+    [
+      'import("dynamic"); require("required"); export * from "all";',
+      [
+        ["dynamic", ["*"]],
+        ["required", ["*"]],
+        ["all", ["*"]],
+      ],
+    ],
+    ['export { group as renamed, single } from "source";', [["source", ["group", "single"]]]],
+    [
+      'import type { group } from "types"; import { type single, group as local } from "source"; void group; void single; void local.member;',
+      [["source", ["group.member"]]],
+    ],
+    [
+      'import local from "source"; void local.member; import { unused } from "unused"; const text = "unused"; other.unused;',
+      [],
+    ],
+    ['import { group } from "source"; const view = <View />;', [["source", ["*"]]]],
+  ];
+  it.each(descriptorReads)(
+    "reads runtime-worker descriptor consumption in %s",
+    (source, expected) => {
+      expect([...readRuntimeWorkerDescriptorReads(source)]).toEqual(expected);
+    },
+  );
+
   it("keeps whole-area UI consumers and source readers across graph cache scopes", () => {
     const pluginModule = "extensions/example/browser/view.ts";
     const pluginConsumer = "test/plugin-browser-consumer.test.ts";
@@ -3374,6 +3600,7 @@ describe("test selector native source facts", () => {
           imports: [],
           typeOnlyImports: [],
           mocks: [],
+          workerExports: [],
         });
         expect(syntaxFacts.find(({ file }) => file === "generic-callback-import.ts")).toMatchObject(
           {
@@ -3440,6 +3667,7 @@ describe("test selector native source facts", () => {
           imports: [],
           typeOnlyImports: [],
           mocks: [],
+          workerExports: [],
           matches: terms.filter((term) => source.includes(term)),
           references: terms.filter((term) => tokens.has(term)),
         };
@@ -3478,6 +3706,7 @@ describe("test selector native source facts", () => {
             imports: [dependency],
             typeOnlyImports: [],
             mocks: [],
+            workerExports: [],
             matches: ["needle"],
             references: ["needle"],
           })),
@@ -3490,6 +3719,7 @@ describe("test selector native source facts", () => {
             imports: [dependency],
             typeOnlyImports: [],
             mocks: [],
+            workerExports: [],
             matches: [],
             references: [],
           })),
@@ -3509,6 +3739,7 @@ describe("test selector native source facts", () => {
           { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
+        // Rows omit empty descriptor exports; parsed facts restore them.
         const unterminatedFacts = {
           imports: [],
           typeOnlyImports: [],
@@ -3566,7 +3797,7 @@ describe("test selector native source facts", () => {
               16 * 1024 * 1024,
               { matchingOnly: true },
             ),
-          ).toEqual([{ file: "large.mts", ...expectedFacts }]);
+          ).toEqual([{ file: "large.mts", ...expectedFacts, workerExports: [] }]);
           expect(
             readTestSelectorSourceFacts(
               cwd,
@@ -3575,8 +3806,8 @@ describe("test selector native source facts", () => {
               16 * 1024 * 1024,
             ),
           ).toEqual([
-            { file: "large.mts", ...expectedFacts },
-            { file: "unterminated.ts", ...unterminatedFacts },
+            { file: "large.mts", ...expectedFacts, workerExports: [] },
+            { file: "unterminated.ts", ...unterminatedFacts, workerExports: [] },
           ]);
           expect(
             readTestSelectorSourceFacts(
@@ -3591,6 +3822,7 @@ describe("test selector native source facts", () => {
               imports: [],
               typeOnlyImports: [],
               mocks: [],
+              workerExports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },
@@ -3745,6 +3977,11 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("expands untargeted local runs to leaf project configs by default", async () => {
     const infraConfig = "test/vitest/vitest.infra.config.ts";
     const infraFiles = await listVitestConfigTestFiles(infraConfig);
+    const toolingFiles = await listVitestConfigTestFiles("test/vitest/vitest.tooling.config.ts");
+    const uiFiles = await listVitestConfigTestFiles("test/vitest/vitest.ui.config.ts");
+    const gatewayFiles = await listVitestConfigTestFiles(
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+    );
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -3774,7 +4011,23 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
+        expect(toolingPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(toolingFiles)].toSorted(),
+        );
+        const uiPlans = targetedPlans("test/vitest/vitest.ui.config.ts");
+        expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
+        expect(uiPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(uiPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(uiFiles)].toSorted(),
+        );
+        const gatewayPlans = targetedPlans("test/vitest/vitest.gateway-database-workers.config.ts");
+        expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
+        expect(gatewayPlans.every((plan) => plan.forwardedArgs.length <= 50)).toBe(true);
+        expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(gatewayFiles)].toSorted(),
+        );
         const infraPlans = plans.filter((plan) => plan.config === infraConfig);
         expect(infraPlans.length).toBeGreaterThan(1);
         expect(

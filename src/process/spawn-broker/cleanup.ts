@@ -105,7 +105,6 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
 export function terminateLostBrokerChild(
   pid: number,
   detached: boolean,
-  ownerExited?: Promise<void>,
   groupIdentity?: BrokerChildGroupIdentity,
 ) {
   if (detached && groupIdentity) {
@@ -115,21 +114,16 @@ export function terminateLostBrokerChild(
     return terminateRetainedBrokerChildGroup(groupIdentity);
   }
   const termination = killProcessTree(pid, { detached, graceMs: GRACEFUL_CANCEL_TIMEOUT_MS });
-  const graceEndsAt = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+  const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
   const settled = (async () => {
-    let deadline = graceEndsAt + 2000;
-    if (ownerExited) {
-      // A stopped broker retains killed children as zombies until its own exit.
-      // Keep signaling on schedule, but budget observation after reaping can proceed.
-      await ownerExited;
-      deadline = Math.max(deadline, Date.now() + 2000);
-    }
-    // The attached-tree owner's captured descendants retain their entire TERM/KILL grace.
-    if (!detached && Date.now() < graceEndsAt) {
-      await delay(graceEndsAt - Date.now());
-    }
+    // An attached root can exit before its descendants; the tree owner's exited()
+    // keeps settlement joined to their TERM/KILL escalation.
     for (;;) {
-      if (isPidDefinitelyDead(pid) && (!detached || groupGone(pid))) {
+      if (
+        isPidDefinitelyDead(pid) &&
+        (!detached || groupGone(pid)) &&
+        (termination?.exited() ?? true)
+      ) {
         break;
       }
       if (Date.now() >= deadline) {

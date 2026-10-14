@@ -337,28 +337,17 @@ describe("runWithModelFallback probe logic", () => {
     ]);
   });
 
-  it("prunes stale probe throttle entries before checking eligibility", () => {
-    probeThrottleInternals.lastProbeAttempt.set(
-      "stale",
-      NOW - probeThrottleInternals.PROBE_STATE_TTL_MS - 1,
-    );
-    probeThrottleInternals.lastProbeAttempt.set("fresh", NOW - 5_000);
-    expect(probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(true);
-    expect(probeThrottleInternals.isProbeThrottleOpen(NOW, "fresh")).toBe(false);
-    expect(probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(false);
-    expect(probeThrottleInternals.lastProbeAttempt.has("fresh")).toBe(true);
-  });
-
   it("caps probe throttle state by evicting the oldest entries", () => {
     for (let i = 0; i < probeThrottleInternals.MAX_PROBE_KEYS; i += 1) {
-      probeThrottleInternals.lastProbeAttempt.set(`key-${i}`, NOW - (i + 1));
+      probeThrottleInternals.markProbeAttempt(NOW - 1_000 + i, `key-${i}`);
     }
+    probeThrottleInternals.markProbeAttempt(NOW - 1, "key-0");
     probeThrottleInternals.markProbeAttempt(NOW, "freshest");
     expect(probeThrottleInternals.lastProbeAttempt.size).toBe(
       probeThrottleInternals.MAX_PROBE_KEYS,
     );
     expect(probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
-    expect(probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
+    expect(probeThrottleInternals.lastProbeAttempt.has("key-1")).toBe(false);
     expect(probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 

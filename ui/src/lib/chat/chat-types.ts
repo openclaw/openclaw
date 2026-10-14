@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -9,6 +10,7 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
@@ -120,6 +122,8 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatGoalRecovery = {
   pending: boolean;
+  goalId?: string;
+  action?: ChatGoalAction | "edit" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -138,6 +142,7 @@ export type ChatComposerMemoryFallback = {
 };
 
 export type ChatGuardianNotice = {
+  permissionMissing?: NodePermissionRequest;
   key: string;
   runId: string;
   timestamp: number;
@@ -230,6 +235,8 @@ export type ChatItem =
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
+      runError?: RunFailureNotice;
+      permissionMissing?: NodePermissionRequest;
     }
   | {
       kind: "divider";
@@ -262,8 +269,8 @@ export type ChatItem =
       /** The run handed off and is idle; its subagents are what is still working. */
       waitingOn?: "subagents";
       /**
-       * Set for a run that resumed a handoff: when its request was asked, on the
-       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       * Set while waiting on or resuming a handoff: when its request was asked,
+       * on the transcript's clock, and its handed-off runs, oldest first.
        */
       request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;

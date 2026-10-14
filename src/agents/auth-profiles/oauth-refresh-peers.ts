@@ -5,6 +5,10 @@ import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worke
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
+  continueAuthProfileAuthorization,
+  continueAuthProfileAuthorizationInheritance,
+} from "./authorization-lifetime.js";
+import {
   fenceCandidateAuthProfileStore,
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStoreAsync,
@@ -21,7 +25,6 @@ import {
   isSameOAuthRefreshGeneration,
 } from "./oauth-refresh-marker.js";
 import { hasMatchingOAuthIdentity, hasOAuthIdentity } from "./oauth-shared.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type OAuthRefreshPeerClaim = {
@@ -72,10 +75,7 @@ function isExternalProfileOwned(
   profileId: string,
   credential: OAuthCredential,
 ): boolean {
-  if (
-    store.runtimeExternalProfileIds?.includes(profileId) === true ||
-    getRuntimeExternalCliProfileIds(store).includes(profileId)
-  ) {
+  if (store.runtimeExternalProfileIds?.includes(profileId) === true) {
     return true;
   }
   return isPersistedExternalCliAuthProfile({ profileId, credential });
@@ -223,7 +223,9 @@ export async function fenceOAuthRefreshPeers(params: {
           }
           // Retain provisional custody if COMMIT succeeds but its reply is lost.
           claims.push({ candidate, original: { ...credential } });
-          store.profiles[params.profileId] = { ...params.fence };
+          store.profiles[params.profileId] = continueAuthProfileAuthorization(credential, {
+            ...params.fence,
+          });
           return true;
         },
       });
@@ -267,7 +269,9 @@ export async function rollbackOAuthRefreshPeerClaims(
         params.profileId,
         params.fence,
         (store) => {
-          store.profiles[params.profileId] = { ...claim.original! };
+          store.profiles[params.profileId] = continueAuthProfileAuthorization(params.fence, {
+            ...claim.original!,
+          });
         },
       );
       if (restored.changed) {
@@ -334,6 +338,11 @@ export async function settleOAuthRefreshPeerClaims(
               (!hasOAuthIdentity(claim.original) &&
                 isExactOAuthCredential(inherited, params.replacement)));
           if (canInherit) {
+            continueAuthProfileAuthorizationInheritance(
+              store.profiles,
+              params.profileId,
+              params.fence,
+            );
             delete store.profiles[params.profileId];
           } else {
             store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);

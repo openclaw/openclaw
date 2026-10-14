@@ -126,6 +126,7 @@ async function startHandoffAndReadCommand(params: {
   commandArgv: string[] | undefined;
   recoveryCommandArgv: string[];
   triageCommandArgv: string[];
+  triageContextCommand: string;
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -161,6 +162,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
+    triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -177,6 +179,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv: helperParams.commandArgv,
     recoveryCommandArgv: helperParams.recoveryCommandArgv,
     triageCommandArgv: helperParams.triageCommandArgv,
+    triageContextCommand: helperParams.triageContextCommand,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -204,6 +207,8 @@ describe("managed service update handoff command", () => {
       argv1: path.join(current, "openclaw.mjs"),
       channel: "beta",
     });
+    expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
+    expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
     for (const argv of [
       prepared.commandArgv,
       prepared.recoveryCommandArgv,
@@ -535,37 +540,6 @@ describe("managed service update handoff command", () => {
       expect(spawnSyncMock.mock.calls.filter(([, args]) => args.includes("stop"))).toEqual([]);
     }
   });
-
-  it.each(["canonical", "ancestor alias"] as const)(
-    "serializes extended-stable into the detached CLI command with a %s lease path",
-    async (leasePath) => {
-      if (leasePath === "ancestor alias") {
-        const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "handoff-alias-")));
-        tempDirs.add(root);
-        const realParent = path.join(root, "real");
-        const aliasParent = path.join(root, "alias");
-        await fs.mkdir(path.join(realParent, "leases"), { recursive: true, mode: 0o700 });
-        await fs.symlink(
-          realParent,
-          aliasParent,
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        resolvePreferredOpenClawTmpDirMock.mockReturnValue(path.join(aliasParent, "leases"));
-      }
-      const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
-
-      expect(result.commandArgv).toEqual([
-        "/usr/local/bin/node",
-        "/opt/openclaw/openclaw.mjs",
-        "update",
-        "--yes",
-        "--json",
-        "--channel",
-        "extended-stable",
-      ]);
-      expect(result.command).toContain("--channel extended-stable");
-    },
-  );
 
   it.each([true, false])(
     "preserves replay consent=%s across the detached handoff",

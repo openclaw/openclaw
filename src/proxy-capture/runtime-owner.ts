@@ -4,6 +4,7 @@ import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -439,11 +440,16 @@ export function resolveCaptureOwnerForTransport(
 
 // Legacy finalization settles legacy work synchronously. Worker-backed claims
 // retain their lifecycle owner and end the shared session when they also close.
-/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. */
+/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. Final compatibility day: 2026-12-31. */
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "finalizeDebugProxyCapture",
+    replacement: "await finalizeDebugProxyCaptureAsync()",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;

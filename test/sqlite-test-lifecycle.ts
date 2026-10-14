@@ -6,6 +6,7 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
+const diskBudgetKey = Symbol.for("openclaw.sessionDiskBudgetWorkers");
 const sessionStateNoticesKey = Symbol.for("openclaw.sessionStateNotices");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
@@ -23,6 +24,7 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
+  [source("src/config/sessions/disk-budget-runtime.ts"), diskBudgetKey],
   [
     source("src/infra/device-pairing-publication.ts"),
     Symbol.for("openclaw.devicePairingPublications"),
@@ -41,6 +43,9 @@ type AgentLifecycleModule = Pick<
   typeof import("../src/state/openclaw-agent-db-lifecycle.js"),
   "agentDatabaseLifecycle" | "closeOpenClawAgentDatabasesAsync"
 >;
+type DiskBudgetOwner = {
+  pool: Pick<import("../src/infra/worker-task-pool.js").WorkerTaskPool<string, unknown>, "close">;
+};
 type AgentOwner = AgentLifecycleModule["agentDatabaseLifecycle"];
 const agentClosers = new WeakMap<AgentOwner, () => Promise<void>>();
 
@@ -69,6 +74,7 @@ export function retainSqliteTestCustody(): void {
 /** Settle independent owners before shared storage; a failure retains its dependent family. */
 export async function drainSqliteTestSingletons(
   onError: (phase: string, error: unknown) => void,
+  canRetireSource?: (key: symbol) => boolean,
 ): Promise<void> {
   const resets = (globalThis as Record<PropertyKey, unknown>)[resetKey] as
     | Map<symbol, SingletonReset>
@@ -104,6 +110,13 @@ export async function drainSqliteTestSingletons(
     }
     try {
       await reset.reset();
+      if (key === diskBudgetKey && canRetireSource?.(key)) {
+        const owner = (globalThis as Record<PropertyKey, unknown>)[key] as
+          | DiskBudgetOwner
+          | undefined;
+        // Rotation joins scans; closing also releases the pool's captured module generation.
+        await owner?.pool.close();
+      }
     } catch (error) {
       retainSqliteTestCustody();
       onError(`singleton ${key.description}`, error);

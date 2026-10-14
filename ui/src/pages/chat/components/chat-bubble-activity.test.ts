@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -161,10 +161,6 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
 it.each([
   { label: "Starting model", options: { startupLabel: "Starting model" } },
   { label: "Waiting for approval", options: { waitingApproval: true } },
-  {
-    label: "Waiting on subagents",
-    options: { waitingSubagents: { runningCount: 1, startedAt: 1 } },
-  },
 ])("keeps $label visible instead of replacing it with working dots", ({ label, options }) => {
   const container = document.createElement("div");
   render(

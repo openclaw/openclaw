@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "../plugins/bundled-sources.js";
 import {
@@ -132,7 +133,7 @@ function mayMutatePluginInstallRecord(
   return Boolean(record?.marketplaceSource && record.marketplacePlugin);
 }
 
-function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, pluginId: string) {
+function pluginConfigReferencesId(config: OpenClawConfig, pluginId: string) {
   const plugins = config.plugins;
   return (
     plugins?.allow?.includes(pluginId) ||
@@ -145,7 +146,7 @@ function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, p
 
 function shouldPreserveEmptyPlugins(params: {
   parsed: unknown;
-  sourceConfig: ReturnType<typeof getRuntimeConfig>;
+  sourceConfig: OpenClawConfig;
 }): boolean {
   const plugins = params.sourceConfig.plugins;
   const parsedPlugins =
@@ -223,7 +224,9 @@ async function runPluginUpdateCommandUnlocked(
     assertConfigWriteAllowedInCurrentMode();
   }
 
-  const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
+  assertOwned();
+  const sourceSnapshotPromise = readConfigFileSnapshotForWrite({ deferredPluginMigrations })
     .then((prepared) => {
       const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
       return {
@@ -249,7 +252,8 @@ async function runPluginUpdateCommandUnlocked(
   }
   // Bind selection, updater input, ownership checks, and persistence to one
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
-  const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
+  const cfg =
+    mutationSnapshot?.snapshot.runtimeConfig ?? (await captureRuntimeConfigAsyncReader()());
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
@@ -564,6 +568,7 @@ async function runPluginUpdateCommandUnlocked(
       });
       const writeOptions = {
         ...sourceSnapshot?.writeOptions,
+        deferredPluginMigrations,
         afterWrite: {
           mode: "none" as const,
           reason: "plugin update owns registry refresh",
@@ -593,6 +598,8 @@ async function runPluginUpdateCommandUnlocked(
         return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
       }
       nextConfig = migration?.config ?? nextConfig;
+      writeOptions.deferredPluginMigrations =
+        migration?.deferredPluginMigrations ?? deferredPluginMigrations;
       const commit = async () => {
         if (shouldPersistPluginInstallIndex) {
           if (
@@ -606,7 +613,7 @@ async function runPluginUpdateCommandUnlocked(
               verifyConfigFresh: async () => {
                 await assertRecordsOnlyUpdateConfigFresh({
                   baseHash: sourceSnapshot?.snapshot.hash,
-                  writeOptions: sourceSnapshot?.writeOptions,
+                  writeOptions,
                 });
               },
             });

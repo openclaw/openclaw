@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
@@ -43,34 +44,11 @@ function randomNonZeroHex(bytes: number): string {
   return value;
 }
 
-function isDiagnosticTraceScopeState(value: unknown): value is DiagnosticTraceScopeState {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<DiagnosticTraceScopeState>;
-  return (
-    candidate.marker === DIAGNOSTIC_TRACE_SCOPE_STATE_KEY &&
-    candidate.storage instanceof AsyncLocalStorage
-  );
-}
-
 function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_TRACE_SCOPE_STATE_KEY];
-  if (isDiagnosticTraceScopeState(existing)) {
-    return existing;
-  }
-  const state: DiagnosticTraceScopeState = {
+  return resolveGlobalSingleton(DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, () => ({
     marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
     storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
-  };
-  Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
-  return state;
+  }));
 }
 
 /** Returns whether a value is a non-zero W3C trace id. */

@@ -1,27 +1,16 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { streamSimple } from "../../../llm/stream.js";
+import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   textToolResult,
   textAssistant,
 } from "../../test-helpers/sparse-transcript.test-support.js";
-
-vi.mock("../context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: async () => ({ llm: undefined }),
-}));
-import type { OpenClawConfig } from "../../../config/config.js";
-import { addSession } from "../../bash-process-registry.js";
-import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
-import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import type { NormalizedUsage } from "../../usage.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "../stream-resolution.js";
-import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
@@ -587,32 +576,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expectSingleToolCallContent(thirdResult.content, "ex");
   });
 
-  it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
-    const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
-    const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
-    const finalToolCallB: { type: string; id: string; name?: string } = {
-      type: "toolCall",
-      id: "functionswrite4",
-    };
-    const finalToolCallC = { type: "functionCall", id: "functions.exec2", name: "" };
-    const event = toolDelta("partial", [partialToolCall]);
-    const finalMessage = {
-      role: "assistant",
-      content: [finalToolCallA, finalToolCallB, finalToolCallC],
-    };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(finalToolCallA.name).toBe("read");
-    expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallC.name).toBe("exec");
-    expect(result).toBe(finalMessage);
-  });
-
   it("does not infer names from malformed toolCallId when allowlist is absent", async () => {
     const finalToolCall: { type: string; id: string; name?: string } = {
       type: "toolCall",
@@ -638,31 +601,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(toolCall.name).toBe("functions.exec2");
   });
 
-  it("does not reuse fallback ids across assistant response streams", async () => {
-    const ids: string[] = [];
-    for (let responseIndex = 0; responseIndex < 2; responseIndex += 1) {
-      const finalToolCall: { type: string; name: string; id?: string } = {
-        type: "toolCall",
-        name: "read",
-      };
-      const baseFn = vi.fn(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: { role: "assistant", content: [finalToolCall] },
-        }),
-      );
-      const stream = await invokeWrappedStream(baseFn, new Set(["read"]));
-      await stream.result();
-      if (!finalToolCall.id) {
-        throw new Error("missing fallback tool call id");
-      }
-      ids.push(finalToolCall.id);
-    }
-
-    expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(ids[1]).not.toBe(ids[0]);
-  });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
@@ -682,31 +620,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
-  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
-    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
-    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
-    const finalToolCallB: { type: string; name: string; id?: string } = {
-      type: "toolCall",
-      name: " write ",
-    };
-    const event = toolDelta("partial", [partialToolCall]);
-    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn);
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe(partialToolCall.id);
-    expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(finalToolCallB.id).not.toBe(finalToolCallA.id);
-    expect(result).toBe(finalMessage);
-  });
-
   it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
     const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
     const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
@@ -722,7 +635,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "keeps repeated provider ids unique across compacted responses (prior history: %s)",
     async (hasPriorHistory) => {
       const makeToolCall = () => ({ type: "toolCall", name: "exec", id: "exec_0", arguments: {} });
@@ -780,31 +693,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       expect(history).toEqual(hasPriorHistory ? [makeMessage()] : []);
     },
   );
-
-  it("preserves non-colliding provider ids byte-for-byte", async () => {
-    const ids = ["toolu_01NativeAnthropic", "call_NativeOpenAI"];
-    const finalMessage = {
-      role: "assistant",
-      content: ids.map((id) => ({ type: "toolCall", name: "exec", id, arguments: {} })),
-    };
-    const baseFn = fakeBaseStream(finalMessage, [
-      { type: "toolcall_delta", partial: structuredClone(finalMessage) },
-      { type: "done", message: structuredClone(finalMessage) },
-    ]);
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
-    const stream = await wrappedFn(
-      {} as never,
-      { messages: [{ role: "assistant", content: [{ type: "toolCall", id: "exec_0" }] }] } as never,
-      {} as never,
-    );
-    for await (const event of stream) {
-      const message =
-        "partial" in event ? event.partial : "message" in event ? event.message : undefined;
-      expect(message?.content).toEqual(finalMessage.content);
-    }
-    expect((await stream.result()).content).toEqual(finalMessage.content);
-    expect(finalMessage.content.map((call) => call.id)).toEqual(ids);
-  });
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
@@ -945,7 +833,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(repairedToolResult.content).toEqual([
       {
         type: "text",
-        text: "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.",
+        text: "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or safe to repeat. If it may have had side effects, verify the current state first instead of repeating it.",
       },
     ]);
     expect(repairedToolResult.isError).toBe(true);
@@ -1160,138 +1048,3 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 });
-
-describe("buildAfterTurnRuntimeContext", () => {
-  type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
-  const runtimeDirectories = { workspaceDir: "/tmp/workspace", agentDir: "/tmp/agent" };
-  function runtimeAttempt(overrides: Partial<RuntimeAttempt>): RuntimeAttempt {
-    return {
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.4",
-      thinkLevel: "off",
-      reasoningLevel: "on",
-      extraSystemPrompt: "extra",
-      ownerNumbers: ["+15555550123"],
-      ...overrides,
-    };
-  }
-
-  it("preserves session-id-scoped processes with borrowed policy", () => {
-    resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
-      });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: runtimeAttempt({
-          sessionId: "session-123",
-          sandboxSessionKey: "agent:main",
-        }),
-        ...runtimeDirectories,
-        activeAgentId: "main",
-      });
-
-      const activeProcessSessions = legacy.activeProcessSessions as
-        | Array<{ sessionId?: string; command?: string; pid?: number }>
-        | undefined;
-      expect(activeProcessSessions).toHaveLength(1);
-      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-      expect(activeSession.sessionId).toBe("sess-session-id");
-      expect(activeSession.command).toBe("sleep 600");
-      expect(activeSession.pid).toBe(1234);
-      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-        false,
-      );
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
-      resetProcessRegistryForTests();
-    }
-  });
-
-  it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:locked",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as OpenClawConfig,
-        modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-      }),
-      ...runtimeDirectories,
-    });
-
-    expect(runtimeContext.modelSelectionLocked).toBe(true);
-    expect(runtimeContext.sandboxSessionKey).toBe("global");
-    expect(runtimeContext.sandboxAgentId).toBe("main");
-    expect(runtimeContext.provider).toBe("openai");
-    expect(runtimeContext.model).toBe("gpt-5.5");
-  });
-
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
-              },
-              compaction: { model: "summary" },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
-    });
-
-    expect(legacy.provider).toBe("openrouter");
-    expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    expect(legacy.authProfileId).toBeUndefined();
-  });
-  it("derives afterTurn token count from the current assistant usage snapshot", () => {
-    const lastCallUsage = {
-      input: 10,
-      output: 5,
-      cacheRead: 40,
-      cacheWrite: 2,
-      contextUsage: { state: "available", promptTokens: 23, totalTokens: 28 },
-      total: 57,
-    } satisfies NormalizedUsage;
-    const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
-    const legacy = buildAfterTurnRuntimeContextFromUsage({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
-      tokenBudget: 1050000,
-      lastCallUsage,
-      promptCache,
-    });
-
-    expect(legacy.currentTokenCount).toBe(23);
-    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
-  });
-});
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

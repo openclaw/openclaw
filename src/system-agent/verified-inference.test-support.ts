@@ -64,7 +64,7 @@ export function profileAuth(profileId: string, apiKey: string) {
 }
 
 export function profileStore(profileId: string, credential: object) {
-  return vi.fn(() => ({ version: 1, profiles: { [profileId]: credential } })) as never;
+  return vi.fn(async () => ({ version: 1, profiles: { [profileId]: credential } })) as never;
 }
 
 export function requireFingerprint(value: string | undefined): string {

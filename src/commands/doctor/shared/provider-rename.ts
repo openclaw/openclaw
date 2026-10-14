@@ -1,4 +1,5 @@
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { getRecord } from "../../../config/legacy.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { ModelProviderConfig } from "../../../config/types.models.js";
@@ -71,14 +72,77 @@ export function applyProviderRenames(
     return { config, changes: [] };
   }
   const changes: string[] = [];
-  const rewritten = rewriteModelRefs(
-    config,
-    "config",
-    changes,
-    (ref) => rewriteProviderModelRef(ref, renames) ?? null,
-  )
+  const memoryDefaults = config.memory?.search;
+  const agentEntries = Object.entries(config.agents?.entries ?? {});
+  const inheritedBaseUrls = new Map<object, string | undefined>();
+  for (const [, agent] of agentEntries) {
+    const search = agent.memory?.search;
+    if (search) {
+      inheritedBaseUrls.set(search, search.remote?.baseUrl ?? memoryDefaults?.remote?.baseUrl);
+    }
+  }
+  const normalize = (ref: string, pair?: Record<string, unknown>) => {
+    const baseUrl =
+      pair && inheritedBaseUrls.has(pair)
+        ? inheritedBaseUrls.get(pair)
+        : getRecord(pair?.remote)?.baseUrl;
+    const rename = renames.find(({ from }) => ref.startsWith(`${from}/`));
+    // An explicit endpoint owns this route independently of the chat provider.
+    if (
+      rename &&
+      typeof baseUrl === "string" &&
+      baseUrl.trim() &&
+      urlOrigin(baseUrl) !== urlOrigin(rename.baseUrl)
+    ) {
+      return null;
+    }
+    return rewriteProviderModelRef(ref, renames) ?? null;
+  };
+  let rewritten = rewriteModelRefs(config, "config", changes, normalize)
     // SAFETY: The walker preserves the config shape, changing only model-reference strings and map keys.
     .value as OpenClawConfig;
+  let updatedEntries: NonNullable<OpenClawConfig["agents"]>["entries"];
+  // Partial overrides have no provider/model pair for the walker. Pin only fields
+  // whose effective route would otherwise change when the shared defaults migrate.
+  for (const [agentId, agent] of agentEntries) {
+    const search = agent.memory?.search;
+    const provider = search?.provider ?? memoryDefaults?.provider;
+    const model = search?.model ?? memoryDefaults?.model;
+    if (!search || !provider || typeof model !== "string") {
+      continue;
+    }
+    const ref = `${provider}/${model}`;
+    const targetRef = normalize(ref, { remote: { baseUrl: inheritedBaseUrls.get(search) } }) ?? ref;
+    const slash = targetRef.indexOf("/");
+    const targetProvider = targetRef.slice(0, slash);
+    const targetModel = targetRef.slice(slash + 1);
+    const currentAgent = rewritten.agents?.entries?.[agentId];
+    const current = currentAgent?.memory?.search;
+    const providerChanged =
+      (current?.provider ?? rewritten.memory?.search?.provider) !== targetProvider;
+    const modelChanged = (current?.model ?? rewritten.memory?.search?.model) !== targetModel;
+    if (!providerChanged && !modelChanged) {
+      continue;
+    }
+    updatedEntries ??= { ...rewritten.agents?.entries };
+    updatedEntries[agentId] = {
+      ...currentAgent,
+      memory: {
+        ...currentAgent?.memory,
+        search: {
+          ...current,
+          ...(providerChanged ? { provider: targetProvider } : {}),
+          ...(modelChanged ? { model: targetModel } : {}),
+        },
+      },
+    };
+    changes.push(
+      `Updated agents.entries.${agentId}.memory.search provider/model to ${JSON.stringify(targetRef)} after resolving inherited memory settings.`,
+    );
+  }
+  if (updatedEntries) {
+    rewritten = { ...rewritten, agents: { ...rewritten.agents, entries: updatedEntries } };
+  }
   const providers = { ...rewritten.models?.providers };
   let moved = false;
   for (const { from, to } of renames) {

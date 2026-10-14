@@ -1,18 +1,21 @@
 // Tests reply session persistence, route updates, and label behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -21,13 +24,14 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import {
   createSessionRolloverSpawnLineage,
   SESSION_ROLLOVER_LINEAGE_CASES,
 } from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
 import {
   testing as sessionBindingTesting,
@@ -49,17 +53,14 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -125,18 +126,15 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   ]),
 }));
 
-let suiteRoot = "";
+// Keep the fixture caller visible when a nested database admission fails.
+const previousStackTraceLimit = Error.stackTraceLimit;
+Error.stackTraceLimit = 64;
+afterAll(() => {
+  Error.stackTraceLimit = previousStackTraceLimit;
+});
+
+const suiteRoot = useSessionStoreTempDirs(afterAll, "openclaw-session-suite-").make();
 let suiteCase = 0;
-
-beforeAll(async () => {
-  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suite-"));
-});
-
-afterAll(async () => {
-  await fs.rm(suiteRoot, { recursive: true, force: true });
-  suiteRoot = "";
-  suiteCase = 0;
-});
 
 async function makeCaseDir(prefix: string): Promise<string> {
   const dir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
@@ -295,13 +293,102 @@ beforeEach(() => {
       return { sessionId, sessionFile: sessionKey };
     });
 });
-afterEach(async () => {
+afterEach(() => {
   resetSystemEventsForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
+
+  it("reuses unchanged initialization without losing related entries or later in-process updates", async () => {
+    const storePath = await makeStorePath("openclaw-session-accepted-activity-");
+    const sessionKey = "agent:main:dashboard:accepted-activity";
+    const sessionId = "accepted-activity";
+    const storedParentKey = "agent:main:dashboard:stored-parent";
+    const modelParentKey = "agent:main:dashboard:model-parent";
+    const at = Date.now() - 1_000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: at,
+        lastInteractionAt: at,
+        parentSessionKey: storedParentKey,
+      },
+      [storedParentKey]: { sessionId: "stored-parent", updatedAt: at, label: "Stored parent" },
+      [modelParentKey]: { sessionId: "model-parent", updatedAt: at, modelOverride: "test-model" },
+    });
+    const params = {
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        ModelParentSessionKey: modelParentKey,
+        Provider: "webchat",
+        Surface: "webchat",
+      },
+      recordedSessionActivity: { sessionId, sessionKey, at },
+    };
+    const initialized = await initSessionState(params);
+    expect(initialized.sessionEntry).toMatchObject({ updatedAt: at, lastInteractionAt: at });
+    const unchanged = await initSessionState(params);
+    expect(unchanged.sessionEntry).toEqual(initialized.sessionEntry);
+    expect(unchanged.sessionEntryHandle.get(storedParentKey)).toMatchObject({
+      sessionId: "stored-parent",
+      label: "Stored parent",
+    });
+    expect(unchanged.sessionEntryHandle.get(modelParentKey)).toMatchObject({
+      sessionId: "model-parent",
+      modelOverride: "test-model",
+    });
+
+    const updated = expectDefined(
+      await upsertSessionEntryCore(
+        { storePath, sessionKey },
+        { label: "renamed after acceptance", lastInteractionAt: at + 100 },
+      ),
+      "updated session entry",
+    );
+    const resumed = await initSessionState(params);
+    const expected = {
+      label: "renamed after acceptance",
+      updatedAt: updated.updatedAt,
+      lastInteractionAt: at + 100,
+    };
+    expect(resumed.sessionEntry).toMatchObject(expected);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(expected);
+  });
+
+  it.each(["session", "key", "reset"] as const)(
+    "does not reuse accepted activity after a %s change",
+    async (change) => {
+      const storePath = await makeStorePath("openclaw-session-replaced-activity-");
+      const sessionKey = "agent:main:dashboard:replaced-activity";
+      const sessionId = "replaced-activity";
+      const at = Date.now() - 1_000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId, updatedAt: at, lastInteractionAt: at },
+      });
+      const initialized = await initSessionState({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        ctx: {
+          Body: change === "reset" ? "/new" : "hello",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        recordedSessionActivity: {
+          sessionId: change === "session" ? "previous-session" : sessionId,
+          sessionKey: change === "key" ? "agent:main:dashboard:previous" : sessionKey,
+          at,
+        },
+      });
+      expect(initialized.sessionEntry.updatedAt).toBeGreaterThan(at);
+      expect(initialized.sessionEntry.lastInteractionAt).toBeGreaterThan(at);
+      if (change === "reset") {
+        expect(initialized.isNewSession).toBe(true);
+      }
+    },
+  );
 
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
@@ -339,7 +426,7 @@ describe("initSessionState guarded initialization", () => {
           storePath,
         });
       } finally {
-        closeOpenClawAgentDatabasesForTest();
+        memorySessionActorOwners.closeDatabase({ agentId, path: storePath });
       }
     });
   });
@@ -363,9 +450,13 @@ describe("initSessionState guarded initialization", () => {
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
       }),
-    ).rejects.toThrow(
-      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
-    );
+    ).rejects.toMatchObject({
+      name: "SessionWorkStartError",
+      reason: "archived",
+      retryable: false,
+      message:
+        'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    });
   });
 
   it.each(["/new"] as const)(
@@ -638,7 +729,7 @@ describe("initSessionState thread forking", () => {
         loadSessionEntry({ storePath, sessionKey: threadSessionKey })?.nativeRuntimeConsent,
       ).toBeUndefined();
       expect(
-        resolveSandboxRuntimeStatus({
+        resolvePreparedSandboxRuntimeStatus({
           cfg,
           sessionKey: threadSessionKey,
           preparedSessionEntry: result.sessionEntry,
@@ -1278,8 +1369,35 @@ describe("initSessionState RawBody", () => {
       expect(stored.permissionMode).toBe("full");
       expect(stored.nativeRuntimeConsent).toBeUndefined();
       expect(
-        resolveSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
+        resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
+    },
+  );
+
+  it.each(["hello again", "/reset"])(
+    "preserves device-folder affinity through reply-session rollover (%s)",
+    async (body) => {
+      const storePath = await makeStorePath("openclaw-rollover-device-folder-");
+      const sessionKey = "agent:main:dashboard:device-folder-rollover";
+      const deviceFolder = { deviceId: "rollover-device", path: "/existing/project" };
+      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "device-folder-before-rollover",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+          lastInteractionAt: staleStartedAt,
+          deviceFolder,
+        },
+      });
+      const result = await initSessionState({
+        ctx: { RawBody: body, ChatType: "direct", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: { mode: "daily", atHour: 4 } } },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(body === "/reset");
+      expect(result.sessionEntry.deviceFolder).toEqual(deviceFolder);
+      expect(loadSessionEntry({ storePath, sessionKey })?.deviceFolder).toEqual(deviceFolder);
     },
   );
 
@@ -1329,9 +1447,11 @@ describe("initSessionState RawBody", () => {
     // Boundary proof: worker placement, which failed with "dispatch requires
     // a session-owned workspace" before the fix, now resolves the rolled-over
     // entry against its live worktree.
-    const placement = await resolveWorkerPlacementSessionTarget({
+    setRuntimeConfigSnapshot(cfg, cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    using placement = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: {
-        resolveGatewaySessionStoreTargetWithStore,
+        resolveGatewaySessionStoreTargetInWorker,
         resolveCanonicalSessionEntryFromStoreKeys,
         managedWorktrees: {
           findLiveByOwner: async (_kind, ownerId) => ({
@@ -1789,7 +1909,7 @@ describe("initSessionState reset policy", () => {
   let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
       bootstrapCache,
       "clearBootstrapSnapshotOnSessionBoundary",

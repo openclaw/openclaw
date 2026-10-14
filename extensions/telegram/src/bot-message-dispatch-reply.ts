@@ -225,6 +225,7 @@ async function adoptProgressDraft(
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
   }
+  await info.onPlatformSendDispatch?.();
   if (
     !turn.progressCompositor.isVisible &&
     !turn.progressCompositor.hasStarted &&

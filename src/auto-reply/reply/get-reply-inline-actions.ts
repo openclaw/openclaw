@@ -20,6 +20,7 @@ import {
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -89,7 +90,6 @@ type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
-      cleanedBody: string;
       queueModeOverride?: QueueMode;
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
@@ -130,35 +130,8 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  const commandParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    command: params.command,
-    initialSessionEntry: params.initialSessionEntry,
-    allowCreateSessionEntry: params.allowCreateSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    sessionScope: params.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    thinkingCatalog: params.thinkingCatalog,
-    resolveModelLevels: params.resolveModelLevels,
-    resolvedElevatedLevel: params.resolvedElevatedLevel,
-    blockReplyChunking: params.blockReplyChunking,
-    resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.contextTokens,
-    contextTokenProjection: params.contextTokenProjection,
-    isGroup: params.isGroup,
-    typing: params.typing,
-  };
+  // Native directive results also carry turn-local fast mode; commands resolve their own status.
+  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -324,7 +297,7 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies = await import("../../agents/openclaw-tools.js");
+      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
@@ -372,7 +345,7 @@ export async function handleInlineActions(
             toolName: dispatch.toolName,
           },
         },
-        dependencies,
+        { createOpenClawToolsAsync },
       );
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
@@ -390,7 +363,7 @@ export async function handleInlineActions(
         opts?.abortSignal?.throwIfAborted();
         if (opts?.runId) {
           const transcriptStart =
-            opts.onAgentRunStart && params.sessionEntry?.sessionId
+            (opts.onPreparedAgentRunStart || opts.onAgentRunStart) && params.sessionEntry?.sessionId
               ? await (
                   await import("../../config/sessions/session-transcript-watermark.js")
                 ).readSessionTranscriptStartAsync({
@@ -406,18 +379,20 @@ export async function handleInlineActions(
               : null;
           opts.abortSignal?.throwIfAborted();
           // Tool commands leave transcript persistence with ordinary reply dispatch.
-          opts.onAgentRunStart?.(
-            opts.runId,
-            undefined,
-            {
+          notifyPreparedAgentRunStart(opts, {
+            runId: opts.runId,
+            options: {
               completionSource: "reply-dispatch",
               getResult: () => ({}),
             },
             transcriptStart,
-          );
+          });
         }
         // The execution owner can observe revocation while arming cancellation.
+        await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
+        opts?.operatorAuthority?.assertCurrent();
+        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -524,6 +499,10 @@ export async function handleInlineActions(
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
+    await opts?.awaitSessionDiffBaseline?.();
+    opts?.abortSignal?.throwIfAborted();
+    opts?.operatorAuthority?.assertCurrent();
+    commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.
@@ -594,19 +573,9 @@ export async function handleInlineActions(
       return finishCommand();
     }
 
-    const commandBodyBeforeRun = command.commandBodyNormalized;
-    const bodyBeforeRun = sessionCtx.agentText;
     const commandResult = await runCommands(command);
     if (!commandResult.shouldContinue) {
       return finishCommand(commandResult.reply);
-    }
-    if (command.commandBodyNormalized !== commandBodyBeforeRun) {
-      cleanedBody = command.commandBodyNormalized;
-    } else {
-      const bodyAfterRun = sessionCtx.agentText;
-      if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
-        cleanedBody = bodyAfterRun;
-      }
     }
   }
 
@@ -614,7 +583,6 @@ export async function handleInlineActions(
     kind: "continue",
     directives,
     abortedLastRun,
-    cleanedBody,
     ...(queueModeOverride ? { queueModeOverride } : {}),
     ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
   };

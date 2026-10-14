@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   normalizeBackgroundPreference,
@@ -10,6 +9,7 @@ import type {
   UsersBackgroundRemoveParams,
   UsersBackgroundResult,
 } from "../../packages/gateway-protocol/src/schema/users-background.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -29,7 +29,7 @@ import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.
 type Snapshot = Extract<UsersBackgroundResult, { status: "ok" }>;
 const key = USER_BACKGROUND_PREFERENCE_KEY;
 
-function readSnapshot(db: DatabaseSync, profileId: string): Snapshot {
+function readSnapshot(db: EngineConnection, profileId: string): Snapshot {
   const row = readUserBackgroundAsset(db, profileId);
   const value = tableExists(db, "user_preferences")
     ? readUserPreferences(db, profileId, [key])[key]
@@ -49,14 +49,14 @@ function readSnapshot(db: DatabaseSync, profileId: string): Snapshot {
   };
 }
 
-function resolveProfile(db: DatabaseSync, profileId: string): string | undefined {
+function resolveProfile(db: EngineConnection, profileId: string): string | undefined {
   return tableExists(db, "user_profiles")
     ? selectResolvedUserProfileMetadataById(db, profileId)?.id
     : undefined;
 }
 
 export function readUserBackgroundCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: UserBackgroundReadCommand,
 ): UserBackgroundReadReply {
   return runSqliteDeferredTransactionSync(db, () => {
@@ -89,7 +89,7 @@ function matchesExpected(current: Snapshot, expected: UsersBackgroundRemoveParam
 }
 
 export function commitUserBackgroundInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: UserBackgroundWriteInput,
 ): UsersBackgroundResult {
   const { profileId, expected, image } = input;

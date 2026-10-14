@@ -5,10 +5,6 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
-  attachAgentCommandAdmissionFacts,
-  attachAgentCommandRecoveryAdmissionFacts,
-} from "../../agents/agent-command-admission-facts.js";
-import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
@@ -21,12 +17,8 @@ import {
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
-import {
-  resolveReplySourceTurnId,
-  setChannelSourceTurnId,
-  setChannelSourceTurnSameThreadRequired,
-} from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
@@ -39,7 +31,6 @@ import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
@@ -62,6 +53,7 @@ import { projectWithdrawnAgentInput } from "./agent-run-dispatch-outcome.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
+import { buildAgentRunSourceContext } from "./agent-run-source-context.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
   annotateAgentRunUserTurnPrompt,
@@ -70,9 +62,10 @@ import {
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
+  // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
   return await runWithChatAbortExecution(
     params.prepared.activeRunAbort.entry,
-    () => executeAgentRun(params),
+    () => runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params)),
     params.prepared.activeRunAbort.cleanup,
   );
 }
@@ -312,6 +305,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
+            acpSession: params,
           });
         }
         if (
@@ -382,41 +376,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });
-        const restartRecoveryChannelContext = restartRecoveryContext?.channel;
-        const runContext = {
-          messageChannel:
-            restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
-          accountId:
-            restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
-          senderId: restartRecoveryChannelContext?.requesterSenderId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          currentChannelId: restartRecoveryChannelContext?.currentChannelId,
-          currentThreadTs:
-            restartRecoveryChannelContext?.currentThreadTs ??
-            (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
-        };
-        setChannelSourceTurnId(
-          runContext,
-          resolveReplySourceTurnId({
-            sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
-            admissionRunId: params.runId,
-            ingressProvider: runContext.messageChannel,
-            entry: params.sessionEntry,
-          }),
-        );
-        setChannelSourceTurnSameThreadRequired(
-          runContext,
-          restartRecoveryChannelContext?.sameChannelThreadRequired,
-        );
-
-        const localUserIngress = getGatewayLocalUserIngress(params.client);
-        if (params.isRestartRecoveryResumeRun) {
-          attachAgentCommandRecoveryAdmissionFacts(runContext);
-        } else if (localUserIngress) {
-          attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
-        }
+        const runContext = buildAgentRunSourceContext(params, restartRecoveryContext);
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);

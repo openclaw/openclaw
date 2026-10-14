@@ -8,7 +8,6 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -585,7 +584,6 @@ export function truncateToolResultMessage(
     if (typeof block.content === "string") {
       nextBlock.content = truncatedText;
     }
-    copyPreparedModelVisibleToolText(block, nextBlock);
     return nextBlock;
   });
 
@@ -780,7 +778,6 @@ export function restoreCacheTtlToolResultProjections(
 ): void {
   const checkpoint = readCacheTtlCheckpoint(entries);
   projectionState.cacheTtlCheckpoint = checkpoint;
-  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
   if (!checkpoint) {
     return;
   }

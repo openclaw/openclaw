@@ -2,12 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as redact from "../logging/redact.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -21,12 +26,15 @@ afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
+  memorySessionActorOwners.reset();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 function createScope(prefix: string) {
   const stateDir = tempDirs.make(prefix);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  setRuntimeConfigSnapshot({});
   return {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -143,6 +151,49 @@ describe("session companion context", () => {
     });
   });
 
+  it("reads current incognito context without creating missing sessions", async () => {
+    const scope = {
+      ...createScope("companion-memory"),
+      sessionKey: "agent:main:dashboard:incognito-companion",
+    };
+    const location = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+    };
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(memorySessionActorOwners.read(location)).toBeUndefined();
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      incognito: true,
+    });
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBe(
+      scope.sessionId,
+    );
+    for (const [index, text] of ["First question", "Latest question"].entries()) {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            eventId: `question-${index}`,
+            message: { role: "user", content: text, timestamp: index },
+          },
+        ],
+        touchSessionEntry: true,
+      });
+      const result = await defaultSessionCompanionContextReader.read(scope);
+      expect(result).toMatchObject({
+        kind: "ready",
+        context: {
+          sessionId: scope.sessionId,
+          messages: expect.arrayContaining([{ role: "user", text, ts: index }]),
+        },
+      });
+    }
+    memorySessionActorOwners.closeDatabase(location);
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBeUndefined();
+  });
+
   it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {
     const scope = createScope("companion-context-tail");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -162,29 +213,23 @@ describe("session companion context", () => {
       .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
       .run(scope.sessionId);
 
-    const redaction = vi.spyOn(redact, "redactToolPayloadText");
-    try {
-      const result = await defaultSessionCompanionContextReader.read(scope);
+    const result = await defaultSessionCompanionContextReader.read(scope);
 
-      expect(result.kind).toBe("ready");
-      if (result.kind !== "ready") {
-        return;
-      }
-      expect(result.context.messages).toHaveLength(40);
-      expect(result.context.messages.at(0)).toEqual({
-        role: "assistant",
-        text: "message 161",
-        ts: 161,
-      });
-      expect(result.context.messages.at(-1)).toEqual({
-        role: "user",
-        text: "message 200",
-        ts: 200,
-      });
-      expect(redaction).toHaveBeenCalledTimes(40);
-    } finally {
-      redaction.mockRestore();
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") {
+      return;
     }
+    expect(result.context.messages).toHaveLength(40);
+    expect(result.context.messages.at(0)).toEqual({
+      role: "assistant",
+      text: "message 161",
+      ts: 161,
+    });
+    expect(result.context.messages.at(-1)).toEqual({
+      role: "user",
+      text: "message 200",
+      ts: 200,
+    });
   });
 
   it("pages past a tool-heavy tail while retaining the selected session's latest user turn", async () => {

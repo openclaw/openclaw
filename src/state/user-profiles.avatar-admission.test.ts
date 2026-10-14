@@ -6,7 +6,7 @@ import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   getUserProfileDisplay,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
@@ -46,7 +46,7 @@ it("preserves a native first-use role in avatar publication after warming a lega
       },
     );
     expect(adopted.role).toBe("reader");
-    expect(readUserProfileIdentity(profile.id)?.role).toBe("reader");
+    expect(readResidentUserProfileIdentity(profile.id)?.role).toBe("reader");
     expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
   } finally {

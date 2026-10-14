@@ -14,7 +14,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
@@ -70,7 +69,11 @@ export function registerSessionMaintenancePreparationTests() {
                       maxEntries: 100,
                       pruneAfter: "1h",
                     }),
-                    preservation: null,
+                    preservation: {
+                      providerKeys: [stale.sessionKey],
+                      workIdentities: [],
+                      lifecycleIdentities: [],
+                    },
                     storePath,
                   },
                 };
@@ -83,35 +86,19 @@ export function registerSessionMaintenancePreparationTests() {
         });
         const completed = vi.fn();
         const diagnostics = {};
-        const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-        const actorCalls: Array<() => number> = [];
-        vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-          (...args) => {
-            const execution = capture(...args);
-            const run = vi.spyOn(execution, "runExisting");
-            actorCalls.push(() => run.mock.calls.length);
-            return execution;
-          },
-        );
         try {
           const result = await runSqliteSessionReclamation({
             diagnostics,
-            forceInProcess: false,
             onWorkerResult: completed,
             plan,
           });
           expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
-          expect(result.kind).toBe(
-            operation === "preservation" ? "maintenance-preservation-required" : plan.kind,
-          );
+          expect(result.kind).toBe(plan.kind);
           expect(completed).toHaveBeenCalledExactlyOnceWith(
             result,
             `${originalFile.dev}:${originalFile.ino}`,
           );
           expect(published).toEqual([]);
-          if (operation === "no-op" || operation === "preservation") {
-            expect(actorCalls.reduce((count, readCount) => count + readCount(), 0)).toBe(0);
-          }
           if (operation === "preservation") {
             expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
           }
@@ -158,7 +145,6 @@ export function registerSessionMaintenancePreparationTests() {
           await racePromiseWithAbortSignal(archiveEntered.promise, signal);
           pending = runSqliteSessionReclamation({
             plan,
-            forceInProcess: false,
             diagnostics,
           });
           const result = await racePromiseWithAbortSignal(pending, signal);
@@ -231,7 +217,7 @@ export function registerSessionMaintenancePreparationTests() {
         },
       });
       const sql = observeHostDataSql();
-      const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
+      const pending = runSqliteSessionReclamation({ plan });
       let foreground: Promise<void> | undefined;
       let retry: ReturnType<typeof runSqliteSessionReclamation> | undefined;
       try {
@@ -268,7 +254,7 @@ export function registerSessionMaintenancePreparationTests() {
         await expect(pending).resolves.toEqual({ kind: "maintenance-plan-stale" });
         expect(released).toEqual([preparations[0]]);
         expect(published).toEqual([stale.sessionKey]);
-        retry = runSqliteSessionReclamation({ forceInProcess: false, plan });
+        retry = runSqliteSessionReclamation({ plan });
         await expect(retry).resolves.toMatchObject({
           kind: "maintenance-plan",
           value: { archived: 1, archivedEntries, entryRemovals: [] },
@@ -333,7 +319,6 @@ export function registerSessionMaintenancePreparationTests() {
         const published = vi.fn();
         const sql = observeHostDataSql();
         const first = runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
           onWorkerResult: published,
           assertCommitAllowed() {
@@ -370,7 +355,7 @@ export function registerSessionMaintenancePreparationTests() {
             signal,
           );
           expect(settled).toBe(false);
-          second = runSqliteSessionReclamation({ forceInProcess: false, plan });
+          second = runSqliteSessionReclamation({ plan });
           await racePromiseWithAbortSignal(
             Promise.race([
               secondPrepared.promise,
@@ -384,7 +369,7 @@ export function registerSessionMaintenancePreparationTests() {
           expect(preparations[0]).not.toBe(preparations[1]);
           expect(released).toEqual([]);
           expect(published).not.toHaveBeenCalled();
-          excess = runSqliteSessionReclamation({ forceInProcess: false, plan });
+          excess = runSqliteSessionReclamation({ plan });
           await expect(racePromiseWithAbortSignal(excess, signal)).rejects.toThrow(
             "Session maintenance preparation capacity is occupied",
           );
@@ -449,7 +434,7 @@ export function registerSessionMaintenancePreparationTests() {
           },
         });
         const sql = observeHostDataSql();
-        const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
+        const pending = runSqliteSessionReclamation({ plan });
         const outcome = pending.then(
           (value) => ({ kind: "returned" as const, value, nativeClosed }),
           (error: unknown) => ({ kind: "failed" as const, error, nativeClosed }),
@@ -505,9 +490,7 @@ export function registerSessionMaintenancePreparationTests() {
         }
         expect(loadSessionEntry(stale)).toMatchObject({ sessionId: "stale" });
         expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
-        await expect(
-          runSqliteSessionReclamation({ forceInProcess: false, plan }),
-        ).resolves.toMatchObject({
+        await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
           kind: "maintenance-plan",
           value: { archivedEntries },
         });
@@ -554,7 +537,6 @@ export function registerSessionMaintenancePreparationTests() {
       });
       const sql = observeHostDataSql();
       const pending = runSqliteSessionReclamation({
-        forceInProcess: false,
         plan,
         onWorkerResult: published,
       });

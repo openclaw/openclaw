@@ -10,7 +10,7 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
 import {
@@ -377,7 +377,6 @@ describe("connected in-process plugin finalization authority", () => {
           await expect(terminal).rejects.toMatchObject({ code: 1, name: new ExitError(1).name });
           expect(refused).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
           expect(refused).toMatchObject({
-            automaticTriage: undefined,
             result: { status: "error" },
           });
           expect(await fs.readFile(state.configPath, "utf8")).toBe(
@@ -440,7 +439,7 @@ describe("connected in-process plugin finalization authority", () => {
           recovering = true;
           configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
           preUpdatePluginInstallRecords =
-            readPersistedInstalledPluginIndexInstallRecords({ env: state.env }) ?? {};
+            (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })) ?? {};
           created = createUpdateRun({ trigger: "cli" }, { env: state.env });
           run = { runId: created.runId, env: state.env };
           completed = undefined;

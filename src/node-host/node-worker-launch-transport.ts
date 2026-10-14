@@ -3,6 +3,7 @@ import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
@@ -39,7 +40,6 @@ import type {
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
-  NODE_WORKER_INFERENCE_SETUP_ERROR,
   projectNodeWorkerNativeInference,
   type NodeWorkerNativeInferenceSnapshot,
 } from "./node-worker-native-inference.js";
@@ -56,6 +56,7 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
@@ -207,6 +208,7 @@ export async function prepareNodeWorkerLaunchTransport(
       bundleRoot: options.bundleRoot,
       bundleEntry: entry,
       workspaceDir: options.descriptor.assignment.workspaceDir,
+      homeDir: options.homeDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
       env: workerEnv,

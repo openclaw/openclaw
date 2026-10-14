@@ -13,6 +13,7 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -40,7 +41,7 @@ function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
     id: `fc_spawn_${ordinal}`,
     call_id: `call_spawn_${ordinal}`,
     name,
-    arguments: JSON.stringify(name === "tool_call" ? { id: "sessions_spawn", args } : args),
+    arguments: JSON.stringify(name === "dispatch_action" ? { id: "sessions_spawn", args } : args),
   };
   writeOpenAiResponsesSse(response, [
     { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
@@ -66,15 +67,23 @@ function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
 async function startProvider(signal: AbortSignal) {
   const childPending = createDeferred();
   const recovery = createDeferred<string>();
-  const checkpoint = createDeferred<{ runId: string; prompt: string }>();
+  const checkpoint = createDeferred<{
+    runId: string;
+    prompt: string;
+    sessionKey: string;
+    sessionId: string;
+  }>();
   const releaseCheckpoint = createDeferred();
   const releaseRecovery = createDeferred();
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const calls: Array<{ kind: "parent" | "child" | "recovery"; input: string }> = [];
+  const requests: string[] = [];
   let parentCalls = 0;
   const reservation = await reserveTestPortListener({
-    offsets: [0],
+    // Keep the measured provider/Gateway block above 40000 and outside Linux's client-port pool.
+    port: 64_864,
+    offsets: [0, 1, 2, 3],
     signal,
     createListener: () =>
       createServer((request, response) => {
@@ -87,12 +96,20 @@ async function startProvider(signal: AbortSignal) {
           if (request.url === "/recovery-checkpoint") {
             expect(typeof body.runId).toBe("string");
             expect(typeof body.prompt).toBe("string");
-            checkpoint.resolve({ runId: String(body.runId), prompt: String(body.prompt) });
+            expect(typeof body.sessionKey).toBe("string");
+            expect(typeof body.sessionId).toBe("string");
+            checkpoint.resolve({
+              runId: String(body.runId),
+              prompt: String(body.prompt),
+              sessionKey: String(body.sessionKey),
+              sessionId: String(body.sessionId),
+            });
             await withinTest(releaseCheckpoint.promise, signal);
             response.writeHead(204).end();
             return;
           }
           expect(request.url).toBe("/v1/responses");
+          requests.push(JSON.stringify(body.input));
           const tools = Array.isArray(body.tools)
             ? body.tools.flatMap((tool) =>
                 isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
@@ -149,7 +166,7 @@ async function startProvider(signal: AbortSignal) {
           calls.push({ kind: "parent", input });
           parentCalls += 1;
           if (parentCalls === 1) {
-            const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "tool_call";
+            const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "dispatch_action";
             expect(tools).toContain(tool);
             writeSpawn(response, tool, calls.length);
           } else {
@@ -165,7 +182,9 @@ async function startProvider(signal: AbortSignal) {
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
+    gatewayPort: reservation.claim.port + 2,
     calls,
+    requests,
     childPending: childPending.promise,
     recovery: recovery.promise,
     checkpoint: checkpoint.promise,
@@ -185,17 +204,25 @@ async function startProvider(signal: AbortSignal) {
   };
 }
 
-it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as const)(
-  "keeps quiet-child restart continuation under parent authority: %s",
+it.skipIf(process.platform === "win32").for([
+  { outcome: "complete", replaceChild: false },
+  { outcome: "reset", replaceChild: false },
+  { outcome: "complete", replaceChild: true },
+  { outcome: "reset", replaceChild: true },
+  { outcome: "cancel", replaceChild: true },
+] as const)(
+  "keeps quiet-child restart continuation under parent authority: $outcome (child replaced: $replaceChild)",
   { timeout: 180_000 },
-  async (outcome, { signal }) => {
+  async ({ outcome, replaceChild }, { signal }) => {
     const provider = await startProvider(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.4");
     const instance = await createOpenClawTestInstance({
       name: "gateway-quiet-subagent-restart",
+      port: provider.gatewayPort,
       signal,
       startTimeoutMs: 120_000,
       stopTimeoutMs: 10_000,
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
         OPENAI_API_KEY: undefined,
         OPENAI_BASE_URL: undefined,
@@ -210,6 +237,7 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
     const recoveryEnded = createDeferred<Record<string, unknown>>();
     let originalRunId: string | undefined;
     let observeRecovery = false;
+    let replacementChild: Record<string, unknown> | undefined;
     let phase = "startup";
     const observations: Record<string, unknown> = {};
     const persisted = (sessionKey: string) => {
@@ -285,7 +313,7 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
           signal,
         },
       );
-    const restart = async () => {
+    const restart = async (replaceChildAfterDrain = false) => {
       const child = instance.child;
       if (!child?.pid) {
         throw new Error("Owned Gateway process unavailable");
@@ -304,6 +332,36 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
       expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
       phase = "after-shutdown";
       observations.afterShutdown = persistedChild({ sessionKey: String(observations.childKey) });
+      if (replaceChildAfterDrain) {
+        // The owned Gateway has exited. Model an offline reset's new incarnation
+        // while retaining the old task receipt that startup must settle.
+        const childKey = String(observations.childKey);
+        const originalChild = persisted(childKey);
+        expect(originalChild).toMatchObject({
+          sessionId: expect.any(String),
+          lifecycleRevision: expect.any(String),
+        });
+        replacementChild = {
+          ...originalChild,
+          lifecycleRevision: "replacement-child-revision",
+          lifecycleRunId: "replacement-child-run",
+          status: "done",
+          abortedLastRun: false,
+        };
+        delete replacementChild.lastRunError;
+        const database = openNodeSqliteDatabase(
+          path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
+        );
+        try {
+          expect(
+            database
+              .prepare("UPDATE session_nodes SET entry_json=?, status='done' WHERE session_key=?")
+              .run(JSON.stringify(replacementChild), childKey).changes,
+          ).toBe(1);
+        } finally {
+          database.close();
+        }
+      }
       await instance.startGateway();
       phase = "after-startup";
       observations.afterStartup = persistedChild({ sessionKey: String(observations.childKey) });
@@ -335,7 +393,12 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
                   await fetch(${JSON.stringify(provider.baseUrl.replace("/v1", "/recovery-checkpoint"))}, {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ runId: ctx.runId, prompt: event.prompt }),
+                    body: JSON.stringify({
+                      runId: ctx.runId,
+                      prompt: event.prompt,
+                      sessionKey: ctx.sessionKey,
+                      sessionId: ctx.sessionId,
+                    }),
                   });
                 }, { timeoutMs: 60000 });
               },
@@ -435,8 +498,9 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
+          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
           const recoveryStartedAt = Date.now();
-          await restart();
+          await restart(replaceChild);
           phase = "waiting-for-continuation";
           await client!.request("sessions.subscribe", { agentId: "main" });
           const checkpoint = await withinTest(
@@ -444,6 +508,7 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
             AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
           );
           const recoveryMs = Date.now() - recoveryStartedAt;
+          expect(checkpoint).toMatchObject({ sessionKey: PARENT_KEY, sessionId: parentSessionId });
           expect(checkpoint.prompt).toContain(child.key);
           expect(checkpoint.prompt).toContain(childRunId);
           expect(checkpoint.prompt).toContain("Reconcile every listed unfinished");
@@ -453,7 +518,20 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
             status: "dispatching",
           });
           expect(provider.calls.filter((call) => call.kind === "recovery")).toHaveLength(0);
+          if (replaceChild) {
+            expect(checkpoint.prompt).toContain("original session incarnation changed");
+            expect(persisted(child.key)).toEqual(replacementChild);
+            expect(persistedChild({ runId: childRunId })?.execution).toMatchObject({
+              status: "terminal",
+              suppressSessionEffects: true,
+              outcome: {
+                status: "error",
+                error: expect.stringContaining("original session incarnation changed"),
+              },
+            });
+          }
           let dispatchesAtRevocation: number | undefined;
+          let requestsAtRevocation: number | undefined;
           if (outcome === "complete") {
             provider.releaseCheckpoint();
             await withinTest(Promise.race([provider.recovery, provider.failed]), signal);
@@ -463,7 +541,12 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
               () => {
                 expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
                 const settled = persistedChild({ runId: childRunId });
-                expect(settled).toMatchObject({ expectsCompletionMessage: false, cleanup: "keep" });
+                if (!replaceChild) {
+                  expect(settled).toMatchObject({
+                    expectsCompletionMessage: false,
+                    cleanup: "keep",
+                  });
+                }
                 expect(settled?.requesterSettleWake).toBeUndefined();
               },
               { timeout: 30_000 },
@@ -478,16 +561,19 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
             dispatchesAtRevocation = provider.calls.filter(
               (call) => call.kind === "recovery",
             ).length;
+            requestsAtRevocation = provider.requests.length;
             if (outcome === "reset") {
               await client!.request("sessions.reset", { key: PARENT_KEY, reason: "reset" });
             } else {
-              // Cancellation acknowledges the stop before the held prompt hook returns.
-              expect(
-                await client!.request("chat.abort", {
+              // Parent cancellation succeeds but cannot cancel a replacement child.
+              await expect(
+                client!.request("chat.abort", {
                   sessionKey: PARENT_KEY,
                   runId: checkpoint.runId,
                 }),
-              ).toMatchObject({ aborted: true });
+              ).rejects.toThrow(
+                /Parent run stopped, but descendant cancellation was incomplete: .*original session incarnation is unresolved or changed/,
+              );
             }
             provider.releaseCheckpoint();
             provider.release();
@@ -499,7 +585,7 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
               { timeout: 30_000 },
             );
           }
-          if (outcome === "complete") {
+          if (outcome === "complete" && !replaceChild) {
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: child.key,
             });
@@ -535,6 +621,9 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
             signal,
           );
           expect(persistedChild({ runId: childRunId })?.requesterSettleWake).toBeUndefined();
+          if (replaceChild) {
+            expect(persisted(child.key)).toEqual(replacementChild);
+          }
           if (outcome === "complete") {
             expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
           }
@@ -543,20 +632,28 @@ it.skipIf(process.platform === "win32").for(["complete", "reset", "cancel"] as c
           const recoveryDispatches = provider.calls.filter(
             (call) => call.kind === "recovery",
           ).length;
-          expect(recoveryDispatches).toBe(outcome === "cancel" ? 0 : 1);
+          expect(recoveryDispatches).toBe(outcome === "complete" || outcome === "reset" ? 1 : 0);
           if (dispatchesAtRevocation !== undefined) {
             expect(recoveryDispatches - dispatchesAtRevocation).toBe(0);
+          }
+          if (requestsAtRevocation !== undefined) {
+            expect(provider.requests.length - requestsAtRevocation).toBe(0);
           }
           console.log(
             JSON.stringify({
               proof: "quiet-subagent-managed-restart",
               recoveryMs,
               outcome,
+              replaceChild,
               recoveryDispatches,
               originalParentDispatches: 2,
               ...(dispatchesAtRevocation === undefined
                 ? {}
-                : { dispatchesAfterRevocation: recoveryDispatches - dispatchesAtRevocation }),
+                : {
+                    dispatchesAfterRevocation: recoveryDispatches - dispatchesAtRevocation,
+                    providerRequestsAfterRevocation:
+                      provider.requests.length - (requestsAtRevocation ?? 0),
+                  }),
               childDispatches: 1,
               subsequentRestarts: 1,
             }),

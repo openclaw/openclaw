@@ -5,7 +5,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 

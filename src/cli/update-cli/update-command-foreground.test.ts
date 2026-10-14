@@ -11,7 +11,6 @@ import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
 } from "../../infra/update-control-plane-sentinel.js";
-import * as finalizationBudget from "../../infra/update-finalization-budget.js";
 import {
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_CHANNEL_ENV,
@@ -413,9 +412,6 @@ it.each([
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },
     ]);
-    const budget = vi
-      .spyOn(finalizationBudget, "resolveUpdateFinalizationTimeoutMs")
-      .mockResolvedValue(1_000);
     mocks.validateCanary.mockResolvedValue({
       status: "ok",
       phase: "readiness",
@@ -449,14 +445,12 @@ it.each([
         reason: "target-native-unsupported",
       });
       expect(events).toEqual(["prepare"]);
-      expect(budget).not.toHaveBeenCalled();
     } else {
       expect(result?.result.status).toBe("ok");
       expect(events).toEqual(["prepare", "park", "prepare", "publish"]);
       expect(mocks.prepareMutableUpdate.mock.lastCall?.[1]).toBe(
-        omittedTimeout ? undefined : 1_000,
+        omittedTimeout ? undefined : 30_000,
       );
-      expect(budget).toHaveBeenCalledTimes(omittedTimeout ? 0 : 1);
       expect(params.opts.run.gatewayRestartRequired).toBe(true);
     }
     expect(mocks.captureManagedContext).not.toHaveBeenCalled();

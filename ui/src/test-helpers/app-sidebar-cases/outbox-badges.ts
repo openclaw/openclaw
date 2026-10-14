@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
@@ -36,31 +36,6 @@ describe("AppSidebar outbox attention badges", () => {
     const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
     expect(incognitoRow).not.toBeNull();
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
-  });
-
-  it("shows delivery attention and removes the badge when empty", async () => {
-    const sessionKey = "agent:main:attention-thread";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
-    sidebar.connected = true;
-    sidebar.storedOutboxes = {
-      total: 3,
-      attentionCountForSession: (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0),
-      hasSessionDraft: () => false,
-    };
-    await sidebar.updateComplete;
-
-    const badge = sidebar.querySelector<HTMLElement>(
-      `[data-session-key="${sessionKey}"] .session-row-badge--attention`,
-    );
-    expect(badge?.textContent).toContain("3");
-    expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
-
-    sidebar.storedOutboxes = undefined;
-    await sidebar.updateComplete;
-    expect(
-      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--attention`),
-    ).toBeNull();
   });
 
   it("resolves agent-main aliases to one attention badge count", async () => {

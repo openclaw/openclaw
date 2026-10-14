@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemorySearchStaleness,
+  readMemorySearchManagerStatus,
   type MemoryCliSearchParams,
   type MemoryCliSearchResult,
   type MemorySearchResult,
@@ -25,7 +26,7 @@ export async function searchMemoryForCli(
   let readRebuildWarning: () => string | undefined = () => undefined;
   let results: MemorySearchResult[];
   try {
-    readRebuildWarning = captureMemoryRebuildNotice(manager.status());
+    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
     results = await manager.search(query, {
       maxResults: params.maxResults,
       minScore: params.minScore,
@@ -45,7 +46,7 @@ export async function searchMemoryForCli(
     );
   }
   assertCurrent?.();
-  const status = manager.status();
+  const status = await readMemorySearchManagerStatus(manager);
   const staleness = resolveMemorySearchStaleness(status, agentId);
   const warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
   const pluginConfig = asNullableRecord(cfg.plugins?.entries?.["memory-core"]?.config) ?? {};
