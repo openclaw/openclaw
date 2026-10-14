@@ -717,9 +717,10 @@ use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
 old decision. During enforcement, the same bounded recovery handles transient
-sticky-notice creation and update failures. Each restart rereads comments and
-updates an existing owned notice if GitHub accepted the earlier write, rather
-than blindly posting another comment. Required approval remains required.
+label updates, sticky-notice creation and updates, and obsolete notice deletion.
+Each restart rereads labels and comments, then applies only changes still needed.
+If GitHub accepted an earlier notice creation, the review updates the existing
+owned notice rather than blindly posting another comment. Required approval remains required.
 Automatic lockfile cleanup, other uncertain writes, cancellation, and write
 request timeouts remain outside this publication recovery.
 

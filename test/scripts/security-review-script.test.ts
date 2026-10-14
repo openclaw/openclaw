@@ -831,6 +831,114 @@ describe("combined security review entry point", () => {
   );
 
   it.each([
+    {
+      name: "dependency label removal",
+      file: files[0],
+      label: "dependencies-changed",
+      method: "DELETE",
+      accepted: false,
+    },
+    {
+      name: "accepted dependency label addition",
+      file: files[1],
+      label: "dependencies-changed",
+      method: "POST",
+      accepted: true,
+    },
+    {
+      name: "accepted security label removal",
+      file: files[1],
+      label: "security-sensitive-changed",
+      method: "DELETE",
+      accepted: true,
+    },
+    {
+      name: "security label addition",
+      file: files[0],
+      label: "security-sensitive-changed",
+      method: "POST",
+      accepted: false,
+    },
+  ])("recovers a failed $name from live labels", ({ file, label, method, accepted }) => {
+    const labelsPath = "/repos/openclaw/openclaw/issues/7/labels";
+    const writePath = method === "DELETE" ? `${labelsPath}/${label}` : labelsPath;
+    const before = method === "DELETE" ? [{ name: label }] : [];
+    const after = accepted ? (method === "DELETE" ? [] : [{ name: label }]) : before;
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [file],
+      [`GET ${labelsPath}`]: { settlesAt: "2026-01-02T00:00:01Z", before, after },
+      [`${method} ${writePath}`]: { responses: [{ httpError: 500 }, {}] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(afterWait.some((entry) => entry.method === "GET" && entry.path === labelsPath)).toBe(
+      true,
+    );
+    expect(
+      result.requests.filter((entry) => entry.method === method && entry.path === writePath),
+    ).toHaveLength(accepted ? 1 : 2);
+    expect(result.combined.at(-1)).toBe("success");
+  });
+
+  it("reconciles an accepted obsolete-comment deletion after a lost response", () => {
+    const commentsPath = "/repos/openclaw/openclaw/issues/7/comments";
+    const commentPath = "/repos/openclaw/openclaw/issues/comments/321";
+    const result = evaluate({
+      [`GET ${commentsPath}`]: {
+        settlesAt: "2026-01-02T00:00:01Z",
+        before: [
+          {
+            id: 321,
+            user: { login: "github-actions[bot]", type: "Bot" },
+            body: "<!-- openclaw:dependency-guard -->\nObsolete notice",
+          },
+        ],
+        after: [],
+      },
+      [`DELETE ${commentPath}`]: { transportError: "ECONNRESET" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(
+      result.requests.filter((entry) => entry.method === "DELETE" && entry.path === commentPath),
+    ).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("success");
+  });
+
+  it.each([403, 404, 422])("does not retry an unavailable label write: HTTP %s", (httpError) => {
+    const result = evaluate({
+      "POST /repos/openclaw/openclaw/issues/7/labels": { httpError },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([]);
+    expect(result.combined.at(-1)).toBe("success");
+    expect(result.stderr).toContain(httpError === 403 ? "Skipping label" : "is unavailable");
+  });
+
+  it("does not replay automatic cleanup after its label removal fails", () => {
+    const result = evaluate(
+      {
+        ...lockfileRoutes,
+        [`GET ${pullPath}`]: lockfilePr,
+        "GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml": lockfileContents,
+        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } } },
+        "DELETE /repos/openclaw/openclaw/issues/7/labels/dependencies-changed": { httpError: 500 },
+      },
+      "autoscrub",
+    );
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
+    expect(result.stderr).toContain("Dependency lockfile autoscrub failed");
+    expect(result.combined).not.toContain("success");
+  });
+
+  it.each([
     { name: "dependency", file: files[1] },
     { name: "security-sensitive", file: files[0] },
   ])("recovers a failed $name notice without creating a duplicate", ({ file }) => {

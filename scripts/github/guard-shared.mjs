@@ -254,10 +254,10 @@ export function createIssueMutationHelpers({
   owner,
   repo,
   labelNames,
-  recoverCommentWrites = false,
+  recoverIssueWrites = false,
   warn = console.warn,
 }) {
-  const ignoreUnavailableWritePermission = (action) => (error) => {
+  const handleIssueWriteFailure = (action) => (error) => {
     if (error instanceof GitHubRateLimitError) {
       throw error;
     }
@@ -271,6 +271,14 @@ export function createIssueMutationHelpers({
       warn(`${action} is unavailable.`);
       return;
     }
+    // A failed write may already be visible. Enforcement can reread live
+    // labels and comments; restarting autoscrub could repeat a cleanup mutation.
+    if (
+      recoverIssueWrites &&
+      (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code))
+    ) {
+      throw new GitHubNoticePublicationError(error);
+    }
     throw error;
   };
   const removeLabelIfPresent = async (label) => {
@@ -281,7 +289,7 @@ export function createIssueMutationHelpers({
       .request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
         method: "DELETE",
       })
-      .catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
+      .catch(handleIssueWriteFailure(`label "${label}" removal`));
     labelNames.delete(label);
   };
   const addLabelIfMissing = async (label) => {
@@ -293,7 +301,7 @@ export function createIssueMutationHelpers({
         method: "POST",
         body: JSON.stringify({ labels: [label] }),
       })
-      .catch(ignoreUnavailableWritePermission(`label "${label}" update`));
+      .catch(handleIssueWriteFailure(`label "${label}" update`));
     labelNames.add(label);
   };
   const deleteCommentIfPresent = async (comment) => {
@@ -304,32 +312,18 @@ export function createIssueMutationHelpers({
       .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
         method: "DELETE",
       })
-      .catch(ignoreUnavailableWritePermission("comment deletion"));
+      .catch(handleIssueWriteFailure("comment deletion"));
   };
   const upsertComment = async (comment, body) => {
-    try {
-      return await api
-        .request(
-          comment
-            ? `/repos/${owner}/${repo}/issues/comments/${comment.id}`
-            : `${issuePath}/comments`,
-          {
-            method: comment ? "PATCH" : "POST",
-            body: JSON.stringify({ body }),
-          },
-        )
-        .catch(ignoreUnavailableWritePermission(comment ? "comment update" : "comment creation"));
-    } catch (error) {
-      // A failed POST may already exist. Only enforcement can restart from
-      // live comments; restarting autoscrub could repeat a cleanup mutation.
-      if (
-        recoverCommentWrites &&
-        (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code))
-      ) {
-        throw new GitHubNoticePublicationError(error);
-      }
-      throw error;
-    }
+    return await api
+      .request(
+        comment ? `/repos/${owner}/${repo}/issues/comments/${comment.id}` : `${issuePath}/comments`,
+        {
+          method: comment ? "PATCH" : "POST",
+          body: JSON.stringify({ body }),
+        },
+      )
+      .catch(handleIssueWriteFailure(comment ? "comment update" : "comment creation"));
   };
   return { removeLabelIfPresent, addLabelIfMissing, deleteCommentIfPresent, upsertComment };
 }
