@@ -25,10 +25,10 @@ it("reuses a clean seal across builds but validates again after a version change
   const file = fs.statSync(pathname, { bigint: true });
   const proof = { verifiedAt: Date.now(), facts: "validated facts" };
   const first = await import("./openclaw-database-seal-schema.js");
-  expect(writeSqliteCleanCloseSeal(pathname, first.SQLITE_DATABASE_SEAL_SCHEMA, file, proof)).toBe(
-    true,
-  );
-  expect(readSqliteCleanCloseSeal(pathname, first.SQLITE_DATABASE_SEAL_SCHEMA, file)).toEqual(
+  expect(
+    writeSqliteCleanCloseSeal(pathname, first.sqliteDatabaseSealSchemaFor(), file, proof),
+  ).toBe(true);
+  expect(readSqliteCleanCloseSeal(pathname, first.sqliteDatabaseSealSchemaFor(), file)).toEqual(
     proof,
   );
 
@@ -36,8 +36,8 @@ it("reuses a clean seal across builds but validates again after a version change
   inputs.build = "second";
   vi.resetModules();
   const rebuilt = await import("./openclaw-database-seal-schema.js");
-  expect(rebuilt.SQLITE_DATABASE_SEAL_SCHEMA).toBe(first.SQLITE_DATABASE_SEAL_SCHEMA);
-  expect(readSqliteCleanCloseSeal(pathname, rebuilt.SQLITE_DATABASE_SEAL_SCHEMA, file)).toEqual(
+  expect(rebuilt.sqliteDatabaseSealSchemaFor()).toBe(first.sqliteDatabaseSealSchemaFor());
+  expect(readSqliteCleanCloseSeal(pathname, rebuilt.sqliteDatabaseSealSchemaFor(), file)).toEqual(
     proof,
   );
 
@@ -45,6 +45,6 @@ it("reuses a clean seal across builds but validates again after a version change
   vi.resetModules();
   const upgraded = await import("./openclaw-database-seal-schema.js");
   expect(
-    readSqliteCleanCloseSeal(pathname, upgraded.SQLITE_DATABASE_SEAL_SCHEMA, file),
+    readSqliteCleanCloseSeal(pathname, upgraded.sqliteDatabaseSealSchemaFor(), file),
   ).toBeUndefined();
 });

@@ -18,7 +18,7 @@ import {
 } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
-import { resolveXIngress, xMentionFacts } from "./ingress.js";
+import { createXPublicationPreparation, resolveXIngress, xMentionFacts } from "./ingress.js";
 import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
 import type { XVisibleWorkSession } from "./reply.js";
@@ -262,6 +262,17 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         publicationSnapshot && publicThread
           ? {
               audience: "public" as const,
+              prepare: createXPublicationPreparation({
+                accountId: account.accountId,
+                post,
+                cfg,
+                readConfig,
+                route,
+                assertActive: () => {
+                  lifecycle.abortSignal.throwIfAborted();
+                  assertCurrent();
+                },
+              }),
               assertCurrent: () => {
                 lifecycle.abortSignal.throwIfAborted();
                 assertCurrent();

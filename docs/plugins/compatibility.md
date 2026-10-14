@@ -73,14 +73,25 @@ that introduces its replacement. Migration sequence:
 4. Document the replacement and timeline.
 5. Test both old and new paths.
 6. Wait through the announced migration window.
-7. Remove only with explicit breaking-release approval.
+7. Remove only with explicit maintainer approval for a later ordinary stable release.
 
 Deprecated records must include a warning start date, replacement, docs link,
-and either a final removal date no more than three months after the warning
-starts or an explicit version boundary such as `next-plugin-sdk-major`. Do not
-add a deprecated compatibility path with an open-ended removal window unless
-maintainers explicitly decide it is permanent compatibility and mark it
-`active` instead.
+and either a final removal date or an explicitly approved removal gate.
+The `stable-deprecation-period` gate records preparation for removal in a later
+ordinary stable release. It does not set a deadline or authorize removal.
+Leave `removeAfter` unset until the owning maintainer approves and announces the
+target stable release and final compatibility date. Beta releases do not satisfy
+the shipped replacement or deprecation requirement.
+
+The announced warning-to-removal window should be no more than three months.
+That bound is not an automatic expiry: a source annotation, elapsed registry
+date, or undated gate cannot substitute for shipped diagnostics, migration
+instructions, supported-reader checks, and the announced window. The
+[removal timeline](/plugins/sdk-migration/removal-timeline) describes the
+additional shipped-surface gate. Legacy `next-plugin-sdk-major` registry values
+require owner migration to the later-stable-release policy. Do not add an
+open-ended removal window without an approved gate unless maintainers explicitly
+decide it is permanent compatibility and mark it `active` instead.
 
 ## Current compatibility areas
 
@@ -156,14 +167,14 @@ and legacy-state import and Doctor migrations remain unchanged.
 ### Synchronous plugin state
 
 `plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
-Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate.
+Its September 11, 2026 deprecation uses the `stable-deprecation-period` removal gate.
 Actual legacy calls emit one diagnostic per plugin and capability family per
 Gateway process; module imports remain silent.
 Existing synchronous methods, plugin trust eligibility, and transactional callback
 semantics remain unchanged. Migrate to data-only `openKeyedStoreV2` operations using
 the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
-Removal still requires a supported external-plugin migration and explicit
-breaking-release approval.
+Removal still requires a supported external-plugin migration, an announced
+ordinary stable release window, and explicit maintainer approval.
 
 ### Session agent resolution aliases
 

@@ -170,6 +170,7 @@ export async function recoverStore(params: {
   activeSessionKeys?: Iterable<string>;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
+  signal?: AbortSignal;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
@@ -641,6 +642,7 @@ export async function recoverStore(params: {
         completionSource,
         recoveryAttempt: recoveryView.nextAttempt,
         recoveryAdmission: params.recoveryAdmission,
+        signal: params.signal,
         gatewayRuntime: params.gatewayRuntime,
         ...resumeOptions,
         lifecycleGeneration: params.lifecycleGeneration,
@@ -652,7 +654,7 @@ export async function recoverStore(params: {
         reason: `dispatch_${resumeResult}`,
         nextOwner:
           resumeResult === "started"
-            ? "main-lane"
+            ? "background-lane"
             : resumeResult === "settled"
               ? "none"
               : "main-session-recovery",

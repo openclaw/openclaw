@@ -269,9 +269,7 @@ it("retains branch reads across four-minute gaps and retires after five idle min
   const { database, scope } = input();
   const request = {
     database,
-    databaseIdentity: "synthetic-branch-owner",
     sessionKey: scope.sessionKey,
-    sessionId: "branch-session",
   };
   const result = {
     status: "ok" as const,

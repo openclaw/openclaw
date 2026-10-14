@@ -292,6 +292,13 @@ The caller still owns model allowlist validation, atomic persistence,
 `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
 
+In an async session-entry patch, prepare an existing auth pin with
+`await prepareAuthProfileProvider({ agentDir, profileId })` from the same subpath
+and pass its result as `recordedProvider`. This reuses the runtime snapshot or
+reads persisted credentials through the auth owner. Pass the result even when
+its `provider` is `undefined`: it records completed preparation and prevents a
+synchronous fallback lookup. Skip preparation when the entry has no auth pin.
+
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
 the channel's private authenticated envelope. Channel codecs opt into resolving

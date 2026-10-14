@@ -59,7 +59,7 @@ async function fixture(state: NodePermissionRequest["state"], ids = ["screenReco
   if (ids.includes("computerControl")) {
     snapshot.capabilities.computerControlEnabled = false;
   }
-  const post = vi.fn<(message: unknown) => Promise<unknown>>().mockResolvedValue(snapshot);
+  const post = vi.fn<(message: { type: string }) => Promise<unknown>>().mockResolvedValue(snapshot);
   vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
   vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
   capability = createNativeDeviceSettingsCapability();
@@ -249,6 +249,42 @@ it("shows grant failures and never claims success", async () => {
   );
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
 });
+
+it.each(
+  (["denied", "restart-required", "granted"] as const).flatMap((outcome) =>
+    [false, true].map((reject) => ({ outcome, reject })),
+  ),
+)(
+  "refreshes the card to $outcome after a native grant attempt (reject=$reject)",
+  async ({ outcome, reject }) => {
+    const f = await fixture("not-determined");
+    f.post.mockImplementation(async (message) => {
+      if (message.type === "resolve-permission") {
+        f.snapshot.permissions.entries = [
+          outcome === "granted"
+            ? { id: "screenRecording", status: "granted" }
+            : { id: "screenRecording", status: "denied", state: outcome },
+        ];
+        if (reject) {
+          throw new Error("Native grant request ended");
+        }
+        return null;
+      }
+      f.publish();
+      return f.snapshot;
+    });
+    f.view.getByRole("button", { name: "Grant Screen Recording" }).click();
+    await waitForSolid(() => {
+      if (outcome === "granted") {
+        expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
+      } else if (outcome === "restart-required") {
+        expect(f.view.getByRole("button", { name: "Relaunch OpenClaw" })).toBeTruthy();
+      } else {
+        expect(f.view.getByRole("button", { name: "Open System Settings" })).toBeTruthy();
+      }
+    });
+  },
+);
 
 it("shows the Mac app destination in a browser without a native capability", async () => {
   const view = await mountPermissionCard({

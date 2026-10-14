@@ -8,7 +8,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
-import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
@@ -40,8 +40,10 @@ export class McpAppCatalogController {
     host.addController?.(this);
   }
   get available() {
+    const snapshot = this.context()?.gateway.snapshot;
     return (
-      isGatewayMethodAdvertised(this.context()?.gateway.snapshot ?? {}, "mcp.app.discover") === true
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
     );
   }
   hostConnected() {

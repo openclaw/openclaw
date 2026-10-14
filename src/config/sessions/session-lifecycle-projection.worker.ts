@@ -55,6 +55,7 @@ export function commitSessionLifecycleProjection(
       input.removalPlans,
       {
         resetScope: { agentId: input.agentId, path: database.path, env: options.env },
+        currentEntrySnapshot: publishActorEntry?.snapshot(),
         postimages,
         onArchived: (sessionKey, previous) => archivedPrevious.set(sessionKey, previous),
         onResetBoundary: ({
@@ -167,7 +168,21 @@ export function bindSqliteWorkerBackend(
       const prepare = () => {
         if (command.type === "prepare") {
           const input = command.input;
-          const store = readProjectedLifecycleStore(database, input);
+          const upsert = input.upserts[0];
+          const retained =
+            !input.allowCanonicalRepair &&
+            input.removals.length === 0 &&
+            input.upserts.length === 1 &&
+            upsert &&
+            !upsert.relatedSessionKeys?.length
+              ? prepareSessionActorEntryPatch(database, upsert.sessionKey.trim())?.snapshot()
+              : undefined;
+          // Related-parent builders still require their complete multi-entry projection.
+          const store =
+            retained &&
+            (upsert?.relatedSessionKeys === undefined || !retained.entry.parentSessionKey)
+              ? { [retained.sessionKey]: retained.entry }
+              : readProjectedLifecycleStore(database, input);
           const identity = readOpenClawAgentDatabaseIdentity(database).identity;
           return {
             store,

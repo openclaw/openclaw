@@ -13,7 +13,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -130,7 +130,11 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list") ||
+      !canCallGatewayMethod(
+        scope.context.gateway.snapshot,
+        "taskSuggestions.list",
+        "operator.read",
+      ) ||
       parseCatalogSessionKey(scope.state.sessionKey)
     ) {
       this.setTaskSuggestions([]);

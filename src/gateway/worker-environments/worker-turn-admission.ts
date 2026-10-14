@@ -9,11 +9,13 @@ import { withSessionPlacementForcedTerminalSettlement } from "../../agents/sessi
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -104,10 +106,9 @@ export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOp
     assertLocalAllowed() {
       assertRequiredWorkerLocalExecution(getRuntimeConfig());
     },
-    assertCurrent(claim: LocalTurnPlacementClaim) {
+    assertCurrent(live: WorkerSessionPlacementRecord | undefined) {
       const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
       if (required) {
-        const live = options.placements.get(claim.sessionId);
         const environment = live?.environmentId
           ? options.environments.get(live.environmentId)
           : undefined;
@@ -220,13 +221,13 @@ export async function waitForInitialWorkerPlacement(params: {
     ...identity,
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const memory = captureSessionActorStorageOwner(target, {
+    assertCurrent: () => params.assertRunCurrent?.(),
+    authorize: () => params.assertRunCurrent?.(),
+  });
   const original = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : await readSessionEntryReadOnlyInWorker(target, params.assertRunCurrent);
+    ? readCapturedSessionActorEntry(memory, target.sessionKey)
+    : await readSessionEntryReadOnlyInWorker(target, params.assertRunCurrent);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };
@@ -436,10 +437,15 @@ export async function executeLocalTurn<T>(params: {
       ...identity,
       storePath: reader?.database.path ?? resolveSessionStorePathForScope(identity),
     };
-    const memory = getSessionActorStorageBinding(scope);
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent: assertPreflightCurrent,
+      authorize: assertPreflightCurrent,
+    });
     if (memory) {
       assertPreflightCurrent();
-      assertLocalWorkspace(memory.actor.snapshot(memory.authority)?.entry?.repositoryWorkspaceId);
+      assertLocalWorkspace(
+        readCapturedSessionActorEntry(memory, scope.sessionKey)?.repositoryWorkspaceId,
+      );
     } else if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(

@@ -13,10 +13,10 @@ import { parse } from "acorn";
 import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
 import { resolveCodeModeConfig } from "../../src/agents/code-mode-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { mergeDeep } from "../../src/infra/deep-merge.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
   createGatewayMatrixFixture,
   createGatewayMatrixPluginManifest,
@@ -32,7 +32,6 @@ import {
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
-  matrixModelConfig,
   matrixProviderEnv,
 } from "./code-mode-matrix-provider.ts";
 import {
@@ -1341,62 +1340,17 @@ export async function runGatewayMatrixCell(
   }
   const port = await availablePort();
   const configPath = path.join(stateDir, "openclaw.json");
-  const baseConfig = {
-    logging: {
-      level: "info",
-      consoleLevel: "info",
-      consoleStyle: "compact",
-      file: path.join(root, "gateway.log"),
-    },
-    env: { shellEnv: { enabled: false } },
-    agents: {
-      defaults: {
-        workspace,
-        skipBootstrap: true,
-        thinkingDefault: params.thinking,
-        heartbeat: { every: "0m" },
-        systemAgent: { agentId: "qa" },
-      },
-      entries: { qa: {} },
-    },
-    plugins: {
-      allow: [
-        provider,
-        ...(executor === "quickjs" ? ["code-mode-quickjs"] : []),
-        ...(fixture.requiredTools.length ? ["code-mode-matrix-fixture"] : []),
-      ],
-      slots: { memory: "none" },
-      ...(fixture.requiredTools.length ? { load: { paths: [pluginDir] } } : {}),
-      entries: {
-        [provider]: { enabled: true },
-        ...(executor === "quickjs" ? { "code-mode-quickjs": { enabled: true } } : {}),
-        ...(fixture.requiredTools.length
-          ? { "code-mode-matrix-fixture": { enabled: true, config: { receiptsPath } } }
-          : {}),
-      },
-    },
-    memory: { search: { enabled: false } },
-    skills: { load: { watch: false } },
-    discovery: { mdns: { mode: "off" } },
-    tools: {
-      profile: "full",
-      allow: allowedTools,
-      fs: { workspaceOnly: true },
-      exec: { security: "full", ask: "off" },
-    },
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      port,
-      auth: { mode: "token", token },
-      controlUi: { enabled: false },
-      http: { endpoints: { responses: { enabled: true } } },
-    },
-  };
-  // Task-specific limits cannot change the selected treatment, runtime, or model settings.
-  const cfg = mergeDeep(mergeDeep(baseConfig, performance?.configPatch ?? {}), {
-    agents: matrixModelConfig(params.cell.model, params.thinking),
-    tools: { codeMode: { enabled: params.cell.mode === "code", executor } },
+  const cfg = createGatewayMatrixConfig({
+    root,
+    port,
+    token,
+    model: params.cell.model,
+    thinking: params.thinking,
+    mode: params.cell.mode,
+    executor,
+    requiredTools: fixture.requiredTools,
+    allowedTools,
+    configPatch: performance?.configPatch,
   });
   await fs.writeFile(configPath, JSON.stringify(cfg), { mode: 0o600 });
   const env: NodeJS.ProcessEnv = {

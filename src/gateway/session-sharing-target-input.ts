@@ -7,7 +7,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { operatorSessionCap } from "./operator-role-policy.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import {
   isApprovalSessionTargetMethod,
@@ -121,6 +123,29 @@ export function resolveDirectIncognitoTargets(
       canonicalizeSessionKeyForAgent(target.agentId ?? DEFAULT_AGENT_ID, target.sessionKey),
     ),
   );
+}
+
+/** Share the core's non-disclosing read boundary with worker preparation. */
+export function resolveProtectedSessionTargets(params: {
+  client: GatewayClient | null;
+  method: string;
+  requestParams: unknown;
+  adminBypass: boolean;
+  talkTargets?: SessionMutationTarget[];
+  sessionCap: () => ReturnType<typeof operatorSessionCap>;
+}) {
+  const directTargets =
+    params.talkTargets ?? resolveDirectSessionTargets(params.method, params.requestParams);
+  const hidesForeignSessions =
+    !params.adminBypass &&
+    directTargets.length > 0 &&
+    Boolean(gatewayClientSessionCreator(params.client)) &&
+    params.sessionCap() === "none";
+  const protectedTargets = hidesForeignSessions
+    ? directTargets
+    : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
+      resolveDirectIncognitoTargets(params.method, params.requestParams));
+  return { hidesForeignSessions, protectedTargets };
 }
 
 export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {

@@ -67,6 +67,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       retainedTransport: true,
       nativeSource,
       nativeResource,
+      databaseAccess: "read-only",
       decodeResourceError: (payload) =>
         // SAFETY: The paired staging worker emits the SQLite codec in this opaque envelope.
         decodeSqliteSnapshotStagingError(payload as OpenClawStateWorkerErrorPayload | undefined),

@@ -137,7 +137,7 @@ describe("gateway suspend handlers", () => {
     );
   });
 
-  it("returns a draining status without exposing its owner's suspension id", async () => {
+  it("immediately reports pending write custody without exposing its owner's suspension id", async () => {
     vi.useFakeTimers();
     const result = {
       status: "draining",
@@ -156,11 +156,9 @@ describe("gateway suspend handlers", () => {
     };
     coordinator.status.mockReturnValue(result);
 
-    const response = invoke("gateway.suspend.status", {
+    const { respond, info } = await invoke("gateway.suspend.status", {
       suspensionId: "suspension-draining",
     });
-    await vi.advanceTimersByTimeAsync(15_000);
-    const { respond, info } = await response;
 
     expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     expect(respond).toHaveBeenCalledWith(true, result);

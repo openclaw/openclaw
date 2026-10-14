@@ -120,7 +120,7 @@ export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
-  /** Bounded Git owner/operation; unknown for unattributed Git and none for other families. */
+  /** Bounded Git owner or SQLite session/transport; unknown for unattributed Git. */
   operation?: string;
   count: number;
   intervalMs: number;

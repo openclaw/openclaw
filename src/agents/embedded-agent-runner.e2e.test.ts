@@ -48,7 +48,6 @@ const resolveModelAsyncMock = vi.fn(
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 let getReplyPayloadMetadata: typeof import("../auto-reply/reply-payload.js").getReplyPayloadMetadata;
 
@@ -212,7 +211,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
-  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
@@ -232,7 +231,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   preparedPluginRegistry.agentHarnesses.length = 0;
-  clearRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot({});
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();

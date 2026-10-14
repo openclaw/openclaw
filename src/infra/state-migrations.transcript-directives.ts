@@ -26,6 +26,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import {
@@ -320,6 +321,7 @@ async function migrateAgentDatabase(
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertOpenClawAgentDatabaseForMaintenance(database, params);
+    admitSqliteSchema(database);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
       const warnings = await recoverPendingTranscriptArchivePublication({

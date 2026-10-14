@@ -21,7 +21,7 @@ import {
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, createPasteEvent, requireElement } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";

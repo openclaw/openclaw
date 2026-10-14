@@ -5,6 +5,7 @@ import {
   loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -132,6 +133,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  await prepareSharedAuthStoreOwnership(runtimeEnv);
   const displaySnapshot =
     !params.assignmentConfig &&
     params.includeConfigRefs !== false &&

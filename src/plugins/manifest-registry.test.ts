@@ -390,6 +390,7 @@ describe("loadPluginManifestRegistry", () => {
             source,
             manifestPath: source,
             configSchema: { type: "object", additionalProperties: false },
+            activation: { onStartup: true },
           }),
         ]);
       }

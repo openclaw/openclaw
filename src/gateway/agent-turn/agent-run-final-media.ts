@@ -129,6 +129,7 @@ export async function finalizeAgentRunMedia(
           ...scope,
           readSource: source,
           workspace: authority.workspace,
+          prepareRead: predicate.prepareRead,
           release,
           assertCurrent: () => {
             assertCurrent();

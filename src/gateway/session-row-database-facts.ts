@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
+import {
+  readSessionRuntimeOwnershipAsync,
+  SessionRuntimeOwnershipChanged,
+} from "../agents/harness/session-runtime-ownership.js";
 import { readSessionActorRowFacts } from "../config/sessions/session-actor-replica.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import {
@@ -208,20 +211,34 @@ export async function withSessionRowDatabaseFacts(
         for (const row of rows) {
           const prepared = facts.get(identity(row));
           if (prepared && prepared.runtimeOwnership === undefined) {
-            const ownership = await capturePluginStateReadDependencies(() =>
-              readSessionRuntimeOwnershipAsync({
-                config: owner.cfg,
-                agentId: row.agentId,
-                sessionKey: row.key,
-                storePath: row.storeTarget.storePath,
-                sessionEntry: prepared.entry,
-                readPreparedPreviousSessionId: () => prepared.entry?.previousSessionId,
-                assertCurrent,
-              }),
-            );
-            ownershipReads.set(identity(row), ownership);
-            prepared.runtimeOwnership = ownership.value ?? null;
-            prepared.runtimeOwnershipDependencies = ownership.dependencies;
+            for (let attempt = 0; attempt < 2; attempt++) {
+              try {
+                const ownership = await capturePluginStateReadDependencies(() =>
+                  readSessionRuntimeOwnershipAsync({
+                    config: owner.cfg,
+                    agentId: row.agentId,
+                    sessionKey: row.key,
+                    storePath: row.storeTarget.storePath,
+                    sessionEntry: prepared.entry,
+                    readPreparedPreviousSessionId: () => prepared.entry?.previousSessionId,
+                    assertCurrent,
+                  }),
+                );
+                ownershipReads.set(identity(row), ownership);
+                prepared.runtimeOwnership = ownership.value ?? null;
+                prepared.runtimeOwnershipDependencies = ownership.dependencies;
+                delete prepared.runtimeOwnershipRetryPending;
+                break;
+              } catch (error) {
+                if (!(error instanceof SessionRuntimeOwnershipChanged)) {
+                  throw error;
+                }
+                // Serve this row degraded, then retry it at the next foreground selection.
+                prepared.runtimeOwnership = null;
+                prepared.runtimeOwnershipDependencies = [];
+                prepared.runtimeOwnershipRetryPending = true;
+              }
+            }
           }
         }
         const preparedFacts = new Map<string, PreparedSessionRowDatabaseFacts>();

@@ -239,9 +239,6 @@ function trackSchemaChanges(
     if (dataChange || mutation.temporaryTableSchemaChange || control?.kind === "ROLLBACK") {
       owner.mutationRevision += 1;
     }
-    if (control?.kind === "ROLLBACK") {
-      owner.rollbackRevision += 1;
-    }
     if (
       phase !== "bind" &&
       wasTransaction &&
@@ -378,12 +375,11 @@ function trackSchemaChanges(
         schemaChange: unexpected,
         mainSchemaChange: unexpected,
         temporaryTableSchemaChange: false,
-        // Known generation triggers change no rows and must not revoke in-flight reads.
-        dataChange: unexpected || schema.kind !== "generation",
+        dataChange: true,
         temporaryWriteTables: [],
         control: undefined,
       });
-      if (!unexpected && schema.kind === "transcript-index") {
+      if (!unexpected) {
         for (const table of [schema.statusTable, schema.pendingTable]) {
           owner.isolatedTempTables.add(table.toLowerCase());
         }
@@ -412,16 +408,6 @@ function trackSchemaChanges(
 /** Local mutation witness; committed sibling writes use the physical admission revision. */
 export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
   return owners.get(database)?.mutationRevision;
-}
-
-/** A callback inside native SQL cannot retain a token across that statement's rollback. */
-export function readSqliteRollbackRevision(database: DatabaseSync): number | undefined {
-  const owner = owners.get(database);
-  if (!owner) {
-    return undefined;
-  }
-  observeTransactionState(database, owner);
-  return owner.mutationDepth === 0 ? owner.rollbackRevision : undefined;
 }
 
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
@@ -556,7 +542,6 @@ export function trackSqliteSchema(
       revision: 0,
       readDepth: 0,
       mutationRevision: 0,
-      rollbackRevision: 0,
       mutationDepth: 0,
       transactionOpen: database.isOpen && database.isTransaction,
       transactionRead: false,

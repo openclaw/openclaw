@@ -156,6 +156,7 @@ describe("createOpenClawTools context wiring", () => {
       "agent:main:main",
       "agent:main:qa-channel:default:direct:media-requester",
     ],
+    ["agent:main:policy", "agent:work:run", "agent:main:policy"],
   ])(
     "passes a separate durable requester key for background media from %s",
     async (agentSessionKey, runSessionKey, taskSessionKey) => {
@@ -163,8 +164,13 @@ describe("createOpenClawTools context wiring", () => {
         disableMessageTool: true,
         disablePluginTools: true,
         authProfileStore: { version: 1, profiles: {} },
-        config: mediaConfig,
+        config: {
+          ...mediaConfig,
+          agents: { ...mediaConfig.agents, entries: { main: {}, work: {} } },
+        },
         agentSessionKey,
+        sandboxAgentId: "main",
+        sandboxed: true,
         runSessionKey,
         onYield: vi.fn(),
       });
@@ -173,6 +179,9 @@ describe("createOpenClawTools context wiring", () => {
           expect.objectContaining({
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
+            sandboxSessionKey: agentSessionKey,
+            sandboxAgentId: "main",
+            requesterAgentId: runSessionKey.startsWith("agent:work:") ? "work" : "main",
           }),
           true,
         );

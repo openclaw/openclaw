@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -5,9 +6,13 @@ import {
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
 import * as publicationStore from "./github-publication-store-async.js";
-import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
+import {
+  claimRepositoryGitHubPublicationFixture,
+  insertRepositoryGitHubPublicationFixture,
+} from "./github-publication-store.test-support.js";
 import {
   SESSION_KEY,
+  commands,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
 import { readPendingRepositoryGitHubPublication } from "./github-repository-publication-store.js";
@@ -96,6 +101,51 @@ it.each([false, true])(
     });
   },
 );
+
+it("returns the terminal receipt without executing an older confirmation", async () => {
+  const fixture = await createPersonalPublicationFixture();
+  const workspace = await sharedRepositoryWorkspace();
+  const row = repositoryReceipt(workspace, {
+    owner_profile_id: fixture.owner,
+    connection_generation: fixture.generation,
+    identity_source: "personal",
+    identity_account_id: account.accountId,
+    identity_login: account.login,
+    status: "needs_confirmation",
+  });
+  insertRepositoryGitHubPublicationFixture(row, fixture.action.assertCurrent);
+  const captured = expectDefined(
+    await fixture.coordinator.personalPending(fixture.action, fixture.action),
+    "original pending receipt",
+  );
+  expect(captured.result.status).toBe("needs_confirmation");
+  const confirmation = expectDefined(captured.confirmation, "original confirmation");
+  const commandCount = commands.length;
+  const execution = claimRepositoryGitHubPublicationFixture(row, "concurrent-publisher", {
+    assertCustody: fixture.action.assertCurrent,
+    assertCurrent: fixture.action.assertCurrent,
+  });
+  execution.complete({
+    requestId: row.request_id,
+    status: "failed",
+    code: "unavailable",
+    message: "Synthetic terminal result",
+    nextAction: "Create a new publication request.",
+  });
+  await expect(
+    fixture.coordinator.confirmPersonalV2(
+      {
+        sessionKey: SESSION_KEY,
+        requestId: row.request_id,
+        requestDigest: confirmation.requestDigest,
+        generation: confirmation.generation,
+        account: confirmation.account,
+      },
+      fixture.action,
+    ),
+  ).resolves.toMatchObject({ requestId: row.request_id, status: "failed", code: "unavailable" });
+  expect(commands).toHaveLength(commandCount);
+});
 
 it.each([false, true])(
   "falls back to the non-repository owner only after an empty successful read (corrupt=%s)",

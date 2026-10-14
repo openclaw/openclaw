@@ -3140,6 +3140,8 @@ describe("talk realtime gateway relay", () => {
   it.each([
     { source: "turn", reason: "barge-in" },
     { source: "session", reason: "relay-closed" },
+    { source: "abort", reason: "relay-closed" },
+    { source: "detach", reason: undefined },
     { source: "provider", reason: "relay-error" },
     { source: "disconnect", reason: undefined },
   ] as const)("settles linked agent runs on $source termination", async ({ source, reason }) => {
@@ -3160,10 +3162,11 @@ describe("talk realtime gateway relay", () => {
         turnId: "turn-1",
       });
       expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
-    } else if (source === "session") {
+    } else if (source === "session" || source === "abort" || source === "detach") {
       void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-1",
+        ...(source !== "session" ? { disposition: source } : {}),
       });
     } else if (source === "provider") {
       bridgeRequest?.onClose?.("error");
@@ -4832,9 +4835,11 @@ describe("talk realtime gateway relay", () => {
           bridgeRequest?.onClose?.(ending === "provider-error" ? "error" : "completed");
         }
         expect(close).toHaveBeenCalledExactlyOnceWith({
-          disposition: ending === "explicit-abort" ? "abort" : "detach",
+          disposition: ending === "explicit-abort" || ending === "client-stop" ? "abort" : "detach",
         });
-        expect(abortController.signal.aborted).toBe(ending === "explicit-abort");
+        expect(abortController.signal.aborted).toBe(
+          ending === "explicit-abort" || ending === "client-stop",
+        );
         expect(relaySessions.has(session.relaySessionId)).toBe(false);
         expect(() =>
           resolveTalkVoiceSession({

@@ -712,6 +712,38 @@ export function startSessionWorkAdmissionInterruption(params: {
   });
 }
 
+/** Cancel this Gateway's ingress, retaining acquired custody through physical settlement. */
+export function startGatewaySessionWorkAdmissionInterruption(
+  resolveGatewayContext: GatewayContextResolver,
+  reason: Error,
+): { released: Promise<void> } {
+  const admissions = collectSessionWorkAdmissions(ACTIVE_SESSION_WORK_ADMISSIONS.keys(), (owner) =>
+    hasGatewayContextOwner(owner, resolveGatewayContext),
+  );
+  const interruptions = Array.from(admissions, (owner) => {
+    if (owner.interrupted || owner.isSettling?.()) {
+      return owner.released;
+    }
+    try {
+      return interruptSessionWorkAdmissionOwners(new Set([owner]), reason).released;
+    } catch (error) {
+      // A failed cancellation callback must not strand another owner's ingress.
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  return {
+    released: Promise.allSettled([
+      ...interruptions,
+      ...Array.from(admissions, (owner) => owner.released),
+    ]).then((results) => {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") {
+        throw failed.reason;
+      }
+    }),
+  };
+}
+
 export async function interruptSessionWorkAdmissions(params: {
   reason?: Error;
   scope: string;

@@ -61,6 +61,8 @@ export type SessionEntryListWorkerResult = {
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
   revision?: string;
   unchanged?: true;
+  /** Oldest cron run in the requested logical agent; null means no run rows. */
+  nextCronRunUpdatedAt?: number | null;
 };
 
 export type SessionExactEntriesWorkerInput = {

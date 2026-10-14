@@ -1,11 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -197,7 +200,12 @@ export async function executeQueuedContextEngineCompaction(input: {
     attemptNativeHarnessCompaction,
     transcriptBytePreflightAuthority,
   } = input;
-  const incognito = captureIncognitoSessionSource(runtimeTarget);
+  const incognito = captureSessionActorStorageOwner(runtimeTarget, {
+    assertCurrent() {
+      host.assertActive?.();
+    },
+    authorize() {},
+  });
   let expected = { ...expectedEntry };
   return await enqueueCompactionInLanes(params, async () => {
     let closed = false;
@@ -596,17 +604,12 @@ export async function executeQueuedContextEngineCompaction(input: {
                 sourceAuthority: {
                   assertActive: () => {
                     assertCallerActive();
-                    incognito?.admissionSignal?.throwIfAborted();
-                    if (incognito && "kind" in incognito) {
-                      incognito.assertCurrent();
-                    }
                     if (incognito) {
                       requireCompactionWriterEntry(
-                        "kind" in incognito
-                          ? undefined
-                          : incognito.actor.sessions.readSharing(
-                              postCompactionSessionTarget.sessionKey,
-                            )?.entry,
+                        readCapturedSessionActorEntry(
+                          incognito,
+                          postCompactionSessionTarget.sessionKey,
+                        ),
                         nativeCompactionOwner,
                       );
                     }

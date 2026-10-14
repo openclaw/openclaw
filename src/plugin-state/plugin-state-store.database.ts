@@ -1,6 +1,9 @@
 import { hasErrnoCode } from "../infra/errno.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-handle.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -13,6 +16,7 @@ import {
   resolveDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../state/openclaw-state-db.paths.js";
+import { beginPluginStatePublication } from "./plugin-state-publication.js";
 import { createPluginStateError, type PluginStateDatabase } from "./plugin-state-store.kernel.js";
 import {
   PluginStateStoreError,
@@ -124,7 +128,26 @@ export function runWriteTransaction<T>(
   if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
     openPluginStateDatabase(operation, options);
   }
-  return runOpenClawStateWriteTransaction(write, options, {
-    operationLabel: `pluginState.${operation}`,
-  });
+  return runOpenClawStateWriteTransaction(
+    (store) => {
+      const identity = readTrackedStateDatabaseIdentity(store.db)?.key;
+      if (!identity) {
+        throw new Error("Plugin state writer has no admitted source");
+      }
+      const publication = beginPluginStatePublication(() => identity);
+      // Savepoints keep denial until the outer owner installs all committed facts.
+      stageSqliteTransactionState(sqlPublicationAnchor(store.db), {
+        stage() {},
+        commit() {},
+        prepareObservers: () => publication.finish("completed"),
+        rollback: () => publication.finish("completed"),
+        invalidate: () => publication.finish("unknown"),
+      });
+      return write(store);
+    },
+    options,
+    {
+      operationLabel: `pluginState.${operation}`,
+    },
+  );
 }

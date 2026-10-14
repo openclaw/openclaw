@@ -14,6 +14,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/index.ts";
 import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
@@ -505,6 +506,27 @@ describe("AgentsPage gateway lifecycle", () => {
       view: "configured",
       agentId: "main",
     });
+  });
+
+  it("does not refresh the agent cron panel without operator read access", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = createTestGatewayClient(request);
+    const current = {
+      ...snapshot(client),
+      hello: gatewayHelloForMethods(["cron.list", "cron.status"], ["operator.sessions.read"]),
+    };
+    const page = createAgentsPage();
+    page.context = pageContext(
+      gateway(current),
+      agentsCapability(async () => files("main", "unused")),
+    );
+    page.gateway.applySnapshot(current, { initial: false, sourceChanged: false });
+    page.routeData = { panel: "cron" } as AgentsRouteData;
+    page.agentsSelectedId = "main";
+    page.cron = { ...page.cron, client, connected: true };
+    page.loadActivePanelData();
+    await page.refreshCron();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("requests the selected agent's implicit default cron job before the first 50 unrelated jobs", async () => {

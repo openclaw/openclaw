@@ -1,6 +1,5 @@
 import { copyFileSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { captureGatewayToolReceiptAssertion } from "../../../agents/tools/gateway-caller-context.js";
 import {
   loadSessionEntry,
@@ -22,6 +21,7 @@ import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js
 import { cleanupTalkConnection } from "../session-registry.js";
 import {
   browserSession,
+  observeTalkVoiceChangeRequest,
   type BrowserRequest,
   type createDelegatedBrowserProviderFixture,
 } from "./client-fixtures.test-support.js";
@@ -200,12 +200,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
           }
         }
       };
-      const changeRequested = createDeferred();
-      fixture.context.broadcastToConnIds.mockImplementation((event) => {
-        if (event === "talk.voice.change") {
-          changeRequested.resolve();
-        }
-      });
+      const waitForVoiceChange = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
       const change = Promise.resolve(
         talkVoiceHandlers["talk.voice.set"]!({
           req: { type: "req", id: "sdk-change", method: "talk.voice.set", params: {} },
@@ -232,11 +227,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
               }),
         } as never),
       );
-      await awaitGateBeforeSettlement(
-        changeRequested.promise,
-        change,
-        "Voice change settled before requesting a replacement",
-      );
+      await waitForVoiceChange(change);
       const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
         ([event]) => event === "talk.voice.change",
       )?.[1]?.changeId;

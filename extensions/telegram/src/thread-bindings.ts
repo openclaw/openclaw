@@ -574,9 +574,9 @@ function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleF
   };
 }
 
-/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setTelegramThreadBindingIdleTimeoutBySessionKey =
   createSyncLifecycleSetter("idleTimeoutMs");
 
-/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");
