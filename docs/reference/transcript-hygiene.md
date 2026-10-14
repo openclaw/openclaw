@@ -273,8 +273,11 @@ inter-session user turns that only have provenance metadata.
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
 - OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  same-model reasoning pairs, but deterministically normalizes malformed or
+  tool-call pairs, but deterministically normalizes malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
+  When an assistant turn lacks preceding reasoning with an `rs_*` ID, the transport
+  omits its `fc_*` item IDs from the outbound payload without changing the
+  transcript's tool-call or tool-result IDs.
 - Tool result pairing repair may move real matched outputs and synthesize
   Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering; no thought signature stripping.

@@ -132,6 +132,23 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
                 submitting={props.params.submitting || props.params.pendingPlacement}
               />
             ) : undefined}
+            {props.params.onDeviceFolder && !view().query ? (
+              <SessionMenuItem
+                item={{
+                  value: "device-folder",
+                  label: t("newSession.deviceFolder"),
+                  icon: <Icon name="folder" />,
+                  sub:
+                    props.params.deviceFolderDisabledReason ??
+                    t("newSession.deviceFolderDescription"),
+                  disabled: Boolean(props.params.deviceFolderDisabledReason),
+                  title: props.params.deviceFolderDisabledReason,
+                  checked: props.params.deviceFolder === true,
+                  onSelect: props.params.onDeviceFolder,
+                }}
+                submitting={props.params.submitting || props.params.pendingPlacement}
+              />
+            ) : undefined}
             {props.params.workspace && props.params.state.showWorkspace ? (
               <SessionMenuItem
                 item={{

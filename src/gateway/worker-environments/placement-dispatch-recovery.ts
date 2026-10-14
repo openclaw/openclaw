@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
@@ -153,6 +154,15 @@ export function createPlacementRecoveryActions(
         await failure.failActive(placement, error, { forceClaimFence: true });
         return;
       }
+    }
+    if (
+      placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF &&
+      (!environment ||
+        workerDisappearanceError(environment) ||
+        isUnavailableEnvironment(environment))
+    ) {
+      // There is no Gateway copy to fall back to. Preserve the device binding indefinitely.
+      return;
     }
     const disappearance = workerDisappearanceError(environment);
     if (disappearance || (environment && isUnavailableEnvironment(environment))) {

@@ -67,6 +67,8 @@ export type UsageCostWorkerInput = {
   kind: "usage-cost";
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
+  /** Logical selectors and their physical owners captured before acquiring custody. */
+  stores: Array<{ agentId: string; storePath: string; database: UsageCostWorkerDatabase }>;
   /** Archive metadata discovery shares the roster captured before database custody. */
   archiveStorePaths: string[];
   operation: UsageCostWorkerOperation;

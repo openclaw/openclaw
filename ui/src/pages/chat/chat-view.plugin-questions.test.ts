@@ -13,9 +13,9 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

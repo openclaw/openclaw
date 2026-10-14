@@ -205,7 +205,7 @@ function resolvePreparedAssistantMediaPolicy(
   }
   const agentId = loaded?.agentId ?? params.agentId;
   const entry = loaded?.entry;
-  const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId);
+  const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId || entry?.deviceFolder);
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
   let executionCwd: string | undefined;

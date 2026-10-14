@@ -97,7 +97,7 @@ export function* iterateUnindexedTranscriptNavigation(
     )
     .select([
       "event.seq as event_seq",
-      transcriptEventResetNavigationSql("event").as("event_json"),
+      transcriptEventResetNavigationSql(projection.database.db, "event").as("event_json"),
       /* kysely-allow-raw: preserve original event byte costs while reading navigation only. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
@@ -105,10 +105,14 @@ export function* iterateUnindexedTranscriptNavigation(
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
       filtered.where((eb) =>
-        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
-          key: "id",
-          eventIds: options.eventIds!,
-        }),
+        navigationCandidatesSql(
+          eb.ref("identity.seq"),
+          transcriptEventNavigationSql(projection.database.db, "event"),
+          {
+            key: "id",
+            eventIds: options.eventIds!,
+          },
+        ),
       ),
     )
     .$if(options.controlsOnly === true, (filtered) =>
@@ -161,7 +165,7 @@ export function* iterateUnindexedActiveTranscriptNavigation(
       "active.event_seq",
       "active.active_position",
       "active.message_position",
-      transcriptEventResetNavigationSql("event").as("event_json"),
+      transcriptEventResetNavigationSql(projection.database.db, "event").as("event_json"),
       /* kysely-allow-raw: a bounded lookup admits the original payload size before hydration. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
@@ -169,10 +173,14 @@ export function* iterateUnindexedActiveTranscriptNavigation(
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
       filtered.where((eb) =>
-        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
-          key: "id",
-          eventIds: options.eventIds!,
-        }),
+        navigationCandidatesSql(
+          eb.ref("identity.seq"),
+          transcriptEventNavigationSql(projection.database.db, "event"),
+          {
+            key: "id",
+            eventIds: options.eventIds!,
+          },
+        ),
       ),
     )
     .where("active.event_seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)

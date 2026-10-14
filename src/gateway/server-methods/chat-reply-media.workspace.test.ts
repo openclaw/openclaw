@@ -335,7 +335,7 @@ describe("WebChat reply media workspace ownership", () => {
     expect(await fs.readFile(staged)).toEqual(PNG_BYTES);
   });
 
-  it.each(["exec-node", "repository", "rootless-cloud"] as const)(
+  it.each(["exec-node", "repository", "device-folder", "rootless-cloud"] as const)(
     "keeps %s media on its own host in full mode",
     async (owner) => {
       const { cfg, workspaceDir } = createMediaTestContext({ allowRead: true });
@@ -361,6 +361,9 @@ describe("WebChat reply media workspace ownership", () => {
         ...(owner === "rootless-cloud" ? {} : { sessionRoot: remoteWorkspace }),
         ...(owner === "exec-node" ? { execNode: "remote-node" } : {}),
         ...(owner === "repository" ? { repositoryWorkspaceId: "remote-project" } : {}),
+        ...(owner === "device-folder"
+          ? { deviceFolder: { deviceId: "paired-device", path: remoteWorkspace } }
+          : {}),
       };
       if (owner === "rootless-cloud") {
         await createWorkerSessionPlacementStore().startDispatch({

@@ -90,9 +90,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );

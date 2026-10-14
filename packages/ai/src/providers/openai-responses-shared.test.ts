@@ -1398,7 +1398,6 @@ describe("processResponsesStream", () => {
     ) as unknown as Array<Record<string, unknown>>;
     expect(replay).toContainEqual({
       type: "function_call",
-      id: "fc_weather",
       call_id: "call_weather",
       name: "weather",
       arguments: '{"city":"Seattle"}',

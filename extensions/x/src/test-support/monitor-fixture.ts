@@ -71,8 +71,6 @@ export function fixture(options: {
   cfg?: OpenClawConfig;
   replyText?: string;
   visibleSessionUrl?: string | null;
-  /** Null models an older host without capability advertisement. */
-  capabilities?: readonly string[] | null;
 }) {
   const cfg = options.cfg ?? config;
   const replies: Array<{ text: string; parent: string }> = [];
@@ -149,9 +147,6 @@ export function fixture(options: {
   const stateDir = `synthetic-x-monitor:${randomUUID()}`;
   const runtime = {
     version: "2026.9.8",
-    ...(options.capabilities === null
-      ? {}
-      : { capabilities: options.capabilities ?? ["sender-restricted-hidden-helpers-v1"] }),
     state: {
       openKeyedStore,
       resolveStateDir: () => stateDir,
