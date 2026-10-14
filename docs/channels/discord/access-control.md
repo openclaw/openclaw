@@ -246,6 +246,8 @@ Channel ID entries win; name or slug keys resolved at startup or on a policy rel
 
 When a thread or forum post matches a parent channel entry, that entry's configured tool policy, including sender overrides, carries into the agent. An explicit thread ID entry takes precedence over the parent.
 
+Resolved guild-name entries also keep their tool policies bound to the guild ID. An explicit guild ID entry takes precedence over a resolved name, and each account replaces its bindings on policy reload.
+
 ### Applying access-policy changes
 
 For running Discord accounts, policy-only changes saved in the Control UI apply
