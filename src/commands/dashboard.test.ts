@@ -228,6 +228,7 @@ it("does not copy or open when gateway readiness fails", async () => {
 
   expect(readConfigFileSnapshot).toHaveBeenCalledTimes(1);
   expectNoCalls(copyToClipboard, openUrl, issueDeviceBootstrapToken);
+  expect(runtime.exit).toHaveBeenCalledWith(1);
 });
 
 it("fails closed when a browser pairing link cannot be issued", async () => {
@@ -239,6 +240,7 @@ it("fails closed when a browser pairing link cannot be issued", async () => {
   expect(runtime.error).toHaveBeenCalledWith(
     "Could not create a one-time browser pairing link: state store unavailable",
   );
+  expect(runtime.exit).toHaveBeenCalledWith(1);
 });
 
 function mockBoundSnapshot(
@@ -298,6 +300,7 @@ describe("verified custom-bind handoff", () => {
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("refusing to copy or open an authenticated URL"),
       );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
     },
   );
 
@@ -348,6 +351,7 @@ describe("verified custom-bind handoff", () => {
     ]);
     expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
     expectNoCredentials();
-    expectNoCalls(inspectPortUsage, runtime.exit);
+    expectNoCalls(inspectPortUsage);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

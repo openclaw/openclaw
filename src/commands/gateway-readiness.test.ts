@@ -130,6 +130,7 @@ describe("dashboard Gateway readiness", () => {
     expect(output()).toContain("Gateway check failed:");
     expect(output()).not.toContain("Gateway is not running");
     expect(output()).not.toContain("gateway start");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("prints diagnosis and skips recovery when an interactive user declines", async () => {
@@ -145,6 +146,20 @@ describe("dashboard Gateway readiness", () => {
       true,
     );
     expect(output()).toContain("Gateway is not running.");
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("reports failure when recovery cannot prompt noninteractively", async () => {
+    tty.set(false);
+    gatherStatus.mockResolvedValue(createStatus());
+
+    await check();
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(output()).not.toContain("Dashboard URL:");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("recovers a stopped gateway (installed=%s)", async (installed) => {
@@ -190,6 +205,7 @@ describe("dashboard Gateway readiness", () => {
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
     expect(output()).toContain("owning environment or supervisor to start or repair");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("can accept a reachable dashboard listener when authenticated RPC fails", async () => {
