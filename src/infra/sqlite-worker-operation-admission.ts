@@ -40,6 +40,7 @@ import {
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
@@ -151,6 +152,7 @@ function createOperationAdmission(
     try {
       // This message moves with port2; command payloads retain their v8 encoding.
       port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
+      recordWorkerMessage("authority", "to_worker");
     } catch (error) {
       port1.close();
       port2.close();
@@ -220,6 +222,12 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
+    recordWorkerMessage(
+      isRecord(message) && message.kind === "sqlite-database-admissions"
+        ? "admission"
+        : "authority",
+      "from_worker",
+    );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
       if (
@@ -319,6 +327,7 @@ function createOperationAdmission(
           message.location === undefined ? undefined : { location: message.location, admissions };
         const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
         message.port.postMessage(reply, []);
+        recordWorkerMessage("admission", "to_worker");
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
         if (

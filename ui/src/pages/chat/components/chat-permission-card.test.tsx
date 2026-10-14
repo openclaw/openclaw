@@ -207,6 +207,26 @@ it("does not treat camera and location OS grants as enabling their OpenClaw togg
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
 });
 
+it("opens Settings for denied Location while its OpenClaw mode is off", async () => {
+  const f = await fixture("disabled-in-openclaw", ["location"]);
+  f.snapshot.permissions.location.mode = "off";
+  f.snapshot.permissions.entries = [{ id: "location", status: "denied", state: "denied" }];
+  f.publish();
+  f.view.getByRole("button", { name: "Open System Settings" }).click();
+  await waitForSolid(() =>
+    expect(f.post).toHaveBeenCalledWith({
+      type: "resolve-permission",
+      request: { ...f.request, state: "denied" },
+    }),
+  );
+  f.snapshot.permissions.entries = [{ id: "location", status: "granted" }];
+  f.publish();
+  expect(f.view.getByRole("button", { name: "Enable Location" })).toBeTruthy();
+  f.snapshot.permissions.location.mode = "whileUsing";
+  f.publish();
+  expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
+});
+
 it.each([false, true])(
   "separates camera enumeration enablement from capture authorization (capture=%s)",
   async (capture) => {

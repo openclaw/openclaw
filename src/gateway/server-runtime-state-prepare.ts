@@ -194,31 +194,29 @@ export async function prepareGatewayKernelState(params: {
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,
             getSessionChangeContext: () => pluginGatewayContext.current,
-            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+            persistAbandonedPartial: async (request) => {
               // Placement runtime starts before chat state exists; callers run only after startup.
-              const partial = connectionState.chatRunState.resolveBuffer(runId, { final: true });
+              const partial = connectionState.chatRunState.resolveBuffer(request.runId, {
+                final: true,
+              });
               const text = partial.displayText ?? partial.text;
-              if (!text.trim()) {
+              if (!text.trim() && !request.missingToolResultText) {
                 return;
               }
-              const {
-                captureAbortedPartial,
-                persistAbortedPartials,
-                prepareChatAbortSessionSnapshot,
-              } = await import("./server-methods/chat-transcript-persistence.runtime.js");
-              await persistAbortedPartials({
+              const transcript =
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
+              await transcript.persistAbortedPartials({
                 context: { logGateway: log },
+                missingToolResultText: request.missingToolResultText,
                 snapshots: [
-                  captureAbortedPartial({
-                    sessionKey,
-                    sessionId,
-                    runId,
+                  transcript.captureAbortedPartial({
+                    ...request,
                     text,
                     abortOrigin: "placement-abandon",
-                    session: await prepareChatAbortSessionSnapshot({
+                    session: await transcript.prepareChatAbortSessionSnapshot({
                       cfg: getCommittedRuntimeConfig(),
-                      key: sessionKey,
-                      agentId,
+                      key: request.sessionKey,
+                      agentId: request.agentId,
                     }),
                   }),
                 ],

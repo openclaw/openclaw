@@ -196,6 +196,7 @@ export async function executeFollowupTurn(params: {
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     internalEventExecution: turn.queued.run.internalEventExecution,
+    userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
     // A refreshed runner owns presentation defaults, never another source's authority or callbacks.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,

@@ -505,6 +505,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
+      thinkingExplicit: params.thinkingExplicit,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {

@@ -2170,7 +2170,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/usage-cost-analysis.e2e.test.ts",
     ["usage"],
-    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/usage-known-zero-cost.e2e.test.ts",
@@ -2181,12 +2181,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/usage-query-recovery.e2e.test.ts",
     ["usage"],
-    ["ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/usage-session-unicode.e2e.test.ts",
     ["usage"],
-    ["ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch("ui/src/e2e/usage-tool-count.e2e.test.ts", ["usage"]),
   pageWatch("ui/src/e2e/warm-boot.e2e.test.ts", ["chat", "profile", "sessions"]),

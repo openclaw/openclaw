@@ -2519,7 +2519,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../sessions/index.js","d3e894ac7d54a838d54cf21aa5c06c302b6a96139d339593e831b20568df1a5d",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../sessions/resource-loader.js","da4055f847fdc983a5853c70a662b93103887f00211e953ccb6603f22383101f",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../subagents/spawn/subagent-spawn.js","0ee268fa46720e15ee26ee1fb77ebbb88215355219b70630ae0a4367b040e05b",1]
-["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../system-prompt-report.js","7ca7bb24a74190bdbe0c8239f92fb99570074bb6f800d21e20789f2f77a863ef",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../tool-fs-policy.js","48d5e366ade7b01817a257d6cb5fb8f66195d24dd30967841af95c43f324f880",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../cache-ttl.js","92f0b3a473d9dacf72a6cf25e1f84f487c79f2869326af93ba3c56f7de25a380",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../compaction-runtime-context.js","c4fe6e41d26fda7ccb1a01e599ae7a22997e020a4dbcec0550acfa7f2cfee409",1]

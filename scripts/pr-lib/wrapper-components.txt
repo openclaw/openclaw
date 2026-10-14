@@ -1024,6 +1024,7 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
+src/infra/private-dir-mode.ts
 src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
@@ -1033,6 +1034,7 @@ src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
+src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
@@ -1217,6 +1219,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
@@ -1227,6 +1230,7 @@ src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
+src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts

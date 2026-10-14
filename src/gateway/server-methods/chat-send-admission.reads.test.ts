@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -104,6 +105,9 @@ it.each(["absent", "admitted"] as const)(
             requestParams: request.value.p,
             context,
           });
+          using _ = {
+            [Symbol.dispose]: () => authorized.authorization?.release?.(),
+          };
           expect(authorized.error).toBeNull();
           const prepared = await prepareChatSendSession({
             request: request.value,
@@ -131,6 +135,7 @@ it.each(["absent", "admitted"] as const)(
         } finally {
           sql.restore();
         }
+        assertNoRetainedSessionSharingReads();
       });
     });
   },

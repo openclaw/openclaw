@@ -40,6 +40,7 @@ function ownDataValue(value: unknown, key: string): unknown {
 export function parseRetryAfterHeadersSeconds(
   headers: unknown,
   nowMs = Date.now(),
+  status?: number,
 ): number | undefined {
   if (!headers || typeof headers !== "object") {
     return undefined;
@@ -47,20 +48,31 @@ export function parseRetryAfterHeadersSeconds(
   try {
     let entries: Array<[string, unknown]>;
     try {
-      entries = ["retry-after", "retry-after-ms"].map<[string, unknown]>((key) => [
-        key,
-        Headers.prototype.get.call(headers, key),
-      ]);
+      entries = [
+        "retry-after",
+        "retry-after-ms",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-remaining-project-tokens",
+        "x-ratelimit-reset-project-tokens",
+      ].map<[string, unknown]>((key) => [key, Headers.prototype.get.call(headers, key)]);
     } catch {
       entries = Object.getOwnPropertyNames(headers).flatMap<[string, unknown]>((key) => {
         const name = key.toLowerCase();
-        return name === "retry-after" || name === "retry-after-ms"
+        return name === "retry-after" ||
+          name === "retry-after-ms" ||
+          /^x-ratelimit-(?:remaining|reset)-(?:tokens|requests|project-tokens)$/.test(name)
           ? [[name, ownDataValue(headers, key)]]
           : [];
       });
     }
     let floor: number | undefined;
     for (const [key, value] of entries) {
+      if (key.startsWith("x-ratelimit-")) {
+        continue;
+      }
       const text =
         typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
       const milliseconds = key === "retry-after-ms";
@@ -82,10 +94,48 @@ export function parseRetryAfterHeadersSeconds(
         floor = Math.max(floor ?? 0, seconds);
       }
     }
+    // Reset headers describe a full quota refill, not a wait for every request.
+    // Only a rejected request with an exhausted matching bucket establishes a floor.
+    if (status === 429) {
+      const values = new Map(entries);
+      for (const dimension of ["tokens", "requests", "project-tokens"]) {
+        const remaining = values.get(`x-ratelimit-remaining-${dimension}`);
+        const numericRemaining =
+          typeof remaining === "number"
+            ? remaining
+            : typeof remaining === "string" && /^-?\d+(?:\.\d+)?$/.test(remaining.trim())
+              ? Number(remaining)
+              : Number.NaN;
+        if (!Number.isFinite(numericRemaining) || numericRemaining > 0) {
+          continue;
+        }
+        const reset = values.get(`x-ratelimit-reset-${dimension}`);
+        const seconds = typeof reset === "string" ? parseQuotaResetSeconds(reset) : undefined;
+        if (seconds !== undefined) {
+          floor = Math.max(floor ?? 0, seconds);
+        }
+      }
+    }
     return floor;
   } catch {
     return undefined;
   }
+}
+
+function parseQuotaResetSeconds(value: string): number | undefined {
+  if (!/^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/.test(value)) {
+    return undefined;
+  }
+  const scales: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600 };
+  let seconds = 0;
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) {
+    const scale = scales[match[2] ?? ""];
+    if (scale === undefined) {
+      return undefined;
+    }
+    seconds += Number(match[1]) * scale;
+  }
+  return Number.isFinite(seconds) && seconds <= Number.MAX_SAFE_INTEGER ? seconds : Infinity;
 }
 
 /** SDK errors carry native response headers separately from their error body. */
@@ -94,14 +144,26 @@ export function parseRetryAfterErrorSeconds(
   nowMs = Date.now(),
 ): number | undefined {
   try {
-    const direct = parseRetryAfterHeadersSeconds(ownDataValue(error, "headers"), nowMs);
-    const response = parseRetryAfterHeadersSeconds(
-      ownDataValue(ownDataValue(error, "response"), "headers"),
+    const status = ownDataValue(error, "status") ?? ownDataValue(error, "statusCode");
+    const response = ownDataValue(error, "response");
+    const responseStatus = ownDataValue(response, "status") ?? ownDataValue(response, "statusCode");
+    const direct = parseRetryAfterHeadersSeconds(
+      ownDataValue(error, "headers"),
       nowMs,
+      typeof status === "number" ? status : undefined,
     );
-    return direct === undefined && response === undefined
+    const responseSeconds = parseRetryAfterHeadersSeconds(
+      ownDataValue(response, "headers"),
+      nowMs,
+      typeof responseStatus === "number"
+        ? responseStatus
+        : typeof status === "number"
+          ? status
+          : undefined,
+    );
+    return direct === undefined && responseSeconds === undefined
       ? undefined
-      : Math.max(direct ?? 0, response ?? 0);
+      : Math.max(direct ?? 0, responseSeconds ?? 0);
   } catch {
     return undefined;
   }

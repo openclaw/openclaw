@@ -7,6 +7,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { recordWorkerMessage, observeWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -156,6 +157,7 @@ export async function finishSessionTranscriptReconcileTask<T>({
     await handlingMessage;
     if (terminalReceived) {
       worker.postMessage({ type: "release" }, []);
+      recordWorkerMessage("lifecycle", "to_worker");
     }
     const plannerRelease = await task.leaseRelease;
     let cleanup = plannerRelease;
@@ -310,6 +312,12 @@ async function startReconcileWorkerTask(
   let releaseFailed = false;
   let failure: Error | undefined;
   port.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
+    observeWorkerMessage(
+      message,
+      "from_worker",
+      "sqlite_reply",
+      message.type === "fts-chunk" ? message.chunk.textBytes.byteLength : undefined,
+    );
     if (message.type === "lease-released") {
       released = true;
     } else if (message.type === "lease-release-failed") {

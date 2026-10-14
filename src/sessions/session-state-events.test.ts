@@ -90,6 +90,32 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({ dedupeKey: "replayed-event" });
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => recordSessionStateEventInDatabase(db, input, now),
+        database,
+      );
+    const first = record(1000);
+    expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.notices).toHaveLength(1);
+    const db = openOpenClawStateDatabase(database).db;
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+
+    const replay = record(2000);
+    expect(replay.row).toEqual(first.row);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
