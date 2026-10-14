@@ -41,7 +41,7 @@ describe("plugin-boundary-report", () => {
 
     expect(summaryResult.exitCode).toBe(0);
     expect(summaryResult.stderr).toBe("");
-    expect(summary.compat?.removalPendingCount).toBe(20);
+    expect(summary.compat?.removalPendingCount).toBe(21);
     expect(summary.compat?.removalPendingDueCount).toEqual(expect.any(Number));
     expect(summary.compat?.removalPending?.map((record) => record.code)).toEqual([
       "sdk-untrusted-context-identifier-aliases",
@@ -63,6 +63,7 @@ describe("plugin-boundary-report", () => {
       "plugin-sdk-broad-runtime-barrels",
       "plugin-sdk-focused-compat-aliases",
       "plugin-sdk-infra-runtime-subpath",
+      "deprecated-session-store-beta5-api",
       "plugin-sdk-plugin-config-runtime-public-demotion",
     ]);
     expect(summary.compat?.removalPending?.[0]).toMatchObject({
@@ -78,7 +79,9 @@ describe("plugin-boundary-report", () => {
       if (originalPendingCodes.has(String(record.code))) {
         expect(record.readerSample).toEqual(expect.arrayContaining([expect.any(String)]));
       } else {
-        expect(record.removeAfter).toBe("2026-10-01");
+        expect(record.removeAfter).toBe(
+          record.code === "deprecated-session-store-beta5-api" ? "2026-10-12" : "2026-10-01",
+        );
         expect(Array.isArray(record.readerSample)).toBe(true);
         for (const reader of record.readerSample as unknown[]) {
           expect(reader).toEqual(expect.any(String));
@@ -109,7 +112,7 @@ describe("plugin-boundary-report", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("removalPending=20");
+    expect(result.stdout).toContain("removalPending=21");
     expect(result.stdout).not.toContain("agent-harness-sdk-alias");
     expect(result.stdout).toMatch(/blocker=.*retain the public/iu);
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
