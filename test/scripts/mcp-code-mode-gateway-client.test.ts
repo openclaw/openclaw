@@ -505,7 +505,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
       name: "provider snapshots",
       extract: (steps: Step[]) => extractMcpCodeModeRequestEvidence(requests(steps), marker),
     },
-  ];
+  ] as const;
 
   for (const route of routes) {
     describe(route.name, () => {
