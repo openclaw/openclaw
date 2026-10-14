@@ -67,7 +67,7 @@ import {
   createRequesterSettleBatchClaim,
   createRequesterSettleBatchDeferral,
   captureRequesterRunOwner,
-  resolvePrivateSettlePolicy,
+  resolveRequesterSettlePolicy,
   retainedYieldIdentity,
   startRequesterSettleWakeAttempt,
   deferRequesterSettleWakePreparation,
@@ -427,8 +427,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const completionRows = currentCompletionRows(settledBatch);
     // Delivered children remain in yield cohorts; the admitted marker owns whether
     // the requester may deliver its final under the conversation's reply policy.
-    const { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker } =
-      resolvePrivateSettlePolicy(
+    const { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker } =
+      resolveRequesterSettlePolicy(
         completionRows,
         requesterYieldedAfterDelivery,
         selectedState,
@@ -628,7 +628,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                 requesterIsSubagent: requesterDepth >= 1,
                 expectsCompletionMessage: false,
                 requireDirectDelivery: true,
-                ...privateBinding,
+                ...requesterBinding,
                 ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
                 directIdempotencyKey,
                 signal: params.signal,
