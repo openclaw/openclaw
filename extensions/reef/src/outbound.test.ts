@@ -1,13 +1,13 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
   PipelineError,
   REEF_MAX_PLAINTEXT_BYTES,
 } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -15,12 +15,15 @@ import {
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
-  trust,
+  workerFlowStores,
 } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
+
+afterEach(resetFlowStoresForTests);
 
 describe("reefOutboundAdapter", () => {
   it("removes internal tool text while preserving user-visible examples", () => {
@@ -122,17 +125,19 @@ describe("reefOutboundAdapter", () => {
       }),
     };
     const relay = transport();
+    const cfg = config();
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
+      alice: peerTrust(generateIdentity()),
+    });
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(generateIdentity()) }).store,
+      config: cfg,
+      trust: trusted,
       keys: reefKeys(),
       transport: relay as unknown as ReefTransportClient,
       guard: classifier,
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
+      audit,
       replay: new MemoryReplayStore(),
-      // The send path consults the review store before classifying.
-      reviews: { lookupDecision: async () => "none", request: async () => undefined } as never,
-      delivered: {} as never,
+      ...stores,
       authoritySignal: firstAuthority.signal,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
@@ -158,16 +163,17 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("terminally rejects unapproved Reef peers", async () => {
+    const cfg = config();
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {});
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({}).store,
+      config: cfg,
+      trust: trusted,
       keys: reefKeys(),
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
+      audit,
       replay: new MemoryReplayStore(),
-      reviews: {} as never,
-      delivered: {} as never,
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
