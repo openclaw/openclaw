@@ -38,7 +38,7 @@ declare module "@solidjs/web" {
   }
 }
 
-export type ChatPagePaneRenderOptions = {
+type ChatPagePaneRenderOptions = {
   active: boolean;
   presented: boolean;
   chatMessagesBySession: ChatMessageCache;

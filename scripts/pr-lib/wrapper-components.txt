@@ -354,7 +354,9 @@ src/config/zod-schema.database.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
+src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
+src/infra/database-engine/postgres-catalog.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -1094,6 +1096,7 @@ src/infra/sqlite-readonly-native-resource.client.ts
 src/infra/sqlite-readonly-native-resource.types.ts
 src/infra/sqlite-readonly-operation-registry.ts
 src/infra/sqlite-readonly-worker-context.ts
+src/infra/sqlite-readonly-worker-pool.ts
 src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
 src/infra/sqlite-readonly-worker.ts
@@ -1934,6 +1937,7 @@ src/utils/timer-delay.ts
 src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
+src/worker/device-folder.ts
 src/worker/protocol-record.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
@@ -2196,6 +2200,7 @@ packages/tool-call-repair/src/index.ts
 packages/tool-call-repair/src/payload.ts
 packages/tool-call-repair/src/promote.ts
 packages/tool-call-repair/src/protection-fast-path.ts
+packages/tool-call-repair/src/stream-normalizer-suppression.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/auth-profiles/oauth-refresh-error-format.ts
 src/agents/auth-profiles/oauth-refresh-failure.ts
@@ -2372,6 +2377,7 @@ src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/text-projection.ts
+src/shared/text/tool-call-xml.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json

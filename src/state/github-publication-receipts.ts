@@ -1,7 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
@@ -178,7 +177,7 @@ export function captureGitHubPublicationLifecycle(
 }
 
 export function deferGitHubPublicationDeletionReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   tombstones: ReadonlyMap<string, { kind: "absent" }>,
 ): void {
   const receipt = publication.receipt(sqlPublicationAnchor(db), tombstones);
@@ -194,7 +193,7 @@ export function deferGitHubPublicationDeletionReceipt(
 
 /** Capture the same authority rows as native writes, including their lifecycle sidecars. */
 export function captureGitHubPublicationWorkerReceipt<T extends object>(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: () => T,
 ): T & { authority: GitHubPublicationAuthorityReceipt } {
   const { result, receipt: authority } = publication.capture(sqlPublicationAnchor(db), write);
@@ -206,7 +205,7 @@ export function captureGitHubPublicationWorkerReceipt<T extends object>(
 }
 
 function stageGitHubPublicationRow<Kind extends keyof Rows>(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: Kind,
   row: Rows[Kind] & Partial<Record<PresentationColumn, string | null>>,
 ): void {

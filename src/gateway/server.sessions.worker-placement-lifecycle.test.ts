@@ -29,6 +29,7 @@ import type {
   WorkerSessionPlacementStore,
 } from "./worker-environments/placement-store.js";
 import { resolveSessionWorkerPlacementMutationError } from "./worker-environments/session-placement-lifecycle.js";
+import { executeLocalTurn } from "./worker-environments/worker-turn-admission.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
@@ -258,6 +259,63 @@ test("sessions.reset rechecks worker placement inside the lifecycle fence", asyn
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expect(getWorkerEnvironment).not.toHaveBeenCalled();
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
+});
+
+test("sessions.reset preserves device-folder affinity after reclaim and refuses a Gateway turn", async () => {
+  await createSessionStoreDir();
+  const deviceFolder = { deviceId: "paired-folder-device", path: "/existing/non-git" };
+  await writeSessionStore({
+    entries: {
+      [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId, { deviceFolder }),
+    },
+  });
+  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+  const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
+    reconcileChanged: false,
+    reconcileCommitsManifest: false,
+  });
+  await harness.service.dispatch(REQUEST);
+  expect(await harness.service.reclaim(REQUEST)).toMatchObject({ state: "reclaimed" });
+
+  const reset = await directSessionReq<{ entry: { deviceFolder?: typeof deviceFolder } }>(
+    "sessions.reset",
+    { key: REQUEST.sessionKey },
+    { context: { workerSessionPlacementService: placementStore } },
+  );
+  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+  expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
+  expect(reset.payload?.entry.deviceFolder).toEqual(deviceFolder);
+  expect((await loadSessionEntryAsync(REQUEST.sessionKey)).entry?.deviceFolder).toEqual(
+    deviceFolder,
+  );
+
+  const runLocal = vi.fn(async () => "must not execute");
+  await expect(
+    executeLocalTurn({
+      claim: { ...REQUEST, runId: "post-reset-gateway-turn" },
+      placements: placementStore,
+      runLocal,
+    }),
+  ).rejects.toThrow("Dispatch it to that device before sending a turn");
+  expect(runLocal).not.toHaveBeenCalled();
+  expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
+
+  const dispatch = vi.fn();
+  const wrongDevice = await directSessionReq(
+    "sessions.dispatch",
+    { key: REQUEST.sessionKey, deviceId: "another-device" },
+    {
+      context: {
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: placementStore,
+      },
+    },
+  );
+  expect(wrongDevice).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("dispatch explicitly to that device") },
+  });
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 test.each(["generation", "environment", "session key"] as const)(

@@ -124,11 +124,12 @@ describe("admitted WebChat prompt reactions", () => {
     return source;
   }
 
-  function mintForRecorder(
+  function mintTurn(
     input: ReturnType<typeof createUserTurnTranscriptRecorder>,
     executionRunId: string,
+    kind: { isHeartbeat?: boolean; internalEventExecution?: boolean } = {},
   ) {
-    const minted = mintReplyMessageActionTurnCapability(
+    return mintReplyMessageActionTurnCapability(
       {
         followupRun: {
           prompt: "Prompt",
@@ -145,16 +146,26 @@ describe("admitted WebChat prompt reactions", () => {
             messageProvider: "webchat",
             timeoutMs: 1000,
             blockReplyBreak: "message_end",
+            ...(kind.internalEventExecution && {
+              internalEventExecution: { onStarted() {}, onTerminal() {} },
+            }),
           },
         },
         sessionCtx: { Provider: "webchat", MessageSid: runId },
         opts: {
           dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
         },
-        isHeartbeat: false,
+        isHeartbeat: kind.isHeartbeat === true,
       },
       executionRunId,
     );
+  }
+
+  function mintForRecorder(
+    input: ReturnType<typeof createUserTurnTranscriptRecorder>,
+    executionRunId: string,
+  ) {
+    const minted = mintTurn(input, executionRunId);
     if (!minted) {
       throw new Error("Expected a recorder-owned reaction capability");
     }
@@ -224,6 +235,37 @@ describe("admitted WebChat prompt reactions", () => {
       revokeMessageActionTurnCapability(token);
       expect(definition(tool({ currentChannelProvider }))).toBe(definition(admitted));
       expect(external).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["webchat", { isHeartbeat: true }],
+    ["discord", { internalEventExecution: true }],
+  ])(
+    "fails prompt reactions locally on a %s-routed run that mints no grant (%o)",
+    async (currentChannelProvider, kind) => {
+      const nextRunId = runId + "-next";
+      const grant = mintTurn(recorder, nextRunId, kind);
+      expect(grant).toBeUndefined();
+      const nextRun = tool({
+        currentChannelProvider,
+        runId: nextRunId,
+        messageActionTurnCapability: grant,
+      });
+      for (const args of [
+        {},
+        { channel: "WebChat" },
+        { target: "channel:external", messageId: "external-message" },
+      ]) {
+        await expect(execute(args, nextRun)).rejects.toThrow("No prompt here permits reactions");
+      }
+      expect(external).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+      await execute(
+        { channel: "discord", target: "channel:external", messageId: "external-message" },
+        nextRun,
+      );
+      expect(external).toHaveBeenCalledOnce();
     },
   );
 

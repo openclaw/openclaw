@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -103,7 +103,7 @@ type PlacementEnvironmentFixture = Pick<
 > &
   Partial<WorkerEnvironmentRecord>;
 
-export function publishWorkerEnvironmentFixture(db: DatabaseSync, environmentId: string): void {
+export function publishWorkerEnvironmentFixture(db: EngineConnection, environmentId: string): void {
   const owner = workerEnvironmentProjections.get(requireOpenClawStateDatabaseIdentity({ db }));
   if (!owner?.active) {
     return;

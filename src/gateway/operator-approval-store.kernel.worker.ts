@@ -1,5 +1,3 @@
-// Approval creation and bounded query transactions, executed in workers.
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -9,6 +7,8 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+// Approval creation and bounded query transactions, executed in workers.
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -340,7 +340,7 @@ export function listPendingOperatorApprovalsInDatabase(
 
 export function listTerminalOperatorApprovalsInDatabase(
   params: ListTerminalOperatorApprovalsInput,
-  db: DatabaseSync,
+  db: EngineConnection,
 ): ListTerminalOperatorApprovalsResult {
   const requestedLimit = Number.isSafeInteger(params.limit)
     ? (params.limit ?? OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT)

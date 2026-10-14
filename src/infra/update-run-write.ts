@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -105,7 +105,7 @@ export function applyUpdateRunStep(
 }
 
 export function persistRun(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: UpdateRunRecord,
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
@@ -122,7 +122,7 @@ export function persistRun(
 }
 
 export function mutateRunInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: UpdateRunLedgerOptions,

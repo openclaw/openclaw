@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
@@ -223,7 +224,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-const messageRangeReaders = createSqliteQueryCache((db) => {
+const messageRangeReaders = createSqliteQueryCache((db: DatabaseSync) => {
   const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
@@ -378,7 +379,7 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReader = createSqliteQueryCache((db) =>
+const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
   prepareSqliteQuerySync<
     string,
     InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]

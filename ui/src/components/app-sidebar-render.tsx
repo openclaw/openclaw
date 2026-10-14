@@ -322,17 +322,17 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
               {(session) => (
                 <>
                   {
-                    renderSessionLeadingState(
-                      session(),
-                      undefined,
-                      "owned",
-                      undefined,
-                      undefined,
-                      false,
-                      <span class="nav-item__icon" aria-hidden="true">
-                        <Icon name="home" />
-                      </span>,
-                    ).leadingIndicator
+                    renderSessionLeadingState({
+                      get session() {
+                        return session();
+                      },
+                      attribution: "owned",
+                      icon: (
+                        <span class="nav-item__icon" aria-hidden="true">
+                          <Icon name="home" />
+                        </span>
+                      ),
+                    }).leadingIndicator
                   }
                   {
                     <SessionRowBadges

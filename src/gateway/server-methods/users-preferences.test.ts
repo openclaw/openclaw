@@ -15,6 +15,7 @@ import * as preferences from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
@@ -504,7 +505,7 @@ test("users.prefs.set notifies only the current merged profile without main-thre
 
     // Measure recipient selection on this handle; the preference worker has its own connection.
     const reads = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["profiles"],
       (sql) =>
         /^select\b/i.test(sql) && /\bfrom "user_profiles"(?:\s|$)/i.test(sql) ? "profiles" : null,

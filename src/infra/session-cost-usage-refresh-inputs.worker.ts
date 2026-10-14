@@ -1,8 +1,12 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSqliteSessionEntriesFromDatabase } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
+import { listTranscriptInstancesFromDatabase } from "../config/sessions/session-accessor.sqlite-history.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
+import { readWithCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { LruCache } from "./lru-cache.js";
@@ -91,13 +95,47 @@ export function createUsageCostCollectionAccess(params: {
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     listSqliteMetadataStores: () => input.archiveStorePaths,
-    readSqliteMetadata: (storePath, read) => readStore(location.agentId, storePath, read),
+    resolveSqliteStorePath: (agentId, storePath) => target(agentId, storePath).path,
+    readSqliteArchives: (agentId, storePath, archiveNames) => {
+      const database = target(agentId, storePath);
+      return readStore(agentId, storePath, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) => listTranscriptArchivesFromDatabase(opened, undefined, [], archiveNames),
+          { ...database, env },
+        );
+        return result.found ? result.value : [];
+      });
+    },
     listSqliteInstances: async (agentId, storePath) => {
-      const { listSessionTranscriptInstances } =
-        await import("../config/sessions/session-history.js");
-      return readStore(agentId, storePath, () =>
-        listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
-      );
+      const database = target(agentId, storePath);
+      return readStore(agentId, storePath, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) =>
+            readWithCanonicalSessionReaderContinuation(opened, undefined, () => {
+              const currentEntries = new Map(
+                listSqliteSessionEntriesFromDatabase(
+                  opened,
+                  {
+                    agentId,
+                    databaseAgentId: database.agentId,
+                    path: database.path,
+                    env,
+                    sessionKey: "",
+                  },
+                  { agentId, storePath, env, clone: false, projection: "list" },
+                ).map(({ sessionKey, entry }) => [sessionKey, entry]),
+              );
+              return listTranscriptInstancesFromDatabase({
+                currentEntries,
+                database: opened,
+                options: {},
+                entryProjection: "list",
+              });
+            }),
+          { ...database, env },
+        );
+        return result.found ? result.value : [];
+      });
     },
     readSqliteStats: async (markers) => {
       const result: Array<SessionTranscriptStats | undefined> = Array(markers.length);

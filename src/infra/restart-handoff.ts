@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -24,6 +23,7 @@ import type {
   GatewayRestartHandoffSource,
   GatewayRestartHandoffSupervisorMode,
 } from "./restart-lifecycle.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -228,7 +228,7 @@ function normalizeGatewayRestartHandoffRow(
 }
 
 export function selectGatewayRestartHandoffRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): GatewayRestartHandoffRow | undefined {
   const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
