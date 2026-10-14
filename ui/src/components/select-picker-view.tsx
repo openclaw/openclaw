@@ -53,6 +53,12 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
+  const placement = () =>
+    props.params.variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : (`${props.params.placement ?? "bottom"}-start` as const);
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -249,9 +255,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     ) {
       return;
     }
-    if (event.key !== "Escape") {
-      event.stopPropagation();
-    }
+    event.stopPropagation();
     menu.keydown(event);
   }
   function hover(event: PointerEvent) {
@@ -288,19 +292,7 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
     },
   );
-  createEffect(
-    () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => {
-      anchor?.update(
-        trigger,
-        variant === "submenu"
-          ? direction() === "rtl"
-            ? "left-start"
-            : "right-start"
-          : `${placement ?? "bottom"}-start`,
-      );
-    },
-  );
+  createEffect(placement, (next) => anchor?.update(trigger, next));
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
     () => {
@@ -319,16 +311,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     overlay.setParent(findOverlayParent(trigger));
     if (!untrack(() => props.params.sheet)) {
       anchor = createOverlayAnchor(surface);
-      untrack(() =>
-        anchor!.update(
-          trigger,
-          props.params.variant === "submenu"
-            ? direction() === "rtl"
-              ? "left-start"
-              : "right-start"
-            : `${props.params.placement ?? "bottom"}-start`,
-        ),
-      );
+      anchor.update(trigger, untrack(placement));
     }
     const stop = overlay.subscribe((next) => {
       setOpened(next);

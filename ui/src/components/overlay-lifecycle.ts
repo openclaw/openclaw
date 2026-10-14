@@ -11,7 +11,6 @@ import {
 } from "./overlay-registry.ts";
 import type {
   Overlay,
-  OverlayFocusIntent,
   OverlayLifecycleEvent,
   OverlayNativeAdapter,
   OverlayOptions,
@@ -52,10 +51,6 @@ export function createOverlay(
   let opened = false;
   let phase: OverlayPhase = "hidden";
   let disposed = false;
-  let intent = 0;
-  let intentTarget = false;
-  let intentFocus: OverlayFocusIntent = "none";
-  let notifyingRetirement = false;
   let nativeMutation = false;
   let generation = 0;
   let frame: number | undefined;
@@ -107,7 +102,7 @@ export function createOverlay(
       return phase;
     },
     get revision() {
-      return generation + intent + (registry?.nativeOrder.get(api) ?? 0);
+      return generation + (registry?.nativeOrder.get(api) ?? 0);
     },
     contains(target) {
       return Boolean(
@@ -133,22 +128,12 @@ export function createOverlay(
       );
     },
     retire() {
-      if (notifyingRetirement) {
-        return;
-      }
       if (surface) {
         nativeToggle();
       }
-      intent += 1;
-      intentTarget = false;
-      notifyingRetirement = true;
-      try {
-        children.forEach((child) => child.retire());
-        if (opened && surface.isConnected) {
-          dispatchLifecycleEvent("overlay-hide");
-        }
-      } finally {
-        notifyingRetirement = false;
+      children.forEach((child) => child.retire());
+      if (opened && surface.isConnected) {
+        dispatchLifecycleEvent("overlay-hide");
       }
       if (!opened) {
         notifyClosed();
@@ -245,22 +230,13 @@ export function createOverlay(
       }
       refreshRegistry();
       refreshOverlayRoots(registry, api);
-      if (notifyingRetirement || (next && !valid())) {
-        return !next;
+      if (next && !valid()) {
+        return false;
       }
-      if (nativeMutation && next === intentTarget) {
+      if (nativeMutation && next === native.isOpen(surface)) {
         return true;
       }
       reconcileNative(registry);
-      if (next === opened && next === intentTarget) {
-        if (!next) {
-          notifyClosed();
-        }
-        return true;
-      }
-      const requested = ++intent;
-      intentTarget = next;
-      intentFocus = focus;
       if (next === opened) {
         if (!next) {
           notifyClosed();
@@ -282,13 +258,10 @@ export function createOverlay(
         }
         return true;
       }
-      if (!propose("overlay-show") || requested !== intent || !valid()) {
+      if (!propose("overlay-show")) {
         return false;
       }
-      reconcileNative(registry);
-      if (requested !== intent) {
-        return false;
-      }
+      // Synchronous lifecycle callbacks that replace this request are best effort.
       const ancestors = new Set<Overlay>();
       for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
         ancestors.add(ancestor);
@@ -303,70 +276,36 @@ export function createOverlay(
       const closes = prepareClosures(
         displaced.filter((owner) => !owner.parent || !displaced.includes(owner.parent)),
       );
-      if (!closes || requested !== intent || !closes()) {
+      if (!closes?.()) {
         return false;
       }
-      reconcileNative(registry);
-      if (requested !== intent || !valid()) {
-        return false;
-      }
-      refreshOverlayRoots(registry, api);
       setPhase("opening");
       if (!setNativeOpen(true)) {
         setPhase("hidden");
         return false;
       }
-      reconcileNative(registry, api);
-      if (!valid() || (requested !== intent && !opened)) {
-        children.forEach((child) => child.retire());
-        setNativeOpen(false);
-        generation += 1;
-        publish(false);
-        setPhase("hidden");
-        return false;
-      }
-      if (requested !== intent) {
-        return false;
-      }
       const token = ++generation;
       publish(true);
       complete(true, token);
-      if ((focus === "first" || focus === "last") && requested === intent && opened) {
+      if ((focus === "first" || focus === "last") && opened) {
         options.onInitialFocus?.(focus);
       }
-      return requested === intent && !disposed && opened;
+      return !disposed && opened;
     },
     prepareClose() {
       nativeToggle();
-      const requested = ++intent;
-      intentTarget = false;
       if (!opened) {
         return () => true;
       }
-      if (!propose("overlay-hide") || requested !== intent) {
+      if (!propose("overlay-hide")) {
         return null;
       }
       const closes = prepareClosures([...children].filter((child) => child.open));
-      if (!closes || requested !== intent) {
+      if (!closes) {
         return null;
       }
       return () => {
-        if (requested !== intent) {
-          return false;
-        }
         if (!closes()) {
-          return false;
-        }
-        reconcileNative(registry);
-        if ([...children].some((child) => child.open)) {
-          return false;
-        }
-        for (const child of children) {
-          if (!child.open) {
-            child.retire();
-          }
-        }
-        if (requested !== intent) {
           return false;
         }
         setPhase("closing");
@@ -374,19 +313,10 @@ export function createOverlay(
           setNativeOpen(false);
         }
         children.forEach((child) => child.retire());
-        if (requested !== intent) {
-          const reopen = intentTarget;
-          const reopenFocus = intentFocus;
-          publish(false);
-          if (reopen) {
-            api.request(true, reopenFocus);
-          }
-          return false;
-        }
         const token = ++generation;
         publish(false);
         complete(false, token);
-        return requested === intent && !opened;
+        return !opened;
       };
     },
     nativeToggle,
@@ -545,12 +475,6 @@ export function createOverlay(
         if (!next && native.isOpen(surface)) {
           setNativeOpen(false);
           children.forEach((child) => child.retire());
-          if (token !== generation || disposed) {
-            if (!disposed && intentTarget) {
-              api.request(true, intentFocus);
-            }
-            return;
-          }
           // Native close can start a fresh exit after an interrupted entry settles.
           if (!native.isOpen(surface) && hasPendingPresentation()) {
             complete(false, token);
@@ -582,16 +506,10 @@ export function createOverlay(
       return;
     }
     refreshOverlayRoots(registry, api);
-    intent += 1;
-    intentTarget = next;
     setPhase(next ? "opening" : "closing");
     const token = ++generation;
     publish(next);
     complete(next, token);
-    // A later beforetoggle listener can admit a child after early retirement.
-    if (!next) {
-      children.forEach((child) => child.retire());
-    }
   }
   function unbindSurface() {
     if (native.isOpen(surface)) {

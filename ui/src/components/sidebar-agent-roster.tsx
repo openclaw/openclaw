@@ -26,20 +26,20 @@ import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.tsx";
 import {
   renderSessionListFrame,
-  renderSessionSection,
+  renderSessionSection as SessionSection,
 } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
-  renderSessionTree,
+  renderSessionTree as SessionTree,
   renderSidebarSessionIndicators,
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import {
   TeamSessionSlots,
   type TeamSessionSlotsProps,
@@ -245,7 +245,10 @@ export function SidebarAgentRoster(props: RosterProps) {
                 ),
                 runVisibility,
               });
-              const access = () => roster.host().readNewSessionAccess();
+              const disabledReason = () => {
+                const access = roster.host().readNewSessionAccess();
+                return access.allowed ? undefined : access.reason;
+              };
               return (
                 <section
                   class="sidebar-agent-roster__group"
@@ -312,23 +315,14 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       }}
                     >
-                      {renderNewSessionLink({
-                        get basePath() {
-                          return roster.host().basePath;
-                        },
-                        get agentId() {
-                          return card().id;
-                        },
-                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
-                        get label() {
-                          return `${t("agentChip.newConversation")}: ${card().name}`;
-                        },
-                        get disabledReason() {
-                          const currentAccess = access();
-                          return currentAccess.allowed ? undefined : currentAccess.reason;
-                        },
-                        onOpen: (id, target) => roster.host().requestOpenNewSession(id, target),
-                      })}
+                      <NewSessionLink
+                        basePath={roster.host().basePath}
+                        agentId={card().id}
+                        className="sidebar-agent-roster__action sidebar-agent-roster__new"
+                        label={`${t("agentChip.newConversation")}: ${card().name}`}
+                        disabledReason={disabledReason()}
+                        onOpen={(id, target) => roster.host().requestOpenNewSession(id, target)}
+                      />
                       <Menu
                         id={`sidebar-agent-roster-${card().id}`}
                         class="sidebar-customize-menu sidebar-agent-roster__menu"
@@ -412,17 +406,13 @@ export function SidebarAgentRoster(props: RosterProps) {
                       {(key) => renderChildSessionLoadError(roster.host(), key)}
                     </For>
                     <For each={sections()} keyed={(section) => section.id}>
-                      {(section) =>
-                        renderSessionSection({
-                          get host() {
-                            return roster.host();
-                          },
-                          get section() {
-                            return section();
-                          },
-                          personHeaders: undefined,
-                        })
-                      }
+                      {(section) => (
+                        <SessionSection
+                          host={roster.host()}
+                          section={section()}
+                          personHeaders={undefined}
+                        />
+                      )}
                     </For>
                   </Show>
                 </section>
@@ -461,14 +451,12 @@ export function renderSidebarPinnedSession(host: RosterHost, session: () => Side
       (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
     return cards.find((agent) => agent.id === agentId());
   });
-  return renderSessionTree({
-    host,
-    get session() {
-      return session();
-    },
-    listItem: false,
-    get icon() {
-      return <AgentIdentityAvatar agent={card() ?? { id: agentId() }} />;
-    },
-  });
+  return (
+    <SessionTree
+      host={host}
+      session={session()}
+      listItem={false}
+      icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}
+    />
+  );
 }

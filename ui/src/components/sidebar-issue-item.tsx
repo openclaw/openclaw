@@ -134,24 +134,12 @@ export function renderSidebarApprovalItem(params: {
   return (
     <SidebarApprovalRow
       props={{
-        get approval() {
-          return params.approval;
-        },
-        get busy() {
-          return snapshot().approvalBusy;
-        },
-        get canGrant() {
-          return snapshot().approvalCanGrant;
-        },
-        get error() {
-          return snapshot().approvalErrors.get(params.approval.id) ?? null;
-        },
-        get openSessionHref() {
-          return sessionTarget()?.href;
-        },
-        get sessionTitle() {
-          return session()?.displayName?.trim() || session()?.label?.trim();
-        },
+        approval: params.approval,
+        busy: snapshot().approvalBusy,
+        canGrant: snapshot().approvalCanGrant,
+        error: snapshot().approvalErrors.get(params.approval.id) ?? null,
+        openSessionHref: sessionTarget()?.href,
+        sessionTitle: session()?.displayName?.trim() || session()?.label?.trim(),
         onDecision: (event, approvalId, decision) => params.onDecision(event, approvalId, decision),
         onOpenSession: (event) => {
           if (!shouldHandleNavigationClick(event)) {
