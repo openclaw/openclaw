@@ -416,6 +416,62 @@ describe("processMessage poll results context", () => {
       },
     );
 
+    async function addReceivedPoll(creatorJids: string[], creatorName: string) {
+      await recordWhatsAppPoll(
+        {
+          accountId: "default",
+          pollMessageId: "POLL2",
+          origin: "received",
+          chatJids: [GROUP_JID],
+          creatorJids,
+          creatorName,
+          question: "Who is in?",
+          secret: new Uint8Array(32).fill(4),
+          options: ["Me", "Not me"],
+          selectableCount: 1,
+        },
+        { mode: "overwrite" },
+      );
+    }
+
+    it.each(["allowlist", "allowlist_quote"])(
+      "drops a received poll whose creator the group allowlist blocks under %s",
+      async (mode) => {
+        await addReceivedPoll([STRANGER_PN], "Mallory");
+        resolvePolicyMock.mockReturnValue(allowlistPolicy);
+        await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility(mode));
+        expect(preparedEntries()).toEqual([]);
+      },
+    );
+
+    it("keeps a received poll from an allowlisted creator", async () => {
+      await addReceivedPoll([PEER_LID, PEER_PN], "Alice");
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({
+        poll_id: "POLL2",
+        created_by: "Alice",
+      });
+    });
+
+    it("keeps the assistant's own poll and drops a blocked creator's poll in the same chat", async () => {
+      await addPollWithStranger();
+      await addReceivedPoll([STRANGER_PN], "Mallory");
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      const payload = preparedPollPayload();
+      expect(payload?.polls.map((poll) => poll.poll_id)).toEqual(["POLL1"]);
+      expect(JSON.stringify(payload)).not.toContain("Who is in?");
+      expect(JSON.stringify(payload)).not.toContain("Mallory");
+    });
+
+    it("shows a blocked creator's poll when contextVisibility is not configured", async () => {
+      await addReceivedPoll([STRANGER_PN], "Mallory");
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({ created_by: "Mallory" });
+    });
+
     it("keeps a LID-only voter whose stored number is on the allowlist", async () => {
       await addPoll(GROUP_JID);
       await addVote({ jids: [PEER_LID], name: "Alice2", e164: PEER_E164 }, ["Pizza"]);

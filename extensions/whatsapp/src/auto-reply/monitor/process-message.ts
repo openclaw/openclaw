@@ -39,6 +39,7 @@ import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import {
+  isWhatsAppPollCreatorVisible,
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppPollVoters,
   resolveVisibleWhatsAppReplyContext,
@@ -386,6 +387,13 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? conversationId,
         });
 
+  const pollVisibility = {
+    isGroup: conversationKind === "group",
+    mode: contextVisibilityMode,
+    groupPolicy: inboundPolicy.groupPolicy,
+    groupAllowFrom: inboundPolicy.groupAllowFrom,
+    authDir: account.authDir,
+  };
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
@@ -399,16 +407,11 @@ export async function processMessage(params: {
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     // Stored poll results for this chat only; a copy, so broadcast agents never stack blocks.
-    msg: await attachWhatsAppPollResultsContext(params.msg, (voters) =>
-      resolveVisibleWhatsAppPollVoters({
-        voters,
-        isGroup: conversationKind === "group",
-        mode: contextVisibilityMode,
-        groupPolicy: inboundPolicy.groupPolicy,
-        groupAllowFrom: inboundPolicy.groupAllowFrom,
-        authDir: account.authDir,
-      }),
-    ),
+    msg: await attachWhatsAppPollResultsContext(params.msg, {
+      filterVoters: (voters) => resolveVisibleWhatsAppPollVoters({ ...pollVisibility, voters }),
+      isCreatorVisible: (record) =>
+        isWhatsAppPollCreatorVisible({ ...pollVisibility, creatorJids: record.creatorJids }),
+    }),
     rawBody: commandBody,
     route: params.route,
     buildContext: params.buildContext,

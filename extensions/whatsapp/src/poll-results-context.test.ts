@@ -141,6 +141,26 @@ describe("readWhatsAppPollResultsContext", () => {
     expect(JSON.stringify(context)).not.toContain("15550000002");
   });
 
+  it("skips a received poll whose creator the visibility filter hides, never the assistant's own", async () => {
+    const base = Date.now() - 100_000;
+    await addPoll({ id: "P1", recordedAt: base, creatorName: "Mallory", question: "Secret plan?" });
+    await addPoll({ id: "P2", recordedAt: base + 1, origin: "sent", question: "Lunch?" });
+    const seen: string[] = [];
+    const context = await readWhatsAppPollResultsContext({
+      accountId: "default",
+      chatJids: [HOME],
+      isCreatorVisible: (record) => {
+        seen.push(record.origin);
+        return false;
+      },
+    });
+    expect(context?.payload.polls.map((poll) => poll.poll_id)).toEqual(["P2"]);
+    expect(seen).toEqual(["received"]);
+    expect(JSON.stringify(context)).not.toContain("Mallory");
+    expect(JSON.stringify(context)).not.toContain("Secret plan?");
+    expect(JSON.stringify(context)).not.toContain("15550000009");
+  });
+
   it("does not count a retracted voter", async () => {
     await addPoll({ id: "P1", recordedAt: Date.now() });
     await addVote("P1", "15550000001@s.whatsapp.net", ["Yes"], "Avi");
