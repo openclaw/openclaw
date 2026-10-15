@@ -2,6 +2,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
@@ -351,4 +352,40 @@ describe("chat Details presentation", () => {
     menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);
   });
+});
+
+it("keeps the change summary in one full-width compact action and omits empty Participants", async () => {
+  const request = vi.fn().mockResolvedValue({
+    files: Array.from({ length: 12 }, () => ({ path: "app.ts" })),
+    additions: 248,
+    deletions: 61,
+  });
+  const gateway = {
+    snapshot: { phase: "connected", client: { request }, hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  const view = await fixture(
+    props({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway }),
+    360,
+  );
+  view.trigger.click();
+  const action = () => view.session.querySelector<HTMLButtonElement>(".chat-details__changes")!;
+  await vi.waitFor(() => expect(action().textContent).toContain("+248"));
+  const row = action().getBoundingClientRect();
+  const group = action().closest<HTMLElement>(".chat-details__group")!;
+  const groupStyle = getComputedStyle(group);
+  const contentWidth =
+    group.clientWidth -
+    Number.parseFloat(groupStyle.paddingLeft) -
+    Number.parseFloat(groupStyle.paddingRight);
+  expect(row.width).toBeCloseTo(contentWidth, 0);
+  expect(row.height).toBe(32);
+  expect(action().scrollWidth).toBeLessThanOrEqual(action().clientWidth);
+  expect(view.session.querySelector(".chat-details__participants")).toBeNull();
+  const additions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--add")!;
+  const deletions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--del")!;
+  expect(getComputedStyle(additions).fontVariantNumeric).toBe("tabular-nums");
+  expect(getComputedStyle(additions).color).not.toBe(getComputedStyle(deletions).color);
 });

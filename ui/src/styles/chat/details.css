@@ -230,6 +230,29 @@ openclaw-chat-details-progress {
   gap: 8px;
   margin-top: 4px;
 }
+.chat-details__change-summary {
+  display: flex;
+  flex: 1;
+  justify-content: end;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+}
+.chat-details__change-files,
+.chat-details__change-status {
+  color: var(--muted);
+}
+.chat-details__change-lines {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.chat-details__change-lines--add {
+  color: var(--ok);
+}
+.chat-details__change-lines--del {
+  color: var(--danger);
+}
 .chat-details__meta-actions > button,
 .chat-details__participants > summary {
   width: auto;

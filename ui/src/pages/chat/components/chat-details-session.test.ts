@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
@@ -158,6 +159,80 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+});
+
+it("hides Participants for zero people and shows it only for a positive count", async () => {
+  const element = await mount();
+  expect(element.querySelector(".chat-details__participants")).toBeNull();
+  element.props = {
+    ...element.props!,
+    selectedSession: { ...element.props!.selectedSession!, participantCount: 2 },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__participants summary")?.textContent).toContain(
+    "2 participants",
+  );
+  element.props = {
+    ...element.props!,
+    selectedSession: { ...element.props!.selectedSession!, participantCount: 0 },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__participants")).toBeNull();
+});
+
+it("renders unknown without invented zero counts and keeps the All changes action usable", async () => {
+  const open = vi.fn();
+  const element = await mount({ onOpenSessionDiff: open });
+  const button = element.querySelector<HTMLButtonElement>(".chat-details__changes")!;
+  expect(button.textContent).toContain("—");
+  expect(button.textContent).not.toContain("0 files");
+  button.click();
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {
+  vi.useFakeTimers();
+  const request = vi
+    .fn<(method: string) => Promise<unknown>>()
+    .mockImplementation(async (method: string) =>
+      method === "sessions.diff"
+        ? { files: [{ path: "app.ts" }], additions: 12_480, deletions: 61, truncated: true }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+    );
+  const gateway = {
+    snapshot: { client: { request }, phase: "connected", hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  try {
+    const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() =>
+      expect(element.querySelector(".chat-details__change-files")?.textContent).toContain("1 file"),
+    );
+    const button = element.querySelector<HTMLButtonElement>(".chat-details__changes")!;
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+12.5K");
+    expect(element.querySelector(".chat-details__change-lines--del")?.textContent).toBe("−61");
+    expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
+    expect(button.textContent).toContain("partial");
+    request.mockRejectedValue(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("stale"));
+    expect(button.textContent).toContain("+12.5K");
+    expect(button.getAttribute("aria-description")).toContain("Last-known changes");
+    request.mockResolvedValue({ files: [], additions: 0, deletions: 0 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("0 files"));
+    expect(button.textContent).toContain("+0");
+    expect(button.textContent).toContain("−0");
+    expect(
+      element.querySelector(".chat-details__change-lines--add, .chat-details__change-lines--del"),
+    ).toBeNull();
+    element.remove();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("shows live environment and context facts while preserving disclosure intent", async () => {

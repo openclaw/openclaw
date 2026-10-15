@@ -64,13 +64,15 @@ function subscribe<T>(
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshnessMs: number,
+  freshness: number | { milliseconds: number; joinPending: true },
   clone: (value: Output) => Output = structuredClone,
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
   retain: (value: Output) => boolean = () => true,
 ) {
+  const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
+  const joinPending = typeof freshness !== "number" && freshness.joinPending;
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
@@ -112,7 +114,7 @@ function createReadCache<Input, Output>(
         (options.refresh && currentRevision === null) ||
         !entry ||
         entry.revision !== revisionKey ||
-        (entry.expiresAt <= Date.now() && (!snapshot || !entry.pending))
+        (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
       ) {
         if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
           return clone(entry?.value ?? snapshot.empty());
@@ -203,6 +205,16 @@ function createReadCache<Input, Output>(
   };
 }
 
+function cloneCheckoutDiff(diff: GitReadOperations["checkout.diff"]["output"]) {
+  // Callers mutate transport fields; immutable patch strings can stay shared.
+  return {
+    ...diff,
+    files: diff.files.map((file) => ({ ...file })),
+    ...(diff.commits ? { commits: diff.commits.map((commit) => ({ ...commit })) } : {}),
+    ...(diff.mergeBase ? { mergeBase: { ...diff.mergeBase } } : {}),
+  };
+}
+
 function createReadCaches() {
   const comparisons = createReadCache<
     GitWorkerOperations["pull-request.branch-comparison"]["input"],
@@ -288,13 +300,14 @@ function createReadCaches() {
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
       0,
-      // Callers mutate transport fields; immutable patch strings can stay shared.
-      (diff) => ({
-        ...diff,
-        files: diff.files.map((file) => ({ ...file })),
-        ...(diff.commits ? { commits: diff.commits.map((commit) => ({ ...commit })) } : {}),
-        ...(diff.mergeBase ? { mergeBase: { ...diff.mergeBase } } : {}),
-      }),
+      cloneCheckoutDiff,
+    ),
+    diffSummary: createReadCache(
+      (input: GitReadOperations["checkout.diff"]["input"], signal) =>
+        runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
+      // Visible clients share this short-lived summary; never duplicate a slow scan.
+      { milliseconds: 10_000, joinPending: true },
+      cloneCheckoutDiff,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>
@@ -341,8 +354,8 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
-    createReadCaches());
+  const { context, branchFacts, diff, diffSummary, branches, baseline, identities } =
+    (state.caches ??= createReadCaches());
   switch (operation.type) {
     case "repository.identities":
       return identities.read(operation.input, options);
@@ -353,7 +366,7 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
     case "pull-request.branch-facts":
       return branchFacts.read(operation.input, options);
     case "checkout.diff":
-      return diff.read(operation.input, options);
+      return (operation.input.summaryOnly ? diffSummary : diff).read(operation.input, options);
     case "repository.branches":
       return branches.read(operation.input, options);
     case "checkout.baseline":

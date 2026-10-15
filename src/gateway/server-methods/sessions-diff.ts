@@ -77,6 +77,7 @@ export async function loadSessionDiff(
         const result = await repository.inspect("diff", {
           scope: params.scope ?? "all",
           commit: params.commit,
+          summaryOnly: params.summaryOnly,
           baseCommit: repository.repository.baseCommit,
         });
         assertCurrent();
@@ -91,7 +92,7 @@ export async function loadSessionDiff(
       }
       worktreeCount = 1;
       timing?.mark("git");
-      const input = { cwd, sessionKey: params.sessionKey };
+      const input = { cwd, sessionKey: params.sessionKey, summaryOnly: params.summaryOnly };
       let result: SessionsDiffResult;
       if (params.scope === "commit") {
         if (!params.commit) {
