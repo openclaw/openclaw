@@ -15,6 +15,7 @@ import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/se
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
+  catalogErrorMessages,
   catalogSessionActivity,
   catalogSessionRowsByKey,
   type SidebarSessionCatalog,
@@ -209,7 +210,11 @@ export class SidebarSessionProjection {
       [...data.childSessionErrorsByParent],
       catalogs
         ? [
-            catalogs,
+            catalogs.map(({ hosts, ...visible }) => [
+              visible,
+              catalogErrorMessages({ ...visible, hosts }),
+              hosts.some(({ nextCursor }) => Boolean(nextCursor)),
+            ]),
             catalogs.map((catalog) =>
               catalogSessionActivity(
                 catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
@@ -240,19 +245,14 @@ export class SidebarSessionProjection {
             ]),
           ]
         : null,
-      sessionsVisible
-        ? (host.sidebarAgentsMode === "chip"
-            ? [host.expandedAgentId()]
-            : (roster?.agentIds ?? [])
-          ).map((id) => {
-            const row = host.mainSessionRow(id);
-            if (!row) {
-              return null;
-            }
-            const { children: _children, ...home } = host.projectHomeSession(row, id);
-            return home;
-          })
-        : null,
+      [...new Set([host.expandedAgentId(), ...(roster?.agentIds ?? [])])].map((id) => {
+        const row = host.mainSessionRow(id);
+        if (!row) {
+          return null;
+        }
+        const { children: _children, ...home } = host.projectHomeSession(row, id);
+        return home;
+      }),
     ]);
     if (presentation === this.publishedSessionPresentation) {
       return false;

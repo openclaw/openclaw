@@ -5,6 +5,7 @@ import type {
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
 import {
   type ControlUiPluginOwner,
@@ -63,12 +64,13 @@ describe("AppSidebar session-list replacement", () => {
       };
       runtime.start();
       const host = createControlUiPluginHost(() => context, runtime, owner);
-      const replacement: ControlUiReplacement<"session-list"> = {
-        id: "sessions",
+      const createReplacement = (id: string): ControlUiReplacement<"session-list"> => ({
+        id,
         label: "Sessions",
         surface: "session-list",
         mount(container, initial) {
           const rows = document.createElement("div");
+          rows.dataset.pluginReplacement = id;
           container.append(rows);
           const update = ({
             props,
@@ -91,12 +93,13 @@ describe("AppSidebar session-list replacement", () => {
           }
           return { update, dispose: () => stopDefault?.() };
         },
-      };
+      });
+      let replacement = createReplacement("sessions");
       let selected = false;
       vi.spyOn(context.plugins, "selectedReplacement").mockImplementation((surface) =>
         selected && surface === "session-list"
           ? {
-              key: "session-list-fixture/sessions",
+              key: `session-list-fixture/${replacement.id}`,
               pluginId: "session-list-fixture",
               value: replacement,
               host,
@@ -117,6 +120,22 @@ describe("AppSidebar session-list replacement", () => {
         pluginListeners.forEach((notify) => notify());
         await settleRoster(sidebar);
         await vi.waitFor(() => expect(keys()).toEqual(["agent:main:main", "agent:main:first"]));
+        const firstReplacement = sidebar.querySelector('[data-plugin-replacement="sessions"]');
+        expect(firstReplacement).not.toBeNull();
+        const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+        replacement = createReplacement("other-sessions");
+        pluginListeners.forEach((notify) => notify());
+        await settleRoster(sidebar);
+        await vi.waitFor(() =>
+          expect(
+            sidebar.querySelector('[data-plugin-replacement="other-sessions"]'),
+          ).not.toBeNull(),
+        );
+        await settleRoster(sidebar);
+        expect(firstReplacement?.isConnected).toBe(false);
+        expect(keys()).toEqual(["agent:main:main", "agent:main:first"]);
+        expect(prepare).not.toHaveBeenCalled();
+        prepare.mockRestore();
         await toggleRoster(sidebar);
         await vi.waitFor(() =>
           expect(sidebar.querySelector(".sidebar-session-toolbar")).not.toBeNull(),
