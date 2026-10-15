@@ -382,6 +382,14 @@ describe("agent runner streaming presentation", () => {
     }> = [
       { payload: { text: "visible answer" }, expected: { text: "visible answer", skip: false } },
       { payload: { text: "H" }, expected: { text: "H", skip: false } },
+      // Truncated final silent tokens must be suppressed on the final path too (#170158).
+      { payload: { text: "NO_R" }, expected: { skip: true } },
+      { payload: { text: "NO_RE" }, expected: { skip: true } },
+      { payload: { text: "NO_REP" }, expected: { skip: true } },
+      { payload: { text: "NO_REPL" }, expected: { skip: true } },
+      { payload: { text: "NO_R alert" }, expected: { text: "NO_R alert", skip: false } },
+      { payload: { text: "No issues found" }, expected: { text: "No issues found", skip: false } },
+      { payload: { text: "no_r" }, expected: { text: "no_r", skip: false } },
       {
         payload: { text: "HEARTBEAT_OK visible after heartbeat" },
         expected: { text: "visible after heartbeat", skip: false },

@@ -59,8 +59,7 @@ export function createAgentTurnPresentation(params: {
       text = stripped.text;
     }
     if (
-      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
-      isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+      isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
     ) {
       return { skip: true };
