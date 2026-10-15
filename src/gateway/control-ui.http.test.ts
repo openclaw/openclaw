@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
 import {
@@ -17,6 +18,7 @@ import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createImageProcessor } from "../media/image-processor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
@@ -409,6 +411,48 @@ describe("handleControlUiHttpRequest", () => {
       terminalEnabled: true,
     });
     expect(parseBootstrapPayload(bootstrap.end).terminalEnabled).toBe(true);
+  });
+
+  it("serves a bounded inbound photo preview without replacing its original", async () => {
+    const state = testTempDirs.make("inbound-preview-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: state }, async () => {
+      const bytes = createNoisyPngBuffer(600, 300);
+      await fs.mkdir(path.join(state, "media", "inbound"), { recursive: true });
+      const photoPath = path.join(state, "media", "inbound", "photo.png");
+      await fs.writeFile(photoPath, bytes);
+      const modified = new Date("2025-01-01T00:00:00.000Z");
+      await fs.utimes(photoPath, modified, modified);
+      const url =
+        "/__openclaw__/assistant-media?source=media%3A%2F%2Finbound%2Fphoto.png&token=test-token";
+      const preview = await runAssistantMediaRequest({ url: `${url}&variant=thumbnail` });
+      expect(preview.res.statusCode).toBe(200);
+      const body = preview.end.mock.calls[0]?.[0];
+      expect(Buffer.isBuffer(body)).toBe(true);
+      expect(body.byteLength).toBeLessThanOrEqual(512 * 1024);
+      expect(body.byteLength).toBeLessThan(bytes.byteLength);
+      expect(await createImageProcessor().probe(body)).toMatchObject({
+        format: "png",
+        width: 400,
+        height: 200,
+      });
+      const head = await runAssistantMediaRequest({
+        url: `${url}&variant=thumbnail`,
+        method: "HEAD",
+      });
+      expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+      expect(head.end).toHaveBeenCalledWith(undefined);
+      const original = await runAssistantMediaRequest({ url, method: "HEAD" });
+      expect(original.setHeader).toHaveBeenCalledWith("Content-Length", String(bytes.byteLength));
+      expect(await fs.readFile(photoPath)).toEqual(bytes);
+      const solid = createSolidPngBuffer(600, 300, { r: 20, g: 40, b: 60 });
+      // PNG decoders ignore trailing bytes; pad this fixture to preserve the source size.
+      const replacement = Buffer.concat([solid, Buffer.alloc(bytes.byteLength - solid.byteLength)]);
+      await fs.writeFile(photoPath, replacement);
+      await fs.utimes(photoPath, modified, modified);
+      const refreshed = await runAssistantMediaRequest({ url: `${url}&variant=thumbnail` });
+      expect(refreshed.res.statusCode).toBe(200);
+      expect(refreshed.end.mock.calls[0]?.[0]).not.toEqual(body);
+    });
   });
 
   it("serves fresh media after an in-place rewrite preserves size and mtime", async () => {

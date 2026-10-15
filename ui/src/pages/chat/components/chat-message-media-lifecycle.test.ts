@@ -51,7 +51,7 @@ function managedImageResourceKey(source: string): string {
     undefined,
     undefined,
     "",
-    `${source.replace(/\/full$/u, "/thumbnail")}?v=2`,
+    `${source.replace(/\/full$/u, "/thumbnail")}?v=3`,
     "",
     "thumbnail",
   ]);
@@ -876,7 +876,7 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls) {
-      expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`);
+      expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=3`);
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

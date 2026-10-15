@@ -77,10 +77,7 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
-import {
-  encodeImageThumbnail,
-  resolveManagedImageThumbnail,
-} from "./managed-image-thumbnail-cache.js";
+import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
 import {
   createManagedOutgoingImageTicket,
   verifyManagedOutgoingImageTicket,
@@ -918,23 +915,6 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, stateDir);
 }
 
-async function readManagedImageThumbnailFromFile(
-  opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
-  maxBytes?: number,
-): Promise<Buffer> {
-  if (maxBytes !== undefined && opened.stat.size > maxBytes) {
-    throw new Error("Managed image exceeds the preview byte limit");
-  }
-  const cacheKey = `${opened.realPath}\0${opened.stat.mtimeMs}\0${opened.stat.size}`;
-  return await resolveManagedImageThumbnail(cacheKey, async () => {
-    const source = await opened.handle.readFile();
-    if (maxBytes !== undefined && source.byteLength > maxBytes) {
-      throw new Error("Managed image exceeds the preview byte limit");
-    }
-    return await encodeImageThumbnail(source);
-  });
-}
-
 /** Read a local preview through the same transcript ownership and thumbnail cache as HTTP. */
 export async function readManagedOutgoingImageThumbnail(
   params: ManagedOutgoingMediaArtifactRequest & {
@@ -958,7 +938,7 @@ export async function readManagedOutgoingImageThumbnail(
         filePath: resolveManagedImageOriginalPath(record),
       });
       try {
-        const thumbnail = await readManagedImageThumbnailFromFile(opened, maxBytes);
+        const thumbnail = await readImageThumbnailFromFile(opened, maxBytes);
         assertCurrent();
         signal.throwIfAborted();
         return thumbnail;
@@ -1456,7 +1436,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
             // is a lower-fidelity representation of the same transcript attachment.
             const thumbnail =
               mediaKind === "image"
-                ? await readManagedImageThumbnailFromFile(opened).catch(() => null)
+                ? await readImageThumbnailFromFile(opened).catch(() => null)
                 : null;
             await byteStream.close();
             assertCurrent?.();
