@@ -139,7 +139,7 @@ export async function waitForChromeMcpReady(
   );
 }
 
-export async function waitForChromeMcpOperation<T>(
+async function waitForChromeMcpOperation<T>(
   pending: Promise<T>,
   signal?: AbortSignal,
   timeout?: { ms: number; error: () => Error; unref?: boolean },

@@ -6,6 +6,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
@@ -277,7 +278,6 @@ vi.mock("./send.js", async () => ({
 // mock-isolation: Keep session database startup outside the command fixture.
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
-  getSessionEntryAsync: async (...args: unknown[]) => getSessionEntryHoisted(...args),
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
@@ -299,7 +299,19 @@ vi.mock("./sticker-cache.js", () => ({
 
 export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 
+function unexpectedInboundContextCall(): never {
+  throw new Error("Dispatch fixtures do not construct inbound message context");
+}
+
 export const telegramDepsForTest: TelegramBotDeps = {
+  ...telegramDirectDeliveryDepsForTest,
+  buildChannelInboundEventContext: unexpectedInboundContextCall,
+  readAmbientTranscriptWatermarkAsync: unexpectedInboundContextCall,
+  readSessionUpdatedAtAsync: unexpectedInboundContextCall,
+  recordInboundSession: unexpectedInboundContextCall,
+  resolveAmbientTranscriptWatermarkKey: unexpectedInboundContextCall,
+  resolveInboundLastRouteSessionKey: unexpectedInboundContextCall,
+  resolvePinnedMainDmOwnerFromAllowlist: unexpectedInboundContextCall,
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
   getSessionEntryAsync: async (params) => getSessionEntry(params),

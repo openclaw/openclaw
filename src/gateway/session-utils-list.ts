@@ -102,7 +102,7 @@ export function* selectSessionEntries(
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
-  sessions: GatewaySessionRow[],
+  { sessions, previousRows }: { sessions: GatewaySessionRow[]; previousRows?: GatewaySessionRow[] },
   policyConfig: OpenClawConfig,
   client?: GatewayClient | null,
 ): SessionsListResult {
@@ -157,7 +157,7 @@ function buildSessionsListResult(
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
     ...(opts.rowMode === "sidebar"
-      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision)
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, previousRows)
       : { sessions }),
   };
 }
@@ -566,7 +566,7 @@ export async function listProjectedSessions(params: {
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            params.acceptsSerializedJson ? presentation.list(sessions, opts) : sessions,
+            params.acceptsSerializedJson ? presentation.list(sessions, opts) : { sessions },
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );

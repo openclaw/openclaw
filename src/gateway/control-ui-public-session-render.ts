@@ -79,32 +79,80 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     else probeFailed();
   }).catch(probeFailed);
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
-  let timer,etag="",running=false,retryAt=0;
+  let timer,etag="",running=false,retryAt=0,following=false;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
+  const transcript=()=>document.querySelector(".transcript");
+  const controls=document.querySelector(".reader-controls");
+  const status=text=>{for(const node of document.querySelectorAll("[data-public-refresh-status]"))node.textContent=text};
+  function atLatest(){
+    const bounds=transcript()?.getBoundingClientRect();
+    return Boolean(bounds&&bounds.bottom>0&&bounds.bottom<=window.innerHeight+96);
+  }
+  function scrollLatest(){
+    const bounds=transcript()?.getBoundingClientRect();
+    if(bounds)window.scrollTo({top:Math.max(0,window.scrollY+bounds.bottom-window.innerHeight+88),behavior:"instant"});
+  }
+  function updateControls(){
+    if(controls)controls.hidden=!transcript();
+    const top=document.querySelector("[data-public-top]");
+    if(top)top.disabled=window.scrollY<100;
+  }
+  window.addEventListener("scroll",()=>{following=enabled()&&atLatest();updateControls()},{passive:true});
+  // Lazy images and font/layout changes must not leave a live follower behind.
+  const observer=typeof ResizeObserver==="undefined"?null:new ResizeObserver(()=>{if(following&&!document.hidden)scrollLatest()});
+  function observeTranscript(){observer?.disconnect();const node=transcript();if(node)observer?.observe(node);updateControls()}
+  following=enabled()&&atLatest();
+  observeTranscript();
   const jitter=()=>Math.floor(Math.random()*3000);
   const schedule=(delay=15000+jitter())=>{clearTimeout(timer);if(!document.hidden&&enabled())timer=setTimeout(refresh,Math.max(delay,retryAt-Date.now()))};
+  document.addEventListener("click",event=>{
+    if(event.target.closest?.("[data-public-top]")){following=false;window.scrollTo({top:0,behavior:"instant"});updateControls()}
+    if(event.target.closest?.("[data-public-latest]")){following=enabled();scrollLatest();updateControls()}
+    if(event.target.closest?.("[data-public-refresh-now]")&&enabled()&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){event.preventDefault();schedule(0)}
+  });
   async function refresh(){
     if(document.hidden||!enabled()||running)return;
     running=true;
+    status("Checking for updates…");
     let delay;
     try{
       const response=await fetch(location.href,{credentials:"same-origin",redirect:"error",cache:"no-store",headers:etag?{"If-None-Match":etag}:{},signal:AbortSignal.timeout(10000)});
-      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}return}
-      if(response.status===304||document.hidden)return;
-      if(response.status!==200&&response.status!==404)return;
+      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}status("Updates delayed · Retrying automatically");return}
+      if(document.hidden)return;
+      if(response.status===304){status("Up to date");return}
+      if(response.status!==200&&response.status!==404)throw new Error("Refresh failed");
       const next=new DOMParser().parseFromString(await response.text(),"text/html");
       const main=next.querySelector("main[data-public-session]");
       const current=document.querySelector("main[data-public-session]");
-      if(document.hidden||!main||!current)return;
+      if(document.hidden||!current)return;
+      if(!main){
+        // Legacy token links return a plain 404 rather than a reader document.
+        if(response.status===404){current.textContent="This conversation is no longer publicly available.";current.dataset.publicRefresh="false";document.title="Conversation unavailable · OpenClaw";observer?.disconnect();updateControls();return}
+        throw new Error("Refresh failed");
+      }
+      const y=window.scrollY;
+      const rows=[...current.querySelectorAll("[data-public-item]")];
+      const anchor=rows.find(row=>{const bounds=row.getBoundingClientRect();return bounds.bottom>0&&bounds.top<window.innerHeight});
+      const anchorTop=anchor?.getBoundingClientRect().top;
+      const expanded=new Set([...current.querySelectorAll("details[open][data-public-item]")].map(row=>row.dataset.publicItem));
+      for(const row of main.querySelectorAll("details[data-public-item]"))row.open=expanded.has(row.dataset.publicItem);
       current.replaceWith(main);
       enhance(main);
       document.title=next.title;
       // A revoked public read is already resolved; its inert script will not run here.
       showUnavailable(main);
+      observeTranscript();
+      if(following&&enabled())scrollLatest();
+      else if(anchor&&transcript()){
+        const retained=[...main.querySelectorAll("[data-public-item]")].find(row=>row.dataset.publicItem===anchor.dataset.publicItem);
+        window.scrollTo({top:retained?y+retained.getBoundingClientRect().top-anchorTop:y,behavior:"instant"});
+      }
       etag=response.headers.get("ETag")||"";
-    }catch{}finally{running=false;schedule(delay)}
+      status("Up to date");
+    }catch{status("Could not refresh · Retrying automatically")}finally{running=false;schedule(delay)}
   }
   document.addEventListener("visibilitychange",()=>{if(document.hidden)clearTimeout(timer);else schedule(0)});
+  window.addEventListener("online",()=>schedule(0));
   schedule();
 })();`;
 
@@ -151,7 +199,7 @@ const PUBLIC_SESSION_PITCH_HTML = `<section class="colophon" aria-labelledby="op
 // Gateway-hosted Control UI face, linked from the same mount.
 const PUBLIC_SESSION_STYLES = `:root{color-scheme:dark;--bg:#0e1015;--bg-muted:#1f2330;--bg-elevated:#191c24;--hover:#1f2330;--panel:#191c24;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--accent:#ff5c5c;--bubble:rgba(255,92,92,.1);--bubble-ink:var(--text);--primary:#d13c3c;--primary-hover:#c22e2e;--link:color-mix(in srgb,#ff7070 85%,#bcbcc0);--ok:#69bf8a;--shell-light:#ff6d5a;--shell-dark:#c2372b;--eye:#050810;--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-family:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-synthesis:none;-webkit-font-smoothing:antialiased}
 @media(prefers-color-scheme:light){:root{color-scheme:light;--bg:#faf9f7;--bg-muted:#efebe4;--bg-elevated:#fff;--hover:#efebe4;--panel:#f4f1ec;--text:#403c35;--text-strong:#211e1a;--muted:#6e6960;--border:#e8e4dc;--border-strong:#d6d0c5;--accent:#bd4531;--bubble:color-mix(in srgb,#bd4531 15%,#faf9f7);--bubble-ink:var(--text-strong);--primary:#bd4531;--primary-hover:#a83c29;--link:color-mix(in srgb,#a83c29 85%,#403c35);--ok:#2f9b5a;--shell-light:#ff4d4d;--shell-dark:#991b1b}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg)}a{color:var(--link);text-underline-offset:3px}a:hover{color:var(--text-strong)}a:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--bg)}a{color:var(--link);text-underline-offset:3px}a:hover{color:var(--text-strong)}a:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .defs{position:absolute;width:0;height:0;overflow:hidden}.mark .shell{fill:url(#openclaw-shell)}.mark .feeler{fill:none;stroke:var(--shell-light);stroke-width:3;stroke-linecap:round}.mark .eye{fill:var(--eye)}.mark .pupil{fill:#00e5cc}.shell-light{stop-color:var(--shell-light)}.shell-dark{stop-color:var(--shell-dark)}
 .page{width:min(720px,calc(100% - 48px));margin:0 auto;padding:0 0 72px}.topbar{display:flex;align-items:center;justify-content:space-between;height:64px}.brand{display:inline-flex;align-items:center;gap:9px;color:var(--text-strong);font-size:15px;font-weight:650;letter-spacing:-.01em;text-decoration:none}.brand:hover{color:var(--text-strong)}.brand .mark{width:22px;height:22px}
 .button{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);color:var(--text-strong);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background-color .12s ease-out,border-color .12s ease-out}.button:hover{background:var(--hover);border-color:var(--border-strong);color:var(--text-strong)}.button.primary{border-color:transparent;background:var(--primary);color:#fff}.button.primary:hover{background:var(--primary-hover);color:#fff}
@@ -170,6 +218,7 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 .install{margin:24px 0}.install pre{margin:0;padding:12px 48px 12px 16px;overflow:auto;border:1px solid var(--border-strong);border-radius:10px;background:var(--bg-muted);color:var(--text-strong);font:13.5px/1.6 var(--mono)}.install pre::before{content:"$ ";color:var(--accent)}.install code{user-select:all}.links{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;font-size:14px;font-weight:500}.links a{color:var(--text);text-decoration:none}.links a:hover{color:var(--text-strong)}.links .button{padding:9px 16px;font-size:14px}
 .code{position:relative}.copy{position:absolute;top:6px;right:6px;display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--border-strong);border-radius:7px;background:var(--bg-elevated);color:var(--muted);cursor:pointer;opacity:0;transition:opacity .12s ease-out,color .12s ease-out}.copy svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.copy .done{display:none}.copy:hover{color:var(--text-strong)}.copy[data-copied],.copy[data-copied]:hover{color:var(--ok)}.copy[data-copied] svg{display:none}.copy[data-copied] .done{display:block}.code:hover .copy,.copy:focus-visible,.copy[data-copied],.install .copy{opacity:1}.install .copy{top:9px;right:9px}
 @media(hover:none){.copy{opacity:1}}
+.reader-controls{position:fixed;z-index:10;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;max-width:calc(100% - 24px);padding:8px;border:1px solid var(--border-strong);border-radius:14px;background:var(--bg-elevated);box-shadow:0 8px 28px #0003}.reader-controls button{font-family:inherit;cursor:pointer}.reader-controls .button:disabled{opacity:.45;cursor:default}.refresh-status{max-width:230px;padding:0 6px;color:var(--muted);font-size:12px;line-height:1.4}.page{padding-bottom:120px}@media(max-width:640px){.reader-controls{gap:6px}.reader-controls .button{padding:7px 10px}.refresh-status{max-width:100px;font-size:11px}}
 .entry-status{display:none}[data-entry-pending] .entry-result{display:none}[data-entry-pending] .entry-status{display:block}[data-entry-pending] .login{visibility:hidden}
 @media(min-width:840px){.assistant{grid-template-columns:minmax(0,1fr);margin-left:-44px;padding-left:44px}.avatar{position:absolute;margin-left:-44px}.assistant .content{grid-column:1}}
 @media(max-width:640px){.page{width:calc(100% - 36px)}.topbar{height:56px}.article-head{padding-top:36px;margin-bottom:32px}.user .content{max-width:88%}.content{font-size:15.5px}.install pre{white-space:pre-wrap;overflow-wrap:anywhere}.status{display:block}.status a{display:inline-block;margin-top:8px}}`;
@@ -205,7 +254,7 @@ export function renderPublicSessionDocument(params: {
   const projected = projectPublicSessionItems(params.messages);
   let truncated = params.truncated || projected.length > MAX_ITEMS;
   let remaining = MAX_DOCUMENT_CHARS;
-  const entries: { role: "user" | "assistant" | "tools"; html: string }[] = [];
+  const entries: { role: "user" | "assistant" | "tools"; html: string; key?: string }[] = [];
   // Budget newest visible items first, then restore conversational order.
   for (const item of projected.slice(-MAX_ITEMS).toReversed()) {
     if (remaining <= 0) {
@@ -253,15 +302,24 @@ export function renderPublicSessionDocument(params: {
     }
     entries.push({
       role: item.role,
+      key: entryId,
       html: `${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}${media.join("")}`,
     });
   }
   const rows = entries.toReversed().map((entry, index, ordered) => {
+    // Stable across latest-page rollover; expose an opaque digest, not source metadata.
+    const key = createHash("sha256")
+      .update(entry.key ?? `${entry.role}:${entry.html}`)
+      .digest("hex")
+      .slice(0, 24);
     if (entry.role === "tools") {
-      return entry.html;
+      return entry.html.replace(
+        '<details class="tools"',
+        `<details class="tools" data-public-item="${key}"`,
+      );
     }
     const continued = ordered[index - 1]?.role === entry.role;
-    return `<article class="message ${entry.role}${continued ? " continued" : ""}" aria-label="${entry.role === "user" ? "User" : "Assistant"} message"><h2 class="speaker">${entry.role === "user" ? "User" : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content">${entry.html}</div></article>`;
+    return `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" aria-label="${entry.role === "user" ? "User" : "Assistant"} message"><h2 class="speaker">${entry.role === "user" ? "User" : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content">${entry.html}</div></article>`;
   });
   const description = params.unavailable
     ? "Log in to open conversations you have access to."
@@ -284,7 +342,7 @@ export function renderPublicSessionDocument(params: {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
-${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""}
+${isLatest ? '<noscript><meta http-equiv="refresh" content="15"></noscript>' : ""}
 <title>${entryPending ? "OpenClaw" : `${title} · OpenClaw`}</title>${canonicalMetadata}
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
@@ -296,7 +354,7 @@ ${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""
 <link rel="stylesheet" href="${escapeHtml(params.assetBasePath)}/fonts/instrument-sans.css">
 <style>
 ${PUBLIC_SESSION_STYLES}
-</style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}[data-entry-pending] .login{visibility:visible}</style></noscript>" : ""}</head><body><main data-public-session${entryPending ? " data-entry-pending" : ""} data-public-refresh="${params.entryUrl && isLatest ? "true" : "false"}">
+</style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}[data-entry-pending] .login{visibility:visible}</style></noscript>" : ""}</head><body><main data-public-session${entryPending ? " data-entry-pending" : ""} data-public-refresh="${isLatest ? "true" : "false"}">
 <svg class="defs" aria-hidden="true" focusable="false"><linearGradient id="openclaw-shell" x1="0" y1="0" x2="1" y2="1"><stop offset="0" class="shell-light"/><stop offset="1" class="shell-dark"/></linearGradient></svg>
 <div class="page">
 <header class="topbar"><a class="brand" href="https://openclaw.ai" rel="noreferrer noopener">${LOBSTER_MARK}<span>OpenClaw</span></a>${entryLink}</header>
@@ -312,9 +370,9 @@ ${navigation}
 ${
   params.unavailable
     ? ""
-    : `<footer class="status"><span>${isLatest ? (params.entryUrl ? "Live view · Updates while this tab is visible" : "Live view · Refreshes every 15 seconds") : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
+    : `<footer class="status"><span>${isLatest ? "Live view · Updates while this tab is visible" : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a${isLatest ? " data-public-refresh-now" : ""} href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
 ${PUBLIC_SESSION_PITCH_HTML}`
 }
 </div>
-</main><script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script></body></html>`;
+</main>${params.unavailable ? "" : `<nav class="reader-controls" aria-label="Conversation navigation" hidden><span class="refresh-status" data-public-refresh-status role="status">${isLatest ? "Live updates" : "Earlier messages"}</span><button class="button" type="button" data-public-top aria-label="Go to top">↑ Top</button><button class="button" type="button" data-public-latest aria-label="Go to ${isLatest ? "latest message" : "page end"}">↓ ${isLatest ? "Latest" : "End"}</button>${isLatest ? `<a class="button" data-public-refresh-now href="${escapeHtml(params.latestUrl)}">Refresh now</a>` : ""}</nav>`}<script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script></body></html>`;
 }

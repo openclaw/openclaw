@@ -419,18 +419,21 @@ suite.define(() => {
                   });
                   throw error;
                 }
-                expect(
-                  await bubble
-                    .locator("img.chat-message-image")
-                    .evaluateAll((images) =>
-                      images.map(
-                        (image) =>
-                          image instanceof HTMLImageElement &&
-                          image.complete &&
-                          image.naturalWidth > 0,
+                // History reconciliation can replace the nodes that just finished decoding.
+                await expect
+                  .poll(() =>
+                    bubble
+                      .locator("img.chat-message-image")
+                      .evaluateAll((images) =>
+                        images.map(
+                          (image) =>
+                            image instanceof HTMLImageElement &&
+                            image.complete &&
+                            image.naturalWidth > 0,
+                        ),
                       ),
-                    ),
-                ).toEqual([true, true]);
+                  )
+                  .toEqual([true, true]);
               };
               await assertDecoded();
               // Capture before the order assertion so an unfixed run retains the actual flattening.

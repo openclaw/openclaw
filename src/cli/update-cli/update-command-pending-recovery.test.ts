@@ -28,7 +28,7 @@ import * as installedPlugins from "../../plugins/installed-plugin-index-records.
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as stateOwnership from "../../state/openclaw-state-ownership.js";
+import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";

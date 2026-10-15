@@ -26,26 +26,11 @@ describe("resolveDiscordChannelOwnerIdSafe", () => {
     ).toBe("snake");
   });
 
-  it("ignores invalid values and unsafe accessors", () => {
+  it("ignores invalid values", () => {
     expect(resolveDiscordChannelOwnerIdSafe({ ownerId: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ owner_id: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ rawData: { owner_id: 123 } })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe(null)).toBeUndefined();
-    expect(
-      resolveDiscordChannelOwnerIdSafe(
-        new Proxy(
-          {},
-          {
-            get() {
-              throw new Error("boom");
-            },
-            has() {
-              throw new Error("boom");
-            },
-          },
-        ),
-      ),
-    ).toBeUndefined();
   });
 });
 

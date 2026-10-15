@@ -13,7 +13,7 @@ import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
-import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 // Preserve source offsets when case folding expands Unicode characters.
 // The pattern is literal and Solid escapes every rendered text segment.
@@ -134,7 +134,9 @@ export function CommandPaletteResult(props: {
               when={props.item.id === "panel-custodian"}
               fallback={<Icon name={props.item.icon} />}
             >
-              <LitContent render={() => renderThemeBrandIcon()} />
+              <span class="lit-content" style={{ display: "contents" }}>
+                <ThemeBrandingIcon />
+              </span>
             </Show>
           </span>
         }

@@ -45,7 +45,6 @@ const TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS = new Set([
 const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
 
 export function formatTelegramRawUpdateForLog(update: unknown): string {
-  const seen = new WeakSet<object>();
   const transform = (value: unknown, key = "", parentKey?: string): unknown => {
     if (
       TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS.has(key) ||
@@ -66,10 +65,6 @@ export function formatTelegramRawUpdateForLog(update: unknown): string {
       return items;
     }
     if (value && typeof value === "object") {
-      if (seen.has(value)) {
-        return "[Circular]";
-      }
-      seen.add(value);
       const record = value as Record<string, unknown>;
       if (
         typeof record.id === "number" &&
