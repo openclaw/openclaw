@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LitContent } from "../../lit/solid-content.tsx";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 
@@ -16,7 +18,8 @@ vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
 });
 
-vi.mock("../../app/stale-chunk-reload.ts", () => ({
+vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/stale-chunk-reload.ts")>()),
   isStaleChunkImportError: () => true,
   retryStaleChunkReloadWhenReachable: lazyMocks.retryDocument,
   scheduleStaleChunkReload: vi.fn(async () => false),
@@ -25,6 +28,7 @@ vi.mock("../../app/stale-chunk-reload.ts", () => ({
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 
 afterEach(() => {
+  cleanupSolid();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
@@ -38,36 +42,49 @@ describe("chat pane lazy sidebar failures", () => {
       openSlot(openSlot({ columns: [] }, "dashboard"), "detail"),
       "dashboard",
     );
-    const renderCurrent = () => {
-      render(
-        renderSidebarRegion({
-          presentationId: "sidebar-layout-fixture",
-          availableWidth: 1_400,
-          callbacks: {
-            activatePanel: vi.fn(),
-            togglePanelExpanded: vi.fn(),
-            closeSlot: vi.fn(),
-            openSlot: vi.fn(),
-            reorderPanel: vi.fn(),
-            resizePanel: vi.fn(),
-            setOpen: vi.fn(),
-          },
-          layout,
-          narrow: false,
-          panelDefinitions: sidebarPanelDefinitions().map((definition) =>
-            Object.assign(definition, {
-              available: definition.slot === "detail",
-              content: definition.slot === "detail" ? html`<aside>Review</aside>` : null,
+    const primary = document.createElement("main");
+    primary.dataset.primary = "";
+    primary.textContent = "Primary chat";
+    let renderCurrent: () => void = () => {};
+    mountSolid(
+      () => {
+        const [content, setContent] = createSignal<unknown>(undefined, { ownedWrite: true });
+        renderCurrent = () => {
+          setContent(() =>
+            renderSidebarRegion({
+              presentationId: "sidebar-layout-fixture",
+              availableWidth: 1_400,
+              callbacks: {
+                activatePanel: vi.fn(),
+                togglePanelExpanded: vi.fn(),
+                closeSlot: vi.fn(),
+                openSlot: vi.fn(),
+                reorderPanel: vi.fn(),
+                resizePanel: vi.fn(),
+                setOpen: vi.fn(),
+              },
+              layout,
+              narrow: false,
+              panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+                Object.assign(definition, {
+                  available: definition.slot === "detail",
+                  content:
+                    definition.slot === "detail"
+                      ? Object.assign(document.createElement("aside"), { textContent: "Review" })
+                      : null,
+                }),
+              ),
+              primary,
+              requestUpdate: renderCurrent,
             }),
-          ),
-          primary: html`<main data-primary>Primary chat</main>`,
-          requestUpdate: renderCurrent,
-        }),
-        container,
-      );
-    };
-
-    renderCurrent();
+          );
+        };
+        renderCurrent();
+        return <LitContent value={content()} />;
+      },
+      { container },
+    );
+    flush();
 
     const placeholders = [...container.querySelectorAll(".side-panel__panel")];
     expect(placeholders.map((panel) => panel.getAttribute("data-region"))).toEqual(["main"]);
@@ -80,6 +97,7 @@ describe("chat pane lazy sidebar failures", () => {
     expect(container.querySelector(".sidebar-region__primary")?.hasAttribute("hidden")).toBe(false);
     layout = openSlot(layout, "detail");
     renderCurrent();
+    flush();
     expect(
       [...container.querySelectorAll(".side-panel__panel")].map((panel) =>
         panel.getAttribute("data-region"),

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
-import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -125,7 +124,7 @@ describe("chat pane retained presentation lifecycle", () => {
       state.handleChatDraftChange = vi.fn();
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       mounted.render = () => ({
-        layout: html`${emptyLegacyContent}`,
+        layout: emptyLegacyContent,
         capabilityDialogs: undefined,
       });
       mounted.active = true;

@@ -217,7 +217,7 @@ describe("resident Codex catalog notifications", () => {
       thread({ id: `stored-${i}`, recencyAt: 1_000 - i }),
     );
     const { index, harness, readNative } = await fixture(inventory);
-    inventory[64]!.name = "Renamed without new activity";
+    inventory[16]!.name = "Renamed without new activity";
     inventory[220]!.name = "Silent tail rename";
     inventory.pop();
     inventory.unshift(thread({ id: "missed-start", recencyAt: 1_999 }));
@@ -227,16 +227,16 @@ describe("resident Codex catalog notifications", () => {
     await vi.waitFor(() => expect(index.get(newer.id)).toBeDefined());
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(7);
+    expect(readNative).toHaveBeenCalledTimes(19);
     expect(index.get("missed-start")).toBeDefined();
-    expect(index.get("stored-64")?.page.sessions[0]?.name).toBe("Renamed without new activity");
+    expect(index.get("stored-16")?.page.sessions[0]?.name).toBe("Renamed without new activity");
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBeNull();
     expect(index.get("stored-255")).toBeDefined();
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
-    expect(readNative).toHaveBeenCalledTimes(7);
+    expect(readNative).toHaveBeenCalledTimes(19);
     await index.list({ limit: 64 });
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(12);
+    expect(readNative).toHaveBeenCalledTimes(36);
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");
     expect(index.get("stored-255")).toBeUndefined();
   });

@@ -1,15 +1,31 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, type Setter } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentIdentityResult } from "../api/types.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { AgentSelectElement } from "./agent-select.ts";
-import { renderSettingsSidebar } from "./settings-sidebar.ts";
+import { renderSettingsSidebar as SettingsSidebar } from "./settings-sidebar.tsx";
 import "./tooltip.ts";
 
 let container: HTMLDivElement;
+type SidebarProps = Parameters<typeof SettingsSidebar>[0];
+let updateSidebar: Setter<SidebarProps> | undefined;
+
+function render(props: SidebarProps, target: HTMLDivElement): void {
+  if (!updateSidebar) {
+    const [value, setValue] = createSignal(props);
+    updateSidebar = setValue;
+    mountSolid(() => <SettingsSidebar {...value()} />, { container: target });
+  } else {
+    updateSidebar(props);
+  }
+  flush();
+}
 
 const saveIndicator = () => ({
   status: "idle" as const,
@@ -45,6 +61,7 @@ const sidebarAgentProps = () => ({
 });
 
 beforeEach(async () => {
+  updateSidebar = undefined;
   await i18n.setLocale("en");
   container = document.createElement("div");
   document.body.append(container);
@@ -60,7 +77,7 @@ describe("settings sidebar search", () => {
   it("keeps save recovery available in the embedded page header", async () => {
     const onRetry = vi.fn();
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         presentation: "embed-page",
         basePath: "",
@@ -75,7 +92,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
-      }),
+      },
       container,
     );
     expect(container.querySelector(".settings-sidebar")).toBeNull();
@@ -91,7 +108,7 @@ describe("settings sidebar search", () => {
 
   it("keeps Models selected while its setup flow is open", () => {
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "model-setup",
@@ -105,7 +122,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -120,7 +137,7 @@ describe("settings sidebar search", () => {
   it("links Ask OpenClaw to the shared custodian route", () => {
     const onNavigate = vi.fn();
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -134,7 +151,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -148,7 +165,7 @@ describe("settings sidebar search", () => {
 
   it("does not match the middle of a word for a short query", () => {
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -169,7 +186,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -184,7 +201,7 @@ describe("settings sidebar search", () => {
   it("ranks matching pages before matching blocks and navigates to the block", () => {
     const onNavigate = vi.fn();
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -212,7 +229,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -239,7 +256,7 @@ describe("settings sidebar search", () => {
   it("keeps a precise block result when its owning page also matches", () => {
     const onNavigate = vi.fn();
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -261,7 +278,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -285,7 +302,7 @@ describe("settings sidebar search", () => {
 
   it("finds Agent Defaults by page name after its sidebar demotion", () => {
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "agents",
@@ -299,7 +316,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -311,7 +328,7 @@ describe("settings sidebar search", () => {
 
   it("excludes admin-only pages and config blocks from non-admin search", () => {
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -333,7 +350,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -345,7 +362,7 @@ describe("settings sidebar search", () => {
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "/ui",
         activeRouteId: "memory",
@@ -369,7 +386,7 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
 
@@ -390,7 +407,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     const rerender = () => {
       render(
-        renderSettingsSidebar({
+        {
           ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
@@ -407,7 +424,7 @@ describe("settings sidebar search", () => {
           },
           preloadTimers: new Map(),
           saveIndicator: saveIndicator(),
-        }),
+        },
         container,
       );
     };
@@ -471,7 +488,7 @@ describe("settings sidebar search", () => {
     const onExit = vi.fn();
     const rerender = () => {
       render(
-        renderSettingsSidebar({
+        {
           ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
@@ -488,7 +505,7 @@ describe("settings sidebar search", () => {
           },
           preloadTimers: new Map(),
           saveIndicator: saveIndicator(),
-        }),
+        },
         container,
       );
     };
@@ -512,17 +529,8 @@ describe("settings sidebar search", () => {
   });
 
   it("renders refreshed settings route titles from the active locale", async () => {
-    i18n.registerTranslation("pt-BR", {
-      routeTitles: {
-        notifications: "Notificacoes",
-        modelProviders: "Provedores de modelos",
-        advanced: "Avancado",
-      },
-    });
-    await i18n.setLocale("pt-BR");
-
     render(
-      renderSettingsSidebar({
+      {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
@@ -536,9 +544,20 @@ describe("settings sidebar search", () => {
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
-      }),
+      },
       container,
     );
+
+    i18n.registerTranslation("pt-BR", {
+      routeTitles: {
+        notifications: "Notificacoes",
+        modelProviders: "Provedores de modelos",
+        advanced: "Avancado",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    flush();
 
     const labels = [...container.querySelectorAll(".settings-sidebar__item-label")].map((item) =>
       item.textContent?.trim(),
@@ -553,11 +572,11 @@ describe("settings sidebar search", () => {
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
-        connectionStatus: Parameters<typeof renderSettingsSidebar>[0]["connectionStatus"],
+        connectionStatus: Parameters<typeof SettingsSidebar>[0]["connectionStatus"],
         lastError: string | null = null,
       ) =>
         render(
-          renderSettingsSidebar({
+          {
             ...sidebarAgentProps(),
             presentation,
             basePath: "",
@@ -572,7 +591,7 @@ describe("settings sidebar search", () => {
             onSearchQueryChange: vi.fn(),
             preloadTimers: new Map(),
             saveIndicator: { ...saveIndicator(), status: "saving" },
-          }),
+          },
           container,
         );
 
@@ -618,7 +637,7 @@ describe("settings sidebar search", () => {
 });
 
 describe("Settings agent selector", () => {
-  const renderSidebar = (overrides: Partial<Parameters<typeof renderSettingsSidebar>[0]> = {}) => {
+  const renderSidebar = (overrides: Partial<Parameters<typeof SettingsSidebar>[0]> = {}) => {
     const props = {
       ...sidebarAgentProps(),
       basePath: "",
@@ -635,7 +654,7 @@ describe("Settings agent selector", () => {
       saveIndicator: saveIndicator(),
       ...overrides,
     };
-    render(renderSettingsSidebar(props), container);
+    render(props, container);
     return props;
   };
 
@@ -713,4 +732,140 @@ describe("Settings agent selector", () => {
     );
     expect(rows[2]?.querySelector(".agent-select__option-description")).toBeNull();
   });
+});
+
+it("preserves search drafts and navigation focus during unrelated status updates", () => {
+  const props: SidebarProps = {
+    ...sidebarAgentProps(),
+    basePath: "",
+    activeRouteId: "appearance",
+    connectionStatus: null,
+    lastError: null,
+    gatewayVersion: "",
+    searchQuery: "",
+    onExit: vi.fn(),
+    onRetryConnect: vi.fn(),
+    onNavigate: vi.fn(),
+    onSearchQueryChange: vi.fn(),
+    preloadTimers: new Map(),
+    saveIndicator: saveIndicator(),
+  };
+  render(props, container);
+  const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+  input.focus();
+  input.value = "composing search";
+  render({ ...props, connectionStatus: "reconnecting" }, container);
+  expect(container.querySelector(".settings-sidebar__search-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("composing search");
+  const link = container.querySelector<HTMLAnchorElement>(".settings-sidebar__item")!;
+  link.focus();
+  render({ ...props, connectionStatus: "offline" }, container);
+  expect(container.querySelector(".settings-sidebar__item")).toBe(link);
+  expect(document.activeElement).toBe(link);
+});
+
+it("refreshes the Ask label when the branding owner publishes", () => {
+  const original = currentThemeBranding();
+  render(
+    {
+      ...sidebarAgentProps(),
+      basePath: "",
+      activeRouteId: "appearance",
+      connectionStatus: null,
+      lastError: null,
+      gatewayVersion: "",
+      searchQuery: "",
+      onExit: vi.fn(),
+      onRetryConnect: vi.fn(),
+      onNavigate: vi.fn(),
+      onSearchQueryChange: vi.fn(),
+      preloadTimers: new Map(),
+      saveIndicator: saveIndicator(),
+    },
+    container,
+  );
+  try {
+    setCurrentThemeBranding({ ...original, brandName: "Moonbase" });
+    flush();
+    expect(
+      container.querySelector('.settings-sidebar__item[href="/custodian"]')?.textContent?.trim(),
+    ).toBe("Ask Moonbase");
+  } finally {
+    setCurrentThemeBranding(original);
+    flush();
+  }
+});
+
+it("follows shared agent selection and identity publications without remounting", async () => {
+  const agents = sidebarAgentProps();
+  type SelectionListener = Parameters<SidebarProps["settingsAgentSelection"]["subscribe"]>[0];
+  const selectionListeners = new Set<SelectionListener>();
+  const identityListeners = new Set<() => void>();
+  let identities: AgentIdentityResult[] = [];
+  const settingsAgentSelection = {
+    ...agents.settingsAgentSelection,
+    subscribe(listener: SelectionListener) {
+      selectionListeners.add(listener);
+      return () => {
+        selectionListeners.delete(listener);
+      };
+    },
+  };
+  const agentIdentity = {
+    ...agents.agentIdentity,
+    get: (agentId: string | null | undefined) =>
+      identities.find((identity) => identity.agentId === agentId) ?? null,
+    entries: () => identities,
+    subscribe(listener: () => void) {
+      identityListeners.add(listener);
+      return () => {
+        identityListeners.delete(listener);
+      };
+    },
+  };
+  render(
+    {
+      ...agents,
+      agentIdentity,
+      settingsAgentSelection,
+      basePath: "",
+      activeRouteId: "appearance",
+      connectionStatus: null,
+      lastError: null,
+      gatewayVersion: "",
+      searchQuery: "",
+      onExit: vi.fn(),
+      onRetryConnect: vi.fn(),
+      onNavigate: vi.fn(),
+      onSearchQueryChange: vi.fn(),
+      preloadTimers: new Map(),
+      saveIndicator: saveIndicator(),
+    },
+    container,
+  );
+  const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
+  await selector.updateComplete;
+  settingsAgentSelection.state.selectedId = "research";
+  settingsAgentSelection.state.scopeId = "research";
+  for (const notify of selectionListeners) {
+    notify(settingsAgentSelection.state);
+  }
+  await waitForSolid(() =>
+    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Research",
+    ),
+  );
+  identities = [{ agentId: "research", emoji: "🦉" }];
+  for (const notify of identityListeners) {
+    notify();
+  }
+  await waitForSolid(() =>
+    expect(
+      selector
+        .querySelector(".agent-select__trigger .identity-avatar__text")
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦉"),
+  );
+  expect(container.querySelector("openclaw-agent-select")).toBe(selector);
 });

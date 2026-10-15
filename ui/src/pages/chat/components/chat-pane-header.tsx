@@ -35,6 +35,7 @@ import {
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import { PaneDetails, type PaneDetailsProps } from "../chat-pane-header-view.tsx";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 
@@ -78,7 +79,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
-  detailsControl?: unknown;
+  detailsControl?: PaneDetailsProps;
   runAction?: unknown;
   presence?: unknown;
   sharingControl?: unknown;
@@ -422,7 +423,9 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
         </div>
         <div class="chat-pane__header-trailing">
-          <LitContent value={props.detailsControl} />
+          <Show when={props.detailsControl !== undefined}>
+            <PaneDetails {...props.detailsControl!} />
+          </Show>
           <LitContent
             value={presentedContent(
               props.presented,

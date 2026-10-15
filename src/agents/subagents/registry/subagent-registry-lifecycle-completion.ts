@@ -246,6 +246,7 @@ export async function completeSubagentRunAttempt(
             const entry = planned.entry;
             const outcomeStatus = entry.execution.outcome?.status;
             const terminalEvents =
+              (planned.mutated || completeParams.recoverInterrupted === true) &&
               !planned.suppressSessionEffects &&
               !planned.sessionSuperseded &&
               entry.killReconciliation === undefined &&

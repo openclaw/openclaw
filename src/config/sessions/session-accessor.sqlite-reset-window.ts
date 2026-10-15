@@ -256,7 +256,7 @@ function readLatestActiveBoundaryMetadata(
 
 function readBoundaryWindowFacts(
   projection: CurrentTranscriptProjection,
-  seq: number,
+  boundary: { seq: number; active_position: number },
   scope: BoundaryWindowScope,
 ) {
   const row = executeSqliteQueryTakeFirstSync(
@@ -268,8 +268,19 @@ function readBoundaryWindowFacts(
         /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
         sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
+      .select((eb) =>
+        eb
+          .selectFrom("session_transcript_active_events")
+          .select("message_position")
+          .where("session_id", "=", projection.resolved.sessionId)
+          .where("active_position", ">", boundary.active_position)
+          .where("message_position", "is not", null)
+          .orderBy("active_position", "asc")
+          .limit(1)
+          .as("post_boundary_message_position"),
+      )
       .where("session_id", "=", projection.resolved.sessionId)
-      .where("seq", "=", seq)
+      .where("seq", "=", boundary.seq)
       .limit(1),
   );
   if (!row) {
@@ -279,7 +290,12 @@ function readBoundaryWindowFacts(
   if (!isWindowBoundary(parsed.type, scope)) {
     throw new Error("Active transcript boundary has invalid payload");
   }
-  return { firstKeptEntryId: parsed.firstKeptEntryId, sizeBytes: row.serialized_bytes };
+  return {
+    firstKeptEntryId: parsed.firstKeptEntryId,
+    sizeBytes: row.serialized_bytes,
+    postBoundaryMessagePosition:
+      row.post_boundary_message_position ?? projection.state.activeMessageCount,
+  };
 }
 
 function findLatestResetMessageWindow(
@@ -292,19 +308,7 @@ function findLatestResetMessageWindow(
   if (!latestBoundary) {
     return null;
   }
-  const boundary = readBoundaryWindowFacts(projection, latestBoundary.seq, scope);
-  const postBoundaryMessagePosition =
-    executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events")
-        .select("message_position")
-        .where("session_id", "=", projection.resolved.sessionId)
-        .where("active_position", ">", latestBoundary.active_position)
-        .where("message_position", "is not", null)
-        .orderBy("active_position", "asc")
-        .limit(1),
-    )?.message_position ?? projection.state.activeMessageCount;
+  const boundary = readBoundaryWindowFacts(projection, latestBoundary, scope);
   const keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
@@ -404,7 +408,7 @@ function findLatestResetMessageWindow(
     contextPrefixEventCount,
     keptMessagePositions,
     contextPrefixSizeBytes,
-    postBoundaryMessagePosition,
+    postBoundaryMessagePosition: boundary.postBoundaryMessagePosition,
     boundaryActivePosition: latestBoundary.active_position,
   };
 }

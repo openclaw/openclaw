@@ -1,7 +1,10 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   warn,
@@ -61,7 +64,6 @@ import {
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
-  type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
@@ -73,7 +75,10 @@ import { resolveSlackMonitorPolicy } from "./runtime-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-let slackBoltInterop: SlackBoltResolvedExports | undefined;
+const getSlackBoltInterop = createLazyRuntimeSurface(
+  () => import("@slack/bolt"),
+  resolveSlackBoltInterop,
+);
 
 function withSlackPresenceLifecycleSignal(
   fetchImpl: FetchFunction,
@@ -84,17 +89,6 @@ function withSlackPresenceLifecycleSignal(
       ...init,
       signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
     });
-}
-
-async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
-  if (!slackBoltInterop) {
-    const slackBoltModule = await import("@slack/bolt");
-    slackBoltInterop = resolveSlackBoltInterop({
-      defaultImport: slackBoltModule.default,
-      namespaceImport: slackBoltModule,
-    });
-  }
-  return slackBoltInterop;
 }
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));

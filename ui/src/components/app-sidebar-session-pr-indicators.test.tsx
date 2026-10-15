@@ -10,16 +10,20 @@ import {
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  useSolidControllerHost,
+  type SolidController,
+  type SolidControllerHost,
+} from "../lit/solid-controller-host.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
-type ControllerHost = ConstructorParameters<typeof SessionPullRequestIndicatorsController>[0];
-type Controller = Parameters<ControllerHost["addController"]>[0];
-
 const testHosts = new Set<TestHost>();
 
-class TestHost implements ControllerHost {
-  readonly controllers: Controller[] = [];
+class TestHost implements SolidControllerHost {
+  readonly controllers: SolidController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
 
@@ -27,11 +31,11 @@ class TestHost implements ControllerHost {
     testHosts.add(this);
   }
 
-  addController(controller: Controller): void {
+  addController(controller: SolidController): void {
     this.controllers.push(controller);
   }
 
-  removeController(controller: Controller): void {
+  removeController(controller: SolidController): void {
     this.controllers.splice(this.controllers.indexOf(controller), 1);
   }
 }
@@ -39,60 +43,64 @@ class TestHost implements ControllerHost {
 type IndicatorOptions = ConstructorParameters<typeof SessionPullRequestIndicatorsController>[1];
 const LIFECYCLE_HOST_TAG = "test-session-pr-indicators";
 
-class LifecycleTestHost extends HTMLElement implements ControllerHost {
+class LifecycleTestHost extends HTMLElement implements SolidControllerHost {
   rows: readonly SidebarRecentSession[] = [];
   readRows: IndicatorOptions["getRows"] = () => [];
+  gateway!: ApplicationGateway;
+  getSessions: IndicatorOptions["getSessions"] = () => undefined;
   controller!: SessionPullRequestIndicatorsController;
-  private readonly controllers = new Set<Controller>();
-  private pending: Promise<boolean> | undefined;
+  controllerHost?: SolidControllerHost;
+  private view?: ReturnType<typeof mountSolid>;
 
-  constructor() {
-    super();
-    this.attachShadow({ mode: "open" });
+  connectedCallback(): void {
+    this.view = mountSolid(() => LifecycleView(this), { container: this });
   }
-
-  addController(controller: Controller) {
-    this.controllers.add(controller);
+  disconnectedCallback(): void {
+    this.view?.unmount();
+    this.view = undefined;
   }
-  removeController(controller: Controller) {
-    this.controllers.delete(controller);
+  addController(controller: SolidController): void {
+    this.controllerHost!.addController(controller);
   }
-  connectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-    this.requestUpdate();
+  removeController(controller: SolidController): void {
+    this.controllerHost!.removeController(controller);
   }
-  disconnectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+  requestUpdate(): void {
+    this.controllerHost?.requestUpdate();
   }
-  get updateComplete() {
-    return this.pending ?? Promise.resolve(true);
-  }
-  requestUpdate() {
-    this.pending ??= Promise.resolve().then(() => {
-      // The sidebar prepares row summaries before controller hooks run.
-      this.rows = this.readRows();
-      this.shadowRoot!.replaceChildren(
-        ...this.rows.map((row) => {
-          const element = document.createElement("span");
-          element.dataset.sessionKey = row.key;
-          element.textContent =
-            this.controller
-              .summary(row.key, row.worktreeId ?? "", row.pullRequest)
-              ?.numbers.join(",") ?? "";
-          return element;
-        }),
-      );
-      this.pending = undefined;
-      for (const controller of this.controllers) {
-        controller.hostUpdated?.();
-      }
+  get updateComplete(): Promise<boolean> {
+    return Promise.resolve().then(() => {
+      flush();
       return true;
     });
   }
+}
+
+function LifecycleView(host: LifecycleTestHost) {
+  const lifecycle = useSolidControllerHost(() => {
+    host.rows = host.readRows();
+  });
+  host.controllerHost = lifecycle.host;
+  const controller = new SessionPullRequestIndicatorsController(host, {
+    getConnected: () => true,
+    getRows: () => host.rows,
+    getSelectedAgentId: () => "main",
+    getGateway: () => host.gateway,
+    getSessions: () => host.getSessions(),
+  });
+  host.controller = controller;
+  return (
+    <>
+      {
+        (lifecycle.revision(),
+        host.rows.map((row) => (
+          <span data-session-key={row.key}>
+            {controller.summary(row.key, row.worktreeId ?? "", row.pullRequest)?.numbers.join(",")}
+          </span>
+        )))
+      }
+    </>
+  );
 }
 
 if (!customElements.get(LIFECYCLE_HOST_TAG)) {
@@ -104,15 +112,10 @@ function mountLifecycleHost(
   readRows: IndicatorOptions["getRows"],
   getSessions: IndicatorOptions["getSessions"] = () => undefined,
 ): LifecycleTestHost {
-  const host = document.createElement(LIFECYCLE_HOST_TAG) as LifecycleTestHost;
+  const host = new LifecycleTestHost();
+  host.gateway = gateway;
   host.readRows = readRows;
-  host.controller = new SessionPullRequestIndicatorsController(host, {
-    getConnected: () => true,
-    getRows: () => host.rows,
-    getSelectedAgentId: () => "main",
-    getGateway: () => gateway,
-    getSessions,
-  });
+  host.getSessions = getSessions;
   document.body.append(host);
   return host;
 }
@@ -382,7 +385,7 @@ describe("SessionPullRequestIndicatorsController", () => {
   });
 });
 
-describe("SessionPullRequestIndicatorsController host lifecycle", () => {
+describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
   it("hides the row's saved PR summary after a same-client read-scope revocation", async () => {
     const harness = createGatewayHarness();
     const row = {
@@ -393,7 +396,7 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
     } as SidebarRecentSession;
     const host = mountLifecycleHost(harness.gateway, () => [row]);
     await host.updateComplete;
-    expect(host.shadowRoot?.textContent).toContain("42");
+    expect(host.textContent).toContain("42");
 
     const snapshot = harness.gateway.snapshot;
     snapshot.hello = {
@@ -402,7 +405,7 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
     };
     host.requestUpdate();
     await host.updateComplete;
-    expect(host.shadowRoot?.textContent).not.toContain("42");
+    expect(host.textContent).not.toContain("42");
     expect(host.controller.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
 
     snapshot.hello = {
@@ -411,7 +414,7 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
     };
     host.requestUpdate();
     await host.updateComplete;
-    expect(host.shadowRoot?.textContent).toContain("42");
+    expect(host.textContent).toContain("42");
   });
 
   it("retains sidebar snapshots while only the viewed checkout drives subscriptions", async () => {
@@ -456,13 +459,13 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
       { sessionKeys: [] },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
-    expect(host.shadowRoot?.textContent?.trim()).toBe("7");
+    expect(host.textContent?.trim()).toBe("7");
 
     harness.request.mockClear();
     harness.emit({ sessionKey: key, agentId: "main", reason: "rewind" }, "sessions.changed");
     await vi.advanceTimersByTimeAsync(5_000);
     await host.updateComplete;
-    expect(host.shadowRoot?.textContent?.trim()).toBe("");
+    expect(host.textContent?.trim()).toBe("");
     expect(harness.request).not.toHaveBeenCalled();
   });
 
@@ -505,7 +508,7 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
       },
     });
     await host.updateComplete;
-    expect(host.shadowRoot?.textContent?.trim()).toBe("7");
+    expect(host.textContent?.trim()).toBe("7");
 
     const store = sessionPullRequestsForGateway(harness.gateway);
     const foregroundOwner = {};
@@ -526,7 +529,7 @@ describe("SessionPullRequestIndicatorsController host lifecycle", () => {
 
       expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(key, undefined, epoch);
       expect(fallback).toBeUndefined();
-      expect(host.shadowRoot?.textContent?.trim()).toBe("");
+      expect(host.textContent?.trim()).toBe("");
     } finally {
       store.unwatch(foregroundOwner);
     }

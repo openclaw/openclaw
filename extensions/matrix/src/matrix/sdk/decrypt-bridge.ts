@@ -184,6 +184,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     this.pendingDecryptions.clear();
     this.exhaustedDecryptRetries.clear();
+    this.failedDecryptionsNotified.clear();
   }
 
   async drainPendingDecryptions(_reason: string): Promise<void> {
@@ -415,10 +416,15 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private pruneExhaustedDecryptRetries(now: number): void {
     for (const [retryKey, state] of this.exhaustedDecryptRetries) {
       if (now - state.exhaustedAt > MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS) {
-        this.exhaustedDecryptRetries.delete(retryKey);
+        this.clearDecryptRetry(retryKey);
       }
     }
-    pruneMapToMaxSize(this.exhaustedDecryptRetries, MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES);
+    for (const retryKey of this.exhaustedDecryptRetries.keys()) {
+      if (this.exhaustedDecryptRetries.size <= MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
+        break;
+      }
+      this.clearDecryptRetry(retryKey);
+    }
   }
 
   private rememberDecryptedMessage(roomId: string, eventId: string): void {

@@ -245,7 +245,7 @@ describe("Codex supervision catalog", () => {
       "thread/list",
       {
         archived: false,
-        limit: 64,
+        limit: 16,
         modelProviders: [],
         sortKey: "recency_at",
         sortDirection: "desc",
