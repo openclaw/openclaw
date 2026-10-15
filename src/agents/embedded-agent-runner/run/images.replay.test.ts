@@ -10,6 +10,7 @@ import {
   readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
 } from "../../../media/media-facts.js";
+import { encodePngRgba } from "../../../media/png-encode.js";
 import {
   finalizeRuntimePromptImages,
   readRuntimePromptImageFactIndexes,
@@ -23,6 +24,27 @@ import {
   hydratePromptMediaMessages,
   materializeProviderContext,
 } from "./images.js";
+
+const imageEncodes = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("../../../media/image-processor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../media/image-processor.js")>();
+  return {
+    ...actual,
+    createImageProcessorWithPixelLimits: (
+      ...args: Parameters<typeof actual.createImageProcessorWithPixelLimits>
+    ) => {
+      const processor = actual.createImageProcessorWithPixelLimits(...args);
+      return {
+        ...processor,
+        encode: (...encodeArgs: Parameters<typeof processor.encode>) => {
+          imageEncodes.count += 1;
+          return processor.encode(...encodeArgs);
+        },
+      };
+    },
+  };
+});
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -162,6 +184,38 @@ describe("structured prompt media replay", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("encodes an oversized stored photo once across replayed model requests", async () => {
+    const workspaceDir = tempDirs.make("openclaw-replay-encode-");
+    const photoPath = path.join(workspaceDir, "photo.png");
+    // Opaque noise wider than the preferred side, so every load must downscale it.
+    const width = 2200;
+    const height = 48;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let index = 0; index < pixels.length; index += 1) {
+      pixels[index] = index % 4 === 3 ? 255 : (Math.imul(index, 2246822519) >>> 24) & 0xff;
+    }
+    await fs.writeFile(photoPath, encodePngRgba(pixels, width, height));
+    const message = buildPersistedUserTurnMessage({
+      text: "what is in this photo?",
+      timestamp: 1,
+      media: [{ path: photoPath, contentType: "image/png" }],
+    }) as unknown as AgentMessage;
+    const options = { workspaceDir, model: { input: ["text", "image"] }, workspaceOnly: true };
+    imageEncodes.count = 0;
+
+    // Every model request of a later turn hydrates the same persisted message again.
+    const requests: unknown[] = [];
+    for (let request = 0; request < 3; request += 1) {
+      const [hydrated] = await hydratePromptMediaMessages([message], options);
+      requests.push((hydrated as UserMessage).content);
+    }
+
+    expect(requests[0]).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[2]).toEqual(requests[0]);
+    expect(imageEncodes.count).toBe(1);
   });
 
   it("preserves persisted facts when replay hydration fails", async () => {

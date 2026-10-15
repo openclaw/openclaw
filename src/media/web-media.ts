@@ -14,7 +14,6 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { EncodedImage } from "rastermill";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,8 +33,6 @@ import {
   writeGeneratedHtmlProvenance,
 } from "./generated-html-provenance.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
-import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
-import { createImageProcessorWithPixelLimits } from "./image-processor.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
@@ -55,6 +52,7 @@ import {
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 import { formatMediaSize } from "./store.shared.js";
+import { encodeWebMediaImage } from "./web-media-image-encode.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -716,22 +714,6 @@ function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   }
 }
 
-function logOptimizedImage(originalSize: number, optimized: EncodedImage): void {
-  if (!shouldLogVerbose() || optimized.bytes >= originalSize) {
-    return;
-  }
-  const resizeSide = optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height);
-  if (optimized.format === "png") {
-    logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px)`,
-    );
-    return;
-  }
-  logVerbose(
-    `Optimized media from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px, q=${optimized.chosen.quality})`,
-  );
-}
-
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
 export async function optimizeImageBufferForWebMedia(params: {
   buffer: Buffer;
@@ -740,6 +722,7 @@ export async function optimizeImageBufferForWebMedia(params: {
   maxBytes?: number;
   imageCompression?: ImageCompressionPolicy;
   maxInputPixels?: number;
+  reuseEncodes?: boolean;
 }): Promise<WebMediaResult> {
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
@@ -767,25 +750,13 @@ export async function optimizeImageBufferForWebMedia(params: {
       fileName: params.fileName,
     };
   }
-  const grid = resolveImageCompressionGrid(params.imageCompression);
-  // Generic callers keep the shared decode limit. An owner with a bounded downscale path may
-  // widen source admission explicitly, while every encoded result remains under the output cap.
-  const processor = createImageProcessorWithPixelLimits({
-    inputPixels: params.maxInputPixels ?? MAX_IMAGE_INPUT_PIXELS,
-    outputPixels: MAX_IMAGE_INPUT_PIXELS,
+  const optimized = await encodeWebMediaImage({
+    buffer: params.buffer,
+    cap,
+    grid: resolveImageCompressionGrid(params.imageCompression),
+    maxInputPixels: params.maxInputPixels,
+    reuse: params.reuseEncodes,
   });
-  const optimized = await processor.encode(params.buffer, {
-    format: "auto",
-    maxBytes: cap,
-    opaque: { format: "jpeg" },
-    transparent: { format: "png" },
-    search: { maxSide: grid.sides, quality: grid.qualities },
-    transparency: "auto",
-  });
-  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
-  }
-  logOptimizedImage(params.buffer.length, optimized);
   if (optimized.data.length > cap) {
     throw new ImageOptimizationLimitError(
       formatCapReduce("Media", cap, optimized.data.length),
@@ -803,6 +774,7 @@ export async function optimizeImageBufferForWebMedia(params: {
 async function loadWebMediaInternal(
   mediaUrlInput: string,
   options: WebMediaOptions = {},
+  reuseImageEncodes = false,
 ): Promise<WebMediaResult> {
   let mediaUrl = mediaUrlInput;
   const {
@@ -849,6 +821,7 @@ async function loadWebMediaInternal(
           fileName: params.fileName,
           maxBytes: cap,
           imageCompression,
+          reuseEncodes: reuseImageEncodes,
         });
       }
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
@@ -1036,6 +1009,18 @@ export async function loadWebMedia(
   return await loadWebMediaInternal(
     mediaUrl,
     resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+  );
+}
+
+/** Loads stored media for agent replay, reusing earlier optimized encodes of identical images. */
+export async function loadReplayWebMedia(
+  mediaUrl: string,
+  options: WebMediaOptions,
+): Promise<WebMediaResult> {
+  return await loadWebMediaInternal(
+    mediaUrl,
+    resolveWebMediaOptions({ maxBytesOrOptions: options, optimizeImages: true }),
+    true,
   );
 }
 
