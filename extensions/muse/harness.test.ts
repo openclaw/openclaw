@@ -903,9 +903,19 @@ describe("Muse native MSP harness", () => {
       }
       try {
         await harness.verifySetup(verification);
+        await harness.verifySetup(verification);
         await harness.loadModelCatalog(scope);
         expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
+        const initialRequests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
+        expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(
+          3,
+        );
         vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
+        await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
         await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
         await expect(harness.loadModelCatalog(scope)).rejects.toThrow("authenticate");
         expect(harness.readModelCatalogReadiness(verification)).toBeUndefined();

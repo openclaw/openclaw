@@ -57,8 +57,9 @@ it("retains the slash viewport during selection changes and resets it when switc
   expect(view.queryByRole("listbox")).toBeNull();
 });
 
-it("retains the focused capability row through toggles and a reordered catalog refresh", async () => {
+it("retains the focused capability row and management link through catalog refreshes", async () => {
   type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+  const onNavigate = vi.fn();
   const [menu, setMenu] = createSignal<Menu>({
     attachments: {},
     disabled: false,
@@ -68,7 +69,7 @@ it("retains the focused capability row through toggles and a reordered catalog r
     onOpenChange: vi.fn(),
     onViewChange: vi.fn(),
     capabilityMenu: {
-      basePath: "",
+      basePath: "/control",
       skills: [{ key: "focused", name: "Focused skill", enabled: true, baseEnabled: true }],
       skillsLoading: false,
       skillsError: false,
@@ -83,7 +84,7 @@ it("retains the focused capability row through toggles and a reordered catalog r
       adminBlockedReason: null,
       onLoadSkills: vi.fn(),
       onPatchToolOverrides: vi.fn(),
-      onNavigate: vi.fn(),
+      onNavigate,
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
@@ -122,6 +123,19 @@ it("retains the focused capability row through toggles and a reordered catalog r
   });
   expect(row.getAttribute("aria-checked")).toBe("false");
   expect(document.activeElement).toBe(row);
+
+  const manage = view.getByRole("menuitem", { name: "Manage skills" });
+  expect(manage.getAttribute("href")).toBe("/control/skills");
+  const modifiedClick = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    metaKey: true,
+  });
+  manage.dispatchEvent(modifiedClick);
+  expect(modifiedClick.defaultPrevented).toBe(false);
+  expect(onNavigate).not.toHaveBeenCalled();
+  manage.click();
+  await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {

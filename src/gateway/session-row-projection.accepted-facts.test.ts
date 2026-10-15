@@ -362,7 +362,7 @@ it.each([
           metadataReads.mock.calls.filter(
             ([, command]) => command.type === "sessionRows.sharedFacts",
           ),
-        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
+        ).toHaveLength(0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({

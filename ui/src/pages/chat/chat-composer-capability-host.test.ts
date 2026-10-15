@@ -274,6 +274,13 @@ describe("ChatComposerCapabilityHost", () => {
     );
     expect(harness.events).toEqual(["global", "load"]);
     expect(harness.patch).not.toHaveBeenCalled();
+    const form = harness.container.querySelector("form")!;
+    const failure = harness.container.querySelector('[role="alert"]')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(form.contains(failure)).toBe(true);
+    expect(submit.form).toBe(form);
+    expect(form.lastElementChild?.contains(submit)).toBe(true);
+    expect(failure.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("blocks tool override patches without exact sessions.patch access", async () => {

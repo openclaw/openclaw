@@ -7,7 +7,10 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import {
+  projectSubagentRunForMaintenance,
+  projectSubagentRunForSessionList,
+} from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -44,7 +47,7 @@ import {
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -55,6 +58,11 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
   state: {},
   copy: immutableSubagentRunSessionList,
   project: projectSubagentRunForSessionList,
+};
+const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
+  state: {},
+  copy: projectSubagentRunForMaintenance,
+  project: projectSubagentRunForMaintenance,
 };
 
 // Notification facts advance only with acknowledged row publications.
@@ -142,6 +150,12 @@ function rememberPersistedSubagentRunsSnapshot(
   for (const cache of [persistedSubagentRunsReadCache, persistedSubagentSessionListRunsReadCache]) {
     rememberSubagentRunsSnapshot(cache, runs, changedRunIds, databasePath);
   }
+  rememberSubagentRunsSnapshot(
+    persistedSubagentMaintenanceReadCache,
+    runs,
+    changedRunIds,
+    databasePath,
+  );
   return keys;
 }
 
@@ -268,6 +282,7 @@ export function clearSubagentRunsReadCacheForTest(): void {
   committedSwarmNotifications.clear();
   persistedSubagentRunsReadCache.state = {};
   persistedSubagentSessionListRunsReadCache.state = {};
+  persistedSubagentMaintenanceReadCache.state = {};
 }
 
 /** Consume a canonical worker read without crossing a cache-publication invalidation. */
@@ -343,7 +358,7 @@ export function prepareSubagentMaintenanceRunsSnapshotForRead(
 ) {
   return prepareSubagentMaintenanceReadSnapshot(
     inMemoryRuns,
-    persistedSubagentRunsReadCache,
+    persistedSubagentMaintenanceReadCache,
     options,
   );
 }

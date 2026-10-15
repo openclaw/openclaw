@@ -31,6 +31,7 @@ import { createGoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
+import type { ComposerPredictionController } from "./chat-composer-prediction.ts";
 import { resolveComposerQuestionPanel } from "./chat-composer-question.tsx";
 import {
   isSkillMenuVisible,
@@ -59,7 +60,10 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 registerChatGoalsEnglish();
 
-export function createChatComposerContext(props: ChatComposerProps) {
+export function createChatComposerContext(
+  props: ChatComposerProps,
+  prediction?: ComposerPredictionController,
+) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
@@ -290,7 +294,16 @@ export function createChatComposerContext(props: ChatComposerProps) {
     syncComposerDraftAfterSend(state.composerTextarea);
   };
 
+  const acceptPrediction = () => {
+    if (state.composerComposing || !canCompose) {
+      return;
+    }
+    prediction?.acceptInto(state.composerTextarea);
+    requestUpdate();
+  };
   const handleKeyDown = createComposerKeyDownHandler({
+    prediction,
+    acceptPrediction,
     state,
     props,
     skillMenuHost,
@@ -315,6 +328,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
         !state.mentionMenu.open,
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
+    prediction?.dismiss();
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
@@ -350,6 +364,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     shareTypingSelection(target);
   };
   const handleBeforeInput = (event: InputEvent) => {
+    prediction?.dismiss();
     const target = event.target;
     if (!(target instanceof HTMLTextAreaElement) || target !== state.composerTextarea) {
       return;
@@ -689,6 +704,9 @@ export function createChatComposerContext(props: ChatComposerProps) {
     canCompose,
     showAbortableUi,
     visibleDraft,
+    predictionText: prediction?.text ?? null,
+    acceptPrediction,
+    dismissPrediction: () => prediction?.dismiss(),
     runStatusAnnouncement,
     requestUpdate,
     sendShortcut,

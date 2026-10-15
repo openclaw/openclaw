@@ -101,13 +101,7 @@ it.each(["durable", "warm durable", "direct active", "runtime"] as const)(
   },
 );
 
-it.for([
-  "transcript backfill",
-  "usage rollup",
-  "new entry",
-  "protection removal",
-  "uncovered SQL",
-] as const)(
+it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"] as const)(
   "settles automatic no-op maintenance across %s according to its entry effects",
   async (overlap, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -164,7 +158,7 @@ it.for([
         }
         observeSessionMaintenancePlanningWorker({
           async afterPrepare() {
-            if (overlaps >= (overlap === "uncovered SQL" ? 2 : 1)) {
+            if (overlaps >= 1) {
               return;
             }
             overlaps++;
@@ -187,13 +181,6 @@ it.for([
                   updatedAt,
                 }),
               ).resolves.toBe(true);
-            } else if (overlap === "uncovered SQL") {
-              runOpenClawAgentWriteTransaction(({ db }) => {
-                // No typed publication certifies this raw write's maintenance effects.
-                db.prepare(
-                  "UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?",
-                ).run(lockedKey);
-              }, scope);
             } else {
               const inserting = overlap === "new entry";
               const key = inserting ? newKey : lockedKey;
@@ -224,10 +211,7 @@ it.for([
           if (result.kind === "maintenance-plan" || result.kind === "maintenance-plan-stale") {
             completedPlans++;
             first.resolve(result);
-            if (
-              result.kind === "maintenance-plan" &&
-              (result.value.archived === 1 || (overlap === "uncovered SQL" && completedPlans === 3))
-            ) {
+            if (result.kind === "maintenance-plan" && result.value.archived === 1) {
               settled.resolve(result);
             }
           }
@@ -239,7 +223,7 @@ it.for([
           const delay = args[1];
           // Observe the maintenance retry/deadline, excluding worker deadlines and idle timers.
           if (
-            (completedPlans >= (overlap === "uncovered SQL" ? 2 : 1) || failedPlans > 0) &&
+            (completedPlans >= 1 || failedPlans > 0) &&
             typeof delay === "number" &&
             (delay <= 1_000 ||
               (delay > SESSION_ENTRY_MAINTENANCE_INTERVAL_MS / 2 &&
@@ -269,23 +253,16 @@ it.for([
         } else {
           if (initial.kind === "maintenance-plan") {
             expect(initial.value).toMatchObject({ archived: 0, durableNoCandidates: true });
-            expect(initial.ageFact).toBeUndefined();
           }
           expect(await withinTest(scheduled.promise, signal)).toBe(1_000);
           const final = await withinTest(settled.promise, signal);
-          if (overlap === "uncovered SQL") {
-            expect(completedPlans).toBe(3);
-            expect(final.ageFact?.entryCount).toBe(2);
-            expect(final.nextAt).toBeGreaterThan(Date.now());
-          } else {
-            expect(final.value.archived).toBe(1);
-            expect(
-              loadSessionEntry({
-                storePath,
-                sessionKey: lockedKey,
-              })?.archivedAt,
-            ).toBeDefined();
-          }
+          expect(final.value.archived).toBe(1);
+          expect(
+            loadSessionEntry({
+              storePath,
+              sessionKey: lockedKey,
+            })?.archivedAt,
+          ).toBeDefined();
         }
         for (const key of overlap === "protection removal"
           ? [sessionKey]

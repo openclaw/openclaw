@@ -1,5 +1,6 @@
 import { createMemo, createUniqueId, Show } from "solid-js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -199,7 +200,13 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     {
       id: "manage-plugins",
       label: t("chat.composer.menu.managePlugins"),
+      href: pathForRoute("plugins", menu.basePath),
       class: "agent-chat__capability-menu-item",
+      content: (
+        <span class="agent-chat__capability-menu-link">
+          {t("chat.composer.menu.managePlugins")}
+        </span>
+      ),
       icon: <Icon name="plug" />,
     },
   );
@@ -265,7 +272,11 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   entries.push(menuDivider("skills-manage-divider"), {
     id: "manage-skills",
     label: t("chat.composer.menu.manageSkills"),
+    href: pathForRoute("skills", menu.basePath),
     class: "agent-chat__capability-menu-item",
+    content: (
+      <span class="agent-chat__capability-menu-link">{t("chat.composer.menu.manageSkills")}</span>
+    ),
   });
   return entries;
 }
@@ -553,12 +564,6 @@ function handleMenuSelection(
   }
   if (value === "add-server") {
     props.onAddServer?.();
-    return;
-  }
-  if (value === "manage-skills") {
-    props.onNavigate("skills");
-  } else if (value === "manage-plugins") {
-    props.onNavigate("plugins");
   }
 }
 
@@ -592,6 +597,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           id={`chat-composer-plus-${id}`}
           panelClass="agent-chat__capability-menu-panel"
           placement="top-start"
+          pointerFocus="trigger"
           label={t("chat.composer.addAttachment")}
           open={props.menu.open}
           disabled={props.menu.disabled}
@@ -608,6 +614,9 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
             }
           }}
           onBeforeShow={() => closeOtherChatComposerPickers(host)}
+          onNavigate={({ value }) =>
+            props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
+          }
           onOpenChange={(open) => {
             host.toggleAttribute("open", open);
             if (open) {
