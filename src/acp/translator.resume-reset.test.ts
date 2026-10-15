@@ -7,8 +7,6 @@ import {
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 describe("ACP translator resume reset", () => {
   it("resumes a listed canonical session when its implicit bridge probe is missing", async () => {
     const canonicalKey = "agent:main:work";

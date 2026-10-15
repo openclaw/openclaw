@@ -35,15 +35,18 @@ const { config, callGatewayMock } = vi.hoisted(() => ({
   } as OpenClawConfig,
   callGatewayMock: vi.fn(),
 }));
+// mock-isolation: Route RPCs through the fixture completion owner, never a live Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
+// mock-isolation: Session routing must use the synthetic config, not host config or secrets.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => config,
   resolveGatewayPort: () => 18789,
 }));
-// Preparation/revocation are independently covered by sessions-send-followup.test.ts.
+// mock-isolation: Inject custody for this dispatch test; sessions-send-followup.test.ts covers revocation.
 vi.mock("./tools/sessions-send-followup-custody.js", () => ({
   prepareSessionsSendFollowup: vi.fn(),
 }));
+// mock-isolation: Observe completion delivery without invoking external channel I/O.
 vi.mock("./tools/sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(async () => {}),
 }));

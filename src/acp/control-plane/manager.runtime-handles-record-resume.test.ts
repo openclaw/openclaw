@@ -67,6 +67,8 @@ function createRecordResumeFixture(params?: {
       deps: {
         requireRuntimeBackend: () => ({ id: "acpx", runtime }),
         loadSessionEntryAsync: async () => ({
+          cfg: {},
+          storePath: "/synthetic/claude/sessions/sessions.json",
           sessionKey: target.sessionKey,
           storeSessionKey: target.sessionKey,
           entry,
