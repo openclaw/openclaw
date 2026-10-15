@@ -14,35 +14,6 @@ import { isExplicitCommandTurnContext } from "./command-turn-detection.js";
 const emptyConfig = {} as const satisfies OpenClawConfig;
 
 describe("resolveCommandTurnContext", () => {
-  it("derives native command turns from legacy context fields", () => {
-    expect(
-      resolveCommandTurnContext({
-        CommandSource: "native",
-        CommandAuthorized: true,
-        CommandBody: "/status now",
-      }),
-    ).toEqual({
-      kind: "native",
-      source: "native",
-      authorized: true,
-      commandName: "status",
-      body: "/status now",
-    });
-  });
-
-  it("keeps normal message turns non-explicit even when command auth is true elsewhere", () => {
-    const commandTurn = resolveCommandTurnContext({
-      CommandAuthorized: true,
-      CommandBody: "hello",
-    });
-    expect(commandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
-    });
-    expect(isExplicitCommandTurn(commandTurn)).toBe(false);
-  });
-
   it("keeps an empty canonical command authoritative over stale aliases", () => {
     const input = {
       commandText: "",

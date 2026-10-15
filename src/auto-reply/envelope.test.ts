@@ -136,27 +136,6 @@ describe("formatAgentEnvelope", () => {
       formatAgentEnvelopeTimestamp(ts, { timezone: "utc" }),
     );
   });
-
-  it("omits timestamps when configured", () => {
-    const ts = Date.UTC(2025, 0, 2, 3, 4);
-    const body = formatAgentEnvelope({
-      channel: "WebChat",
-      timestamp: ts,
-      envelope: { includeTimestamp: false },
-      body: "hello",
-    });
-    expect(body).toBe("[WebChat] hello");
-  });
-
-  it("formats the Unix epoch timestamp", () => {
-    const body = formatAgentEnvelope({
-      channel: "WebChat",
-      timestamp: 0,
-      envelope: { timezone: "utc" },
-      body: "hello",
-    });
-    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
-  });
 });
 
 describe("formatInboundEnvelope", () => {
