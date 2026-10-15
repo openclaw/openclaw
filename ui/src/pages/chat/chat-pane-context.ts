@@ -58,6 +58,7 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
+import { retireChatPairingQr } from "./history-merge.ts";
 import {
   reconcileChatRunAfterSessionStatePublication,
   reconcileChatRunLifecycle,
@@ -68,6 +69,7 @@ import {
   clearChatMessagesFromCache,
   createChatWidgetLayout,
   readChatSessionSnapshot,
+  retireCachedPairingQr,
 } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
@@ -168,6 +170,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   override disconnectedCallback() {
+    if (this.state) {
+      retireChatPairingQr(this.state);
+      retireCachedPairingQr(this.state.chatMessagesBySession);
+    }
     this.sessionPresentationKey = undefined;
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
@@ -467,6 +473,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      retireChatPairingQr(state);
+      retireCachedPairingQr(state.chatMessagesBySession);
       this.resetSessionReadAcknowledgements();
       this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
@@ -562,6 +570,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireSessionWorkspaceCheckout(state);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveControlUiAuthToken(state)) {
+      retireChatPairingQr(state);
+      retireCachedPairingQr(state.chatMessagesBySession);
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;

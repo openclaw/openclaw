@@ -25,9 +25,16 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
+import {
+  getChatSessionProjection,
+  reduceChatSessionProjection,
+  setChatRunOwner,
+  getChatRunOwner,
+} from "./history-merge.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -69,6 +76,94 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it.each(["reconnect", "auth change", "pane disposal"])(
+    "retires pairing QR credentials on %s without losing canonical history",
+    async (transition) => {
+      const text = { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" };
+      const canonical = {
+        role: "assistant",
+        content: [text],
+        __openclaw: { id: "pairing-reply", seq: 1, runId: "pairing-run" },
+      };
+      const live = {
+        ...canonical,
+        content: [
+          text,
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+            expiresAtMs: Date.now() + 60_000,
+            sensitive: true,
+          },
+        ],
+      };
+      const client = createTestGatewayClient(
+        createReconnectRequest({ messages: [canonical], sessionId: "pairing-session" }),
+      );
+      const { pane, state } = createTestChatPane({ client });
+      const hello = sessionMutationGatewayHello();
+      const connected = {
+        ...pane.context.gateway.snapshot,
+        client,
+        phase: "connected" as const,
+        hello: { ...hello, auth: { ...hello.auth, deviceToken: "fixture-token-before" } },
+      };
+      pane.applyGatewaySnapshot(connected);
+      state.currentSessionId = "pairing-session";
+      state.chatMessagesBySession = new Map();
+      reduceChatSessionProjection(state, { type: "messagePersisted", message: live });
+      reduceChatSessionProjection(state, {
+        type: "runTerminal",
+        runId: "pairing-run",
+        status: "completed",
+        message: live,
+      });
+      setChatRunOwner(state, "pairing-run");
+      const runBefore = getChatSessionProjection(state).runs["pairing-run"];
+      const cached = {
+        messages: [live],
+        sessionId: "pairing-session",
+        pagination: { hasMore: false as const },
+      };
+      const target = { sessionKey: state.sessionKey };
+      const otherTarget = { sessionKey: "agent:main:other" };
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, cached);
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, otherTarget, {
+        ...cached,
+        messages: [canonical],
+      });
+
+      if (transition === "reconnect") {
+        pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      } else if (transition === "pane disposal") {
+        pane.disconnectedCallback();
+      } else {
+        pane.applyGatewaySnapshot({
+          ...connected,
+          hello: { ...hello, auth: { ...hello.auth, deviceToken: "fixture-token-after" } },
+        });
+      }
+
+      expect(state.chatMessages).toEqual([canonical]);
+      expect(getChatSessionProjection(state).runs["pairing-run"]).toEqual({
+        ...runBefore,
+        message: canonical,
+      });
+      expect(getChatRunOwner(state)).toBe("pairing-run");
+      expect(readChatMessagesFromCache(state.chatMessagesBySession, state, target)).toEqual([]);
+      expect(readChatMessagesFromCache(state.chatMessagesBySession, state, otherTarget)).toEqual([
+        canonical,
+      ]);
+      if (transition === "reconnect") {
+        pane.applyGatewaySnapshot(connected);
+      }
+      if (transition !== "pane disposal") {
+        await loadChatHistory(state, { startup: true });
+        expect(state.chatMessages).toEqual([canonical]);
+      }
+    },
+  );
+
   it("keeps the initial transcript pending while the first client connects", async () => {
     const client = createTestGatewayClient(createReconnectRequest({ messages: [] }));
     const { pane, state } = createTestChatPane({ client });

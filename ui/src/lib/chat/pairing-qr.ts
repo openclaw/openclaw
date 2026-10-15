@@ -12,6 +12,17 @@ export function readPairingQrContent(message: unknown): Record<string, unknown>[
     : [];
 }
 
+export function removePairingQrContent(message: unknown): unknown {
+  const record = asNullableRecord(message);
+  if (!Array.isArray(record?.content)) {
+    return message;
+  }
+  const content = record.content.filter(
+    (block) => asNullableRecord(block)?.type !== "openclaw_pairing_qr",
+  );
+  return content.length === record.content.length ? message : { ...record, content };
+}
+
 /** Enrich only admitted rows; canonical history still owns text, identity, and removal. */
 export function retainPairingQrEntries(
   previous: readonly SessionProjectionEntry[],
