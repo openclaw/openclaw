@@ -4,6 +4,12 @@ export const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 export const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 export const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 export const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const SERIAL_SELECTED_16_CONFIGS = new Set([
+  "test/vitest/vitest.cli.config.ts",
+  "test/vitest/vitest.gateway-client.config.ts",
+  "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.agents-embedded-agent.config.ts",
+]);
 export const TOOLING_LARGE_CAPACITY_TEST_FILES = new Set([
   // Generation-retention cases require eight CPUs / 24 GiB; the two-CPU
   // screen also peaked at 6.05 GiB before those gated cases could run.
@@ -65,12 +71,11 @@ export function resolveSelectedNodeTestRunner(
     job.groups.every(
       (group) =>
         group.configs.length === 1 &&
-        ((/^agentic-cli(?:-hosted-\d+)?$/u.test(group.shard_name) &&
-          group.configs[0] === "test/vitest/vitest.cli.config.ts") ||
-          (/^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name) &&
-            group.configs[0] === "test/vitest/vitest.gateway-client.config.ts")) &&
+        SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
-        group.fallbackMaxWorkers === 2 &&
+        (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
+          (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
+            group.fallbackMaxWorkers === 2)) &&
         group.minTotalMemoryBytes === undefined &&
         !group.requiresDist &&
         !group.pretestBuildMode &&
