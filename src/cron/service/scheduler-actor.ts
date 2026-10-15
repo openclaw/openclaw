@@ -253,6 +253,7 @@ export function refreshCronScheduler(state: CronServiceState): void {
         return;
       }
       const snapshot = await captureCronSchedulerSnapshot(state);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
       await publish(
         state,
         await connection.lease.execute({
@@ -265,6 +266,7 @@ export function refreshCronScheduler(state: CronServiceState): void {
             nowMs: state.deps.nowMs(),
           },
         }),
+        observedRevision,
       );
     })
     .catch((error: unknown) => {
