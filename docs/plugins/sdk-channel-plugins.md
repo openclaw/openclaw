@@ -430,7 +430,10 @@ when initialization must finish before the child runs.
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its `begin()` cleanup receives an optional settlement with
       `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
-      An omitted settlement means the attempt deferred, retained transport/retry ownership,
+      `transportPending: true` means delivery remains owned by transport without a
+      later callback to this source; clear activity UI without claiming success or failure
+      unless `visibleReplySent` or `failed` already proves the outcome.
+      An omitted settlement means the attempt deferred, queued a source retry,
       or uses a separate source-owned delivery outcome (such as a Gateway reply batch).
       Use the settlement for delivery-dependent completion UI; an agent's successful
       execution callback can arrive before any reply is sent.

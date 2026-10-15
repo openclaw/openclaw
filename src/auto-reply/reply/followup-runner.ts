@@ -122,6 +122,7 @@ export function createFollowupRunner(
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let visibleReplySent = false;
     let deliveryPending = false;
+    let sourceRetryPending = false;
     const onObservedReplyDelivery = async () => {
       if (visibleReplySent) {
         return;
@@ -143,7 +144,7 @@ export function createFollowupRunner(
         kind,
         onObservedReplyDelivery,
       });
-      deliveryPending ||= delivery.kind !== "completed";
+      deliveryPending ||= delivery.kind === "pending";
     };
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
@@ -291,7 +292,8 @@ export function createFollowupRunner(
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "source-retry" ? [] : delivery.payloads;
-      deliveryPending ||= delivery.kind !== "completed";
+      deliveryPending ||= delivery.kind === "pending";
+      sourceRetryPending = delivery.kind === "source-retry";
       // Gateway final batches are returned above, not delivered: their one-shot
       // source owner settles in finally. Allocate its successor before that boundary.
       if (
@@ -386,9 +388,13 @@ export function createFollowupRunner(
           end(
             // Source-owned batches settle through their own owner, whose void callback is not a receipt.
             disposition.kind === "consumed" &&
-              (!deliveryPending || visibleReplySent || completion.kind === "failed") &&
+              (!sourceRetryPending || visibleReplySent || completion.kind === "failed") &&
               sourceDisposition?.kind !== "deliver"
-              ? { visibleReplySent, failed: !admittedTurn || completion.kind === "failed" }
+              ? {
+                  visibleReplySent,
+                  failed: !admittedTurn || completion.kind === "failed",
+                  ...(deliveryPending ? { transportPending: true } : {}),
+                }
               : undefined,
           );
         } catch (error) {

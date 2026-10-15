@@ -118,6 +118,9 @@ function statusReactionFixture() {
       setReaction: async (emoji) => {
         reactions.push(emoji);
       },
+      clearReaction: async () => {
+        reactions.push("");
+      },
     },
     initialEmoji: "👀",
     timing: { doneHoldMs: 0, errorHoldMs: 0 },
@@ -550,6 +553,27 @@ describe("WhatsApp reply delivery", () => {
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     await restoration;
     expect(reactions).toEqual(["✅", "👀"]);
+  });
+  it.each([
+    { outcome: "delivered", visibleReplySent: true, failed: false },
+    { outcome: "terminally failed", visibleReplySent: false, failed: true },
+  ])("leaves held delivery neutral after a later $outcome receipt", async (terminal) => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const clear = vi.spyOn(controller, "clear");
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    const settle = beginQueuedDelivery(plan);
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    settle({ visibleReplySent: false, failed: false, transportPending: true });
+    expect(clear).toHaveBeenCalledOnce();
+    await clear.mock.results[0]?.value;
+    expect(reactions).toEqual(["👀", ""]);
+
+    // Recovery has no source callback; even a retained caller cannot revive finished activity.
+    settle(terminal);
+    expect(reactions).toEqual(["👀", ""]);
+    expect(clear).toHaveBeenCalledOnce();
   });
   it("shows execution failure immediately and does not replace it with delivery success", async () => {
     const { controller, reactions, restoration } = statusReactionFixture();

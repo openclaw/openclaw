@@ -569,13 +569,17 @@ export function createWhatsAppReplyPlan(params: {
   let didLogHeartbeatStrip = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;
-  let queuedDeliveryOutcome: typeof agentRunOutcome;
+  let queuedDeliveryOutcome: typeof agentRunOutcome | "neutral";
   let reactionFinished = false;
-  const finalizeStatusReaction = async (outcome: typeof agentRunOutcome) => {
+  const finalizeStatusReaction = async (outcome: typeof queuedDeliveryOutcome) => {
     if (!statusReactionController || reactionFinished) {
       return;
     }
     reactionFinished = outcome !== undefined;
+    if (outcome === "neutral") {
+      await statusReactionController.clear();
+      return;
+    }
     if (outcome === "failed") {
       await statusReactionController.setError();
     } else if (outcome === "completed") {
@@ -812,8 +816,13 @@ export function createWhatsAppReplyPlan(params: {
                 if (!settlement) {
                   return;
                 }
-                queuedDeliveryOutcome =
-                  settlement.failed || !settlement.visibleReplySent ? "failed" : "completed";
+                queuedDeliveryOutcome = settlement.failed
+                  ? "failed"
+                  : settlement.visibleReplySent
+                    ? "completed"
+                    : settlement.transportPending
+                      ? "neutral"
+                      : "failed";
                 if (reactionDeferred) {
                   void finalizeStatusReaction(queuedDeliveryOutcome);
                 }

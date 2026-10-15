@@ -165,9 +165,14 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
-  it.each([false, true])(
-    "keeps pending transport unsettled unless execution failed (%s)",
-    async (failed) => {
+  it.each([
+    { kind: "pending", failed: false },
+    { kind: "pending", failed: true },
+    { kind: "source-retry", failed: false },
+    { kind: "source-retry", failed: true },
+  ] as const)(
+    "distinguishes transport handoff from source retry ($kind, failed=$failed)",
+    async ({ kind, failed }) => {
       const turn = createTurn();
       const end = vi.fn();
       turn.queued.deliveryCorrelations = [{ begin: () => end }];
@@ -176,7 +181,7 @@ describe("createFollowupRunner", () => {
         failed ? createRejectedExecution() : createSettledExecution(),
       );
       state.account.mockResolvedValue(undefined);
-      state.deliver.mockResolvedValue({ kind: "pending", payloads: [] });
+      state.deliver.mockResolvedValue({ kind, payloads: [] });
 
       await createFollowupRunner({
         typing: createTypingController(),
@@ -185,7 +190,13 @@ describe("createFollowupRunner", () => {
       })(turn.queued);
 
       expect(end).toHaveBeenCalledExactlyOnceWith(
-        failed ? { visibleReplySent: false, failed: true } : undefined,
+        kind === "source-retry" && !failed
+          ? undefined
+          : {
+              visibleReplySent: false,
+              failed,
+              ...(kind === "pending" ? { transportPending: true } : {}),
+            },
       );
     },
   );
