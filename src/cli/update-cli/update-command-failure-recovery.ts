@@ -16,6 +16,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import type {
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
+  UpdateServiceDefinitionRecovery,
 } from "./update-command-service-context-types.js";
 import {
   readManagedGatewayServiceForUpdate,
@@ -35,6 +36,8 @@ export async function verifyUpdateFailureRecovery(params: {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   serviceStopped?: boolean;
+  gatewayStartAttempted?: "install" | "restart";
+  definitionRecovery?: UpdateServiceDefinitionRecovery;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   preManagedServiceStop?: PreManagedServiceStop;
   onGatewayStartAttempted?: () => void;
@@ -162,6 +165,9 @@ export async function verifyUpdateFailureRecovery(params: {
         }));
       params.assertCurrent?.();
       if (
+        // An unverified installer receipt does not prove a start; never repeat a restart.
+        params.gatewayStartAttempted !== "restart" &&
+        (!params.gatewayStartAttempted || params.definitionRecovery?.unverified) &&
         params.opts.restart !== false &&
         params.preManagedServiceStop?.stopped &&
         params.preManagedServiceStop.serviceMutationAllowed !== false &&

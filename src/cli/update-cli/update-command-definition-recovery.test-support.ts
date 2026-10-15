@@ -6,7 +6,9 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import * as processExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -56,24 +58,9 @@ export function registerUnverifiedDefinitionRecoveryTests({
         fingerprint: "fixture",
         refreshDefinition: true,
       };
-      const started = path.join(packageRoot, "started");
+      const entrypoint = path.join(packageRoot, "dist", "index.js");
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "index.js"),
-        `
-        import fs from 'node:fs';
-        const install = process.argv.includes('install');
-        if (!install && ${JSON.stringify(startup)} !== 'start-failed') fs.writeFileSync(${JSON.stringify(started)}, 'running');
-        process.stdout.write(JSON.stringify(install
-          ? { action: 'install', ok: false, error: 'Installer definition backup receipt is unverified', definitionBackup: { files: [] } }
-          : ${JSON.stringify(startup)} === 'cold-start'
-            ? { action: 'restart', ok: false, result: 'restart-health-failed', error: 'Native 60s health wait ended while starting' }
-            : ${JSON.stringify(startup)} !== 'start-failed'
-            ? { action: 'restart', ok: true, result: 'restarted' }
-            : { action: 'restart', ok: false, error: 'systemctl restart failed: startup fixture refused' }));
-        process.exitCode = install || ['start-failed', 'cold-start'].includes(${JSON.stringify(startup)}) ? 1 : 0;
-      `,
-      );
+      await fs.writeFile(entrypoint, "// Synthetic installed CLI entrypoint.\n");
       mocks.version = "2.0.0";
       const service = createMockGatewayService({
         readRuntime: async () => ({
@@ -108,17 +95,49 @@ export function registerUnverifiedDefinitionRecoveryTests({
       const native = await vi.importActual<typeof import("./update-command-service-command.js")>(
         "./update-command-service-command.js",
       );
-      // Native command I/O is a synthetic executable; executor/receiver custody has its own process proof.
-      mocks.restartCommand.mockImplementation(async (options, action) => {
-        try {
-          return await native.runUpdatedInstallGatewayCommand({ ...options, opts: {} }, action);
-        } finally {
-          mocks.healthy = await fs.readFile(started, "utf8").then(
-            () => true,
-            () => false,
-          );
+      const runCommand = processExec.runCommandWithTimeout;
+      // Native stdout is fixture I/O; executor/receiver custody has separate process proof.
+      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (argv[1] !== entrypoint || argv[2] !== "gateway") {
+          return runCommand(argv, options);
         }
+        expect(["install", "restart"]).toContain(argv[3]);
+        const install = argv[3] === "install";
+        if (!install) {
+          expect(argv).toContain("--preserve-definition");
+          mocks.healthy = startup !== "start-failed";
+        }
+        return createCommandResult({
+          cleanup: "normal",
+          code: install || ["start-failed", "cold-start"].includes(startup) ? 1 : 0,
+          stdout: JSON.stringify(
+            install
+              ? {
+                  action: "install",
+                  ok: false,
+                  error: "Installer definition backup receipt is unverified",
+                  definitionBackup: { files: [] },
+                }
+              : startup === "cold-start"
+                ? {
+                    action: "restart",
+                    ok: false,
+                    result: "restart-health-failed",
+                    error: "Native 60s health wait ended while starting",
+                  }
+                : startup !== "start-failed"
+                  ? { action: "restart", ok: true, result: "restarted" }
+                  : {
+                      action: "restart",
+                      ok: false,
+                      error: "systemctl restart failed: startup fixture refused",
+                    },
+          ),
+        });
       });
+      mocks.restartCommand.mockImplementation((options, action) =>
+        native.runUpdatedInstallGatewayCommand({ ...options, opts: {} }, action),
+      );
       const activation = await vi.importActual<typeof import("./update-command-service.js")>(
         "./update-command-service.js",
       );

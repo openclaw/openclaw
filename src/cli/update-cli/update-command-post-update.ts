@@ -99,9 +99,9 @@ async function finishSettledUpdate(
     recordPhase,
     sentinelOptions,
   } = captured;
-  let gatewayStartAttempted = false;
-  const onGatewayStartAttempted = () => {
-    gatewayStartAttempted = true;
+  let gatewayStartAttempted: "install" | "restart" | undefined;
+  const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
+    gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
     observeGatewayStartAttempted?.();
   };
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
@@ -368,6 +368,8 @@ async function finishSettledUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
+        gatewayStartAttempted,
+        definitionRecovery,
         preManagedServiceStop: currentServiceStop(),
         onGatewayStartAttempted,
         nodeRunner: params.packageUpdateNodeRunner,
@@ -378,7 +380,6 @@ async function finishSettledUpdate(
         waitForStartup:
           params.result.status !== "error" ||
           params.mutationStarted ||
-          params.preManagedServiceStop?.stopped ||
           currentServiceStop()?.stopped ||
           Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
           rollbackAttempted,

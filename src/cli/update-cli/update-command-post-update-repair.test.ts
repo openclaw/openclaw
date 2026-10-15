@@ -147,6 +147,9 @@ const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repai
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      dirs.make("post-update-repair-native-"),
+    );
     vi.mocked(resolveGatewayService)
       .mockReset()
       .mockImplementation(
@@ -184,6 +187,7 @@ describe("post-activation failure settlement without inference", () => {
       rolledBack: false,
     }));
     mocks.restart.mockImplementation(async (params) => {
+      params.onGatewayStartAttempted?.();
       if (!mocks.restart.mock.calls.slice(0, -1).length) {
         if (params.opts.run) {
           recordUpdateRunPhase(params.opts.run.runId, "verifying", undefined, {
