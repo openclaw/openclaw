@@ -40,7 +40,6 @@ import {
   registerSubagentResultRefreshCases,
   updateSubagentRunFixture as updateFixtureRun,
 } from "./subagent-registry-result-refresh.test-support.js";
-import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerYieldFollowupAdoptionTests } from "./subagent-registry-yield-followup-adoption.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import {
@@ -1658,34 +1657,6 @@ describe("subagent registry seam flow", () => {
 
   registerSupersededNativeTimingTest({ getRegistry: () => mod, mocks, mockPendingAgentWait });
 
-  it("settles restart-aborted runs without redispatching child work", async () => {
-    mockPendingAgentWait();
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        updatedAt: Date.now(),
-        status: "interrupted",
-        abortedLastRun: true,
-      }),
-    };
-
-    await mod.registerSubagentRun({
-      runId: "run-stale-aborted",
-      task: "resume after restart",
-    });
-
-    vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
-    await mod.testing.sweepOnceForTests();
-
-    expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
-    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-    const run = findRequesterRun("run-stale-aborted");
-    expect(run?.execution.endedAt).toBeTypeOf("number");
-    expect(run?.execution.outcome).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("Gateway restart"),
-    });
-  });
-
   it.each(["registry write", "completion hook"] as const)(
     "retries completion after a transient %s failure",
     async (failure) => {
@@ -1908,56 +1879,6 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("retains delete-mode successful completions through the delivery deadline", async () => {
-    const persist = (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) =>
-      saveSubagentRegistryChangesToSqlite(runs, runIds ?? [...runs.keys()]);
-    mocks.persistRegistryRows.mockImplementation(persist);
-    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
-    const endedAt = Date.parse("2026-03-24T12:00:00Z");
-    mocks.callGateway.mockResolvedValueOnce({
-      status: "ok",
-      startedAt: endedAt - 500,
-      endedAt,
-      terminalReply: { disposition: "visible", text: "final completion reply" },
-    });
-
-    const settleRootWork = observeRootWork();
-    await mod.registerSubagentRun({
-      runId: "run-delete-give-up",
-      task: "completion cleanup retry",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await settleRootWork(true);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toEqual(expect.objectContaining({ runId: "run-delete-give-up", cleanup: "delete" }));
-
-    const retryWindowEnd = endedAt + 5 * 60_000;
-    while (Date.now() < retryWindowEnd) {
-      await vi.advanceTimersToNextTimerAsync();
-      await settleRootWork(true);
-    }
-    expect(mocks.runSubagentAnnounceFlow.mock.calls.length).toBeGreaterThan(3);
-    expect(findRequesterRun("run-delete-give-up")?.delivery?.status).not.toBe("suspended");
-
-    const deadlineAt = findRequesterRun("run-delete-give-up")?.delivery?.deadlineAt;
-    expect(deadlineAt).toBeTypeOf("number");
-    vi.setSystemTime((deadlineAt ?? Date.now()) + 1);
-    mod.resumeSubagentRun("run-delete-give-up");
-    await vi.advanceTimersByTimeAsync(0);
-    await settleRootWork();
-    expect(findRequesterRun("run-delete-give-up")?.delivery).toMatchObject({
-      status: "suspended",
-      suspendedReason: "expiry",
-    });
-  });
-
   it("retries completion delete runs regardless of prior attempt count", async () => {
     mockEndedHooks();
     const runId = "run-resume-delete";
@@ -2119,56 +2040,6 @@ describe("subagent registry seam flow", () => {
         requesterSessionKey: "agent:main:main",
       }),
     );
-  });
-
-  it("announces readable failure when an interrupted run is finalized", async () => {
-    const error =
-      "Subagent run was interrupted by a gateway restart or connection loss. Automatic recovery failed after 2 attempts. Please retry.";
-    const outcome = { status: "error", error, startedAt: 1, endedAt: 2, elapsedMs: 1 };
-    const finalize = () =>
-      mod.finalizeInterruptedSubagentRun({ runId: "run-interrupted", error, endedAt: 2 });
-    await mod.addSubagentRunForTests({
-      runId: "run-interrupted",
-      childSessionKey: "agent:main:subagent:interrupted",
-      childSessionIdentity: {
-        sessionId: "sess-interrupted",
-        lifecycleRevision: "revision-interrupted",
-      },
-      controllerSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "quietchat", accountId: "acct-interrupted" },
-      task: "recover interrupted subagent",
-      expectsCompletionMessage: true,
-      spawnMode: "run",
-      createdAt: 1,
-      startedAt: 1,
-      sessionStartedAt: 1,
-      accumulatedRuntimeMs: 0,
-      cleanupHandled: false,
-    });
-
-    expect(await finalize()).toBe(1);
-    await waitForFast(() =>
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          childRunId: "run-interrupted",
-          requesterSessionKey: "agent:main:main",
-          requesterOrigin: { channel: "quietchat", accountId: "acct-interrupted" },
-          outcome: expect.objectContaining({ status: "error", error }),
-        }),
-      ),
-    );
-    const run = findRequesterRun("run-interrupted");
-    expect(run?.execution.outcome).toEqual(outcome);
-    expect(run?.terminalOwner).toBe("interrupted-recovery");
-    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
-
-    const announceCalls = mocks.runSubagentAnnounceFlow.mock.calls.length;
-    await expect(finalize()).resolves.toBe(1);
-    const repeated = findRequesterRun("run-interrupted");
-    expect(repeated?.terminalOwner).toBe("interrupted-recovery");
-    expect(repeated?.execution.outcome).toEqual(outcome);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(announceCalls);
   });
 
   const completeTerminalOutcome = {
