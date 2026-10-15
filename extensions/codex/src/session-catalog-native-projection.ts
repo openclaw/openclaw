@@ -4,6 +4,7 @@ import { isJsonObject, type JsonObject, type CodexThread } from "./app-server/pr
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,
+  isInteractiveThreadSource,
   MAX_CURSOR_LENGTH,
   MAX_CWD_LENGTH,
   MAX_SESSION_ID_LENGTH,
@@ -75,7 +76,7 @@ export function projectCodexCatalogNativeThread(
       row[field] = value;
     }
   }
-  const rawPreview = thread.preview;
+  const rawPreview = isInteractiveThreadSource(thread.source) ? thread.preview : undefined;
   const preview = reuseCodexCatalogPreview(
     row,
     typeof rawPreview === "string" ? Boolean(rawPreview) : undefined,

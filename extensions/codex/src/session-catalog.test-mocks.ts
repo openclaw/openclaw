@@ -20,10 +20,12 @@ const nodeHostMocks = vi.hoisted(() => ({
   userShellPaths: new Map<string, string>(),
 }));
 
-vi.mock("./command-rpc.js", async () => {
+vi.mock("./command-rpc.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./command-rpc.js")>();
   const { codexCatalogSourceForClient, getCodexCatalogSource, recordCodexCatalogResponseSource } =
     await import("./session-catalog-source.js");
   return {
+    ...actual,
     codexControlRequest: async (
       ...args: Parameters<typeof import("./command-rpc.js").codexControlRequest>
     ) => {

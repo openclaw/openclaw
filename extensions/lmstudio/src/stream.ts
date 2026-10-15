@@ -159,7 +159,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (asRecord(providerConfig?.params).preload === false) {
       return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
     }
-    const resolvedBaseUrl = resolveLmstudioInferenceBase(model.baseUrl);
+    const resolvedBaseUrl = resolveLmstudioInferenceBase(model.baseUrl ?? providerConfig?.baseUrl);
     const requestedContextLength =
       asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
     const preloadKey = `${resolvedBaseUrl}::${modelKey}::${requestedContextLength ?? "default"}`;
