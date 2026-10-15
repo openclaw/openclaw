@@ -310,13 +310,13 @@ export function createMemoryWikiCompiledCacheStore(
     overflowPolicy: "evict-oldest",
   });
   return {
-    async read(this: void, config: ResolvedMemoryWikiConfig) {
+    async read(this: void, config: ResolvedMemoryWikiConfig, readOptions?: { reload?: boolean }) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.reconciled || !activeVault.compiledCachePublicationId) {
         return null;
       }
-      if (activeVault.snapshot) {
+      if (activeVault.snapshot && !readOptions?.reload) {
         return activeVault.snapshot;
       }
       const key = publicationKey(ownerId, activeVault.compiledCachePublicationId);
@@ -508,6 +508,42 @@ export async function reconcileMemoryWikiCompiledCacheOwner(
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   await requireConfiguredStore().reconcile(config, loadDurableIdentity);
+}
+
+export async function reuseMemoryWikiCompiledCache(
+  config: ResolvedMemoryWikiConfig,
+  snapshot: MemoryWikiCompiledCacheSnapshot,
+  parentPublicationId: string | null,
+  validatePublication: () => Promise<void>,
+  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
+): Promise<boolean> {
+  const activeVault = resolveActiveVault(config);
+  if (
+    !parentPublicationId ||
+    !activeVault ||
+    activeVault.compiledCachePublicationId !== parentPublicationId
+  ) {
+    return false;
+  }
+  // Explicit compile must validate the persisted predecessor, not a warm copy
+  // whose row may be missing or corrupt. Ordinary reads retain their lifecycle cache.
+  const persisted = await requireConfiguredStore().read(config, { reload: true });
+  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(snapshot)) {
+    return false;
+  }
+  await validatePublication();
+  const identity = await loadDurableIdentity();
+  if (resolveActiveVault(config) !== activeVault) {
+    throw new Error("Memory Wiki cache owner retired before publication reuse.");
+  }
+  if (
+    identity.vaultGeneration !== activeVault.vaultGeneration ||
+    identity.compiledCachePublicationId !== parentPublicationId
+  ) {
+    return false;
+  }
+  dashboardStates.delete(dashboardStateKey(config));
+  return true;
 }
 
 export async function writeMemoryWikiCompiledCache(
