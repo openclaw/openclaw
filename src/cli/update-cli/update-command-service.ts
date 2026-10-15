@@ -246,13 +246,9 @@ export async function maybeRestartService(params: {
     if (!original.version) {
       throw new Error("Original service runtime or schema support was not verified.");
     }
-    activation.refreshServiceEnv = false;
-    activation.serviceRuntimeRefreshRequired = false;
+    activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
     activation.nodeRunner = original.nodeRunner;
-    activation.expectedGatewayIdentity = {
-      version: original.version,
-      buildId: original.buildId,
-    };
+    activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
     activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
   }
   const verdict = activation.serviceUpdateVerdict;
