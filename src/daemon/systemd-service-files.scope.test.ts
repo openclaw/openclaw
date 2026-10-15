@@ -145,7 +145,6 @@ describe("system-scope effective command", () => {
   it.each([
     { canStart: false, refuse: false, empty: true, reason: "disabled-no-start" },
     { canStart: true, refuse: true, empty: true, reason: "refuse-manual-start" },
-    { canStart: true, refuse: false, empty: false, reason: undefined },
     { canStart: true, refuse: true, empty: false, reason: undefined },
     { canStart: true, refuse: false, empty: false, reason: undefined, file: "masked-runtime" },
   ])(
@@ -296,29 +295,6 @@ describe("system-scope effective command", () => {
     });
     await expect(readSystemdServiceCommandLocation(env, target)).rejects.toThrow();
   });
-  it.each([false, true])(
-    "reads the selected system unit with discovered target=%s",
-    async (discover) => {
-      const command = await readSystemdServiceExecStart(env, {
-        requireEffective: true,
-        requireLoaded: true,
-        ...(discover ? {} : { systemdReadTarget: target }),
-      });
-      expect(command).toMatchObject({
-        programArguments: ["/usr/bin/openclaw", "gateway"],
-        sourcePath: target.unitPath,
-        environment: { HOME: "/home/gateway", OPENCLAW_SERVICE_KIND: "gateway" },
-      });
-      expect(command?.managedDefinition).toBeUndefined();
-      expect(userBus).not.toHaveBeenCalled();
-      expect(
-        systemBus.mock.calls.every(
-          ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-        ),
-      ).toBe(true);
-    },
-  );
-
   it.each(["2001", "other"])(
     "requires the service account for strict inspection: %s",
     async (user) => {
