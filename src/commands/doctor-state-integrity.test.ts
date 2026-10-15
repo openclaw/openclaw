@@ -47,7 +47,6 @@ import {
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
-  listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
 
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
