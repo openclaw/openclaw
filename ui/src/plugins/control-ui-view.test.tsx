@@ -1,4 +1,3 @@
-import { html, LitElement } from "lit";
 import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -10,73 +9,18 @@ import type {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationBinding,
-} from "../lit/presentation-binding.ts";
-import { renderLegacyTemplate, solidContent } from "../lit/solid-content.tsx";
+  renderLegacyTemplate,
+  solidContent,
+  SolidContentPresentation,
+} from "../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { renderPluginSurface } from "./control-ui-view.ts";
-import "./control-ui-view.solid.tsx";
+import { PluginSurface } from "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
-function increment(this: SurfaceTestHost) {
-  this.count += 1;
-}
-
-class SurfaceTestHost extends LitElement {
-  count = 0;
-  sessionKey = "main";
-  agentId = "main";
-  surface: "workspace" | "composer" = "workspace";
-  draft = "";
-  presentation?: PresentationBinding;
-  readonly setDraft = vi.fn((draft: string) => {
-    this.draft = draft;
-  });
-  readonly send = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
-  readonly abort = vi.fn();
-  readonly navigation = document.createElement("nav");
-  override createRenderRoot() {
-    return this;
-  }
-  override render() {
-    const identity = { sessionKey: this.sessionKey, agentId: this.agentId };
-    const defaultView = html`<button class="builtin-action" @click=${increment}>
-        Built-in action
-      </button>
-      <input class="builtin-input" aria-label="Built-in input" />
-      ${this.navigation}`;
-    if (this.surface === "composer") {
-      return renderPluginSurface(
-        "composer",
-        {
-          ...identity,
-          draft: this.draft,
-          canSend: true,
-          sending: false,
-          disabledReason: null,
-          setDraft: this.setDraft,
-          send: this.send,
-          abort: this.abort,
-        },
-        defaultView,
-        this.presentation ?? true,
-        html`<button class="companion-action">Retained attachment controls</button>`,
-      );
-    }
-    return renderPluginSurface(
-      "workspace",
-      { ...identity, routeId: "chat" },
-      defaultView,
-      this.presentation ?? true,
-    );
-  }
-}
-customElements.define("control-ui-surface-test-host", SurfaceTestHost);
-
-function mountSurface(initial?: ControlUiReplacement<"workspace" | "composer">) {
+function createRuntime(initial?: ControlUiReplacement<"workspace" | "composer">) {
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   const request = vi.fn().mockResolvedValue({ ok: true });
@@ -116,14 +60,8 @@ function mountSurface(initial?: ControlUiReplacement<"workspace" | "composer">) 
       reportError,
     },
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const host = document.createElement("control-ui-surface-test-host") as SurfaceTestHost;
-  host.surface = initial?.surface ?? "workspace";
-  provider.append(host);
-  document.body.append(provider);
   return {
-    host,
-    provider,
+    context,
     reportError,
     listeners,
     request,
@@ -134,6 +72,102 @@ function mountSurface(initial?: ControlUiReplacement<"workspace" | "composer">) 
       }
     },
   };
+}
+
+function mountSurface(
+  initial?: ControlUiReplacement<"workspace" | "composer">,
+  sessionKey = "main",
+) {
+  const runtime = createRuntime(initial);
+  const provider = createSolidApplicationContextProvider(runtime.context);
+  const state = {
+    count: 0,
+    sessionKey,
+    agentId: "main",
+    draft: "",
+    navigation: document.createElement("nav"),
+    setDraft: vi.fn((draft: string): void => {
+      state.draft = draft;
+    }),
+    send: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    abort: vi.fn(),
+  };
+  const [revision, setRevision] = createSignal(0);
+  const [presented, setPresented] = createSignal(true);
+  const [contentPresented, setContentPresented] = createSignal(true);
+  const identity = () => {
+    revision();
+    return { sessionKey: state.sessionKey, agentId: state.agentId };
+  };
+  const renderDefault = () => (
+    <>
+      <button
+        class="builtin-action"
+        onClick={() => {
+          state.count += 1;
+        }}
+      >
+        Built-in action
+      </button>
+      <input class="builtin-input" aria-label="Built-in input" />
+      {state.navigation}
+    </>
+  );
+  const view = mountSolid(
+    () => (
+      <SolidContentPresentation value={contentPresented}>
+        {initial?.surface === "composer" ? (
+          <PluginSurface
+            surface="composer"
+            presented={presented()}
+            props={{
+              ...identity(),
+              draft: state.draft,
+              canSend: true,
+              sending: false,
+              disabledReason: null,
+              setDraft: state.setDraft,
+              send: state.send,
+              abort: state.abort,
+            }}
+            renderDefault={renderDefault}
+            renderCompanion={() => (
+              <button class="companion-action">Retained attachment controls</button>
+            )}
+          />
+        ) : (
+          <PluginSurface
+            surface="workspace"
+            presented={presented()}
+            props={{ ...identity(), routeId: "chat" }}
+            renderDefault={renderDefault}
+          />
+        )}
+      </SolidContentPresentation>
+    ),
+    { wrapper: provider.wrapper },
+  );
+  return {
+    ...runtime,
+    host: view.container,
+    state,
+    setPresented,
+    setContentPresented,
+    unmount: view.unmount,
+    update: () => setRevision((value) => value + 1),
+  };
+}
+
+// Unported contribution callers still mount the registered custom element through DOM context.
+function mountView(initial: ControlUiReplacement<"workspace" | "composer">) {
+  const runtime = createRuntime(initial);
+  const provider = createApplicationContextProvider(runtime.context);
+  const view = document.createElement("openclaw-plugin-view");
+  view.surface = initial.surface;
+  view.props = { sessionKey: "main", agentId: "main", routeId: "chat" };
+  provider.append(view);
+  document.body.append(provider);
+  return { ...runtime, view, provider };
 }
 
 afterEach(() => {
@@ -197,7 +231,7 @@ describe("native UI built-in delegation", () => {
         button.remove();
       };
     };
-    const { host, provider, select, listeners } = mountSurface({
+    const { view, select, listeners } = mountView({
       id: "renderer-defaults",
       label: "Renderer defaults",
       surface: "workspace",
@@ -218,10 +252,7 @@ describe("native UI built-in delegation", () => {
         };
       },
     });
-    host.remove();
-    const view = document.createElement("openclaw-plugin-view");
     view.mountDefaultView = mountDefaultView;
-    provider.append(view);
     await view.updateComplete;
     expect(mounted).toHaveLength(3);
     expect(view.querySelectorAll("button")).toHaveLength(2);
@@ -278,22 +309,80 @@ describe("native UI built-in delegation", () => {
 
   it("restores host controls when a replacement stops delegating to the built-in", async () => {
     let stopDefault: (() => void) | undefined;
+    const toolbar = document.createElement("button");
+    toolbar.textContent = "Plugin action";
+    const clicked = vi.fn();
+    toolbar.addEventListener("click", clicked);
+    const status = document.createElement("output");
+    status.textContent = "Plugin status";
     const { host } = mountSurface({
       id: "composer",
       label: "Custom composer",
       surface: "composer",
       mount(container, context) {
+        container.append(toolbar);
         stopDefault = context.mountDefault(container);
+        container.append(status);
         return { dispose: () => stopDefault?.() };
       },
     });
     await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
     expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
     expect(host.querySelector(".companion-action")).toBeNull();
+    expect(toolbar.isConnected).toBe(true);
+    expect(status.isConnected).toBe(true);
     stopDefault?.();
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
     expect(host.querySelector(".builtin-action")).toBeNull();
+    expect(toolbar.isConnected).toBe(true);
+    expect(status.isConnected).toBe(true);
+    toolbar.click();
+    expect(clicked).toHaveBeenCalledOnce();
   });
+
+  it.each(["surface", "content"])(
+    "parks replacement selection with %s presentation and retains the mounted view",
+    async (presentation) => {
+      const view = mountSurface();
+      const setPresented =
+        presentation === "surface" ? view.setPresented : view.setContentPresented;
+      const builtin = view.host.querySelector(".builtin-action");
+      const contexts: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
+      const dispose = vi.fn();
+      const mount = vi.fn(
+        (
+          container: HTMLElement,
+          context: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>,
+        ) => {
+          contexts.push(context);
+          container.textContent = "Retained plugin state";
+          return { update: (next: typeof context) => contexts.push(next), dispose };
+        },
+      );
+
+      setPresented(false);
+      flush();
+      expect(view.listeners.size).toBe(0);
+      view.select({ id: "workspace", label: "Workspace", surface: "workspace", mount });
+      flush();
+      expect(mount).not.toHaveBeenCalled();
+      expect(view.host.querySelector(".builtin-action")).toBe(builtin);
+
+      setPresented(true);
+      await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+      const root = view.host.querySelector("[data-plugin-view-root]");
+      setPresented(false);
+      await vi.waitFor(() => expect(contexts.at(-1)?.presented).toBe(false));
+      expect(view.host.querySelector("[data-plugin-view-root]")).toBe(root);
+      expect(root?.textContent).toBe("Retained plugin state");
+      expect(dispose).not.toHaveBeenCalled();
+
+      setPresented(true);
+      await vi.waitFor(() => expect(contexts.at(-1)?.presented).toBe(true));
+      expect(mount).toHaveBeenCalledOnce();
+      expect(view.host.querySelector("[data-plugin-view-root]")).toBe(root);
+    },
+  );
 
   it.each([
     { label: "another agent", nextAgents: ["writer"] },
@@ -320,8 +409,7 @@ describe("native UI built-in delegation", () => {
         return { dispose };
       },
     };
-    const { host, request, select } = mountSurface(replacement);
-    host.sessionKey = "global";
+    const { host, state, request, select } = mountSurface(replacement, "global");
     await vi.waitFor(() => expect(contexts).toHaveLength(1));
     const current = contexts[0];
     const view =
@@ -330,7 +418,7 @@ describe("native UI built-in delegation", () => {
       throw new Error("Expected the composer replacement to mount");
     }
     current.props.setDraft("Current draft");
-    expect(host.draft).toBe("Current draft");
+    expect(state.draft).toBe("Current draft");
 
     if (nextAgents) {
       const props = view.props as ControlUiSurfaceProps["composer"];
@@ -354,7 +442,7 @@ describe("native UI built-in delegation", () => {
     expect(dispose).not.toHaveBeenCalled();
     expect(() => current.props.setDraft("Stale draft")).toThrow("view has ended");
     expect(current.signal.aborted).toBe(true);
-    expect(host.draft).toBe("Current draft");
+    expect(state.draft).toBe("Current draft");
     await expect(current.host.request("fixture.retired-view")).rejects.toThrow("view has ended");
     expect(request).not.toHaveBeenCalled();
 
@@ -368,17 +456,12 @@ describe("native UI built-in delegation", () => {
     }
     expect(successor.props.agentId).toBe(nextAgents?.at(-1) ?? "main");
     successor.props.setDraft("Successor draft");
-    expect(host.draft).toBe("Successor draft");
+    expect(state.draft).toBe("Successor draft");
   });
 
-  it.each([
-    { sameTurnReturn: false, retainedParent: false },
-    { sameTurnReturn: true, retainedParent: false },
-    { sameTurnReturn: false, retainedParent: true },
-    { sameTurnReturn: true, retainedParent: true },
-  ])(
-    "retires hidden composer operations (same-turn return: $sameTurnReturn, parked parent: $retainedParent)",
-    async ({ sameTurnReturn, retainedParent }) => {
+  it.each([false, true])(
+    "retires hidden composer operations (same-turn return: %s)",
+    async (sameTurnReturn) => {
       const contexts: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
       const roots: HTMLElement[] = [];
       const dispose = vi.fn();
@@ -393,11 +476,7 @@ describe("native UI built-in delegation", () => {
           return { update: (next) => contexts.push(next), dispose };
         },
       };
-      const { host, request } = mountSurface(replacement);
-      let presented = true;
-      if (retainedParent) {
-        host.presentation = { owner: host, isPresented: () => presented };
-      }
+      const { host, state, request } = mountSurface(replacement);
       await vi.waitFor(() => expect(roots).toHaveLength(1));
       const current = contexts.at(-1);
       const view =
@@ -407,18 +486,10 @@ describe("native UI built-in delegation", () => {
       }
       current.props.setDraft("Current draft");
       const send = createDeferred<boolean>();
-      host.send.mockReturnValueOnce(send.promise);
+      state.send.mockReturnValueOnce(send.promise);
       const pending = expect(current.props.send()).rejects.toThrow("view has ended");
       const setPresented = (value: boolean) => {
-        if (retainedParent) {
-          presented = value;
-          host.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-          if (value) {
-            host.requestUpdate();
-          }
-        } else {
-          view.presented = value;
-        }
+        view.presented = value;
       };
 
       setPresented(false);
@@ -427,9 +498,9 @@ describe("native UI built-in delegation", () => {
       expect(() => current.props.abort?.()).toThrow("view has ended");
       const hiddenSend = expect(current.props.send()).rejects.toThrow("view has ended");
       expect(current.signal.aborted).toBe(false);
-      expect(host.send).toHaveBeenCalledOnce();
-      expect(host.abort).not.toHaveBeenCalled();
-      expect(host.draft).toBe("Current draft");
+      expect(state.send).toHaveBeenCalledOnce();
+      expect(state.abort).not.toHaveBeenCalled();
+      expect(state.draft).toBe("Current draft");
 
       if (sameTurnReturn) {
         setPresented(true);
@@ -445,7 +516,7 @@ describe("native UI built-in delegation", () => {
       expect(() => current.props.setDraft("Revived draft")).toThrow("view has ended");
       send.resolve(true);
       await pending;
-      await host.updateComplete;
+      flush();
       await view.updateComplete;
 
       expect(roots).toHaveLength(1);
@@ -461,22 +532,22 @@ describe("native UI built-in delegation", () => {
       expect(successor.presented).toBe(true);
       expect(successor.signal).toBe(current.signal);
       successor.props.setDraft("Successor draft");
-      expect(host.draft).toBe("Successor draft");
+      expect(state.draft).toBe("Successor draft");
       await expect(successor.props.send()).resolves.toBe(true);
       successor.props.abort?.();
-      expect(host.abort).toHaveBeenCalledOnce();
+      expect(state.abort).toHaveBeenCalledOnce();
       expect(() => current.props.setDraft("Still retired")).toThrow("view has ended");
     },
   );
 
   it("restores retained navigation when a workspace replacement's final update is pending", async () => {
-    const { host, select } = mountSurface();
+    const { host, state, select } = mountSurface();
     const navigate = vi.fn();
     const link = document.createElement("button");
     link.textContent = "Open plugin page";
     link.addEventListener("click", navigate);
-    host.navigation.append(link);
-    await host.updateComplete;
+    state.navigation.append(link);
+    flush();
 
     select({
       id: "workspace",
@@ -494,13 +565,13 @@ describe("native UI built-in delegation", () => {
     select();
     await vi.waitFor(() => expect(host.querySelector("openclaw-plugin-view")).toBeNull());
     await retired.updateComplete;
-    expect(host.querySelector("nav")).toBe(host.navigation);
+    expect(host.querySelector("nav")).toBe(state.navigation);
     expect(link.isConnected).toBe(true);
     link.click();
     expect(navigate).toHaveBeenCalledOnce();
   });
 
-  it("keeps the built-in synchronous and preserves its event receiver through composition and failure recovery", async () => {
+  it("preserves built-in controls through composition and failure recovery", async () => {
     const dispose = vi.fn();
     const replacement: ControlUiReplacement<"workspace"> = {
       id: "composed",
@@ -516,23 +587,23 @@ describe("native UI built-in delegation", () => {
         };
       },
     };
-    const { host, reportError, listeners, select } = mountSurface();
-    await host.updateComplete;
+    const { host, state, reportError, listeners, select, update, unmount } = mountSurface();
+    flush();
     expect(host.querySelector("openclaw-plugin-view")).toBeNull();
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(host.count).toBe(1);
+    expect(state.count).toBe(1);
 
     select(replacement);
     await vi.waitFor(() =>
       expect(host.querySelector("openclaw-plugin-view button")).not.toBeNull(),
     );
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(host.count).toBe(2);
+    expect(state.count).toBe(2);
 
     select();
     await vi.waitFor(() => expect(host.querySelector("openclaw-plugin-view")).toBeNull());
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(host.count).toBe(3);
+    expect(state.count).toBe(3);
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
 
@@ -547,18 +618,18 @@ describe("native UI built-in delegation", () => {
       expect(host.querySelector("[role=alert]")?.textContent).toContain(failure.message),
     );
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(host.count).toBe(4);
+    expect(state.count).toBe(4);
     expect(reportError).toHaveBeenCalledWith("review", failure);
     const input = host.querySelector<HTMLInputElement>(".builtin-input")!;
     input.value = "Unsent input";
     input.focus();
-    host.requestUpdate();
-    await host.updateComplete;
+    update();
+    flush();
     await host.querySelector("openclaw-plugin-view")!.updateComplete;
     expect(host.querySelector(".builtin-input")).toBe(input);
     expect(input.value).toBe("Unsent input");
     expect(document.activeElement).toBe(input);
-    host.remove();
+    unmount();
     await Promise.resolve();
     expect(listeners.size).toBe(0);
   });
@@ -589,7 +660,7 @@ describe("native UI built-in delegation", () => {
         };
       },
     });
-    await host.updateComplete;
+    flush();
     const view =
       host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
     await view.updateComplete;
@@ -625,48 +696,43 @@ describe("native UI built-in delegation", () => {
         container.append(document.createTextNode("Plugin content"));
       },
     };
-    const { host, provider, listeners, select, request } = mountSurface(replacement);
-    let presented = true;
-    host.presentation = { owner: host, isPresented: () => presented };
+    const { view, provider, listeners, select, request } = mountView(replacement);
+    const navigation = document.createElement("nav");
+    view.defaultView = navigation;
     await vi.waitFor(() => expect(roots).toHaveLength(1));
     select({ ...replacement });
     await vi.waitFor(() => expect(roots).toHaveLength(2));
     expect(roots[1]).not.toBe(roots[0]);
     expect(signals[0]?.aborted).toBe(true);
-    expect(host.textContent).toBe("Plugin content");
+    expect(view.textContent).toBe("Plugin content");
 
-    host.sessionKey = "other-session";
-    host.requestUpdate();
+    view.props = { sessionKey: "other-session", agentId: "main", routeId: "chat" };
     await vi.waitFor(() => expect(roots).toHaveLength(3));
     expect(roots[2]).not.toBe(roots[1]);
     expect(signals[1]?.aborted).toBe(true);
-    expect(host.textContent).toBe("Plugin content");
+    expect(view.textContent).toBe("Plugin content");
 
-    const navigationParent = host.navigation.parentNode;
+    const navigationParent = navigation.parentNode;
     const defaultTarget = document.createElement("div");
-    host.remove();
+    view.remove();
     expect(() => mountedViews[2]!.mountDefault(defaultTarget)).toThrow("view has ended");
     expect(defaultTarget.childNodes).toHaveLength(0);
-    expect(host.navigation.parentNode).toBe(navigationParent);
+    expect(navigation.parentNode).toBe(navigationParent);
     const detachedRequest = mountedViews[2]!.host.request("fixture.detached-view");
     expect(request).not.toHaveBeenCalled();
     await expect(detachedRequest).rejects.toThrow("view has ended");
     await Promise.resolve();
     expect(signals[2]?.aborted).toBe(true);
     expect(listeners.size).toBe(0);
-    const view =
-      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
-    presented = false;
-    host.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expect(view.presented).toBe(true);
+    view.presented = false;
     view.props = structuredClone(view.props);
     await view.updateComplete;
     expect(roots).toHaveLength(3);
-    provider.append(host);
+    provider.append(view);
     await vi.waitFor(() => expect(roots).toHaveLength(4));
     expect(roots[3]).not.toBe(roots[2]);
     expect(signals[3]?.aborted).toBe(false);
-    expect(host.textContent).toBe("Plugin content");
+    expect(view.textContent).toBe("Plugin content");
     expect(view.presented).toBe(false);
   });
 });

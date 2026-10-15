@@ -14,6 +14,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
@@ -235,7 +236,11 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       >
         {persistentIndicator()}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">{marqueeLabel()}</span>
+          <span class="sidebar-recent-session__title-row">
+            <Show when={session().titlePending} fallback={marqueeLabel()}>
+              <SessionTitlePlaceholder />
+            </Show>
+          </span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
               {(channel) => (

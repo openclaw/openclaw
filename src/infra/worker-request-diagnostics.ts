@@ -162,7 +162,7 @@ export function trackWorkerRequest(
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
     kind === "sqlite_writer" &&
-    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request"))
+    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request", true))
       ? { enqueued: enqueuedAt }
       : undefined;
   let startedAt: number | undefined;
@@ -171,7 +171,7 @@ export function trackWorkerRequest(
     phase: DiagnosticWorkerRequestFields["phase"],
     durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
   ) => {
-    if (!hasInternalDiagnosticEventInterest("worker.request")) {
+    if (!hasInternalDiagnosticEventInterest("worker.request", true)) {
       return;
     }
     emitTrustedDiagnosticEvent({

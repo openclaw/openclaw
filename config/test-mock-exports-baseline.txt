@@ -7133,7 +7133,6 @@
 ["src/gateway/server-methods/session-discussion.test.ts","../../agents/utility-model.js","5d373931f4374d327d1719087efbea02e5fd3549464c2324af6c9a13f3736cd1",1]
 ["src/gateway/server-methods/session-discussion.test.ts","../../auto-reply/reply/conversation-label-generator.js","906b88cb9f5a70c220be1cea9592b7963e9325c5779518d54d3935b7f0ff35f0",1]
 ["src/gateway/server-methods/session-discussion.test.ts","../../plugins/session-discussion-registry.js","67af200a4b8bac999e85f49ae415f8019dffb95c4b154e13fa8fcfb57d6ec0ae",1]
-["src/gateway/server-methods/session-discussion.test.ts","./session-change-event.js","59f0dbca2e020baedfb6d85ff2ccff7f594c183b986da9de85811888337b5e3e",1]
 ["src/gateway/server-methods/sessions-github-read.test.ts","../../process/exec.js","87bbccb42d2149907918424b8f2779380f5c017162a4a95b7fa0858f85673e6d",1]
 ["src/gateway/server-methods/sessions-github-read.test.ts","../github-oauth-lifecycle.js","2a8a9b2d2d0a8b5ae09c02eabf29806b24672658175bdeb7bd5ea941016676a1",1]
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","../../../packages/gateway-protocol/src/index.js","dc2bd69555874c90c4663002cbea8b3046b837aabbdf6632435cedfd082d332c",1]

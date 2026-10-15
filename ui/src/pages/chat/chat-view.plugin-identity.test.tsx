@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { html, LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiHost,
@@ -9,15 +8,16 @@ import type {
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
-  createApplicationContextProvider,
+  createSolidApplicationContextProvider,
   createApplicationGateway,
-} from "../../test-helpers/application-context.ts";
+} from "../../test-helpers/solid-application-context.tsx";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import type { ChatProps } from "./chat-view.tsx";
-import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
+import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { GroupedMessage } from "./components/chat-message-bubble-view.tsx";
 import { prepareChatMessageRender } from "./components/chat-message-markdown.ts";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
@@ -70,7 +70,7 @@ describe("native chat view session identity", () => {
         reportError,
       },
     } as unknown as ApplicationContext;
-    const provider = createApplicationContextProvider(context);
+    const provider = createSolidApplicationContextProvider(context);
     const props: ChatProps = {
       ...threadProps("native-owner", "global", []),
       ...createComposerProps({
@@ -84,41 +84,39 @@ describe("native chat view session identity", () => {
       onRefresh: vi.fn(),
       agentsList: null,
     };
-    class ChatHost extends LitElement {
-      override createRenderRoot() {
-        return this;
-      }
-
-      override render() {
-        return html`${renderChat(props, context)}
-        ${renderGroupedMessage(
-          prepareChatMessageRender({
-            role: "toolResult",
-            toolCallId: "identity-result",
-            toolName: "inspect",
-            content: [{ type: "text", text: "Inspection complete" }],
-          }),
-          "identity-message",
-          {
-            isStreaming: false,
-            showReasoning: false,
-            sessionKey: props.sessionKey,
-            agentId: props.currentAgentId,
-          },
-        )}`;
-      }
-    }
-    customElements.define("native-chat-owner-test-host", ChatHost);
-    provider.append(document.createElement("native-chat-owner-test-host"));
-    document.body.append(provider);
+    // ChatView still contains registered bridges that request their application through the DOM.
+    const container = document.body.appendChild(createApplicationContextProvider(context));
+    const view = mountSolid(
+      () => (
+        <>
+          <ChatView props={props} />
+          <GroupedMessage
+            preparation={prepareChatMessageRender({
+              role: "toolResult",
+              toolCallId: "identity-result",
+              toolName: "inspect",
+              content: [{ type: "text", text: "Inspection complete" }],
+            })}
+            messageKey="identity-message"
+            options={{
+              isStreaming: false,
+              showReasoning: false,
+              sessionKey: props.sessionKey,
+              agentId: props.currentAgentId,
+            }}
+          />
+        </>
+      ),
+      { container, wrapper: provider.wrapper },
+    );
 
     await vi.waitFor(() => {
       expect(reportError).not.toHaveBeenCalled();
-      expect(provider.querySelectorAll("[data-native-owner]")).toHaveLength(2);
+      expect(view.container.querySelectorAll("[data-native-owner]")).toHaveLength(2);
     });
     expect(
       Object.fromEntries(
-        [...provider.querySelectorAll<HTMLElement>("[data-native-owner]")].map((element) => [
+        [...view.container.querySelectorAll<HTMLElement>("[data-native-owner]")].map((element) => [
           element.dataset.nativeOwner,
           element.textContent,
         ]),
