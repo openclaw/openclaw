@@ -331,7 +331,8 @@ function readAttemptJobs(repository, producer, runGh) {
       repository,
       `actions/runs/${producer.runId}/attempts/${producer.runAttempt}/jobs?per_page=100&page=${page}`,
       runGh,
-      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion}]}",
+      // Keep the execution fields sameJobExecution compares.
+      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion,started_at,completed_at,steps:[(.steps // [])[] | {number,name,status,conclusion,started_at,completed_at}]}]}",
     );
     if (
       !Array.isArray(response.jobs) ||

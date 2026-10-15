@@ -512,7 +512,11 @@ describe("prepared npm bundle", () => {
         return JSON.stringify(current);
       }
       if (endpoint.includes("/attempts/3/jobs?")) {
-        return JSON.stringify({ total_count: 1, jobs: [later] });
+        // Apply the production --jq projection so dropped execution fields fail here.
+        return execFileSync("jq", ["-c", args[args.indexOf("--jq") + 1]!], {
+          input: JSON.stringify({ total_count: 1, jobs: [later] }),
+          encoding: "utf8",
+        });
       }
       return fixture.runGh(args);
     };
