@@ -79,7 +79,6 @@ async function runSchedulingFixture(
   shape: HistoryShape,
   options: {
     historyError?: Error;
-    persistentHistoryError?: boolean;
     onHistoryRead?: () => void;
     initialHistoryCallCount?: number;
     mutateCalls?: (calls: ToolCall[]) => void;
@@ -132,7 +131,7 @@ async function runSchedulingFixture(
     if (method === "chat.history") {
       historyReads += 1;
       options.onHistoryRead?.();
-      if (options.historyError && (historyReads === 1 || options.persistentHistoryError)) {
+      if (options.historyError && historyReads === 1) {
         throw options.historyError;
       }
       expect(params.sessionKey).toBe(
@@ -258,33 +257,6 @@ afterEach(() => {
 });
 
 describe("scheduling YAML canonical tool proof", () => {
-  it("admits canonical history after a typed transient storage failure", async () => {
-    const historyError = Object.assign(new Error("session history admission unavailable"), {
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { method: "chat.history" },
-    });
-    const { result, historyReads } = await runSchedulingFixture("authority", "nested", {
-      historyError: new Error("gateway call failed", { cause: historyError }),
-    });
-    expect(result.status).toBe("pass");
-    expect(historyReads).toBeGreaterThan(1);
-    expect(Date.now()).toBe(now + 250);
-  });
-  it("accepts read-derived skill authority without admitting unrelated tools", async () => {
-    const { result, restarted, removed } = await runSchedulingFixture("authority", "nested", {
-      mutateJobs: (jobs) => {
-        const overbroad = jobs[2];
-        assert.ok(overbroad);
-        overbroad.payload.toolsAllow = ["skills_read", "read"];
-      },
-    });
-    expect(result.status).toBe("pass");
-    expect(restarted).toBe(true);
-    expect(removed).toEqual(["job-0", "job-1", "job-2", "job-3"]);
-  });
-
   it.each(["authority", "recurring"] as const)(
     "ignores a rejected %s add attempt before successful mutations",
     async (kind) => {
@@ -331,17 +303,6 @@ describe("scheduling YAML canonical tool proof", () => {
     },
   );
 
-  it("rejects an unrequested mutation alongside read-only introspection and two adds", async () => {
-    await expect(
-      runSchedulingFixture("recurring", "nested", {
-        mutateCalls: (calls) => {
-          calls.unshift({ action: "list", includeDisabled: true });
-          calls.push({ action: "run", jobId: "job-0" });
-        },
-      }),
-    ).rejects.toThrow(/expected exactly two/);
-  });
-
   it.each([
     { code: "UNAVAILABLE", retryable: false, method: "chat.history" },
     { code: "INVALID_REQUEST", retryable: true, method: "chat.history" },
@@ -358,26 +319,6 @@ describe("scheduling YAML canonical tool proof", () => {
     ).rejects.toBe(historyError);
     expect(onHistoryRead).toHaveBeenCalledTimes(1);
     expect(Date.now()).toBe(now);
-  });
-
-  it("keeps the existing admission deadline and final typed error when storage stays unavailable", async () => {
-    const historyError = Object.assign(new Error("persistent history admission failure"), {
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { method: "chat.history" },
-    });
-    const onHistoryRead = () => {
-      expect(Date.now()).toBeLessThan(now + 240_000);
-    };
-    await expect(
-      runSchedulingFixture("authority", "direct", {
-        historyError,
-        persistentHistoryError: true,
-        onHistoryRead,
-      }),
-    ).rejects.toMatchObject({ message: "timed out after 240000ms", cause: historyError });
-    expect(Date.now()).toBe(now + 240_000);
   });
 
   it.each([

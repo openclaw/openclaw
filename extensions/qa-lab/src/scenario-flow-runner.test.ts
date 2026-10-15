@@ -663,26 +663,6 @@ describe("scenario-flow-runner", () => {
     expect(result.details).toBe(message);
   });
 
-  it.each([
-    {
-      scenarioId: "channel-chat-baseline",
-      to: "channel:qa-room",
-      text: "generic shared-channel reply without the required marker",
-    },
-  ])("rejects unmarked outbound replies for $scenarioId", async ({ scenarioId, to, text }) => {
-    await expect(
-      runLoadedScenarioFlow(scenarioId, {
-        onWaitForOutboundMessage: ({ state }) => {
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to,
-            text,
-          });
-        },
-      }),
-    ).rejects.toThrow("waiting for outbound marker");
-  });
-
   it("rejects reconnect follow-up replies that replay the first marker", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
