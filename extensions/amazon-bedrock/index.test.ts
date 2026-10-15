@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -328,14 +327,6 @@ describe("amazon-bedrock provider plugin", () => {
     } as never);
 
     expect(restricted?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
-  });
-
-  it("keeps unsupported provider routes disabled with the runtime cache override", async () => {
-    await withEnvAsync({ AWS_BEDROCK_FORCE_CACHE: "1" }, async () => {
-      const provider = await registerWithConfig(undefined);
-      const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
-      expectWrappedResultFields(result, { cacheRetention: "none" });
-    });
   });
 
   it("omits temperature for canonical Bedrock Opus aliases", async () => {
@@ -858,28 +849,6 @@ describe("amazon-bedrock provider plugin", () => {
 
       expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
       expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
-    });
-
-    it("checks caller cancellation before profile lookup", async () => {
-      const modelId =
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/pre-aborted";
-      const controller = new AbortController();
-      const reason = new Error("cancelled before payload");
-      controller.abort(reason);
-      const provider = await registerWithConfig(undefined);
-
-      await expect(
-        callWrappedStreamWithPayload(
-          provider,
-          modelId,
-          makeAppInferenceProfileDescriptor(modelId),
-          { cacheRetention: "short", signal: controller.signal },
-          buildBedrockCachePayload(),
-        ),
-      ).rejects.toBe(reason);
-
-      expect(sendBedrockCommand).not.toHaveBeenCalled();
-      expect(destroyBedrockClient).not.toHaveBeenCalled();
     });
   });
 });

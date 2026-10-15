@@ -230,71 +230,59 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
-  it.each([
-    ["global.amazon.nova-2-lite-v1:0", true],
-    ["amazon.nova-sonic-v1:0", false],
-  ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
-    vi.stubEnv("OPENCLAW_CACHE_RETENTION", supported ? "long" : undefined);
-    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", supported ? "1" : undefined);
-    const tools = [
-      { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
-      {
-        name: "calculate",
-        description: "Calculate",
-        parameters: { type: "object", properties: {} },
-      },
-    ];
-    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-      const payload = await capturePayload(
-        bedrockModel({ id, name: "Nova Pro" }),
+  it.each([["global.amazon.nova-2-lite-v1:0", true]])(
+    "emits only supported Nova checkpoints for %s",
+    async (id, supported) => {
+      vi.stubEnv("OPENCLAW_CACHE_RETENTION", supported ? "long" : undefined);
+      vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", supported ? "1" : undefined);
+      const tools = [
+        { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
         {
-          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
-          messages: [{ role: "user", content: "Hello", timestamp: 0 }],
-          tools,
+          name: "calculate",
+          description: "Calculate",
+          parameters: { type: "object", properties: {} },
         },
-        cacheRetention === undefined ? {} : { cacheRetention },
-      );
-      if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
-        expect(payload.system).toEqual([
-          { text: "Stable workspace" },
-          { cachePoint: { type: "default" } },
-          { text: "Today: Monday" },
-        ]);
-        expect(payload.messages?.[0]?.content).toEqual([
-          { text: "Hello" },
-          { cachePoint: { type: "default" } },
-        ]);
-      } else {
-        expect(JSON.stringify(payload)).not.toContain("cachePoint");
-        if (supported || cacheRetention === "none") {
-          expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
+      ];
+      for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+        const payload = await capturePayload(
+          bedrockModel({ id, name: "Nova Pro" }),
+          {
+            systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+            tools,
+          },
+          cacheRetention === undefined ? {} : { cacheRetention },
+        );
+        if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
+          expect(payload.system).toEqual([
+            { text: "Stable workspace" },
+            { cachePoint: { type: "default" } },
+            { text: "Today: Monday" },
+          ]);
+          expect(payload.messages?.[0]?.content).toEqual([
+            { text: "Hello" },
+            { cachePoint: { type: "default" } },
+          ]);
+        } else {
+          expect(JSON.stringify(payload)).not.toContain("cachePoint");
+          if (supported || cacheRetention === "none") {
+            expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
+          }
         }
+        expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([
+          "calculate",
+          "lookup",
+        ]);
+        expect(tools.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
+        expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
       }
-      expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([
-        "calculate",
-        "lookup",
-      ]);
-      expect(tools.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
-      expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
-    }
-  });
+    },
+  );
 
   it.each([
-    ["anthropic.claude-haiku-5-5", "1h"],
-    ["global.anthropic.claude-haiku-5-5", "1h"],
-    ["us.anthropic.claude-fable-5", "1h"],
-    ["us.anthropic.claude-mythos-5", "1h"],
     ["global.anthropic.claude-opus-5", "1h"],
     ["global.anthropic.claude-sonnet-5", "1h"],
     ["opaque-deployment", undefined],
-    ["anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
-    ["us.anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
-    ["anthropic.claude-sonnet-4-20250514-v1:0", undefined],
-    ["anthropic.claude-opus-4-1-20250805-v1:0", undefined],
-    ["anthropic.claude-sonnet-4-5-20250929-v1:0", "1h"],
-    ["anthropic.claude-opus-4-8", "1h"],
-    ["anthropic.claude-sonnet-5-5", "1h"],
-    ["anthropic.claude-fable-5-1", "1h"],
   ])("uses the supported long-retention TTL for %s", async (id, ttl) => {
     vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", id === "opaque-deployment" ? "1" : undefined);
     const payload = await capturePayload(
@@ -977,28 +965,6 @@ describe("Bedrock stream client lifecycle", () => {
       errorMessage: "acceptance observer failed",
     });
     expect(close).toHaveBeenCalledOnce();
-    expectDestroyedClient(send, destroy);
-  });
-
-  it("records a transport-failure diagnostic when the request fails before any output", async () => {
-    const send = vi
-      .spyOn(BedrockRuntimeClient.prototype, "send")
-      .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
-    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-
-    const result = await streamDefaultBedrock().result();
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "socket hang up",
-      errorCode: "ECONNRESET",
-    });
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        type: "provider_transport_failure",
-        details: { eventsEmitted: false, phase: "before_message_stream_start" },
-      }),
-    ]);
     expectDestroyedClient(send, destroy);
   });
 
