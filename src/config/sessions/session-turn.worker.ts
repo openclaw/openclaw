@@ -297,25 +297,6 @@ export function applySessionTurn<T>(
               },
               assertRouting,
             );
-            // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
-            for (const append of input.options.messages) {
-              if (!append.preparedMessage?.prepared) {
-                continue;
-              }
-              const key = readMessageIdempotencyKey(append.message);
-              const current =
-                key && append.idempotencyLookup !== "caller-checked"
-                  ? readTranscriptMessageByScopedIdempotencyKey(
-                      database,
-                      scope,
-                      key,
-                      append.idempotencyLookup,
-                    )
-                  : undefined;
-              if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
-                throw new Error("Transcript idempotency changed while preparing the turn");
-              }
-            }
             let projectionNeedsReconcile = false;
             const committed = kernel.commit(
               database,

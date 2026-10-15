@@ -1464,6 +1464,28 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("leaves an unsafe legacy unit intact for full installer regeneration", async () => {
+    const { env, unitPath } = await createSystemdFixture("gateway");
+    const previous = [
+      "[Unit]",
+      "Description=OpenClaw Gateway (v2026.6.35)",
+      "[Service]",
+      "ExecStart=/usr/bin/openclaw gateway",
+      "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+      "Environment=OPENCLAW_SERVICE_KIND=gateway",
+      "Environment=OPENCLAW_SERVICE_VERSION=2026.6.35",
+      "",
+    ].join("\n");
+    await writeUnitFixture(unitPath, previous);
+    await fs.chmod(unitPath, 0o664);
+
+    await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(false);
+
+    expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
+    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "reset managed markers", version: "2026.7.1-2", reset: true, admitted: undefined },
     {

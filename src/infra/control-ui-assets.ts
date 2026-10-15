@@ -8,7 +8,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
@@ -108,43 +108,7 @@ async function resolveControlUiDistIndexPath(
     argv1: path.resolve(argv1),
     moduleUrl,
   });
-  if (packageRoot) {
-    return path.join(packageRoot, "dist", "control-ui", "index.html");
-  }
-
-  // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
-  // This handles global installs where path-based resolution might fail.
-  const fallbackStartDirs = new Set(
-    entrypointCandidates.map((candidate) => path.dirname(candidate)),
-  );
-  for (const startDir of fallbackStartDirs) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-      const pkgJsonPath = path.join(dir, "package.json");
-      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (fs.existsSync(pkgJsonPath)) {
-        try {
-          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
-          const parsed = JSON.parse(raw) as { name?: unknown };
-          if (parsed.name === "openclaw") {
-            return fs.existsSync(indexPath) ? indexPath : null;
-          }
-          // Stop at the first package boundary to avoid resolving through unrelated ancestors.
-          break;
-        } catch {
-          // Invalid package.json at package boundary; abort this candidate chain.
-          break;
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
-    }
-  }
-
-  return null;
+  return packageRoot ? resolveControlUiDistIndexPathForRoot(packageRoot) : null;
 }
 
 type ControlUiRootResolveOptions = {
@@ -419,6 +383,7 @@ export async function ensureControlUiAssetsBuilt(
 
   let build: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
       timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,

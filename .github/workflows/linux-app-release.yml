@@ -1,28 +1,8 @@
 name: Linux App Release
 
+run-name: Linux App Release request=${{ github.event.workflow_run.id }} attempt=${{ github.event.workflow_run.run_attempt }}
+
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Published core tag to reconcile (mirror only; no native build)"
-        required: true
-        type: string
-      source_sha:
-        description: "Exact published core source SHA"
-        required: true
-        type: string
-      tooling_sha:
-        description: "Exact protected parent workflow SHA"
-        required: true
-        type: string
-      release_publish_run_id:
-        description: "Original core publication run"
-        required: true
-        type: string
-      release_publish_run_attempt:
-        description: "Exact original core publication attempt"
-        required: true
-        type: string
   workflow_run: # zizmor: ignore[dangerous-triggers] main-only release builder; exact successful request/main identity is validated before selected-tag execution, while signing and publication stay in fresh jobs
     workflows: ["Linux App Release Request"]
     branches: [main]
@@ -32,7 +12,7 @@ permissions: {}
 
 # Serial admission lets later requests reuse the first completed publication.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('linux-app-mirror-{0}', github.run_id) || 'linux-app-release-build' }}
+  group: linux-app-release-build
   cancel-in-progress: false
   queue: max
 
@@ -246,6 +226,40 @@ jobs:
             echo "- Linux: existing same-tag bundles and signed updater metadata verified; no rebuild needed. Current updater publication follows." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Record Linux builder admission
+        if: ${{ always() }}
+        env:
+          REQUEST_RUN_ID: ${{ github.event.workflow_run.id }}
+          REQUEST_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+          TAG_SHA: ${{ steps.ancestry.outputs.tag_sha }}
+          ADMISSION_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          jq -n --arg repository "$GITHUB_REPOSITORY" \
+            --arg requestRunId "$REQUEST_RUN_ID" --arg requestRunAttempt "$REQUEST_RUN_ATTEMPT" \
+            --arg requestSha "$REQUEST_HEAD_SHA" --arg builderRunId "$GITHUB_RUN_ID" \
+            --arg builderRunAttempt "$GITHUB_RUN_ATTEMPT" --arg toolingSha "$WORKFLOW_SHA" \
+            --arg tag "$RELEASE_TAG" --arg sourceSha "$TAG_SHA" --arg status "$ADMISSION_STATUS" \
+            '{schemaVersion: 1, repository: $repository,
+              request: {runId: $requestRunId, runAttempt: $requestRunAttempt, headSha: $requestSha},
+              builder: {runId: $builderRunId, runAttempt: $builderRunAttempt, toolingSha: $toolingSha},
+              tag: (if $tag == "" then null else $tag end),
+              sourceSha: (if $sourceSha == "" then null else $sourceSha end),
+              admission: (if $status == "success" then "admitted" else "rejected" end)}' \
+            > "$RUNNER_TEMP/linux-release-admission.json"
+          echo "- Linux builder: $ADMISSION_STATUS; request https://github.com/$GITHUB_REPOSITORY/actions/runs/$REQUEST_RUN_ID; builder https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain Linux builder admission
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-release-admission-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-release-admission.json
+          if-no-files-found: error
+
       - name: Retain Linux completion evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -357,6 +371,7 @@ jobs:
           .release-tooling/apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
 
       - name: Build Linux companion bundles
+        id: bundle-build
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
@@ -374,6 +389,7 @@ jobs:
             --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false,\"useLocalToolsDir\":false}}"
 
       - name: Finalize AppImage
+        id: finalize-appimage
         env:
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
@@ -382,6 +398,7 @@ jobs:
           .release-tooling/apps/linux/scripts/finalize-appimage.sh "$bundle_dir"
 
       - name: Verify and stage unsigned Linux bundles
+        id: stage-bundles
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
@@ -433,6 +450,51 @@ jobs:
             "${runtime_args[@]}" \
             --shell-container \
               "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+
+      # Diagnostic bytes never use the qualified artifact IDs consumed by signing.
+      - name: Retain completed unqualified Linux bundles
+        if: ${{ failure() && steps.bundle-build.outcome == 'success' }}
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          FINALIZE_OUTCOME: ${{ steps.finalize-appimage.outcome }}
+          STAGING_OUTCOME: ${{ steps.stage-bundles.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.packaged-runtime.outcome }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          output="$RUNNER_TEMP/linux-unqualified-bundles"
+          mkdir -p "$output/bundles"
+          bundles=(apps/linux/src-tauri/target/release/bundle/deb/*.deb apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage)
+          for bundle in "${bundles[@]}"; do
+            [[ -f "$bundle" && ! -L "$bundle" ]]
+            cp "$bundle" "$output/bundles/"
+          done
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "::warning::No completed Linux bundle files remain for diagnostics."
+            exit 0
+          fi
+          (cd "$output" && sha256sum bundles/* > SHA256SUMS)
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg tag "$RELEASE_TAG" \
+            --arg sourceSha "$TAG_SHA" --arg toolingSha "$WORKFLOW_SHA" \
+            --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg finalize "$FINALIZE_OUTCOME" --arg staging "$STAGING_OUTCOME" --arg runtime "$RUNTIME_OUTCOME" \
+            '{schemaVersion: 1, qualification: "unqualified", repository: $repository, tag: $tag,
+              sourceSha: $sourceSha, toolingSha: $toolingSha, runId: $runId, runAttempt: $runAttempt,
+              checks: {finalize: $finalize, staging: $staging, packagedRuntime: $runtime}}' \
+            > "$output/identity.json"
+          echo "- Linux: completed bundles retained for diagnostics only; not eligible for signing or publication. Verify identity.json and SHA256SUMS before rerunning the packaging checker on these exact bytes." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unqualified Linux bundle diagnostics
+        if: ${{ failure() && steps.bundle-build.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-unqualified-bundles
 
       - name: Upload packaged runtime failure evidence
         if: failure() && steps.packaged-runtime.outcome == 'failure'
@@ -1131,94 +1193,3 @@ jobs:
             ${{ runner.temp }}/linux-publication.log
             ${{ runner.temp }}/linux-release-before-upload
           if-no-files-found: ignore
-
-  mirror_legacy:
-    name: Reconcile legacy Linux updater metadata
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw' }}
-    # The core parent dispatches and exits; this queue never holds that parent.
-    concurrency:
-      group: linux-app-release-publish
-      queue: max
-      cancel-in-progress: false
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - name: Checkout trusted Linux mirror tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: |
-            apps/linux/src-tauri/tauri.conf.json
-            scripts/linux-app-channel.mjs
-            scripts/lib/release-version.mjs
-            scripts/lib/record-shared.mjs
-            scripts/release-tooling-identity.mjs
-          sparse-checkout-cone-mode: false
-
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.21.0"
-          package-manager-cache: false
-
-      - name: Verify detached mirror dispatch identity
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_TOOLING_SHA: ${{ inputs.tooling_sha }}
-          PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
-          PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          WORKFLOW_REF: ${{ github.ref_name }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$WORKFLOW_FULL_REF" == refs/tags/release-publish/* && "$EXPECTED_TOOLING_SHA" == "$WORKFLOW_SHA" ]]
-          node scripts/release-tooling-identity.mjs verify \
-            --repository "$GITHUB_REPOSITORY" \
-            --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
-            --workflow-sha "$WORKFLOW_SHA" \
-            --release-publish-run-id "$PARENT_RUN_ID" \
-            --release-publish-run-attempt "$PARENT_RUN_ATTEMPT" \
-            --release-publish-ref "$WORKFLOW_REF" --release-publish-full-ref "$WORKFLOW_FULL_REF" \
-            --release-publish-parent-state-policy active-or-success
-
-      - name: Mirror verified canonical bytes to the actual core latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          TAG_SHA: ${{ inputs.source_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-          WORKFLOW_REF: ${{ github.ref_name }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
-          PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
-        run: |
-          set -euo pipefail
-          node scripts/linux-app-channel.mjs mirror \
-            --tag "$RELEASE_TAG" --source-sha "$TAG_SHA" --tooling-sha "$WORKFLOW_SHA" \
-            --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
-            --release-publish-run-id "$PARENT_RUN_ID" --release-publish-run-attempt "$PARENT_RUN_ATTEMPT" \
-            --release-publish-ref "$WORKFLOW_REF" --release-publish-full-ref "$WORKFLOW_FULL_REF" \
-            --public-key-config apps/linux/src-tauri/tauri.conf.json \
-            2> "$RUNNER_TEMP/linux-mirror.log" | tee "$RUNNER_TEMP/linux-mirror.json"
-
-      - name: Record degraded legacy Linux bridge
-        if: ${{ failure() }}
-        run: |
-          echo "::warning::Legacy Linux update delivery is degraded; core publication remains complete. Reconcile canonical/latest identity before recovering this mirror-only dispatch."
-          echo "- Legacy Linux bridge: incomplete. Dispatch acceptance was not mirror success; inspect this run before recovery." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Retain Linux mirror result
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: linux-mirror-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/linux-mirror.json
-            ${{ runner.temp }}/linux-mirror.log
-          if-no-files-found: warn

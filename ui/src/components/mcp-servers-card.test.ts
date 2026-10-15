@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
@@ -13,16 +14,14 @@ import { createConfigCapabilityHarness } from "../lib/config/config-test-harness
 import { buildRemoveMcpServerPatch, patchMcpServers } from "../lib/config/mcp-servers.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import * as uuid from "../lib/uuid.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import {
-  createApplicationContextProvider,
   createApplicationGateway,
-  type ApplicationContextProvider,
-} from "../test-helpers/application-context.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
-import "./mcp-servers-card.tsx";
+import { McpServersCard } from "./mcp-servers-card.tsx";
 
-type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
 type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];
 
 type RuntimeConfigHarness = {
@@ -112,9 +111,8 @@ async function mountCard(
     gateway?: ApplicationGateway;
   } = {},
 ): Promise<{
-  card: McpServersCard;
+  card: HTMLElement;
   context: ApplicationContext;
-  provider: ApplicationContextProvider;
   harness: RuntimeConfigHarness;
 }> {
   const harness = createRuntimeConfig(options.config ?? { mcp: { servers: {} } });
@@ -129,15 +127,20 @@ async function mountCard(
     runtimeConfig: harness.runtimeConfig,
     basePath: "",
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const card = document.createElement("openclaw-mcp-servers-card");
-  card.pluginsHref = "/settings/plugins";
-  document.body.append(provider);
-  mountSolid(() => card, { container: provider });
-  await card.updateComplete;
+  const { container } = mountSolid(
+    () =>
+      createComponent(McpServersCard, {
+        pluginsHref: "/settings/plugins",
+        docsUrl: "https://docs.openclaw.ai/tools/mcp",
+      }),
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
   await waitForFast(() => expect(harness.ensureLoaded).toHaveBeenCalled());
-  await card.updateComplete;
-  return { card, context, provider, harness };
+  const card = expectDefined(
+    container.querySelector<HTMLElement>("openclaw-mcp-servers-card"),
+    "MCP servers card",
+  );
+  return { card, context, harness };
 }
 
 function actionButton(container: Element, label: string): HTMLButtonElement {
@@ -148,13 +151,13 @@ function actionButton(container: Element, label: string): HTMLButtonElement {
 }
 
 async function submitAddForm(
-  card: McpServersCard,
+  card: HTMLElement,
   name: string,
   target: string,
   transport: "streamable-http" | "sse" | "stdio" = "streamable-http",
 ) {
   actionButton(card, "Add server").click();
-  await card.updateComplete;
+  flush();
   const form = expectDefined(card.querySelector<HTMLFormElement>(".mcp-server-form"), "MCP form");
   expectDefined(form.querySelector<HTMLInputElement>('[name="mcp-name"]'), "name input").value =
     name;
@@ -210,6 +213,7 @@ describe("openclaw-mcp-servers-card", () => {
   });
 
   afterEach(() => {
+    cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
@@ -353,7 +357,7 @@ describe("openclaw-mcp-servers-card", () => {
       );
       lateNext.resolve({ done: true, status: "done" });
       await lateNext.promise;
-      await card.updateComplete;
+      flush();
       expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(card.textContent).not.toContain("Authentication saved");
       expect(replacementRequest).not.toHaveBeenCalled();
@@ -365,7 +369,7 @@ describe("openclaw-mcp-servers-card", () => {
           client: replacement,
           hello: { ...hello, features: { methods: [] } },
         });
-        await card.updateComplete;
+        flush();
       }
       if (change === "disconnect" || change === "capability drop") {
         expect(card.textContent).toContain("openclaw mcp login docs");

@@ -116,6 +116,8 @@ export type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Defaults to logical activity for rows without a live activity projection. */
+  isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
   hasActiveSubagentRun?: boolean;

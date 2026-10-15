@@ -7,7 +7,6 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
-import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -247,7 +246,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
                                 key: `side-chat:${waiting().startedAt}`,
                                 startedAt: waiting().startedAt,
                               }}
-                              options={{ workingPhrases: currentThemeBranding().workingPhrases }}
+                              options={{}}
                             />
                           </div>
                         )}
