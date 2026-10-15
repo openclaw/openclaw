@@ -121,7 +121,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   const { inMemoryRuns, fullCache, compactCache, select, readScope } = params;
   const requestSignal = getAsyncWorkSignal();
   const privateSnapshot = getActiveOpenClawStateDatabaseReadSnapshot();
-  let context = shouldReadPersistedSubagentRuns() ? captureOpenClawStateWorkerContext() : undefined;
+  const readPersisted = shouldReadPersistedSubagentRuns();
+  let context = readPersisted ? captureOpenClawStateWorkerContext() : undefined;
   const assertCurrent = () => {
     requestSignal?.throwIfAborted();
     getAsyncWorkSignal()?.throwIfAborted();
@@ -197,7 +198,9 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
         }
       }
       const currentCompact =
-        context && !privateSnapshot ? getPersistedSubagentRunsSnapshot(compactCache) : compact;
+        readPersisted && context && !privateSnapshot
+          ? getPersistedSubagentRunsSnapshot(compactCache)
+          : compact;
       if (!currentCompact || (currentCompact !== compact && !currentFull)) {
         return { ready: false };
       }

@@ -37,7 +37,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./subagent-registry-memory.js", () => ({
+vi.mock("./subagent-registry-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry-memory.js")>()),
   getSubagentRunsForChildSession: mocks.getSubagentRunsForChildSession,
   immutableSubagentRunSessionList: (entry: SubagentRunRecord) =>
     projectSubagentRunForSessionList(entry),

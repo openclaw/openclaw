@@ -4,7 +4,7 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { buildSubagentSessionListReadIndex } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentSessionListReadView } from "./subagent-registry-state.js";
-import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 /** A resident list index consumes keyed publications until its source is replaced. */
 export function createSubagentSessionListReadIndex(
@@ -66,7 +66,9 @@ export function createSubagentSessionListReadIndex(
           const owner =
             resident &&
             copySubagentRunRuntimeOwner(resident, immutableSubagentRunSessionList(resident));
-          if (memory.get(id) !== owner || !isDeepStrictEqual(index.inputs.runs.get(id), row)) {
+          const previousOwner = memory.get(id);
+          const sameOwner = previousOwner === owner || isSameSubagentRunOwner(previousOwner, owner);
+          if (!sameOwner || !isDeepStrictEqual(index.inputs.runs.get(id), row)) {
             for (const entry of [index.inputs.runs.get(id), row]) {
               if (entry) {
                 changedChildren.add(entry.childSessionKey.trim());
