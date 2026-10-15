@@ -2,7 +2,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { loginHarness, openPicker, selectProvider } from "./model-providers-login.test-support.ts";
+import {
+  loginHarness,
+  openPicker,
+  selectProvider,
+} from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
   startSelectedLogin,
@@ -51,7 +55,7 @@ it("offers the named Muse starter before catalog and config reconciliation", asy
   answer.resolve({
     done: true,
     status: "done",
-    modelActivation: { modelRef: "meta/muse-spark-1.3" },
+    modelActivation: { modelRef: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3" },
   });
   try {
     await waitForSolid(() =>

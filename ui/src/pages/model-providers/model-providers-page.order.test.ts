@@ -825,6 +825,12 @@ describe("Models account recovery", () => {
       await waitForSolid(() =>
         expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
       );
+      const close = [
+        ...page.querySelectorAll<HTMLButtonElement>(".model-setup-wizard button"),
+      ].find((button) => button.textContent?.trim() === "Close");
+      expect(close).toBeDefined();
+      close!.click();
+      await page.updateComplete;
       expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },

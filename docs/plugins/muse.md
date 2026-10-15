@@ -63,7 +63,8 @@ is needed.
 You can also choose **Meta → Muse Code** in the **Provider Access** connection
 dialog. It signs in, verifies access, and enables the Muse runtime without
 changing the active model. The success dialog confirms **Muse Code is connected**
-and names the model ready for your agent, without waiting for a catalog refresh.
+and names the model ready for your agent using the Gateway's provider catalog,
+without waiting for a catalog refresh in the browser.
 Choose **Start a new chat with Muse Spark 1.3** to use that model for a new chat,
 or **Close** to stay on Provider Access. Use **AI Setup** to connect and select a
 default model in one flow.

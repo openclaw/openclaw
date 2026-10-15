@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import metaManifest from "../../../../extensions/meta/openclaw.plugin.json" with { type: "json" };
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -521,10 +520,7 @@ export class ModelProviderLoginController {
           model.manualSelectionAllowed !== false &&
           model.recommended === true,
       );
-    const name =
-      (provider === "meta"
-        ? metaManifest.modelCatalog.providers.meta.models.find((model) => model.id === id)?.name
-        : undefined) ?? known?.name;
+    const name = completion.modelActivation?.modelName ?? known?.name;
     this.completionModel = recommended
       ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
       : name
@@ -571,12 +567,14 @@ export class ModelProviderLoginController {
           .join("\n") || undefined,
     };
     this.host.requestUpdate();
-    void this.options.refresh(providerId).catch((error: unknown) => {
+    try {
+      await this.options.refresh(providerId);
+    } catch (error) {
       if (generation === this.generation) {
         this.refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
         this.host.requestUpdate();
       }
-    });
+    }
     if (generation !== this.generation || context.gateway.snapshot.client !== client) {
       return;
     }
