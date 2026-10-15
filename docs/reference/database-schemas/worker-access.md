@@ -1862,6 +1862,15 @@ boundary. Compositions retain actor lifetime across asynchronous work, while
 individual commands acquire their own FIFO turn. No transaction awaits a hook,
 network operation, or another actor command.
 
+Input admission records the running lifecycle identity with its existing durable
+checkpoint. Lifecycle start reuses that committed marker for the same unfinished
+run instead of rewriting the session node and window. Source-less turns still
+persist their start, and a resumed run with a recorded end time starts a new
+timing interval. After a crash, an admitted run can retain its admission timestamp
+rather than its later model-start timestamp; terminal settlement still persists
+the completed timing and outcome before publication. Approval and external-effect
+checkpoints retain their existing owners and durability.
+
 Durable commands fork the resident state's small mutable object shells and share
 unchanged rows and payloads. A map or navigation array is shallow-copied on its
 first write; stored rows and payloads are replaced rather than edited. Rollback
@@ -5091,8 +5100,9 @@ The host retains the last trajectory session's next sequence and retained UTF-8 
 count per physical execution owner. It passes these facts through the existing
 append request inside the writer FIFO, consumes them before awaiting the write,
 and installs the returned committed facts before releasing that FIFO. An unknown
-append outcome leaves the next request cold. Lifecycle row publications invalidate
-these facts; retention invalidates them inside its existing writer operation.
+append outcome leaves the next request cold. Run-start and run-end liveness notices
+preserve these facts. Lifecycle row publications invalidate them; retention
+invalidates them inside its existing writer operation.
 Ordinary under-budget appends need no window read. Cold appends and actual overflow
 retain the SQL-side byte projection and bounded suffix scan. An hourly retention
 sweep may make the next append cold even when it deletes nothing. Exclusive

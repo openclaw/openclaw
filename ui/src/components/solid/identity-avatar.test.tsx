@@ -25,6 +25,16 @@ it("carries prepared avatar state and image errors across Solid updates", () => 
     expect(face?.getAttribute("data-avatar-state")).toBe("pending");
     expect(view.container.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦀");
 
+    const mutations = new MutationObserver(() => undefined);
+    mutations.observe(face!, { attributes: true, attributeFilter: ["data-avatar-state"] });
+    try {
+      setAgent({ ...agent() });
+      flush();
+      expect(mutations.takeRecords()).toHaveLength(0);
+    } finally {
+      mutations.disconnect();
+    }
+
     setAgent({ ...agent(), avatar: "/avatar/sidebar-synthetic", pending: false });
     flush();
     const image = view.container.querySelector("img");

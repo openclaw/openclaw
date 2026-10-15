@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
@@ -16,6 +18,7 @@ import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
+import { fetchSessionFileDownload } from "./server-methods/sessions-files.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import { sessionRewindHandlers } from "./server-methods/sessions-rewind.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
@@ -81,6 +84,78 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("authorizes original-byte downloads for session-only VIEW readers and revokes HTTP grants with sharing", async () => {
+    await withOpenClawTestState(profileState, async (state) => {
+      const reader = roleClient("view", "download-reader");
+      reader.connect.scopes = ["operator.sessions.read"];
+      reader.connId = "narrow-download";
+      const controller = new AbortController();
+      reader.connectionSignal = controller.signal;
+      const owner = roleClient("view", "download-owner");
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      const catalog = await prepareUserProfileCatalog();
+      using _ = {
+        [Symbol.dispose]: () => {
+          controller.abort();
+          catalog.release();
+        },
+      };
+      prepareGatewayRecipientProfile(reader);
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const bytes = Buffer.alloc(600_001, 0xff);
+      await fs.writeFile(path.join(state.workspaceDir, "original.bin"), bytes);
+      const entry = {
+        sessionId: "download-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        spawnedCwd: state.workspaceDir,
+        permissionMode: "read-only" as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: owner.authenticatedUserProfile!.profileId,
+        },
+      };
+      await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+      const respond = vi.fn();
+      const dispatch = () =>
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "download",
+            method: "sessions.files.download",
+            params: { sessionKey: key, path: "original.bin" },
+          },
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      const download = respond.mock.calls[0]?.[1] as { url: string; filename: string };
+      expect(download.filename).toBe("original.bin");
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...entry, updatedAt: 2, label: "Renamed while downloading" },
+      );
+      const fetched = await fetchSessionFileDownload(reader, download.url);
+      expect(fetched.response.statusCode).toBe(200);
+      expect(Buffer.from(fetched.body as Uint8Array)).toEqual(bytes);
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...entry, visibility: "draft", updatedAt: 3 },
+      );
+      expect((await fetchSessionFileDownload(reader, download.url)).response.statusCode).toBe(404);
+      respond.mockClear();
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+    });
+  });
+
   it.each([false, true])(
     "binds describe and message subscriptions to visible rows (roles=%s)",
     async (roles) => {

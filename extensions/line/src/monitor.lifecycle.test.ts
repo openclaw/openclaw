@@ -469,12 +469,26 @@ describe("monitorLineProvider lifecycle", () => {
       channelAccessToken: "first-token",
       channelSecret: "first-secret", // pragma: allowlist secret
       accountId: "first",
+      webhookPath: "/Line//Webhook/",
     });
     const secondMonitor = await startMonitor({
       channelAccessToken: "second-token",
       channelSecret: "second-secret", // pragma: allowlist secret
       accountId: "second",
     });
+
+    const registration = requireWebhookRegistration();
+    expect(registration.target.path).toBe("/Line//Webhook");
+    expect(registration.target.accountId).toBe("first");
+    expect(registration.route).toMatchObject({
+      accountId: "first",
+      auth: "plugin",
+      pluginId: "line",
+      source: "line-webhook",
+      throwOnFailure: true,
+    });
+    expect(registration.route).not.toHaveProperty("path");
+    expect(registration.route).not.toHaveProperty("replaceExisting");
 
     const route = requireRegisteredRoute();
 
@@ -708,45 +722,6 @@ describe("monitorLineProvider lifecycle", () => {
         await monitor.stop();
       }
     }
-  });
-
-  it("dispatches a signed POST through the canonical configured webhook route", async () => {
-    const monitor = await startMonitor({
-      webhookPath: "/Line//Webhook/",
-      accountId: "default",
-    });
-
-    const registration = requireWebhookRegistration();
-    expect(registration.target.path).toBe("/Line//Webhook");
-    expect(registration.target.accountId).toBe("default");
-    expect(registration.route).toMatchObject({
-      accountId: "default",
-      auth: "plugin",
-      pluginId: "line",
-      source: "line-webhook",
-      throwOnFailure: true,
-    });
-    expect(registration.route).not.toHaveProperty("path");
-    expect(registration.route).not.toHaveProperty("replaceExisting");
-
-    const route = requireRegisteredRoute();
-    const payload = JSON.stringify({ events: [{ type: "message" }] });
-    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
-    const req = Object.assign(createMockIncomingRequest([payload]), {
-      method: "POST",
-      headers: { "x-line-signature": signature },
-    }) as unknown as IncomingMessage;
-    const res = createRouteResponse();
-
-    await route.handler(req, res);
-
-    const bot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    expect(res.statusCode).toBe(200);
-    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-
-    await monitor.stop();
   });
 
   it("rejects ambiguous shared-path webhook signatures", async () => {

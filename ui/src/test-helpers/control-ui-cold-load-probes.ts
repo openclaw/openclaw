@@ -284,9 +284,15 @@ export function installColdLoadProbes(
     Map<ProbeInit.SidebarLifecycle, { count: number; ms: number }>
   >();
   const sidebarOwnerStacks = new Map<string, number>();
+  const OriginalWeakMap = window.WeakMap;
+  class RegistrationWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {
+    override set(host: K, owner: V): this {
+      super.set(host, owner);
+      sidebarRegistration.capture(host, owner);
+      return this;
+    }
+  }
   const sidebarRegistration = {
-    // oxlint-disable-next-line typescript/unbound-method -- Save the native method for restoration; Reflect.apply forwards each WeakMap receiver.
-    originalSet: WeakMap.prototype.set,
     matches(host: unknown, owner: unknown): owner is ProbeInit.SolidSidebarProbeOwner {
       return (
         host instanceof HTMLElement &&
@@ -310,12 +316,7 @@ export function installColdLoadProbes(
         typeof owner.sessionData.requestSessionDataUpdate === "function"
       );
     },
-    set(this: WeakMap<WeakKey, unknown>, host: WeakKey, owner: unknown) {
-      const result: WeakMap<WeakKey, unknown> = Reflect.apply(
-        sidebarRegistration.originalSet,
-        this,
-        [host, owner],
-      );
+    capture(host: WeakKey, owner: unknown) {
       if (sidebarRegistration.matches(host, owner)) {
         solidSidebarOwner = owner;
       }
@@ -338,18 +339,17 @@ export function installColdLoadProbes(
       ) {
         sidebarRegistration.restore();
       }
-      return result;
     },
     restore() {
-      if (WeakMap.prototype.set === sidebarRegistration.set) {
-        // oxlint-disable-next-line no-extend-native -- Restore the native setter immediately after this benchmark-only registration tap.
-        WeakMap.prototype.set = sidebarRegistration.originalSet;
+      if (window.WeakMap === RegistrationWeakMap) {
+        window.WeakMap = OriginalWeakMap;
       }
+      // Existing maps inherit the native setter once registration capture is finished.
+      Reflect.deleteProperty(RegistrationWeakMap.prototype, "set");
     },
   };
-  // Tap the existing host→owner registration without exposing a production debug API.
-  // oxlint-disable-next-line no-extend-native, typescript/unbound-method -- This temporary benchmark tap forwards the WeakMap receiver and restores the native setter after capture or teardown.
-  WeakMap.prototype.set = sidebarRegistration.set;
+  // The init script precedes application modules, including their host→owner maps.
+  window.WeakMap = RegistrationWeakMap;
   window.addEventListener(
     "pagehide",
     () => {

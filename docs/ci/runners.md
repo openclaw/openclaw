@@ -10,13 +10,15 @@ read_when:
 
 ### Testbox spending limits
 
-The general, high-memory, ARM, build-artifact, and Windows Testbox workflows share 32
-concurrency slots. A GitHub-hosted admission job validates the lease ID, runner,
+The focused, routine, general, high-memory, ARM, build-artifact, and Windows Testbox
+workflows share 32 concurrency slots. A GitHub-hosted admission job validates the lease ID, runner,
 and runtime before the Blacksmith job becomes eligible. Dispatches wait in their
-assigned slot without canceling an active lease. Each slot retains one pending
-request; a newer request can cancel and replace that pending request. Hash
-collisions can leave other slots unused; this is a ceiling, not a promise of
-32 busy machines.
+assigned slot without canceling an active lease. Each slot retains up to 100
+pending requests using GitHub's `queue: max`; newer requests do not replace earlier
+waiters. When a slot's queue is full, GitHub cancels additional requests. Ordering
+follows when each job entered the slot queue, not workflow dispatch time. Hash
+collisions can still leave other slots unused; this is a ceiling, not a promise
+of 32 busy machines.
 
 Admission expires 60 minutes after the workflow was created. This bounded queue
 allowance lets waiting clients survive saturation beyond the former ten-minute

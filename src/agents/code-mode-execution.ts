@@ -1,4 +1,4 @@
-import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
+import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -281,6 +281,7 @@ function createInlineHost(
   onInputConsumed?: () => void,
 ): CodeModeExecutorInlineHost {
   return {
+    gcAttribution: codeModeGcAttribution(params.owner.runId, params.ctx.sessionKey),
     onWorkerAssigned: (workerId) => {
       params.bridgeDispatch.workerId = workerId;
     },

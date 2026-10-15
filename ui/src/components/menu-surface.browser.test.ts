@@ -2,11 +2,11 @@ import { html, render } from "lit";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
 import "../test-helpers/load-styles.ts";
@@ -323,35 +323,38 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       host.style.padding = "400px 40px 0";
       document.body.append(host);
-      render(
-        renderChatComposerPlusMenu({
-          attachments: {},
-          disabled: false,
-          open: false,
-          view: "root",
-          toolOverrides: null,
-          onOpenChange: () => {},
-          onViewChange: () => {},
-          capabilityMenu: {
-            basePath: "",
-            skills: [],
-            skillsLoading: false,
-            skillsError: false,
-            mcpServers: [],
-            toolsEffectiveResult: null,
-            toolsEffectiveLoading: false,
-            toolsEffectiveError: false,
-            toolAccessMutationBlockedReason: null,
-            webSearchBaseEnabled: true,
-            mutationBlockedReason: null,
-            canAdmin: true,
-            adminBlockedReason: null,
-            onLoadSkills: () => {},
-            onPatchToolOverrides: () => {},
-            onNavigate: () => {},
-          },
-        }),
-        host,
+      mountSolid(
+        () =>
+          createComponent(ChatComposerPlusMenu, {
+            menu: {
+              attachments: {},
+              disabled: false,
+              open: false,
+              view: "root",
+              toolOverrides: null,
+              onOpenChange: () => {},
+              onViewChange: () => {},
+              capabilityMenu: {
+                basePath: "",
+                skills: [],
+                skillsLoading: false,
+                skillsError: false,
+                mcpServers: [],
+                toolsEffectiveResult: null,
+                toolsEffectiveLoading: false,
+                toolsEffectiveError: false,
+                toolAccessMutationBlockedReason: null,
+                webSearchBaseEnabled: true,
+                mutationBlockedReason: null,
+                canAdmin: true,
+                adminBlockedReason: null,
+                onLoadSkills: () => {},
+                onPatchToolOverrides: () => {},
+                onNavigate: () => {},
+              },
+            },
+          }),
+        { container: host },
       );
       const { page } = await import("vitest/browser");
       await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
@@ -420,7 +423,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const reference = document.createElement("div");
       document.body.append(reference);
       render(
-        solidTemplate(Menu, {
+        solidContent(Menu, {
           id: "browser-card-reference",
           label: "Reference menu",
           class: "session-menu",
@@ -453,7 +456,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.body.append(host);
       const renderOption = (active: boolean) => {
         render(
-          solidTemplate(renderComposerMenuOption, {
+          solidContent(renderComposerMenuOption, {
             id: "hover-command",
             active,
             select: () => {},

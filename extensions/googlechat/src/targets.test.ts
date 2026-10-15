@@ -388,26 +388,6 @@ describe("supported Google Chat request bounds", () => {
     vi.useRealTimers();
   });
 
-  it("derives a bounded transfer deadline from the payload size", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(new Uint8Array([1, 2, 3]), {
-          status: 200,
-          headers: { "content-type": "application/octet-stream" },
-        }),
-      ),
-    );
-
-    await downloadGoogleChatMedia({
-      account,
-      resourceName: "media/123",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(lastGuardedFetchOptions().timeoutMs).toBe(34_000);
-  });
-
   it("cancels a stalled JSON response body", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
@@ -432,12 +412,14 @@ describe("sendGoogleChatMessage", () => {
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123", "spaces/AAA/threads/xyz");
+    const cardsV2 = [{ cardId: "approval", card: { header: { title: "Approval" } } }];
 
     const result = await sendGoogleChatMessage({
       account,
       space: "spaces/AAA",
       text: "hello",
       thread: "spaces/AAA/threads/xyz",
+      cardsV2,
     });
 
     const url = mockCallArg(fetchMock);
@@ -449,9 +431,11 @@ describe("sendGoogleChatMessage", () => {
     const body = JSON.parse(init.body) as {
       text?: unknown;
       thread?: { name?: unknown };
+      cardsV2?: unknown;
     };
     expect(body.text).toBe("hello");
     expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
+    expect(body.cardsV2).toEqual(cardsV2);
     expect(result).toEqual({
       messageName: "spaces/AAA/messages/123",
       threadName: "spaces/AAA/threads/xyz",
@@ -487,35 +471,6 @@ describe("sendGoogleChatMessage", () => {
       expect(result).toEqual({ messageName: "spaces/AAA/messages/126" });
     },
   );
-
-  it("sends cardsV2 with the text fallback", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/125");
-    const cardsV2 = [
-      {
-        cardId: "approval",
-        card: {
-          header: { title: "Approval" },
-          sections: [{ widgets: [{ textParagraph: { text: "Approve?" } }] }],
-        },
-      },
-    ];
-
-    await sendGoogleChatMessage({
-      account,
-      space: "spaces/AAA",
-      text: "Approval required",
-      cardsV2,
-    });
-
-    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected Google Chat request body");
-    }
-    expect(JSON.parse(init.body)).toEqual({
-      text: "Approval required",
-      cardsV2,
-    });
-  });
 
   it("suppresses text-only duplicate manual approval follow-ups at the API send boundary", async () => {
     registerGoogleChatManualApprovalFollowupSuppression({

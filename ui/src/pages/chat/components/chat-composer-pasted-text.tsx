@@ -2,6 +2,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -9,7 +10,6 @@ import {
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove } from "./chat-attachment-file.tsx";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
@@ -103,7 +103,7 @@ export function ComposerPastedText(componentProps: {
           : { status: "unavailable" };
       },
       renderActions: () =>
-        solidTemplate(
+        solidContent(
           () => (
             <>
               {restoreAction()}

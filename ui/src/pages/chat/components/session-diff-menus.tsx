@@ -125,13 +125,13 @@ function SessionDiffMenuContent(
       "scope:uncommitted": { kind: "scope", value: { scope: "uncommitted" } },
     };
     const menu = props.menu;
-    if (menu?.kind === "file" && (value === "open-file" || value === "reveal-file")) {
-      run({ kind: value, path: menu.path });
-      return;
-    }
     if (
       menu?.kind === "file" &&
-      (value === "collapse-code" || value === "collapse-functions" || value === "expand-code")
+      (value === "open-file" ||
+        value === "reveal-file" ||
+        value === "collapse-code" ||
+        value === "collapse-functions" ||
+        value === "expand-code")
     ) {
       run({ kind: value, path: menu.path });
       return;

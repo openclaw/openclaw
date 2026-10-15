@@ -25,14 +25,12 @@ import { prepareSessionStoreTargetInventory } from "../config/sessions/session-s
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { attachErrorDiagnostic } from "../infra/error-diagnostics.js";
-import { formatErrorMessageWithCode } from "../infra/errors.js";
-import type { NativeErrorResponse } from "../infra/native-error-response-schema.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 import {
   prepareGatewaySessionStoreTargetReadOnly,
   prepareGatewaySessionStoreTargetReadPlan,
@@ -45,26 +43,6 @@ import {
   omitInternalSessionEffectsEntries,
 } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
-
-class SessionStoreUnavailableError extends Error {
-  constructor(
-    agentId: string,
-    readonly reason: "schema-missing" | "read-failed",
-    readonly readError?: NativeErrorResponse,
-  ) {
-    const nativeKind = readError?.code ?? readError?.name;
-    const suffix =
-      nativeKind && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(nativeKind) ? `: ${nativeKind}` : "";
-    super(
-      `Session stores for agent ${agentId} are unavailable (${reason}${suffix}); retry after storage is available.`,
-    );
-    this.name = "SessionStoreUnavailableError";
-    // Native messages can contain private paths; keep them out of message/cause and RPC JSON.
-    if (readError) {
-      attachErrorDiagnostic(this, `${readError.name}: ${formatErrorMessageWithCode(readError)}`);
-    }
-  }
-}
 
 type GatewaySessionStoreReadPlan = {
   reads: readonly SessionEntryWorkerRead[];

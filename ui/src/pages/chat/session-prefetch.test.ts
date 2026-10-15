@@ -237,17 +237,6 @@ describe("session navigation intent prefetch", () => {
 
   it("does not fetch unopened history on connect or roster refresh without navigation intent", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     const state = prefetchState(request, [
       row("agent:main:recent", NOW),
       row("agent:main:older", NOW - 1),
@@ -257,7 +246,6 @@ describe("session navigation intent prefetch", () => {
     updatePrefetch({ ...state, listRevision: 2 });
     await advancePrefetch(31_000);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -688,56 +676,17 @@ describe("session navigation intent prefetch", () => {
     );
   });
 
-  it("skips the cycle when another tab holds the Web Lock", async () => {
-    const request = vi.fn();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback(null),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
-    updatePrefetch(prefetchState(request, [row("agent:main:locked", NOW - 1)]));
-    intend("agent:main:locked");
-
-    await advancePrefetch(2_000);
-
-    expect(locksRequest).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("pauses intent while hidden and resumes when the tab becomes visible", async () => {
     const request = historyRequest();
-    const locksRequest = vi.fn(
-      async (
-        _name: string,
-        _options: LockOptions,
-        callback: (lock: Lock | null) => Promise<void>,
-      ) => await callback({ name: "openclaw-chat-prefetch", mode: "exclusive" } as Lock),
-    );
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: { request: locksRequest },
-    });
     updatePrefetch(prefetchState(request, [row("agent:main:hidden", NOW - 1)]));
     intend("agent:main:hidden");
     fixture.setVisibility("hidden");
     await advancePrefetch(300);
 
-    expect(locksRequest).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     fixture.setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     await advancePrefetch(75);
-    expect(locksRequest).toHaveBeenCalledWith(
-      "openclaw-chat-prefetch",
-      { ifAvailable: true },
-      expect.any(Function),
-    );
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:hidden"]);
   });
 

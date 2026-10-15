@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render, type ReactiveControllerHost } from "lit";
+import { Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -8,7 +8,9 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -34,10 +36,9 @@ import {
 } from "./chat-send-composer.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  renderChatAttachmentInputs,
-  renderAttachmentPreview,
-} from "./components/chat-attachments.test-support.ts";
+import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
+import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
+import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   ChatComposerPersistence,
@@ -105,7 +106,7 @@ describe("cross-region Home composer ownership", () => {
     current.chatMessage = "";
     current.chatQueue = [];
     const persistence = new ChatComposerPersistence(() => current);
-    const host: ReactiveControllerHost = {
+    const host: SolidControllerHost = {
       addController: () => {},
       removeController: () => {},
       requestUpdate: () => {},
@@ -167,8 +168,16 @@ describe("cross-region Home composer ownership", () => {
       page.edit("Keep this draft and file");
       const container = document.createElement("div");
       const props = page.controller.attachmentInputProps(page.current);
-      render(
-        html`${renderChatAttachmentInputs(props)}${renderAttachmentPreview(props)}`,
+      const view = mountSolid(
+        (fixture: { controls: ChatAttachmentControlsProps; showInputs: boolean }) => (
+          <>
+            <Show when={fixture.showInputs}>
+              <ChatAttachmentInputs {...fixture.controls} />
+            </Show>
+            <AttachmentPreview {...fixture.controls} />
+          </>
+        ),
+        { controls: props, showInputs: true },
         container,
       );
       const readers: FileReader[] = [];
@@ -179,7 +188,7 @@ describe("cross-region Home composer ownership", () => {
       });
       disposals.push(() => {
         read.mockRestore();
-        render(nothing, container);
+        view.dispose();
       });
       const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
       if (!input) {
@@ -198,10 +207,10 @@ describe("cross-region Home composer ownership", () => {
       expect(dock.current.chatMessage).toBe("Keep this draft and file");
       expect(page.controller.attachmentReads.pendingReads).toBe(0);
       expect(dock.controller.attachmentReads.pendingReads).toBe(1);
-      render(
-        renderAttachmentPreview(dock.controller.attachmentInputProps(dock.current)),
-        container,
-      );
+      view.update({
+        controls: dock.controller.attachmentInputProps(dock.current),
+        showInputs: false,
+      });
       expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull();
 
       dock.view.presented = false;
@@ -230,10 +239,10 @@ describe("cross-region Home composer ownership", () => {
       );
       expect(dock.notify).toHaveBeenCalledOnce();
       expect(page.notify).not.toHaveBeenCalled();
-      render(
-        renderAttachmentPreview(dock.controller.attachmentInputProps(dock.current)),
-        container,
-      );
+      view.update({
+        controls: dock.controller.attachmentInputProps(dock.current),
+        showInputs: false,
+      });
       expect(
         container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
       ).toBe("scaleX(0.5)");

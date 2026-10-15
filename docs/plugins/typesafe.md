@@ -217,7 +217,10 @@ the supported question types:
 Choice supports 2–255 alternatives; Score supports 2–10 rubric levels.
 Unsupported input is rejected before transmission; the adapter does not truncate
 or split a consumer's rubric. Responses must match the complete question batch,
-its labels, types, and rubric bounds.
+its labels, types, and rubric bounds. Additional top-level response and usage
+fields outside the specification are accepted but are not exposed in
+provider-neutral results. Required fields and the plugin’s JSON size, depth,
+and node limits still apply.
 
 Reported probabilities can be rounded, so they may not sum exactly to one. A
 reported label or Score can also differ from a calculation over those estimates.

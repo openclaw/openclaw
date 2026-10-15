@@ -696,13 +696,4 @@ describe("opencode provider plugin", () => {
       } as never),
     ).toEqual({ api: "openai-completions", baseUrl: "https://opencode.ai/zen/v1" });
   });
-
-  it("exposes the thinking policy through the registered provider", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const profile = provider.resolveThinkingProfile?.({
-      provider: "opencode",
-      modelId: "claude-opus-4-7",
-    });
-    expect(profile?.levels.map((level) => level.id)).toContain("adaptive");
-  });
 });

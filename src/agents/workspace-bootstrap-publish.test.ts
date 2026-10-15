@@ -204,6 +204,10 @@ describe("bootstrap publication atomicity", () => {
     const content = Buffer.concat([bom, Buffer.from("# BOOTSTRAP\n")]);
 
     await expect(seedWorkspaceBootstrap({ dir: tempDir, content })).resolves.toBe("seeded");
+    await expect(seedWorkspaceBootstrap({ dir: tempDir, content })).resolves.toBe("already-seeded");
+    await expect(
+      seedWorkspaceBootstrap({ dir: tempDir, content: Buffer.from("# Different bootstrap\n") }),
+    ).rejects.toThrow("differs from the consented Claw bootstrap");
 
     const written = await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     expect(written.equals(content)).toBe(true);

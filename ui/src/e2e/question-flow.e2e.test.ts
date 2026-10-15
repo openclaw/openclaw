@@ -233,6 +233,8 @@ suite.define(() => {
     await emitRequested(gateway, request);
     await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
+    // The drawer's initial focus move must finish before opening the tooltip.
+    await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
     const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
     const shell = page.locator(".shell");
     const attention = row.locator('[data-session-attention="question"]');

@@ -206,6 +206,93 @@ describe("Lit and Solid content boundaries", () => {
     }
   });
 
+  it("publishes nested mutations and stable getters without replacing the view", () => {
+    const state = { text: "First" };
+    const props = { state, read: () => state.text };
+    function Content(current: typeof props) {
+      return (
+        <section>
+          <p>{current.state.text}</p>
+          <output>{current.read()}</output>
+        </section>
+      );
+    }
+    const view = mountSolid(() => <div />);
+    const container = view.container.querySelector("div")!;
+    const paint = () => render(solidContent(Content, props), container);
+    try {
+      paint();
+      const section = container.querySelector("section");
+      expect(section?.textContent).toBe("FirstFirst");
+      state.text = "Updated";
+      paint();
+      expect(container.querySelector("section")).toBe(section);
+      expect(section?.textContent).toBe("UpdatedUpdated");
+    } finally {
+      render(nothing, container);
+      view.unmount();
+    }
+  });
+
+  it("preserves an uncommitted input through mutable prop updates and parking", async () => {
+    const mounted = vi.fn();
+    const disposed = vi.fn();
+    function NativeInput(props: { label: string; value: string }) {
+      mounted();
+      onCleanup(disposed);
+      return (
+        <label>
+          {props.label}
+          <textarea value={props.value} />
+        </label>
+      );
+    }
+    const view = mountSolid(() => <section />);
+    const container = view.container.querySelector("section")!;
+    const props = { label: "", value: "" };
+    const paint = (label: string) => {
+      props.label = label;
+      return render(html`${solidContent(NativeInput, props)}`, container);
+    };
+    const part = paint("First draft");
+    try {
+      const input = container.querySelector("textarea")!;
+      expect(view.getByRole("textbox", { name: "First draft" })).toBe(input);
+      input.value = "Unsent text";
+      input.focus();
+      input.setSelectionRange(3, 7);
+      const valueWrites = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
+      paint("Current draft");
+      expect(valueWrites).not.toHaveBeenCalled();
+      valueWrites.mockRestore();
+      expect(view.getByRole("textbox", { name: "Current draft" })).toBe(input);
+      expect(input.value).toBe("Unsent text");
+      expect(document.activeElement).toBe(input);
+      expect([input.selectionStart, input.selectionEnd]).toEqual([3, 7]);
+      expect(mounted).toHaveBeenCalledOnce();
+      expect(disposed).not.toHaveBeenCalled();
+
+      part.setConnected(false);
+      await Promise.resolve();
+      paint("Updated while parked");
+      expect(mounted).toHaveBeenCalledOnce();
+      expect(disposed).not.toHaveBeenCalled();
+      part.setConnected(true);
+      flush();
+      expect(view.getByRole("textbox", { name: "Updated while parked" })).toBe(input);
+      expect(input.value).toBe("Unsent text");
+      expect([input.selectionStart, input.selectionEnd]).toEqual([3, 7]);
+      expect(mounted).toHaveBeenCalledOnce();
+
+      render(nothing, container);
+      await Promise.resolve();
+      expect(disposed).toHaveBeenCalledOnce();
+    } finally {
+      render(nothing, container);
+      view.unmount();
+    }
+  });
+
   it("remounts initially unowned Lit content synchronously under its renderer owner", async () => {
     const disposed = vi.fn();
     function Content() {

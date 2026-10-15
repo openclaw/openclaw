@@ -276,6 +276,16 @@ describe("ensureConfigReady", () => {
       await ready;
     } else {
       await expect(ready).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(plainErrorCalls(runtime)).toEqual([
+        "OpenClaw config is invalid",
+        "File: /tmp/openclaw.json",
+        "Problem:",
+        "  - channels.quietchat: invalid",
+        "",
+        `Inspect: ${formatCliCommand("openclaw config validate")}`,
+        "Audit, status, health, logs, and doctor commands still run with invalid config.",
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
+      ]);
     }
 
     expect(retired.aborted).toBe(true);
@@ -376,23 +386,6 @@ describe("ensureConfigReady", () => {
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
-  });
-
-  it("exits for invalid config on non-allowlisted commands", async () => {
-    setInvalidSnapshot();
-    const runtime = await runEnsureConfigReady(["message"]);
-
-    expect(plainErrorCalls(runtime)).toEqual([
-      "OpenClaw config is invalid",
-      "File: /tmp/openclaw.json",
-      "Problem:",
-      "  - channels.quietchat: invalid",
-      "",
-      `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Audit, status, health, logs, and doctor commands still run with invalid config.",
-      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-    ]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("runs doctor and retries the config guard once after consent", async () => {

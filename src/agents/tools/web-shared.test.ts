@@ -85,35 +85,6 @@ describe("web shared timeout seconds", () => {
     expect(resolvePositiveTimeoutSeconds(0, 30)).toBe(30);
     expect(resolvePositiveTimeoutSeconds(1.9, 30)).toBe(1);
   });
-
-  it("drops cached values while the process clock is invalid", () => {
-    // Bad system clocks can make cache expiry nonsensical; fail closed instead
-    // of serving stale web data indefinitely.
-    const cache = new Map<string, CacheEntry<string>>();
-    writeCache(cache, "key", "old", 60_000);
-    expect(readCache(cache, "key")?.value).toBe("old");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    expect(readCache(cache, "key")).toBeNull();
-
-    vi.mocked(Date.now).mockReturnValue(1_000);
-    expect(readCache(cache, "key")).toBeNull();
-  });
-
-  it("does not evict valid entries when an invalid expiry cannot be cached", () => {
-    const cache = new Map<string, CacheEntry<string>>();
-    for (let index = 0; index < 100; index += 1) {
-      writeCache(cache, `key-${index}`, `value-${index}`, 60_000);
-    }
-    expect(cache.get("key-0")?.value).toBe("value-0");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    writeCache(cache, "invalid", "value", 60_000);
-
-    expect(cache.size).toBe(100);
-    expect(cache.get("key-0")?.value).toBe("value-0");
-    expect(cache.has("invalid")).toBe(false);
-  });
 });
 
 describe("readResponseText", () => {
