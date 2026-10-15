@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   buildWhatsAppKeyPrefixRange,
+  buildWhatsAppPollAccountPrefix,
   normalizeWhatsAppPollJids,
   normalizeWhatsAppPollMessageId,
   openWhatsAppPollStore,
@@ -90,7 +91,7 @@ function resolveVoterKey(voterJids: readonly string[]): string | undefined {
 }
 
 function tallyPrefix(accountId: string, pollMessageId: string): string {
-  return `${accountId}:${pollMessageId}:`;
+  return `${buildWhatsAppPollAccountPrefix(accountId)}${pollMessageId}:`;
 }
 
 function isTallyValue(value: unknown): value is WhatsAppPollTallyValue {

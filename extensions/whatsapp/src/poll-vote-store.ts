@@ -55,6 +55,7 @@ export type WhatsAppPollStoreErrorMode = "classify" | "throw";
 export const WHATSAPP_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MIN_TTL_MS = 60_000;
 const POLL_MESSAGE_ID_MAX_BYTES = 128;
+const POLL_MESSAGE_ID_RE = /^[A-Za-z0-9_-]+$/;
 const STORE_KEY_MAX_BYTES = 512;
 const QUESTION_MAX_BYTES = 1024;
 const NAME_MAX_BYTES = 128;
@@ -178,13 +179,16 @@ export function openWhatsAppPollStore<T>(
   return runtime.state.openKeyedStoreV2<T>(options);
 }
 
-/** Bounds untrusted poll ids before they can reach storage keys. */
+/**
+ * Bounds untrusted poll ids before they can reach storage keys. WhatsApp ids are
+ * alphanumeric; anything else (":" above all) could forge another key segment.
+ */
 export function normalizeWhatsAppPollMessageId(
   value: string | null | undefined,
 ): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
-  if (!trimmed || utf8ByteLength(trimmed) > POLL_MESSAGE_ID_MAX_BYTES) {
-    logVerbose("whatsapp poll id rejected: empty or longer than 128 bytes");
+  if (utf8ByteLength(trimmed) > POLL_MESSAGE_ID_MAX_BYTES || !POLL_MESSAGE_ID_RE.test(trimmed)) {
+    logVerbose("whatsapp poll id rejected: empty, longer than 128 bytes, or not alphanumeric");
     return undefined;
   }
   return trimmed;
@@ -229,12 +233,17 @@ export function buildWhatsAppKeyPrefixRange(prefix: string, limit: number) {
   };
 }
 
+/** Every key starts with this; the account id is encoded so it never contains ":". */
+export function buildWhatsAppPollAccountPrefix(accountId: string): string {
+  return `${encodeURIComponent(accountId)}:`;
+}
+
 function buildRecordKey(accountId: string, pollMessageId: string): string {
-  return `${accountId}:${pollMessageId}`;
+  return `${buildWhatsAppPollAccountPrefix(accountId)}${pollMessageId}`;
 }
 
 function buildChatIndexPrefix(accountId: string, chatJid: string): string {
-  return `${accountId}:${chatJid}:`;
+  return `${buildWhatsAppPollAccountPrefix(accountId)}${chatJid}:`;
 }
 
 function isPollRecord(value: unknown): value is WhatsAppPollRecord {

@@ -267,6 +267,21 @@ describe("WhatsApp poll record store", () => {
     expect(await readWhatsAppPollRecord("default", id128)).toBeDefined();
   });
 
+  it("(c) keeps a peer-chosen poll id from reaching another account's keys", async () => {
+    await recordWhatsAppPoll(pollInput({ accountId: "a:b", pollMessageId: "X" }), {
+      mode: "overwrite",
+    });
+    expect(await readWhatsAppPollRecord("a", "b:X")).toBeUndefined();
+    expect(
+      await recordWhatsAppPoll(pollInput({ accountId: "a", pollMessageId: "b:Y" }), {
+        mode: "overwrite",
+      }),
+    ).toBe(false);
+    expect(await readWhatsAppPollRecord("a:b", "Y")).toBeUndefined();
+    const rows = await env.openStore(WHATSAPP_POLL_RECORD_STORES.sent).entries();
+    expect(rows.map((row) => row.key)).toEqual(["a%3Ab:X"]);
+  });
+
   it("returns undefined or false when the runtime is missing", async () => {
     vi.spyOn(runtimeModule, "getOptionalWhatsAppRuntime").mockReturnValue(null);
     expect(await recordWhatsAppPoll(pollInput(), { mode: "overwrite" })).toBe(false);
