@@ -21,6 +21,7 @@ import {
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
+  createProviderWaitObserver,
   failTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   notifyProviderHttpResponse,
@@ -41,7 +42,7 @@ import {
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
-import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
+import { resolveOllamaBaseUrlForRun, resolveOllamaChatUrl } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -436,12 +437,6 @@ export function buildAssistantMessage(
   return message;
 }
 
-function resolveOllamaChatUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  const normalizedBase = trimmed.replace(/\/v1$/i, "");
-  return `${normalizedBase || OLLAMA_NATIVE_BASE_URL}/api/chat`;
-}
-
 function resolveOllamaModelHeaders(model: {
   headers?: unknown;
 }): Record<string, string> | undefined {
@@ -479,6 +474,11 @@ function createRawOllamaStreamFn(
 
   return (model, context, options?: OllamaStreamOptions) => {
     const stream = createAssistantMessageEventStream();
+    const localModel =
+      model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
+      !isOllamaCloudModel(model.id) &&
+      !isOllamaCloudOrigin(baseUrl);
+    const wait = createProviderWaitObserver(localModel ? options : undefined);
 
     const run = async () => {
       try {
@@ -527,11 +527,7 @@ function createRawOllamaStreamFn(
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
-          ...(model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
-          !isOllamaCloudModel(model.id) &&
-          !isOllamaCloudOrigin(baseUrl)
-            ? { truncate: false, shift: false }
-            : {}),
+          ...(localModel ? { truncate: false, shift: false } : {}),
           ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
           ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
@@ -581,6 +577,7 @@ function createRawOllamaStreamFn(
             acquisitionDeadline?.signal,
           )
           .finally(acquisitionDeadline?.cleanup);
+        wait.start();
         const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
@@ -739,6 +736,7 @@ function createRawOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            wait.stop();
             throwIfOllamaStreamAborted(options?.signal);
             notifyLlmRequestActivity(options?.signal);
             if (finalResponse) {
@@ -896,6 +894,7 @@ function createRawOllamaStreamFn(
           }),
         });
       } finally {
+        wait.stop();
         stream.end();
       }
     };

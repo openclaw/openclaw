@@ -419,4 +419,32 @@ describe("Codex catalog worker transport", () => {
     expect(JSON.stringify(warn.mock.calls)).toContain("<redacted>");
     expect(parse).not.toHaveBeenCalled();
   });
+  it("rejects oversized catalog frames before decoding and accepts the next response", async () => {
+    const harness = createHarness();
+    const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const rejected = expect(request).rejects.toThrow("exceeds 8 MiB");
+    harness.send({
+      id: requestId(harness),
+      result: { data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }] },
+    });
+    await rejected;
+    expect(submitted).not.toHaveBeenCalled();
+    const next = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.send({ id: requestId(harness, 1), result: { data: [{ id: "healthy" }] } });
+    await expect(next).resolves.toEqual({ data: [{ id: "healthy", projectId: null }] });
+    expect(harness.client.getCloseError()).toBeUndefined();
+  });
+
+  it("preserves meaningful text after a long ANSI prefix through the worker", async () => {
+    const harness = createHarness();
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.send({
+      id: requestId(harness),
+      result: { data: [{ id: "ansi", preview: "\u001b[0m".repeat(15_000) + "meaningful text" }] },
+    });
+    await expect(request).resolves.toEqual({
+      data: [{ id: "ansi", projectId: null, preview: "meaningful text" }],
+    });
+  });
 });

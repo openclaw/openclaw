@@ -59,6 +59,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const id = createUniqueId();
   let menu: MenuHandle | undefined;
   const disabled = createMemo(() => props.disabled || props.pending);
+  const selectedMode = createMemo(() => props.mode ?? null);
+  const defaultMode = createMemo(() => props.defaultMode);
+  const canSelectFull = createMemo(() => props.canSelectFull);
   const selectMode = (mode: PermissionSelection) => {
     if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
       void props.onSelect(mode);
@@ -74,9 +77,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
     },
     ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
       const value = mode ?? DEFAULT_PERMISSION_VALUE;
-      const selected = (props.mode ?? null) === mode;
-      const locked = mode === "full" && !props.canSelectFull;
-      const label = modeLabel(mode, props.defaultMode);
+      const selected = selectedMode() === mode;
+      const locked = mode === "full" && !canSelectFull();
+      const label = modeLabel(mode, defaultMode());
       return {
         id: value,
         label: locked ? `${label}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label,

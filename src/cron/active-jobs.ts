@@ -449,16 +449,6 @@ export function listActiveCronJobIds(): string[] {
   return [...getCronActiveJobState().activeJobs.keys()].filter(isCronJobActive);
 }
 
-/** Includes admitted runs that have not entered their executing core yet. */
-export function hasActiveCronJobsForAgent(agentId: string): boolean {
-  for (const marker of getCronActiveJobState().activeJobs.values()) {
-    if (!marker.inactiveNotified && (!marker.agentId || marker.agentId === agentId)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Runs a callback when the exact cron job no longer has an active in-process run. */
 export function onCronJobInactive(
   marker: CronActiveJobMarker | undefined,
@@ -481,11 +471,6 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   return (
     activeMarker?.token === marker.token && isMarkerActiveInGeneration(marker, state.generation)
   );
-}
-
-/** Returns whether any cron run is active in this process. */
-export function hasActiveCronJobs() {
-  return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
 }
 
 /** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */

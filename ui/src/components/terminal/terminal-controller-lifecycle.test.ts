@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 
-import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import type {
+  CreateGhosttyTerminalOptions,
+  GhosttyTerminalController,
+} from "@openclaw/libterminal/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
@@ -126,6 +129,52 @@ describe("terminal controller lifecycle", () => {
     expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
     expect(host.isConnected).toBe(false);
   });
+
+  it.each([true, false])(
+    "owns automatic opening focus without blocking explicit focus (allowed=%s)",
+    async (allowed) => {
+      vi.useFakeTimers();
+      const focus = vi.fn();
+      // Match the pinned renderer's immediate focus and zero-delay repeat without real sleeps.
+      class FakeTerminal {
+        open(_parent: HTMLElement) {
+          this.focus();
+        }
+        focus() {
+          focus();
+          setTimeout(focus, 0);
+        }
+      }
+      const opened: Array<Pick<GhosttyTerminalController["terminal"], "focus">> = [];
+      runtimeMocks.load.mockResolvedValue({ Terminal: FakeTerminal, FitAddon: MeasurementAddon });
+      const underlying = terminalController();
+      runtimeMocks.create.mockImplementation(async (options: CreateGhosttyTerminalOptions) => {
+        if (!options.runtime) {
+          throw new Error("isolated runtime missing");
+        }
+        const terminal = new options.runtime.Terminal();
+        terminal.open(options.parent);
+        opened.push(terminal);
+        return underlying;
+      });
+      const parent = document.body.appendChild(document.createElement("div"));
+      try {
+        const controller = await createIsolatedGhosttyTerminal({ parent }, () => allowed);
+        expect(focus).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        vi.runOnlyPendingTimers();
+        expect(focus).toHaveBeenCalledTimes(allowed ? 2 : 0);
+        focus.mockClear();
+        expect(opened).toHaveLength(1);
+        opened[0]?.focus();
+        expect(focus).toHaveBeenCalledOnce();
+        vi.runOnlyPendingTimers();
+        expect(focus).toHaveBeenCalledTimes(2);
+        controller.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("applies the final terminal dimensions through rapid fit and resize notifications", async () => {
     const underlying = terminalController();

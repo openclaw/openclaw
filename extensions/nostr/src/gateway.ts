@@ -57,6 +57,25 @@ function normalizeNostrSenderPubkey(value: string): string | null {
   }
 }
 
+function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | undefined {
+  if (account.config.dmPolicy !== "allowlist" || !account.config.allowFrom?.length) {
+    return undefined;
+  }
+  const pubkeys: string[] = [];
+  for (const entry of account.config.allowFrom) {
+    if (typeof entry !== "string") {
+      return undefined;
+    }
+    const normalized = normalizeNostrAllowEntry(entry);
+    // Dynamic, wildcard, and invalid entries must keep the full canonical policy path.
+    if (!normalized || !/^[0-9a-f]{64}$/.test(normalized)) {
+      return undefined;
+    }
+    pubkeys.push(normalized);
+  }
+  return [...new Set(pubkeys)];
+}
+
 const nostrIngressIdentity = {
   key: "nostr-pubkey",
   normalizeEntry: normalizeNostrAllowEntry,
@@ -161,6 +180,7 @@ export async function startNostrGatewayAccount(
         privateKey: account.privateKey,
         relays: account.relays,
         authorizeSender,
+        admissionPubkeys: resolveAdmissionPubkeys(account),
         onMessage: async (senderPubkey, text, reply, meta, lifecycle) => {
           const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
           if (resolvedAccess.senderAccess.decision !== "allow") {

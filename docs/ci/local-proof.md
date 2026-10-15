@@ -292,6 +292,9 @@ PR `checks-fast-baseline-ratchets` job reports this growth as warnings. Renames
 compare against the old path; unchanged or shrinking over-cap files pass the
 ratchet. Measurement uses oxlint's actual caps and comment/blank-line exclusions
 and neutralizes suppression directives only in temporary measurement copies.
+Current files are measured first; historical source and rename detection are
+needed only for files that still exceed their cap, avoiding unused blob downloads
+in partial clones.
 Main-push CI does not run the PR growth comparison; ordinary lint still reports
 all unsuppressed over-cap files.
 

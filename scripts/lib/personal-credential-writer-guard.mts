@@ -163,12 +163,14 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     ],
   ],
   // Enrollment preserves credential bytes with a CAS in the existing admitted transaction.
-  // Guard both worker entry points and their host dispatch; no raw writer escapes this chain.
+  // Doctor uses the native agent transaction only with exclusive maintenance, live admission
+  // and the same credential CAS/commit fence. Keep its exact host edge, not a file exemption.
   [
     key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
     [
       key(authWorker, "authProfiles.enrollAuthorization"),
       key("src/agents/auth-profiles/inline-usage.worker.ts", "bindSqliteWorkerBackend/execute"),
+      key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
     ],
   ],
   [
@@ -917,6 +919,7 @@ export function inspectPersonalCredentialWriters(
     ),
   );
   const aliases: [string, string][] = [];
+  const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
   for (const { file, source } of sources) {
     const visit = (node: ts.Node) => {
       if (
@@ -940,27 +943,31 @@ export function inspectPersonalCredentialWriters(
       }
       if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
         aliases.push([node.propertyName?.text ?? node.name.text, node.name.text]);
+        if (node.propertyName?.text === "default") {
+          bindingNames.push(node.name);
+        }
       }
       if (ts.isNamespaceImport(node)) {
-        names.add(node.name.text);
+        bindingNames.push(node.name);
+      } else if (ts.isImportClause(node) && node.name) {
+        bindingNames.push(node.name);
       }
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
   }
-  let expanded = true;
-  while (expanded) {
-    expanded = false;
-    for (const [from, to] of aliases) {
-      if (names.has(from) && !names.has(to)) {
-        names.add(to);
-        expanded = true;
+  const importedBindings = new Map<Symbol, Symbol>();
+  // Compiler aliases are immutable; prepared binding overrides are applied separately.
+  const aliasTargets = new Map<Symbol, Symbol>();
+  const resolveSymbol = (raw: Symbol | undefined): Symbol | undefined => {
+    let symbol = raw;
+    if (raw && raw.flags & SymbolFlags.Alias) {
+      symbol = aliasTargets.get(raw);
+      if (!symbol) {
+        symbol = checker.getAliasedSymbol(raw);
+        aliasTargets.set(raw, symbol);
       }
     }
-  }
-  const importedBindings = new Map<Symbol, Symbol>();
-  const resolveSymbol = (raw: Symbol | undefined): Symbol | undefined => {
-    const symbol = raw && raw.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(raw) : raw;
     return symbol && (importedBindings.get(symbol) ?? symbol);
   };
   const resolved = new Map<Symbol, string[]>();
@@ -983,7 +990,11 @@ export function inspectPersonalCredentialWriters(
       found.push(...targets(checker.getShorthandAssignmentValueSymbol(declaration)));
     } else if (symbol.flags & SymbolFlags.Module) {
       for (const member of checker.getExportsOfModule(symbol)) {
-        found.push(...targets(member));
+        const writers = targets(member);
+        if (writers.length) {
+          names.add(member.name);
+          found.push(...writers);
+        }
       }
     }
     return found;
@@ -1022,7 +1033,7 @@ export function inspectPersonalCredentialWriters(
       const local = checker.getSymbolAtLocation(binding);
       if (local) {
         importedBindings.set(local, module);
-        names.add(binding.text);
+        bindingNames.push(binding);
       }
       return true;
     }
@@ -1113,6 +1124,23 @@ export function inspectPersonalCredentialWriters(
     };
     source.forEachChild(visit);
   }
+  // Resolve namespace candidates after every dynamic binding has its prepared target.
+  const bindingSymbols = bindingNames.length ? checker.getSymbolAtLocation(bindingNames) : [];
+  for (const [index, binding] of bindingNames.entries()) {
+    if (targets(bindingSymbols[index]).length) {
+      names.add(binding.text);
+    }
+  }
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const [from, to] of aliases) {
+      if (names.has(from) && !names.has(to)) {
+        names.add(to);
+        expanded = true;
+      }
+    }
+  }
   const selectsImportMember = (call: ts.CallExpression): boolean => {
     let expression: ts.Expression = call;
     while (
@@ -1153,17 +1181,20 @@ export function inspectPersonalCredentialWriters(
         (ts.isIdentifier(node.name) || ts.isStringLiteralLikeNode(node.name)) &&
         node.name.text === "type"
       ) {
-        const type = checker.getTypeAtLocation(
-          ts.isPropertyAssignment(node) ? node.initializer : node.name,
-        );
-        const variants = type.isUnionType() ? type.getTypes() : [type];
-        for (const value of variants) {
-          if (!value.isStringLiteralType()) {
-            continue;
-          }
-          const owner = credentialCommandOwners.get(value.value);
+        const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
+        // Literal command values are already exact; only expressions need semantic resolution.
+        const type = ts.isStringLiteralLikeNode(initializer)
+          ? undefined
+          : checker.getTypeAtLocation(initializer);
+        const commands = ts.isStringLiteralLikeNode(initializer)
+          ? [initializer.text]
+          : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+              .filter((value) => value.isStringLiteralType())
+              .map((value) => value.value);
+        for (const command of commands) {
+          const owner = credentialCommandOwners.get(command);
           if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${value.value} credential writes require the host publication adapter`);
+            fail(node, `${command} credential writes require the host publication adapter`);
           }
         }
       }
@@ -1271,7 +1302,7 @@ export function inspectPersonalCredentialWriters(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = checker.getSymbolAtLocation(references);
+    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
     for (const [index, node] of references.entries()) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)

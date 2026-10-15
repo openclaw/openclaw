@@ -11,7 +11,6 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
-import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { getWhatsAppRuntime } from "./runtime.js";
@@ -138,7 +137,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   authDir?: string;
 }): Promise<boolean> {
   const self = getSelfIdentity(params.msg, params.authDir);
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const policy =
     params.policy ??
     resolveWhatsAppInboundPolicy({

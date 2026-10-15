@@ -51,6 +51,60 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     await server?.close();
   });
 
+  it("starts discovery when the Models route inherits a pending connect snapshot", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const model = { provider: "fixture", id: "current", name: "Current model", available: true };
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "main",
+      deferredMethods: ["agents.list"],
+      models: [model],
+      methodResponses: {
+        "models.list": {
+          models: [model],
+          pendingProviders: [],
+          providerOutcomes: [{ provider: "fixture", status: "ready" }],
+        },
+        "models.authStatus": {
+          ts: 1,
+          providers: [{ provider: "fixture", profiles: [], apiKey: { source: "config" } }],
+        },
+      },
+    });
+    try {
+      await page.goto(server.baseUrl + "settings/model-providers");
+      await gateway.waitForRequest("agents.list");
+      const connect = await gateway.waitForRequest("connect");
+      const target = asNullableRecord(connect.params)?.modelCatalog;
+      expect(target).toBeDefined();
+      await gateway.emitGatewayEvent("models.snapshot", {
+        target,
+        scope: { agentId: "main" },
+        catalog: { models: [model], pendingProviders: ["fixture"] },
+      });
+      const reads = (await gateway.getRequests("models.list")).length;
+      expect(reads).toBe(0);
+      await gateway.resolveDeferred("agents.list");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      const badge = page.locator(
+        '[data-provider-id="fixture"] .model-providers__head .settings-status',
+      );
+      await expect.poll(() => badge.textContent()).toBe("Ready");
+      expect((await gateway.getRequests("models.list")).length).toBe(reads + 1);
+      await page.locator('a[href="/settings/appearance"]').first().click();
+      await waitForControlUiRoute(page, { routeId: "appearance" });
+      await page.locator('a[href="/settings/model-providers"]').first().click();
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await badge.textContent()).toBe("Ready");
+      expect((await gateway.getRequests("models.list")).map((request) => request.params)).toEqual([
+        { view: "configured", agentId: "main" },
+        { view: "configured", preparedOnly: true, agentId: "main" },
+      ]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["fresh", "populated", "empty"] as const)(
     "adopts partial provider inventory on the Models route (%s cache)",
     async (cacheState) => {

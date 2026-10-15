@@ -48,6 +48,10 @@ export type ColdLoadProbeInput = {
     event: string;
     payload: unknown;
     history?: { text?: string; message?: unknown };
+    sessionMutation?: {
+      upsert?: import("../api/types.ts").GatewaySessionRow[];
+      removeKeys?: string[];
+    };
   }>;
   liveHistory?: {
     sessionId: string;

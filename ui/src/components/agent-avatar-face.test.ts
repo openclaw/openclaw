@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderAgentAvatarFace } from "./agent-avatar-face.ts";
+import { createComponent } from "solid-js";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { AgentAvatarFace } from "./agent-avatar-face.tsx";
+
+afterEach(cleanupSolid);
 
 function face(id: string) {
-  const container = document.createElement("div");
-  render(renderAgentAvatarFace(id), container);
-  return container.querySelector("svg")!;
+  const view = mountSolid(() => createComponent(AgentAvatarFace, { agentId: id }));
+  return view.container.querySelector("svg")!;
 }
 
 describe("default agent face", () => {

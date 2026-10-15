@@ -11,6 +11,7 @@ import type { CodexCatalogDecodeRoute } from "./client-message-frames.js";
 import { isJsonObject } from "./protocol.js";
 
 const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
+const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 const CATALOG_WORKER_IDLE_MS = 60_000;
 const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
 
@@ -45,9 +46,17 @@ export class CodexCatalogWorker {
     line: Buffer,
     route: CodexCatalogDecodeRoute,
     attempts: ReadonlyMap<number | string, CodexClientRequestAttempt>,
-  ) {
+  ): Promise<CodexCatalogDecodeResult | undefined> {
     if (this.closed) {
       return undefined;
+    }
+    if (line.byteLength > CATALOG_MAX_BYTES) {
+      const error = new Error(
+        "Codex catalog response exceeds 8 MiB; reduce oversized thread previews and retry.",
+      );
+      return route === "unresolved"
+        ? { failures: [{ value: "<oversized catalog response>", error, fragmentCount: 1 }] }
+        : { failures: [], projectionError: { id: route.id, error } };
     }
     if (route !== "unresolved" && line.byteLength <= INLINE_CATALOG_MAX_BYTES) {
       let parsed: unknown;
@@ -88,8 +97,7 @@ export class CodexCatalogWorker {
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         workerClass: "singleton",
         maxPendingTasks: 1,
-        // Framing admits one line at a time; native responses have no size cap.
-        maxPendingBytes: Number.MAX_SAFE_INTEGER,
+        maxPendingBytes: CATALOG_MAX_BYTES,
         idleTimeoutMs: 0,
         restartOnError: false,
       });

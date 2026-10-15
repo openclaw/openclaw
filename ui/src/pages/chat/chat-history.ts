@@ -222,6 +222,7 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  waitReason?: "response" | "slot";
   retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
