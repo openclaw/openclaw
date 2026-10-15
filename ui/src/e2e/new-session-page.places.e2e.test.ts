@@ -566,6 +566,119 @@ suite.define(() => {
     }
   });
 
+  it("selects an eligible checkout for a restricted registered project", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "checkout-choice"),
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read", "operator.sessions.write"],
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "projects.list",
+        "projects.checkoutOptions",
+        "worktrees.branches",
+      ],
+      methodResponses: {
+        "projects.list": {
+          projects: [
+            { id: "sample-project", displayName: "Sample Project", source: "registered" },
+            { id: "allowed-project", displayName: "Workspace Project", source: "registered" },
+          ],
+        },
+        "projects.checkoutOptions": {
+          cases: [
+            {
+              match: { projectId: "allowed-project" },
+              response: { current: true, worktree: true },
+            },
+            { response: { current: false, worktree: true } },
+          ],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          repositoryStatus: "git",
+        },
+        "sessions.create": { key: "agent:main:checkout-choice" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Inspect the project and explain the next change.");
+      await page.locator("#new-session-project-trigger").click();
+      await page
+        .locator(".new-session-page__project-popover")
+        .getByRole("button", { name: "Sample Project", exact: true })
+        .click();
+      const trigger = page.locator("#new-session-checkout-trigger");
+      await trigger.click();
+      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      const current = checkout.locator('[data-value="checkout"]');
+      expect(await current.isDisabled()).toBe(true);
+      expect(await current.textContent()).toContain(
+        "Use an isolated worktree for this project and agent",
+      );
+      await captureProjectUiProof(suite, page, "checkout-choice.png", {
+        surface: checkout,
+        content: [current],
+      });
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
+      await page.keyboard.press("Escape");
+      await page.locator("#new-session-project-trigger").click();
+      await page
+        .locator(".new-session-page__project-popover")
+        .getByRole("button", { name: "Workspace Project", exact: true })
+        .click();
+      await trigger.click();
+      await expect.poll(() => current.isDisabled()).toBe(false);
+      expect(await trigger.getAttribute("data-worktree")).toBe("true");
+      await current.click();
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
+      await page.keyboard.press("Escape");
+      await page.locator("#new-session-project-trigger").click();
+      await page
+        .locator(".new-session-page__project-popover")
+        .getByRole("button", { name: "Sample Project", exact: true })
+        .click();
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      expect(await message.inputValue()).toBe("Inspect the project and explain the next change.");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        projectId: "sample-project",
+        worktree: true,
+        message: "Inspect the project and explain the next change.",
+      });
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("selects a registered project and submits its id at write scope", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

@@ -95,6 +95,11 @@ describe("chat Details presentation", () => {
     );
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     expect(panel.getAttribute("role")).toBe("complementary");
+    expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
+    const groupStyle = getComputedStyle(panel.querySelector(".chat-details__group")!);
+    expect(groupStyle.borderTopWidth).toBe("1px");
+    expect(groupStyle.borderInlineStartWidth).toBe("0px");
+    expect(groupStyle.borderBottomWidth).toBe("0px");
     expect(panel.matches(":popover-open")).toBe(false);
     expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
       panel.getBoundingClientRect().left,
@@ -114,7 +119,7 @@ describe("chat Details presentation", () => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
-    panel.querySelector<HTMLButtonElement>("button")!.click();
+    trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(1320);
     element.props = { ...element.props!, progressCard: { ...card, revision: 4 } };
@@ -151,6 +156,7 @@ describe("chat Details presentation", () => {
     trigger.click();
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
@@ -173,10 +179,17 @@ describe("chat Details presentation", () => {
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getBoundingClientRect().width).toBe(364);
+    expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(source);
+    element.open(source);
+    await element.updateComplete;
+    panel.querySelector<HTMLButtonElement>(".chat-details__toolbar button")!.click();
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(source);
@@ -241,6 +254,11 @@ describe("chat Details presentation", () => {
       window.dispatchEvent(new Event("resize"));
       const bounds = panel.getBoundingClientRect();
       const conversation = frame.getBoundingClientRect();
+      expect(
+        Math.abs(
+          bounds.top - Math.max(conversation.top + 8, trigger.getBoundingClientRect().bottom + 6),
+        ),
+      ).toBeLessThanOrEqual(1);
       expect(bounds.left).toBeGreaterThanOrEqual(conversation.left);
       expect(bounds.right).toBeLessThanOrEqual(conversation.right);
       expect(bounds.bottom).toBeLessThanOrEqual(footer.getBoundingClientRect().top);
@@ -296,6 +314,13 @@ describe("chat Details presentation", () => {
     expect(menuSurface.matches(":popover-open")).toBe(true);
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
     const select = async (value: string) => {
+      if (trigger.getAttribute("aria-expanded") !== "true") {
+        trigger.click();
+        await element.updateComplete;
+        await expect
+          .poll(() => menu.querySelector<HTMLButtonElement>("button")!.disabled)
+          .toBe(false);
+      }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
         await expect.poll(() => menuSurface.dataset.phase).toBe("open");
@@ -303,6 +328,7 @@ describe("chat Details presentation", () => {
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };
     await select("hide");
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(hide).toHaveBeenCalledOnce();
     expect(clear).not.toHaveBeenCalled();
     await select("collapse");

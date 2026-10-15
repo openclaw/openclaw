@@ -491,8 +491,8 @@ supported. The publication source also accepts the execution object shape shippe
 in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
 `capturePreparedGenerationClaim` method in parameter-derived types; internal
 native-adoption capabilities are not required from plugins. Ordinary preparation
-reuses a completed native generation; host
-admission can request current schema proof through an optional third argument.
+and host admission reuse a completed native generation and its published schema
+facts. The two-argument contract is also unchanged in `v2026.10.3`.
 
 The `agent-execution-preparation-released-signature` compatibility record is
 active, with no deprecation warning or required migration. Breaking the released
