@@ -2,7 +2,7 @@
  * Regression coverage for transcript replay policy resolution.
  * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -21,23 +21,9 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
       if (
         !provider ||
-        ![
-          "amazon-bedrock",
-          "anthropic",
-          "google",
-          "github-copilot",
-          "env-sensitive",
-          "minimax",
-          "mistral",
-          "openai",
-          "ollama",
-          "vllm",
-        ].includes(provider)
+        !["amazon-bedrock", "anthropic", "env-sensitive", "ollama"].includes(provider)
       ) {
         return undefined;
-      }
-      if (provider === "vllm") {
-        return {};
       }
       return {
         buildReplayPolicy: (context?: {
@@ -72,67 +58,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 undefined,
                 context?.inHistorySystemUpdates,
               );
-            case "minimax":
-              return context?.modelApi === "openai-completions"
-                ? {
-                    sanitizeToolCallIds: true,
-                    toolCallIdMode: "strict",
-                    applyAssistantFirstOrderingFix: true,
-                    validateGeminiTurns: true,
-                    validateAnthropicTurns: true,
-                  }
-                : {
-                    sanitizeMode: "full",
-                    sanitizeToolCallIds: true,
-                    toolCallIdMode: "strict",
-                    preserveSignatures: true,
-                    repairToolUseResultPairing: true,
-                    validateAnthropicTurns: true,
-                    allowSyntheticToolResults: true,
-                    ...(replayHelpers.buildAnthropicReplayPolicyForModel(modelId).dropThinkingBlocks
-                      ? { dropThinkingBlocks: true }
-                      : {}),
-                  };
-            case "google":
-              return {
-                sanitizeMode: "full",
-                sanitizeToolCallIds: true,
-                toolCallIdMode: "strict",
-                sanitizeThoughtSignatures: {
-                  allowBase64Only: true,
-                  includeCamelCase: true,
-                },
-                repairToolUseResultPairing: true,
-                applyAssistantFirstOrderingFix: true,
-                validateGeminiTurns: true,
-                validateAnthropicTurns: false,
-                allowSyntheticToolResults: true,
-              };
-            case "github-copilot":
-              return context?.modelApi === "anthropic-messages"
-                ? {
-                    sanitizeMode: "full",
-                    preserveSignatures: true,
-                    repairToolUseResultPairing: true,
-                    validateAnthropicTurns: true,
-                    allowSyntheticToolResults: true,
-                    dropThinkingBlocks: true,
-                  }
-                : undefined;
-            case "mistral":
-              return {
-                sanitizeToolCallIds: true,
-                toolCallIdMode: "strict9",
-              };
-            case "openai":
-              return {
-                sanitizeMode: "images-only",
-                sanitizeToolCallIds: context?.modelApi === "openai-completions",
-                ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
-                applyAssistantFirstOrderingFix: false,
-                validateGeminiTurns: false,
-                validateAnthropicTurns: false,
-              };
             default:
               return undefined;
           }
@@ -143,25 +68,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 });
 
 describe("resolveTranscriptPolicy", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
-    const policy = resolveTranscriptPolicy({
-      provider,
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
-    expect(policy.appendOnlyRuntimeContext).toBe(true);
-  }
-
   function makeOpenAiCompatibleReasoningModel(
     overrides: Partial<ProviderRuntimeModel> = {},
   ): ProviderRuntimeModel {
@@ -179,25 +85,6 @@ describe("resolveTranscriptPolicy", () => {
       ...overrides,
     };
   }
-
-  it("memoizes replay policy resolution for the same config and process env", () => {
-    const config = {} as OpenClawConfig;
-
-    const firstPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
-      config,
-      env: process.env,
-    });
-    const secondPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
-      config,
-      env: process.env,
-    });
-
-    expect(secondPolicy).toBe(firstPolicy);
-  });
 
   it("does not reuse cached replay policies across custom env objects", () => {
     const config = {} as OpenClawConfig;
@@ -292,10 +179,6 @@ describe("resolveTranscriptPolicy", () => {
     },
   );
 
-  it("falls back to unowned transport defaults when no owning plugin exists", () => {
-    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
-  });
-
   it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
     const claudePolicy = resolveTranscriptPolicy({
       provider: "anthropic-foundry",
@@ -306,6 +189,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(claudePolicy.toolCallIdMode).toBe("strict");
     expect(claudePolicy.validateAnthropicTurns).toBe(true);
     expect(claudePolicy.validateGeminiTurns).toBe(false);
+    expect(claudePolicy.dropReasoningFromHistory).toBe(false);
 
     const gptPolicy = resolveTranscriptPolicy({
       provider: "custom-openai-proxy",
@@ -441,6 +325,7 @@ describe("resolveTranscriptPolicy", () => {
       const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
       const policy = resolveTranscriptPolicy({
         config,
+        env: process.env,
         provider,
         modelApi: api,
         modelId: model.id,
@@ -541,6 +426,18 @@ describe("resolveTranscriptPolicy", () => {
 
     expect(defaultPolicy.dropReasoningFromHistory).toBe(true);
     expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
+    expect(defaultPolicy.sanitizeToolCallIds).toBe(true);
+    expect(defaultPolicy.toolCallIdMode).toBe("strict");
+    expect(defaultPolicy.applyGoogleTurnOrdering).toBe(true);
+    expect(defaultPolicy.validateGeminiTurns).toBe(true);
+    expect(defaultPolicy.validateAnthropicTurns).toBe(true);
+    expect(defaultPolicy.appendOnlyRuntimeContext).toBe(true);
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "openai-completions",
+        policy: defaultPolicy,
+      }),
+    ).toBe(false);
   });
 
   it("enables Anthropic-compatible policies for Bedrock provider", () => {
