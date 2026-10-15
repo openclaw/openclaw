@@ -255,6 +255,16 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       });
       await page.locator('a[href="/settings/model-providers"]').first().click();
       await gateway.waitForRequest("models.authStatus");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              document.querySelector<HTMLElement & { loaderPending: boolean }>(
+                "openclaw-model-providers-page",
+              )?.loaderPending,
+          ),
+        )
+        .toBe(true);
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
@@ -333,6 +343,16 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       });
       await page.locator('a[href="/settings/model-providers"]').first().click();
       await gateway.waitForRequest("models.authStatus");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              document.querySelector<HTMLElement & { loaderPending: boolean }>(
+                "openclaw-model-providers-page",
+              )?.loaderPending,
+          ),
+        )
+        .toBe(true);
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
