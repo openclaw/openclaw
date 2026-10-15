@@ -148,10 +148,21 @@ export type WorkerLiveClient = {
 
 export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let previewEnabled = true;
-  const enqueueLive = (event: WorkerLiveEvent) => {
+  // Previews produced by an internal pass whose assistant output may still be
+  // rejected are parked here. Terminal events never pass through this queue.
+  let deferredPreviews: WorkerLiveEvent[] | undefined;
+  const dispatchPreview = (event: WorkerLiveEvent) => {
     if (previewEnabled) {
-      previewEnabled = client.enqueuePreview(boundLiveEvent(event));
+      previewEnabled = client.enqueuePreview(event);
     }
+  };
+  const enqueueLive = (event: WorkerLiveEvent) => {
+    const bound = boundLiveEvent(event);
+    if (deferredPreviews) {
+      deferredPreviews.push(bound);
+      return;
+    }
+    dispatchPreview(bound);
   };
   const startedAt = Date.now();
   // Terminal lifecycle events are deferred past the final transcript flush so the
@@ -329,5 +340,25 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     }
     await client.emitTerminal(boundLiveEvent(terminalLiveEvent));
   };
-  return { handleSessionEvent, enqueueRunFailure, emitTerminal };
+  const beginDeferredPreviews = () => {
+    deferredPreviews = [];
+  };
+  const commitDeferredPreviews = () => {
+    const parked = deferredPreviews ?? [];
+    deferredPreviews = undefined;
+    for (const event of parked) {
+      dispatchPreview(event);
+    }
+  };
+  const discardDeferredPreviews = () => {
+    deferredPreviews = undefined;
+  };
+  return {
+    handleSessionEvent,
+    enqueueRunFailure,
+    emitTerminal,
+    beginDeferredPreviews,
+    commitDeferredPreviews,
+    discardDeferredPreviews,
+  };
 }

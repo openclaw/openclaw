@@ -1023,6 +1023,14 @@ describe("worker runtime", () => {
       role: "assistant",
       content: [{ type: "text", text: "worker reply" }],
     });
+    // The rejected restatement must never reach the committed transcript.
+    expect(JSON.stringify(messages)).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+    // ...nor any live preview the gateway could forward to a channel.
+    const liveAssistantTexts = gateway.liveEventRequests.flatMap(({ event }) =>
+      event.kind === "assistant" ? [event.payload.text] : [],
+    );
+    expect(liveAssistantTexts.join("\n")).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+    expect(liveAssistantTexts.join("\n")).toContain("worker reply");
   });
 
   it("keeps a finalizer answer that quotes a nudge it did not receive", async () => {
@@ -1047,6 +1055,9 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests.at(-1)).toMatchObject({
       event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
     });
+    expect(
+      JSON.stringify(gateway.acceptedTranscriptRequests.flatMap((request) => request.messages)),
+    ).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
   });
 
   registerWorkerBackgroundExecLifecycleTests({

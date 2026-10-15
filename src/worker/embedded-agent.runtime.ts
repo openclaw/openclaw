@@ -463,18 +463,22 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           finalizationAttempt += 1
         ) {
           params.signal?.throwIfAborted();
-          await session.sendCustomMessage(
-            {
-              customType: "openclaw.settled-tool-finalization",
-              content: instruction,
-              display: false,
-            },
-            { triggerTurn: true },
-          );
-          terminalAssistant = completion.getCurrentAttemptAssistant();
+          // Nothing this pass produces may reach the gateway until it is accepted:
+          // park live previews and transcript commits, then release only the turn
+          // that actually answers. A restatement is dropped instead of published.
+          liveRuntime.beginDeferredPreviews();
+          transcriptRuntime.beginTranscriptHold();
           try {
+            await session.sendCustomMessage(
+              {
+                customType: "openclaw.settled-tool-finalization",
+                content: instruction,
+                display: false,
+              },
+              { triggerTurn: true },
+            );
+            terminalAssistant = completion.getCurrentAttemptAssistant();
             assertSettledTurnFinalizationResult({ assistant: terminalAssistant! }, instruction);
-            break;
           } catch (error) {
             const echoedInstruction =
               error instanceof EmptySettledTurnFinalizationError &&
@@ -483,9 +487,17 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                 instruction,
               );
             if (!echoedInstruction || finalizationAttempt >= MAX_ECHOED_FINALIZATION_ATTEMPTS) {
+              liveRuntime.discardDeferredPreviews();
+              transcriptRuntime.discardTranscriptHold();
               throw error;
             }
+            liveRuntime.discardDeferredPreviews();
+            transcriptRuntime.discardTranscriptHold();
+            continue;
           }
+          liveRuntime.commitDeferredPreviews();
+          await transcriptRuntime.commitTranscriptHold();
+          break;
         }
       }
       params.signal?.throwIfAborted();
