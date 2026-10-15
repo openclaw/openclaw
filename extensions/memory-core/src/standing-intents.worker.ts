@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   ensureOpenClawAgentStandingIntentsSchema,
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
@@ -54,12 +54,8 @@ export function bindSqliteWorkerBackend(
       return result;
     }),
   );
-  let closed = false;
-  return {
+  return bindSqliteWorkerDatabase<StandingIntentWorkerOperations>(db, {
     execute(command) {
-      if (closed) {
-        throw new Error("Standing-intent worker binding is closed");
-      }
       if (schemaPrepared) {
         return { kind: "schema-prepared" };
       }
@@ -87,17 +83,7 @@ export function bindSqliteWorkerBackend(
           case "match":
             return result(matchStandingIntentsInDatabase(db, command.input));
         }
-        throw new Error("Unknown standing-intent command");
       });
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Standing-intent operation left an unsettled native connection");
-      }
-    },
-    close() {
-      closed = true;
-    },
-  };
+  });
 }

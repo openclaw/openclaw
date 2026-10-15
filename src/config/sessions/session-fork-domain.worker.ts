@@ -28,10 +28,8 @@ export function bindSqliteWorkerBackend(
           return readParentForkSource(command.input, context);
         case "session.parentFork.commit":
           return commitParentFork(command.input, context);
-        case "session.messageCut.fork":
-          return commitSessionForkMessageCut(command.input, context);
       }
-      throw new Error("Unknown session fork domain operation");
+      return commitSessionForkMessageCut(command.input, context);
     },
   );
 }
