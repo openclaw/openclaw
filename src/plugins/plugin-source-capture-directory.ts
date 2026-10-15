@@ -371,12 +371,14 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
       } else {
         const parent = resolvePluginSourceCapturesDirectory(stateDir);
         fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-        instance.managedRoot = fs.realpathSync(parent);
+        // Native spelling expands Windows 8.3 names, matching fs-safe copy admission
+        // and the fs.promises.realpath reclaim scan.
+        instance.managedRoot = fs.realpathSync.native(parent);
         const candidate = path.join(instance.managedRoot, randomUUID());
         fs.mkdirSync(candidate, { mode: 0o700 });
         directory = candidate;
       }
-      const canonical = fs.realpathSync(directory);
+      const canonical = fs.realpathSync.native(directory);
       token = acquireSqliteStagingToken(canonical, "create");
       const captures = path.join(canonical, kind);
       fs.mkdirSync(captures, { mode: 0o700 });

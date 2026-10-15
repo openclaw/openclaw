@@ -633,7 +633,8 @@ export function createPluginSourceCapture() {
       override !== undefined
         ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
         : instance!.createDirectory();
-    directory = fs.realpathSync(created);
+    // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
+    directory = fs.realpathSync.native(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
     const cleanupErrors: unknown[] = [];
