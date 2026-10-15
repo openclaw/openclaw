@@ -24,6 +24,7 @@ vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
 }));
 
+// mock-isolation: Route dispatch stops at the daemon entrypoint without opening service state.
 vi.mock("../daemon-cli/status.js", () => ({
   runDaemonStatus: runDaemonStatusMock,
 }));
