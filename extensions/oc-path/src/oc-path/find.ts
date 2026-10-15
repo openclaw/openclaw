@@ -16,6 +16,7 @@ import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
+  MAX_SUB_SEGMENTS_PER_SLOT,
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
   WILDCARD_RECURSIVE,
@@ -78,7 +79,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   const seen = new Set<string>();
   const flatPaths = ast.kind === "jsonc" || ast.kind === "yaml";
   const onMatch: OnMatch = (slotSubs) => {
-    const path = repackSlotSubs(pattern, slotSubs);
+    const path = repackSlotSubs(pattern, slotSubs, flatPaths);
     const key = JSON.stringify(
       flatPaths
         ? slotSubs.map(({ value }) => unquoteSeg(value))
@@ -136,11 +137,11 @@ function patternSubs(pattern: OcPath): readonly SlotSub[] {
   return out;
 }
 
-function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
+function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[], flatPaths: boolean): OcPath {
   // Subs arrive in slot order, but a mid-path `**` matching zero
   // segments skips a slot boundary; compact sub-runs into the first
   // available slots so emitted paths keep the nesting contract.
-  const runs: string[][] = [];
+  let runs: string[][] = [];
   let runSlot: Slot | undefined;
   for (const { slot, value } of slotSubs) {
     if (slot !== runSlot) {
@@ -148,6 +149,17 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
       runSlot = slot;
     }
     runs[runs.length - 1]?.push(value);
+  }
+  if (flatPaths && runs.some((run) => run.length > MAX_SUB_SEGMENTS_PER_SLOT)) {
+    const values = runs.flat();
+    runs = [
+      values.slice(0, MAX_SUB_SEGMENTS_PER_SLOT),
+      values.slice(MAX_SUB_SEGMENTS_PER_SLOT, 2 * MAX_SUB_SEGMENTS_PER_SLOT),
+    ];
+    if (values.length > 2 * MAX_SUB_SEGMENTS_PER_SLOT) {
+      // Keep the full remainder even when the path exceeds all three slots' capacity.
+      runs.push(values.slice(2 * MAX_SUB_SEGMENTS_PER_SLOT));
+    }
   }
   const [section, item, field] = runs;
   return {

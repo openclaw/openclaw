@@ -184,6 +184,43 @@ describe("recursive wildcard targets", () => {
     }
   });
 
+  describe.each([
+    { file: "f.json", parse: parseJsonc },
+    { file: "f.yaml", parse: parseYaml },
+  ])("deep recursive targets in $file", ({ file, parse }) => {
+    it.each([64, 65, 129, 192])("round-trips every result at depth %i", (depth) => {
+      const keys = Array.from({ length: depth }, (_, index) => (index === 63 ? "a.b" : "k"));
+      const value = keys.reduceRight<unknown>((child, key) => ({ [key]: child }), 1);
+      const { ast, diagnostics } = parse(JSON.stringify(value));
+      expect(diagnostics).toEqual([]);
+      const out = findOcPaths(ast, parseOcPath("oc://" + file + "/**/**/**?session=deep"));
+      expect(out).toHaveLength(depth + 1);
+      expect(new Set(out.map(({ path }) => formatOcPath(path))).size).toBe(out.length);
+      expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(path.session).toBe("deep");
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    });
+
+    it("preserves an already valid three-slot partition", () => {
+      const middle = Array(64).fill("k").join(".");
+      let value: unknown = { end: 1 };
+      for (let level = 0; level < 64; level++) {
+        value = { k: value };
+      }
+      const ast = parse(JSON.stringify({ start: value })).ast;
+      const out = findOcPaths(ast, parseOcPath("oc://" + file + "/start/**/end"));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+        "oc://" + file + "/start/" + middle + "/end",
+      ]);
+      expect(leafValues(out)).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    });
+  });
+
   it("bounds AST expansion for repeated recursive wildcards", () => {
     const depth = 10;
     let value: unknown = 1;
