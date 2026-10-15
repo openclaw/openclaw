@@ -783,6 +783,34 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
+  it.each([undefined, "5"])(
+    "runs finalizer doctors outside the lease with timeout %s",
+    async (timeout) => {
+      await updateFinalizeCommand({
+        channel: "stable",
+        deferCompletionCache: true,
+        json: true,
+        yes: true,
+        timeout,
+      });
+
+      expectLifecycleBoundary(mocks.events, "fresh-doctor");
+      const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
+      expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
+      expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
+        mocks.events.lastIndexOf("lease-exit:false"),
+      );
+      expect(mocks.events).not.toContain("persisted-index:true");
+      const timeoutMs = timeout === undefined ? undefined : 5_000;
+      expect(runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs }),
+      );
+      expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs }),
+      );
+    },
+  );
+
   it.each(finalizationCleanupCases)(
     "joins finalizer cleanup before publication ($phase, $cleanup, failure=$failed)",
     async ({ phase, cleanup, failed }) => {

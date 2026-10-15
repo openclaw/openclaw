@@ -599,6 +599,8 @@ describe("update repair ledger recovery", () => {
     { opts: { channel: "beta" } },
     { opts: { acceptCapabilities: true } },
     { phase: "activating" },
+    { phase: "restarting" },
+    { phase: "verifying" },
     { phase: "repairing" },
     { phase: "verifying", reconciled: true },
     { failedStep: true },

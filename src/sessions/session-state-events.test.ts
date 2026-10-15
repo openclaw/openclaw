@@ -10,7 +10,11 @@ import {
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
@@ -31,6 +35,7 @@ import {
   recordSessionStateEventAsync,
   recordSubagentSpawned,
   registerMainSessionGroupWatch,
+  registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 import {
@@ -63,6 +68,16 @@ async function readAmbientTargets(
   } finally {
     reader.release();
   }
+}
+
+async function createWatcherSession(
+  database: ReturnType<typeof createDatabaseOptions>,
+  watcherSessionKey = watcher,
+) {
+  await upsertSessionEntryCore(
+    { sessionKey: watcherSessionKey, env: database.env },
+    { sessionId: `session-${watcherSessionKey}`, updatedAt: Date.now() },
+  );
 }
 
 beforeEach(() => {
@@ -119,17 +134,22 @@ describe("session state events", () => {
     expect(readCursor(database)).toEqual(cursor);
   });
 
-  it.each([
-    { change: "ownership", field: "lifecycleRunId", records: false, verdict: 1 },
-    { change: "ownership", field: "lifecycleRunId", records: false, verdict: 2 },
-    { change: "metadata", field: "completionOwnerSessionKey", records: true, verdict: 2 },
-  ])(
+  it.each(
+    [
+      { change: "ownership", key: child, field: "lifecycleRunId", records: false },
+      { change: "metadata", key: child, field: "completionOwnerSessionKey", records: true },
+      { change: "another session", key: watcher, field: "lifecycleRunId", records: true },
+    ].flatMap(({ change, key, field, records }) =>
+      [1, 2].map((verdict) => ({ change, key, field, records, verdict })),
+    ),
+  )(
     "records=$records after $change changes during native verdict $verdict",
-    async ({ field, records, verdict }) => {
+    async ({ key, field, records, verdict }) => {
       const database = createDatabaseOptions();
       const target = { agentId: "main", sessionKey: child, env: database.env };
       const entry = { sessionId: "session-child", updatedAt: 1, lifecycleRunId: "original-run" };
       await upsertSessionEntryCore(target, entry);
+      await createWatcherSession(database);
       openOpenClawStateDatabase(database);
       const current = await withSessionEntryReadOnlyInWorker(
         target,
@@ -157,11 +177,11 @@ describe("session state events", () => {
           current.assertSourceCurrent();
           expect(facts?.lifecycleRunId).toBe("original-run");
           if (++verdicts === verdict) {
-            const previous = readExactSessionEntryRow(writer, child)?.entry;
+            const previous = readExactSessionEntryRow(writer, key)?.entry;
             if (!previous) {
               throw new Error("Expected an existing session for the owner write");
             }
-            writeSessionEntry(writer, child, { ...previous, [field]: "successor-run" });
+            writeSessionEntry(writer, key, { ...previous, [field]: "successor-run" });
             changedAfterVerdict = true;
           }
         },
@@ -186,6 +206,20 @@ describe("session state events", () => {
       expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
     },
   );
+
+  it("suppresses cursors and notices for agent-ambiguous bare watcher keys", async () => {
+    const database = createDatabaseOptions();
+    const event = (await recordSessionStateEventAsync(
+      eventInput({ watcherSessionKeys: ["global"] }),
+      database,
+    ))!;
+    expect(event.sequence).toBeGreaterThan(0);
+    expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
+    const cursorRow = openOpenClawStateDatabase(database)
+      .db.prepare("SELECT COUNT(*) AS n FROM session_watch_cursors")
+      .get() as { n: number };
+    expect(cursorRow.n).toBe(0);
+  });
 
   it("keeps same-keyed global sessions independent across agents", async () => {
     const database = createDatabaseOptions();
@@ -315,6 +349,38 @@ describe("session state events", () => {
       .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
       .get() as { count: number };
     expect(cursors.count).toBe(1);
+  });
+
+  it("gates unparented human turns on registered watchers", async () => {
+    const database = createDatabaseOptions();
+    const entry = { sessionId: "session-child", updatedAt: Date.now() };
+    await recordSessionHumanDirectMessage({
+      sessionKey: child,
+      entry,
+      agentId: "main",
+      actor: { actorType: "human" },
+      channel: "webchat",
+    });
+    expect(
+      (await listSessionStateEventsSince(child, "main", 0, 200, database)).events,
+    ).toHaveLength(0);
+
+    await registerSessionStateWatch(
+      { watcherSessionKey: watcher, targetSessionKey: child },
+      database,
+    );
+    await recordSessionHumanDirectMessage({
+      sessionKey: child,
+      entry,
+      agentId: "main",
+      actor: { actorType: "human" },
+      channel: "webchat",
+    });
+
+    const events = (await listSessionStateEventsSince(child, "main", 0, 200, database)).events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "human_direct_message" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
   it("projects spawn, terminal, goal, and compaction producer helpers", async () => {

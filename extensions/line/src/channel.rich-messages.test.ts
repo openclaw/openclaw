@@ -203,6 +203,28 @@ describe("LINE rich-message boundaries", () => {
     },
   );
 
+  it("keeps fallback text when only quick replies render", async () => {
+    const prepared = await prepareLineReplyPayload({
+      text: "Agent needs input:\n1. Alpha",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [{ label: "Alpha", action: { type: "callback", value: "alpha" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as
+      | { quickReplyItems?: unknown[]; flexMessage?: unknown }
+      | undefined;
+    expect(prepared.text).toBe("Agent needs input:\n1. Alpha");
+    expect(line?.flexMessage).toBeUndefined();
+    expect(line?.quickReplyItems).toHaveLength(1);
+  });
+
   it("preserves full select prompts and overflow labels while bounding native labels", async () => {
     const placeholder = "Which region should receive this deployment?";
     const options = Array.from({ length: 8 }, (_, index) => ({
@@ -271,6 +293,25 @@ describe("LINE rich-message boundaries", () => {
     expect(prepared.text).toContain("region-8");
     expect(prepared.text).not.toContain("Staging is green.");
     expect(prepared.text).not.toContain("Deploy");
+  });
+
+  it("keeps a table beside a select instead of dropping it", async () => {
+    const prepared = await prepareLineReplyPayload({
+      text: "Here is this week's usage.",
+      presentation: {
+        blocks: [
+          { type: "table", caption: "Runs", headers: ["Day", "Runs"], rows: [["Mon", "12"]] },
+          {
+            type: "select",
+            options: [{ label: "Mon", action: { type: "callback", value: "mon" } }],
+          },
+        ],
+      },
+    });
+
+    expect(prepared.text).toContain("Here is this week's usage.");
+    expect(prepared.text).toContain("Runs");
+    expect(prepared.text).toContain("12");
   });
 
   it.each([

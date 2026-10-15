@@ -117,22 +117,32 @@ describe("update progress", () => {
     },
   );
 
-  it("stops redirected elapsed notices on completion", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    presentation = await observe(true);
-    presentation.progress.onStepStart?.(step);
-    vi.advanceTimersByTime(29_999);
-    expect(log.mock.calls.flat()).toEqual(["build..."]);
-    vi.advanceTimersByTime(1);
-    expect(log).toHaveBeenLastCalledWith("build — still running (30s)");
-    vi.advanceTimersByTime(30_000);
-    expect(log).toHaveBeenLastCalledWith("build — still running (60s)");
-    presentation.progress.onStepComplete?.({ ...step, durationMs: 60_000, exitCode: 0 });
-    const count = log.mock.calls.length;
-    vi.advanceTimersByTime(60_000);
-    expect(log).toHaveBeenCalledTimes(count);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each(["complete", "stop", "suspend", "dispose"] as const)(
+    "stops redirected elapsed notices on %s",
+    async (operation) => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      presentation = await observe(true);
+      presentation.progress.onStepStart?.(step);
+      if (operation === "complete") {
+        vi.advanceTimersByTime(29_999);
+        expect(log.mock.calls.flat()).toEqual(["build..."]);
+        vi.advanceTimersByTime(1);
+        expect(log).toHaveBeenLastCalledWith("build — still running (30s)");
+        vi.advanceTimersByTime(30_000);
+        expect(log).toHaveBeenLastCalledWith("build — still running (60s)");
+        presentation.progress.onStepComplete?.({ ...step, durationMs: 60_000, exitCode: 0 });
+      } else {
+        presentation[operation]();
+      }
+      const count = log.mock.calls.length;
+      vi.advanceTimersByTime(60_000);
+      expect(log).toHaveBeenCalledTimes(count);
+      if (operation !== "complete") {
+        expect(log.mock.calls.flat()).toEqual(["build..."]);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("keeps the report available when initial history observation fails", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -447,6 +457,8 @@ describe("update progress", () => {
   });
 
   it.each([
+    { history: "running", rolledBack: false },
+    { history: "succeeded", rolledBack: false },
     { history: "rolled-back", rolledBack: false },
     { history: "rolled-back", rolledBack: true },
   ] as const)(

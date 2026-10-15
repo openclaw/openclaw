@@ -351,6 +351,26 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
+  it.each([undefined, true])(
+    "requires explicit runtime append freshness (%s), not an admission anchor",
+    async (appended) => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const commits: UserTurnOriginalInputCommit[] = [];
+      const input = { text: "Hello @Ada", idempotencyKey: "runtime-mention:user" };
+      const result = await persistUserTurnTranscript({ ...target, input });
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target,
+        onOriginalInputCommitted: (commit) => commits.push(commit),
+      });
+      const persistence = appended === undefined ? undefined : { appended };
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      expect(recorder.getAdmissionReceipt()?.entryId).toBe(result?.messageId);
+      expect(commits).toHaveLength(appended === true ? 1 : 0);
+    },
+  );
+
   it.each(["internal", "blocked"] as const)(
     "does not report %s rows as original human input",
     async (kind) => {
@@ -387,57 +407,68 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
-  it("fans committed source mentions back to their own recorders for an annotated collection", async () => {
-    const target = createSqliteTranscriptTarget({
-      dir: sessionDirs.make(),
-    });
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const commits: UserTurnOriginalInputCommit[] = [];
-    const sources = ["ada", "grace"].map((profileId) =>
-      createUserTurnTranscriptRecorder({
-        input: {
-          text: `@${profileId}`,
-          idempotencyKey: `${profileId}:user`,
-          mentions: [{ profileId, start: 0, end: profileId.length + 1 }],
-          sender: {
-            id: `sender-${profileId}`,
-            identity: { type: "profile", id: `sender-${profileId}` },
+  it.each([true, false])(
+    "fans committed source mentions back to their own recorders only for an annotated collection (%s)",
+    async (annotated) => {
+      const target = createSqliteTranscriptTarget({
+        dir: sessionDirs.make(),
+      });
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const commits: UserTurnOriginalInputCommit[] = [];
+      const sources = ["ada", "grace"].map((profileId) =>
+        createUserTurnTranscriptRecorder({
+          input: {
+            text: `@${profileId}`,
+            idempotencyKey: `${profileId}:user`,
+            mentions: [{ profileId, start: 0, end: profileId.length + 1 }],
+            sender: {
+              id: `sender-${profileId}`,
+              identity: { type: "profile", id: `sender-${profileId}` },
+            },
           },
+          target,
+          onOriginalInputCommitted: (commit) => commits.push(commit),
+        }),
+      );
+      for (const [index, source] of sources.entries()) {
+        await source.stageApproved?.({ runId: `source-${index}`, assertCurrent: () => {} });
+      }
+      const aggregate = createUserTurnTranscriptRecorder({
+        input: {
+          text: annotated ? "@ada\n@grace" : "Two queued messages were summarized.",
+          idempotencyKey: "aggregate:user",
+          ...(annotated
+            ? {
+                mentions: [
+                  { profileId: "ada", start: 0, end: 4 },
+                  { profileId: "grace", start: 5, end: 11 },
+                ],
+              }
+            : {}),
         },
+        pendingInputSources: sources,
         target,
-        onOriginalInputCommitted: (commit) => commits.push(commit),
-      }),
-    );
-    for (const [index, source] of sources.entries()) {
-      await source.stageApproved?.({ runId: `source-${index}`, assertCurrent: () => {} });
-    }
-    const aggregate = createUserTurnTranscriptRecorder({
-      input: {
-        text: "@ada\n@grace",
-        idempotencyKey: "aggregate:user",
-        mentions: [
-          { profileId: "ada", start: 0, end: 4 },
-          { profileId: "grace", start: 5, end: 11 },
-        ],
-      },
-      pendingInputSources: sources,
-      target,
-    });
-    const result = await aggregate.persistApproved();
-    await aggregate.persistFallback();
-    expect(result?.appended).toBe(true);
-    expect(
-      commits.map((commit) => ({
-        text: commit.message.content,
-        sender: commit.message["__openclaw"]?.senderId,
-        entryId: commit.anchor.entryId,
-      })),
-    ).toEqual([
-      { text: "@ada", sender: "sender-ada", entryId: result?.messageId },
-      { text: "@grace", sender: "sender-grace", entryId: result?.messageId },
-    ]);
-    expect(await readTranscriptMessages(target)).toHaveLength(1);
-  });
+      });
+      const result = await aggregate.persistApproved();
+      await aggregate.persistFallback();
+      expect(result?.appended).toBe(true);
+      expect(
+        commits.map((commit) => ({
+          text: commit.message.content,
+          sender: commit.message["__openclaw"]?.senderId,
+          entryId: commit.anchor.entryId,
+        })),
+      ).toEqual(
+        annotated
+          ? [
+              { text: "@ada", sender: "sender-ada", entryId: result?.messageId },
+              { text: "@grace", sender: "sender-grace", entryId: result?.messageId },
+            ]
+          : [],
+      );
+      expect(await readTranscriptMessages(target)).toHaveLength(1);
+    },
+  );
 
   it("does not fail or retry a committed input when notification and diagnostic callbacks throw", async () => {
     const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });

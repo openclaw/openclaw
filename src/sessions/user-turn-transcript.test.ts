@@ -168,7 +168,7 @@ describe("user turn transcript persistence", () => {
     });
   });
 
-  it.each([{ version: 1, text: 42 }])(
+  it.each([null, { version: 2, text: "stored" }, { version: 1, text: 42 }])(
     "refuses unsupported or malformed model prompt projections: %j",
     (modelPromptProjection) => {
       expect(() =>
@@ -180,6 +180,43 @@ describe("user turn transcript persistence", () => {
       ).toThrow("update OpenClaw to a compatible version or start a new session");
     },
   );
+
+  describe("persistUserTurnTranscript", () => {
+    it("resolves the session file and persists the user turn", async () => {
+      const dir = sessionDirs.make();
+      const target = createSqliteTranscriptTarget({ dir });
+      const sessionStore = {
+        [target.sessionKey]: {
+          sessionId: target.sessionId,
+          sessionFile: target.sqliteMarker,
+          updatedAt: 1,
+        },
+      };
+
+      const persisted = await persistUserTurnTranscript({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionEntry: sessionStore[target.sessionKey],
+        sessionStore,
+        storePath: target.storePath,
+        agentId: target.agentId,
+        cwd: dir,
+        input: {
+          text: "hello",
+          timestamp: 123,
+        },
+        updateMode: "none",
+      });
+
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
+      await expect(readTranscriptMessages(target)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello",
+        }),
+      ]);
+    });
+  });
 
   describe("createUserTurnTranscriptRecorder", () => {
     it("freezes the original prompt after initial steering and across reopened recorders", async () => {
