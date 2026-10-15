@@ -103,6 +103,33 @@ export type PluginStateWorkerOperations = {
   };
 };
 
+export type PluginStateReadType =
+  | "pluginState.lookup"
+  | "pluginState.lookupMany"
+  | "pluginState.entries"
+  | "pluginState.entriesInKeyRange"
+  | "pluginState.count";
+
+export type PluginStateReadCommand = SqliteWorkerCommand<
+  Pick<PluginStateWorkerOperations, PluginStateReadType>
+>;
+export type PluginStateReadResult = {
+  type: PluginStateReadType;
+  result: PluginStateWorkerOperations[PluginStateReadType]["output"];
+};
+
+export function isPluginStateReadCommand(command: {
+  type: PropertyKey;
+}): command is PluginStateReadCommand {
+  return (
+    command.type === "pluginState.lookup" ||
+    command.type === "pluginState.lookupMany" ||
+    command.type === "pluginState.entries" ||
+    command.type === "pluginState.entriesInKeyRange" ||
+    command.type === "pluginState.count"
+  );
+}
+
 export const pluginStateWorkerOperations = {
   "pluginState.executeOperation": {
     operation: "register",
@@ -218,5 +245,7 @@ export function isPluginStateWorkerCommand(command: {
   type: string;
   input: unknown;
 }): command is SqliteWorkerCommand<PluginStateWorkerOperations> {
-  return Object.hasOwn(pluginStateWorkerOperations, command.type);
+  return (
+    !isPluginStateReadCommand(command) && Object.hasOwn(pluginStateWorkerOperations, command.type)
+  );
 }

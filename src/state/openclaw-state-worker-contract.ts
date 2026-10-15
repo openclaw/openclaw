@@ -25,10 +25,6 @@ import type { ConfigHealthEntryBasis } from "../config/io.health-state.types.js"
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type {
-  RepositoryGitHubPublicationPendingQuery,
-  RepositoryGitHubPublicationStatusRow,
-} from "../gateway/github-repository-publication.kernel.js";
-import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
@@ -134,10 +130,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
       output: void;
-    };
-    "githubRepository.personalPending": {
-      input: RepositoryGitHubPublicationPendingQuery;
-      output: RepositoryGitHubPublicationStatusRow | undefined;
     };
     "agentProvenance.readBatch": {
       input: { agentIds: readonly string[] };

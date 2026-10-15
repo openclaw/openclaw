@@ -573,7 +573,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   });
 }
 
-/** Internal bounded read through the same shared-state worker as journal writes. */
+/** Internal bounded read after preceding journal writes have settled. */
 export async function pluginStateEntriesInKeyRange(
   params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
 ): Promise<PluginStateEntry<unknown>[]> {

@@ -87,6 +87,10 @@ import type {
   PluginBlobReadCommand,
   PluginBlobReadReply,
 } from "../plugin-state/plugin-blob-worker-contract.js";
+import type {
+  PluginStateReadCommand,
+  PluginStateReadResult,
+} from "../plugin-state/plugin-state-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type {
@@ -184,6 +188,7 @@ export type OpenClawStateReadCommand =
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | { type: "operatorApprovals.placementGrant"; input: PlacementGrantReadInput }
   | PluginBlobReadCommand
+  | PluginStateReadCommand
   | { type: "subagents.sessionList" }
   | { type: "subagents.restore" }
   | {
@@ -309,6 +314,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | PluginStateReadResult
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
   | ReturnType<typeof import("./openclaw-state-read-diagnostics.js").readStateDiagnosticCommand>

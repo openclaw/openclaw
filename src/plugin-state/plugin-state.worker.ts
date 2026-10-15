@@ -23,11 +23,7 @@ import {
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
-import {
-  countLivePluginStateNamespaceEntries,
-  deletePluginStateEntry,
-  lookupPluginStateEntry,
-} from "./plugin-state-store.kernel.js";
+import { deletePluginStateEntry } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
@@ -35,11 +31,6 @@ import {
   movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
-import {
-  listPluginStateEntries,
-  listPluginStateEntriesInKeyRange,
-  lookupPluginStateEntries,
-} from "./plugin-state-store.reads.js";
 import {
   readPluginStateRetention,
   registerPluginStateEntry,
@@ -155,67 +146,6 @@ export function executePluginStateCommand(
           { ...options, database },
         ),
       );
-    } catch (error) {
-      return failure(error);
-    }
-  }
-  if (
-    command.type === "pluginState.lookup" ||
-    command.type === "pluginState.lookupMany" ||
-    command.type === "pluginState.entries" ||
-    command.type === "pluginState.entriesInKeyRange" ||
-    command.type === "pluginState.count"
-  ) {
-    try {
-      switch (command.type) {
-        case "pluginState.lookup":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntry(store, command.input),
-              options,
-            ),
-          );
-        case "pluginState.lookupMany": {
-          const rows =
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntries(store, command.input),
-              options,
-            ) ?? command.input.keys.map(() => ok(undefined));
-          return ok(
-            rows.map((row) => (row.ok ? row : err(capturePluginStateWorkerFailure(row.error)))),
-          );
-        }
-        case "pluginState.entriesInKeyRange":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "entries",
-              (store) => listPluginStateEntriesInKeyRange(store, command.input),
-              options,
-            ) ?? [],
-          );
-        case "pluginState.entries":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "entries",
-              (store) => listPluginStateEntries(store, command.input),
-              options,
-            ) ?? [],
-          );
-        case "pluginState.count":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "count",
-              ({ db }) =>
-                countLivePluginStateNamespaceEntries(db, {
-                  ...command.input,
-                  now: Date.now(),
-                }),
-              options,
-            ) ?? 0,
-          );
-      }
     } catch (error) {
       return failure(error);
     }
