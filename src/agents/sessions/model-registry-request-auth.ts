@@ -1,8 +1,5 @@
 import type { Model } from "../../llm/types.js";
-import {
-  applyLocalNoAuthHeaderOverride,
-  resolveExplicitProviderNoAuth,
-} from "../model-auth-markers.js";
+import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
 import { resolveConfigValueOrThrow, resolveHeadersOrThrow } from "./resolve-config-value.js";
@@ -59,7 +56,7 @@ export async function resolveModelRegistryRequestAuth(params: {
         : undefined;
 
     if (noAuth) {
-      headers = applyLocalNoAuthHeaderOverride({ ...model, headers }, noAuth).headers;
+      headers = applyLocalNoAuthHeaders(model.api, noAuth.apiKey, headers);
     } else if (providerConfig?.authHeader) {
       if (!apiKey) {
         return { ok: false, error: `No API key found for "${model.provider}"` };

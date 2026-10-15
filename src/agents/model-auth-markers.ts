@@ -158,18 +158,19 @@ export function resolveExplicitProviderNoAuth(params: {
   };
 }
 
-/** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
-export function applyLocalNoAuthHeaderOverride<T extends Model>(
-  model: T,
-  auth: ResolvedProviderAuth | null | undefined,
-): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
-    return model;
+/** Clears auth after the caller has merged all headers for a no-auth request. */
+export function applyLocalNoAuthHeaders(
+  api: string,
+  apiKey: string | undefined,
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (apiKey !== CUSTOM_LOCAL_AUTH_MARKER || api !== "openai-completions") {
+    return headers;
   }
   // Null every spelling: SDK callers may merge these headers over the original model headers.
-  const headers: Record<string, string | null> = {
+  const next: Record<string, string | null> = {
     ...Object.fromEntries(
-      Object.entries(model.headers ?? {}).map(([name, value]) => [
+      Object.entries(headers ?? {}).map(([name, value]) => [
         name,
         name.toLowerCase() === "authorization" ? null : value,
       ]),
@@ -177,5 +178,14 @@ export function applyLocalNoAuthHeaderOverride<T extends Model>(
     Authorization: null,
   };
   // SAFETY: OpenAI accepts null to delete headers; the shared Model header type omits that SDK value.
-  return { ...model, headers: headers as Record<string, string> };
+  return next as Record<string, string>;
+}
+
+/** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
+export function applyLocalNoAuthHeaderOverride<T extends Model>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  const headers = applyLocalNoAuthHeaders(model.api, auth?.apiKey, model.headers);
+  return headers === model.headers ? model : { ...model, headers };
 }

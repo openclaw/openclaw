@@ -1,6 +1,7 @@
 // Onboard command tests cover guided setup entrypoints, setup aliases, and CLI messaging.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
@@ -813,11 +814,11 @@ describe("setupWizardCommand", () => {
         customNoAuth: true,
       },
       () =>
-        "--custom-no-auth requires the openai-completions adapter. Choose a compatible endpoint or configure an API key.",
+        'auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.',
     );
   });
 
-  it("accepts replacing no-auth with a keyed Responses provider before reset", async () => {
+  it.each([false, true])("accepts Responses setup before reset (no-auth: %s)", async (noAuth) => {
     const runtime = makeRuntime();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -829,7 +830,16 @@ describe("setupWizardCommand", () => {
               baseUrl: "https://example.com/v1",
               api: "openai-completions",
               auth: "none",
-              models: [],
+              models: noAuth
+                ? [
+                    makeProviderModelFixture({
+                      provider: "custom",
+                      id: "test-model",
+                      api: "openai-completions",
+                      baseUrl: "https://example.com/v1",
+                    }),
+                  ]
+                : [],
             },
           },
         },
@@ -845,7 +855,8 @@ describe("setupWizardCommand", () => {
         customBaseUrl: "https://example.com/v1",
         customModelId: "test-model",
         customCompatibility: "openai-responses",
-        customApiKey: "synthetic-replacement-key",
+        customApiKey: noAuth ? undefined : "synthetic-replacement-key",
+        customNoAuth: noAuth,
       },
       runtime,
     );

@@ -431,15 +431,6 @@ export function parseNonInteractiveCustomApiFlags(params: ParseNonInteractiveCus
       "Custom provider flags conflict: --custom-no-auth cannot be combined with --custom-api-key. Omit one.",
     );
   }
-  if (
-    params.noAuth &&
-    resolveCustomProviderApi({ baseUrl, compatibility }) !== "openai-completions"
-  ) {
-    throw new CustomApiError(
-      "no_auth_unsupported",
-      "--custom-no-auth requires the openai-completions adapter. Choose a compatible endpoint or configure an API key.",
-    );
-  }
   return {
     baseUrl,
     modelId,

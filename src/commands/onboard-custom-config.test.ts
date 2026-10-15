@@ -3,6 +3,7 @@ import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-
 import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import * as currentPluginMetadataSnapshot from "../plugins/current-plugin-metadata-snapshot.js";
@@ -405,16 +406,49 @@ describe("applyCustomApiConfig", () => {
   it.each([
     { baseUrl: "https://claude-compatible.example.ts.net", compatibility: "anthropic" },
     { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
+    { baseUrl: "https://llm.example.com/v1", compatibility: "openai-responses" },
   ] as const)("rejects no-auth on $baseUrl before saving", ({ baseUrl, compatibility }) => {
     expect(() =>
       applyCustomApiConfig({
+        ...parseNonInteractiveCustomApiFlags({
+          baseUrl,
+          modelId: "some-model",
+          compatibility,
+          noAuth: true,
+        }),
         config: {},
-        baseUrl,
-        modelId: "some-model",
-        compatibility,
-        noAuth: true,
       }),
     ).toThrow(/auth: "none"/);
+  });
+
+  it("accepts no-auth flags when the selected model overrides Responses with Completions", () => {
+    const model = makeProviderModelFixture({
+      provider: "custom",
+      id: "foo-large",
+      baseUrl: "https://llm.example.com/v1",
+      api: "openai-completions",
+    });
+    const result = applyCustomApiConfig({
+      ...parseNonInteractiveCustomApiFlags({
+        baseUrl: model.baseUrl,
+        modelId: model.id,
+        providerId: "custom",
+        compatibility: "openai-responses",
+        noAuth: true,
+      }),
+      config: {
+        models: {
+          providers: {
+            custom: { baseUrl: model.baseUrl, api: "openai-responses", models: [model] },
+          },
+        },
+      },
+    });
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      api: "openai-responses",
+      auth: "none",
+      models: [{ id: model.id, api: "openai-completions" }],
+    });
   });
 
   it.each([true, false])(
@@ -680,17 +714,6 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         noAuth: true,
       }),
     ).toThrow("--custom-no-auth cannot be combined with --custom-api-key");
-  });
-
-  it("rejects no-auth on adapters that cannot suppress auth headers", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "anthropic",
-        noAuth: true,
-      }),
-    ).toThrow("--custom-no-auth requires the openai-completions adapter");
   });
 
   it.each([
