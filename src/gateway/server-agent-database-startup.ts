@@ -228,6 +228,11 @@ export function activateGatewayAgentDatabaseStartup(params: {
           throw new Error(`Agent ${agentId} model preparation is no longer configured`);
         }
         if (!getPreparedModelRuntimeSnapshot(preparedInput)) {
+          const replacement = getPendingPreparedModelRuntimeReplacement();
+          if (replacement) {
+            await replacement;
+            throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+          }
           throw new Error(`Agent ${agentId} model preparation has not published`);
         }
       }),

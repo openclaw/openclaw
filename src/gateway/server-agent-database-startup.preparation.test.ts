@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   refreshSecrets: vi.fn(),
   refreshModels: vi.fn(),
   replacement: vi.fn(),
+  modelSnapshot: vi.fn(),
   snapshot: vi.fn(),
   revision: vi.fn(),
   info: vi.fn(),
@@ -57,7 +58,7 @@ vi.mock("./server-startup-session-migration.js", () => ({
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: mocks.refreshModels,
-  getPreparedModelRuntimeSnapshot: () => ({}),
+  getPreparedModelRuntimeSnapshot: mocks.modelSnapshot,
   getPendingPreparedModelRuntimeReplacement: mocks.replacement,
 }));
 // mock-isolation: Configured model inputs are not the behavior under test.
@@ -119,6 +120,7 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
+  mocks.modelSnapshot.mockReturnValue({});
   mocks.migrate.mockImplementation(async ({ assertCurrent }) => assertCurrent());
   mocks.revision.mockImplementation(() => revision);
   mocks.snapshot.mockImplementation(() => ({
@@ -527,7 +529,13 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
   },
 );
 
-it.for(["config", "secrets", "secrets preparation", "model runtime"] as const)(
+it.for([
+  "config",
+  "secrets",
+  "secrets preparation",
+  "model runtime",
+  "queued model runtime",
+] as const)(
   "retries a superseded publication after %s replacement",
   async (replacement, { signal }) => {
     const fleet = createFleet(["large"]);
@@ -539,6 +547,9 @@ it.for(["config", "secrets", "secrets preparation", "model runtime"] as const)(
       joining.resolve();
       return successor.promise;
     });
+    if (replacement === "queued model runtime") {
+      mocks.modelSnapshot.mockReturnValueOnce(undefined);
+    }
     if (replacement === "secrets preparation") {
       const refresh = mocks.refreshSecrets.getMockImplementation()!;
       mocks.refreshSecrets.mockImplementationOnce(async (params) => {
@@ -560,11 +571,11 @@ it.for(["config", "secrets", "secrets preparation", "model runtime"] as const)(
       await withinTest(entered.promise, signal);
       if (replacement === "secrets") {
         fleet.bumpSecretsRevision();
-      } else {
+      } else if (replacement === "config" || replacement === "secrets preparation") {
         fleet.reloadConfig();
       }
       release.resolve();
-      if (replacement === "model runtime") {
+      if (replacement === "model runtime" || replacement === "queued model runtime") {
         await withinTest(joining.promise, signal);
         expect(readAgentDatabaseAdmissionRefusal("large", fleet)?.code).toBe(
           "agent-database-inspection-pending",
