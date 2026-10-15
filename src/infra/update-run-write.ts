@@ -110,6 +110,15 @@ export function persistRun(
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const recovery = record.verification.recovery;
+  record.steps = record.steps.filter((step) => step.step !== "finalize:data-at-risk");
+  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
+    upsertStep(record, {
+      step: "finalize:data-at-risk",
+      status: "completed",
+      failureFacts: [{ check: "update-recovery", code: recovery.dataAtRisk }],
+    });
+  }
   const row = encodeRun(record, options);
   executeSqliteQuerySync(
     db,
