@@ -26,9 +26,9 @@ function firstNonemptyString(
   ...keys: string[]
 ): string {
   for (const key of keys) {
-    const value = typeof record?.[key] === "string" && record?.[key];
-    if (value) {
-      return value as string; // SAFETY: Preserve the old second accessor read after its string check.
+    const value = record?.[key];
+    if (typeof value === "string" && value) {
+      return value;
     }
   }
   return "";

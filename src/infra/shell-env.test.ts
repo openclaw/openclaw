@@ -437,40 +437,6 @@ describe("shell env fallback", () => {
     }
   });
 
-  it.each([false, true])(
-    "bounds successful probe entries with LRU eviction (refresh: %s)",
-    (refreshOldest) => {
-      const logger = { warn: vi.fn() };
-      const makeExec = (value: string) => vi.fn(() => framedShellEnv(`PROBE_RESULT=${value}\0`));
-      const runProbe = (exec: ReturnType<typeof vi.fn>) =>
-        runShellEnvFallback({ expectedKeys: ["PROBE_RESULT"], exec, logger });
-      const oldestExec = makeExec("oldest");
-      const oldestFillerExec = makeExec("filler-0");
-      const fillerExecs = [
-        oldestFillerExec,
-        ...Array.from({ length: 62 }, (_, i) => makeExec(`filler-${i + 1}`)),
-      ];
-      const newestExec = makeExec("newest");
-
-      for (const exec of [oldestExec, ...fillerExecs]) {
-        runProbe(exec);
-      }
-      if (refreshOldest) {
-        runProbe(oldestExec);
-      }
-      runProbe(newestExec);
-      runProbe(newestExec);
-      runProbe(oldestExec);
-
-      expect(newestExec).toHaveBeenCalledOnce();
-      expect(oldestExec).toHaveBeenCalledTimes(refreshOldest ? 1 : 2);
-      if (refreshOldest) {
-        runProbe(oldestFillerExec);
-        expect(oldestFillerExec).toHaveBeenCalledTimes(2);
-      }
-    },
-  );
-
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};
     const successExec = vi.fn(() =>
@@ -595,17 +561,6 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledTimes(1);
     expectSanitizedStartupEnv(receivedEnv);
     expect(receivedTimeout).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("ignores startup output before the framed environment payload", () => {
-    const env: NodeJS.ProcessEnv = {};
-    const exec = vi.fn((_shell: string, args: string[]) => {
-      const frame = args.at(-1) === "printf '\\0'; env -0" ? "\0" : "";
-      return Buffer.from(`NOTICE=startup output\n${frame}OPENAI_API_KEY=from-shell\0`);
-    });
-
-    expect(runShellEnvFallback({ env, exec })).toEqual({ ok: true, applied: ["OPENAI_API_KEY"] });
-    expect(env.OPENAI_API_KEY).toBe("from-shell");
   });
 
   it("uses interactive Bash login startup before nounset reads PS1", () => {

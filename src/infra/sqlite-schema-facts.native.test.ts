@@ -238,6 +238,31 @@ describe("native SQLite schema snapshots and callbacks", () => {
     ).toBe(false);
   });
 
+  it("reclaims another isolate's retired metadata at the next publication", () => {
+    const root = tempDirs.make("sqlite-retired-publication-");
+    const first = openDatabase("CREATE TABLE proof(value)", true, path.join(root, "first.sqlite"));
+    const second = openDatabase(
+      "CREATE TABLE proof(value)",
+      true,
+      path.join(root, "second.sqlite"),
+    );
+    const firstSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+      location: first.location()!,
+    })[0]!;
+    const secondSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+      location: second.location()!,
+    })[0]!;
+    const receiver = new SqliteDatabaseAdmissionRegistry();
+    receiver.install(structuredClone([firstSnapshot, secondSnapshot]));
+    try {
+      first.close();
+      receiver.publish(receiver.records.get(secondSnapshot.identity)!);
+      expect(receiver.records.has(firstSnapshot.identity)).toBe(false);
+    } finally {
+      captureSqliteDatabaseAdmissions();
+    }
+  });
+
   it("installs a recreated scope when only the sender's latest publication is delivered", () => {
     const location = path.join(tempDirs.make("sqlite-recreated-scope-"), "proof.sqlite");
     const database = openDatabase("CREATE TABLE proof(value)", true, location);

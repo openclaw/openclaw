@@ -6,13 +6,13 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
@@ -125,7 +125,7 @@ describe("chat permission failure ownership", () => {
           ),
         );
         const container = document.createElement("div");
-        const draw = () => render(solidTemplate(ChatPermissionPicker, picker()), container);
+        const draw = () => render(solidContent(ChatPermissionPicker, picker()), container);
         draw();
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",

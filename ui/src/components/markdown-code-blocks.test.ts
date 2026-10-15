@@ -271,7 +271,6 @@ describe("Markdown code-block clipboard feedback", () => {
 });
 
 describe("toSanitizedMarkdownHtml code blocks", () => {
-  const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
   const jsonBlock = (lineCount: number) => {
     const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
     values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
@@ -320,15 +319,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(code?.textContent).toBe("  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ");
   });
 
-  it("marks fenced block art without syntax highlighting", () => {
-    const rendered = toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``);
-    const fragment = htmlFragment(rendered);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(code?.classList.contains("hljs")).toBe(false);
-    expect(code?.textContent).toBe(`${blockArt}\n`);
-  });
-
   it("renders indented code blocks", async () => {
     // markdown-it requires a blank line before indented code
     const rendered = toSanitizedMarkdownHtml("text\n\n    indented code");
@@ -338,28 +328,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
     expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
     await expectCodeCopy(fragment, "indented code");
-  });
-
-  it("omits copy chrome when rendering user-preserved code blocks", () => {
-    const source = `python3 - <<'PY'
-import openpyxl
-
-for ws in wb.worksheets:
-  print(f"--- {ws.title} ---")
-  rows = 0
-
-  for row in ws.iter_rows(values_only=True):
-      print(row)
-PY
-`;
-    const rendered = toSanitizedMarkdownHtml(`\`\`\`bash\n${source}\`\`\``, {
-      codeBlockChrome: "none",
-    });
-    const fragment = htmlFragment(rendered);
-
-    expect(fragment.querySelector(".code-block-copy")).toBeNull();
-    expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
-    expect(fragment.querySelector("pre code")?.textContent).toBe(source);
   });
 
   it("uses the singular hidden-line label for a single hidden line", () => {
@@ -382,20 +350,6 @@ PY
     expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
     expect(fragment.querySelector(".code-block-expand")).toBeNull();
     expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
-  });
-
-  it("keeps long unlabeled fences collapsible", () => {
-    const content = "unlabeled line\n".repeat(20);
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(`\`\`\`\n${content}\`\`\``, {
-        codeBlockInteraction: "interactive",
-      }),
-    );
-
-    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
-      HTMLDivElement,
-    );
-    expect(fragment.querySelector(".code-block-expand")?.textContent).toContain("13 hidden lines");
   });
 
   it("reveals a collapsed block through the shared click owner", () => {

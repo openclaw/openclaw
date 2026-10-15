@@ -70,7 +70,10 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
   publication: 0,
-  seals: new SqliteDatabaseCleanCloseSeals(publishFact),
+  seals: new SqliteDatabaseCleanCloseSeals(publishFact, {
+    retain: (record) => state.registry.changeReferences(record, 1),
+    release: releaseReference,
+  }),
 }));
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
@@ -346,24 +349,53 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
 }
 
 function retainConnection(database: DatabaseSync, record: Admission): Admission {
-  const publish = state.registry.changeReferences(record, 1);
+  const expected = record.identity;
+  let current = record;
   try {
-    if (publish) {
-      exchange(record);
+    for (;;) {
+      if (current.identity !== expected) {
+        throw new Error("SQLite database changed identity during native open");
+      }
+      const publish = state.registry.changeReferences(current, 1);
+      let retained = false;
+      try {
+        if (publish) {
+          exchange(current);
+        }
+        const retirement = readSqliteDatabaseGeneration(current, "retired");
+        if (retirement === 0) {
+          state.connections.set(database, current);
+          retained = true;
+          return current;
+        }
+        if (retirement !== 2) {
+          throw new Error("SQLite database admission retired during native open");
+        }
+      } finally {
+        if (!retained) {
+          state.registry.changeReferences(current, -1);
+        }
+      }
+      // The last known reader can close before the host receives this worker's
+      // first reference. Bind only after the host acknowledges its live generation.
+      const location = database.location();
+      const replacement = database.isTransaction
+        ? state.registry.records.get(expected)
+        : location
+          ? pathAdmission(location)
+          : undefined;
+      if (!replacement || isRetired(replacement)) {
+        throw new Error("SQLite database admission unavailable during native open");
+      }
+      current = replacement;
     }
-    if (isRetired(record)) {
-      throw new Error("SQLite database admission retired during native open");
-    }
-    state.connections.set(database, record);
-    return record;
   } catch (error) {
-    state.registry.changeReferences(record, -1);
     state.openedIdentities.delete(database);
     throw error;
   }
 }
 
-/** Native close settles this handle; the physical store retains facts until invalidation. */
+/** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
 export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   const record = state.connections.get(database);
   if (state.openedIdentities.delete(database) && record) {

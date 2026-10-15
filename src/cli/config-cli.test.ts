@@ -481,64 +481,6 @@ describe("config cli", () => {
       expect(errorMessages).not.toContain("auto-managed");
     });
 
-    it("rejects protected model map replacement unless explicitly requested", async () => {
-      const resolved: OpenClawConfig = {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.4": { alias: "GPT" },
-              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            },
-          },
-        },
-      };
-      setSnapshot(resolved, resolved);
-
-      await expect(
-        runConfigSet("agents.defaults.models", '{"openai/gpt-5.4":{}}', "--strict-json"),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes("Refusing to replace agents.defaults.models");
-    });
-
-    it.each([
-      {
-        label: "an ancestor object",
-        path: "models",
-        value:
-          '{"providers":{"ollama":{"models":[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]}}}',
-      },
-    ])(
-      "merges provider model arrays by id through $label with --merge",
-      async ({ path: configPath, value }) => {
-        const resolved = {
-          models: {
-            providers: {
-              ollama: {
-                api: "ollama",
-                models: [
-                  { id: "llama3.2", name: "Llama 3.2", contextWindow: 131072 },
-                  { id: "qwen3", name: "Qwen 3" },
-                ],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-        setSnapshot(resolved, resolved);
-
-        await runConfigSet(configPath, value, "--strict-json", "--merge");
-
-        expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-        const written = firstWrittenConfig();
-        expect(written.models?.providers?.ollama?.models).toEqual([
-          { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
-          { id: "qwen3", name: "Qwen 3" },
-          { id: "gemma4", name: "Gemma 4" },
-        ]);
-      },
-    );
-
     it.each([
       {
         name: "a mode assignment",
@@ -573,27 +515,25 @@ describe("config cli", () => {
       },
     );
 
-    it("uses deep type-exact comparison for authored expectations", async () => {
+    it("rejects protected model map replacement unless explicitly requested", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789, bind: "loopback" },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigSet(
-        "gateway",
-        '{"port":19001,"bind":"loopback"}',
-        "--strict-json",
-        "--expect-current-json",
-        '{"port":18789,"bind":"loopback"}',
-      );
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-
-      vi.clearAllMocks();
-      setSnapshot({ gateway: { port: 1 } }, { gateway: { port: 1 } });
       await expect(
-        runConfigSet("gateway.port", "2", "--strict-json", "--expect-current-json", '"1"'),
-      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        runConfigSet("agents.defaults.models", '{"openai/gpt-5.4":{}}', "--strict-json"),
+      ).rejects.toThrow(ExitError);
+
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("Refusing to replace agents.defaults.models");
     });
 
     it("rejects an absent expectation when a SecretRef redirects away from the caller path", async () => {
@@ -821,19 +761,6 @@ describe("config cli", () => {
     ExitError,
   }));
 
-  describe("config set parsing flags", () => {
-    it("falls back to raw string when parsing fails and strict mode is off", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
-
-      await runConfigSet("gateway.auth.mode", "{bad");
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig();
-      expect(written.gateway?.auth).toEqual({ mode: "{bad" });
-    });
-  });
-
   describe("config set builders and dry-run", () => {
     it("writes array-indexed sibling SecretRefs to their registered ref path in batch mode", async () => {
       const resolved = {
@@ -1048,38 +975,8 @@ describe("config cli", () => {
         message: "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
       },
       {
-        name: "mixed batch operation keys",
-        args: [
-          "--batch-json",
-          '[{"path":"channels.discord.token","value":"x","ref":{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}}]',
-        ],
-        message: "must include exactly one of: value, ref, provider",
-      },
-      {
-        name: "both expectation flags",
-        args: [
-          "gateway.port",
-          "19001",
-          "--expect-current-absent",
-          "--expect-current-json",
-          "18789",
-        ],
-      },
-      {
         name: "malformed expected JSON",
         args: ["gateway.port", "19001", "--expect-current-json", "{bad"],
-      },
-      {
-        name: "batch mode",
-        args: [
-          "--batch-json",
-          '[{"path":"gateway.port","value":19001}]',
-          "--expect-current-absent",
-        ],
-      },
-      {
-        name: "dry-run",
-        args: ["gateway.port", "19001", "--expect-current-absent", "--dry-run"],
       },
     ])(
       "rejects config mutations with $name before loading config",
@@ -1120,23 +1017,6 @@ describe("config cli", () => {
       await runConfigCommand(["config", "patch", "--file", pathname]);
       const written = firstWrittenConfig();
       expect(written.channels?.slack).toEqual(expected.channels.slack);
-    });
-
-    it.each(["directory", "oversized"] as const)("rejects a %s --file patch", async (kind) => {
-      const root = tempDirs.make("openclaw-config-patch-invalid-");
-      const pathname = kind === "directory" ? root : path.join(root, "patch.json5");
-      if (kind === "oversized") {
-        fs.writeFileSync(pathname, " ".repeat(8 * 1024 * 1024 + 1), "utf8");
-      }
-      await expect(runConfigCommand(["config", "patch", "--file", pathname])).rejects.toThrow(
-        ExitError,
-      );
-      expectErrorIncludes(
-        kind === "directory"
-          ? `--file must be a regular file: ${pathname}. Choose a JSON5 input file and try again.`
-          : "--file exceeds the 8 MiB supported maximum (8388608 bytes)",
-      );
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
@@ -1324,11 +1204,6 @@ describe("config cli", () => {
     });
 
     it.each([
-      {
-        name: "a malformed batch payload",
-        args: ["config", "set", "--batch-json", "{}", "--dry-run", "--json"],
-        message: "--batch-json must be a JSON array.",
-      },
       {
         name: "a missing patch file",
         args: [

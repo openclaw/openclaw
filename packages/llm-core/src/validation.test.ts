@@ -39,7 +39,7 @@ describe("validateToolArguments", () => {
     ).toThrow("  - room.~1%2F.leaf:");
   });
 
-  it.each(["anyOf", "oneOf", "TypeBox"])(
+  it.each(["anyOf", "oneOf"])(
     "preserves accepted %s values before coercing other branches or sibling fields",
     (form) => {
       const cases: { branches: TSchema[]; value: unknown }[] = [
@@ -54,7 +54,7 @@ describe("validateToolArguments", () => {
       ];
       for (const { branches, value } of cases) {
         for (const alternatives of [branches, branches.toReversed()]) {
-          const schema = form === "TypeBox" ? Type.Union(alternatives) : { [form]: alternatives };
+          const schema = { [form]: alternatives };
           const validate = validator("union-value", {
             type: "object",
             properties: { value: schema, count: { type: "integer" } },
@@ -246,36 +246,19 @@ describe("validateToolArguments", () => {
       Type.Object({
         counts: Type.Record(Type.String(), Type.Integer()),
         choice: Type.Enum([1, 2]),
+        value: Type.Union([Type.Number(), Type.String()]),
         limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
       }),
     );
-    expect(validate({ counts: { first: "1" }, choice: "2", limit: null })).toEqual({
+    expect(validate({ counts: { first: "1" }, choice: "2", value: "00123", limit: null })).toEqual({
       counts: { first: 1 },
       choice: 2,
+      value: "00123",
       limit: null,
     });
-    expect(() => validate({ counts: { first: "1" }, choice: "2", limit: 0 })).toThrow(
-      /Validation failed for tool "typed-record"/,
-    );
-  });
-
-  it("preserves an accepted union value during TypeBox record recovery", () => {
-    const tool: Tool = {
-      name: "union-record",
-      description: "Preserve a string while recovering record values",
-      parameters: Type.Object({
-        value: Type.Union([Type.Number(), Type.String()]),
-        counts: Type.Record(Type.String(), Type.Integer()),
-      }),
-    };
-    expect(
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "union-record-call",
-        name: tool.name,
-        arguments: { value: "00123", counts: { first: "1" } },
-      }),
-    ).toEqual({ value: "00123", counts: { first: 1 } });
+    expect(() =>
+      validate({ counts: { first: "1" }, choice: "2", value: "00123", limit: 0 }),
+    ).toThrow(/Validation failed for tool "typed-record"/);
   });
 
   it("still rejects values accepted by multiple oneOf branches", () => {

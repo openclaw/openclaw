@@ -1209,7 +1209,7 @@ export async function runVitest(
     process.exitCode = failedExitCode;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
         process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
         console.error(error);
       });

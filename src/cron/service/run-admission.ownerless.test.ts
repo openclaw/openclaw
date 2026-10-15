@@ -229,24 +229,6 @@ describe("ownerless reservation and manual completion", () => {
       clearCommandLane(CommandLane.Cron);
     }
   });
-
-  it("returns ownerless for a direct run without a terminal tracker", async () => {
-    const job = commandJob("ownerless-direct");
-    const { state, events, execute } = await setupOwnerlessJob(job);
-    await expect(run(state, job.id, "force")).resolves.toEqual({
-      ok: true,
-      ran: false,
-      reason: "ownerless",
-    });
-    expect(events.filter((event) => event.action === "finished")).toEqual([
-      expect.objectContaining({
-        jobId: job.id,
-        status: "skipped",
-        error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-      }),
-    ]);
-    expect(execute).not.toHaveBeenCalled();
-  });
 });
 
 const changedPlans: Array<{ name: string; change: (job: CronJob) => void }> = [

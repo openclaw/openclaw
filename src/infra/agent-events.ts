@@ -26,6 +26,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
 import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
+import { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 export type {
@@ -120,6 +121,7 @@ export function reserveAgentTerminalEvent(
 ): (data: AgentTerminalEventData) => void {
   const { runId } = identity;
   const context = getAgentRunContext(runId);
+  const terminalPersistence = captureAgentRunTerminalPersistence(runId);
   return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
     if (context) {
       recordAgentEventRouting(runId, context);
@@ -147,6 +149,9 @@ export function reserveAgentTerminalEvent(
             undefined,
             undefined,
             publication,
+            undefined,
+            undefined,
+            terminalPersistence,
           ),
         );
       }
@@ -404,6 +409,7 @@ function enrichAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): AgentEventRuntimePayload | undefined {
   const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
   if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
@@ -516,6 +522,14 @@ function enrichAgentEvent(
     });
   }
   Object.defineProperties(enriched, {
+    terminalPersistence: {
+      value:
+        terminalPersistence ??
+        (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
+          ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
+          : undefined),
+      enumerable: false,
+    },
     assistantSource: { value: assistantSource, enumerable: false },
     assistantProjection: { value: assistantProjection, enumerable: false },
   });
@@ -555,6 +569,7 @@ function dispatchAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): boolean {
   const state = getAgentEventState();
   const enriched = enrichAgentEvent(
@@ -565,6 +580,7 @@ function dispatchAgentEvent(
     reservedPublication,
     assistantSource,
     assistantProjection,
+    terminalPersistence,
   );
   if (!enriched) {
     return false;

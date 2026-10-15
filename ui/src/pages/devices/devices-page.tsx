@@ -106,14 +106,10 @@ class DevicesPageController {
     });
   }
   private readonly presenceTask = createPageRequest({
-    // Gateway identity invalidates same-client reconnects and source replacements.
-    args: () =>
-      [
-        this.gateway.connected ? this.gateway.gateway : null,
-        this.gateway.connected ? this.gateway.client : null,
-      ] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client ? client.request("system-presence", {}, { signal }) : undefined,
+    task: (signal) =>
+      this.gateway.connected && this.gateway.gateway
+        ? this.gateway.client?.request("system-presence", {}, { signal })
+        : undefined,
     onComplete: (response) => {
       if (Array.isArray(response)) {
         // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
@@ -129,11 +125,9 @@ class DevicesPageController {
     },
   });
   private readonly systemInfoTask = createPageRequest({
-    args: () =>
-      [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client
-        ? readSystemInfo(gateway, signal).then((sample) => sample.value)
+    task: (signal) =>
+      this.gateway.gateway && this.canLoadSystemInfo && this.gateway.client
+        ? readSystemInfo(this.gateway.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
       this.gatewaySystemInfo = result;
@@ -152,11 +146,9 @@ class DevicesPageController {
     },
   });
   private readonly environmentsTask = createPageRequest({
-    args: () =>
-      [this.gateway.gateway, this.canLoadDesktopEnvironments ? this.gateway.client : null] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client
-        ? client.request<EnvironmentsListResult>("environments.list", {}, { signal })
+    task: (signal) =>
+      this.gateway.gateway && this.canLoadDesktopEnvironments
+        ? this.gateway.client?.request<EnvironmentsListResult>("environments.list", {}, { signal })
         : undefined,
     onComplete: (result) => {
       this.desktopEnvironments = result.environments;
@@ -269,7 +261,7 @@ class DevicesPageController {
     ) {
       const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
       this.presence = initialPresence ?? [];
-      void this.loadPresence();
+      void this.presenceTask.run();
     }
     if (change.initial || change.identityChanged || change.connectionChanged) {
       this.refreshSystemInfo();
@@ -290,7 +282,7 @@ class DevicesPageController {
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.resetServerState(snapshot);
       this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
-      void this.loadPresence();
+      void this.presenceTask.run();
       return;
     }
     this.pageState = {
@@ -303,7 +295,7 @@ class DevicesPageController {
     if (initialPresence) {
       this.presence = initialPresence;
     }
-    void this.loadPresence();
+    void this.presenceTask.run();
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
@@ -430,15 +422,6 @@ class DevicesPageController {
     this.gatewaySystemInfo = null;
     this.desktopEnvironments = [];
     this.systemInfoUnavailable = false;
-  }
-
-  private loadPresence(): Promise<void> {
-    const gateway = this.gateway.gateway;
-    const client = this.gateway.client;
-    if (!gateway || !this.gateway.connected || !client) {
-      return Promise.resolve();
-    }
-    return this.presenceTask.run([gateway, client]);
   }
 
   // A rotation always ends in a dialog: with the replacement when the Gateway issued it

@@ -300,11 +300,12 @@ export async function readChildCompletionFindings(
 export function dedupeLatestChildCompletionRows<
   T extends ChildCompletionRow & { runId: string; generation?: number },
 >(children: T[]): T[] {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  const latestByChildOwner = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
+    const key = JSON.stringify([resolveSubagentChildAgentId(child), child.childSessionKey]);
+    recordLatestSubagentRun(latestByChildOwner, key, child);
   }
-  return [...latestByChildSessionKey.values()];
+  return [...latestByChildOwner.values()];
 }
 
 export function filterCurrentDirectChildCompletionRows<

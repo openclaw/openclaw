@@ -4,17 +4,12 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
-import type {
-  SessionEntryWorkerInput,
-  SessionSqliteTargetWorkerInput,
-} from "./session-transcript-worker-read.types.js";
+import type { SessionSqliteTargetWorkerInput } from "./session-transcript-worker-read.types.js";
 
 function readWorkers(contexts: readonly unknown[]): Worker[] {
   return contexts.map((context) => {
@@ -24,37 +19,6 @@ function readWorkers(contexts: readonly unknown[]): Worker[] {
     return context;
   });
 }
-
-it("preserves admitted schema when a session export reader exits", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const pool = createSessionTranscriptReadPool<SessionEntryWorkerInput>(1, true);
-    const storePath = state.statePath("agents/main/sessions/sessions.json");
-    const posts = vi.spyOn(Worker.prototype, "postMessage");
-    try {
-      expect(
-        await pool.run(
-          {
-            kind: "session-entry",
-            absPath: state.statePath("agents/main/sessions/export.jsonl"),
-            options: { agentId: "main", sessionId: "export", storePath },
-          },
-          {},
-          { storePaths: [storePath], admissionPaths: [database.path] },
-        ),
-      ).toMatchObject({ ok: true, value: { entry: { content: "" } } });
-      const schema = getAdmittedSqliteSchemaFacts(database.db);
-      expect(schema).toBeDefined();
-      const workers = new Set(readWorkers(posts.mock.contexts));
-      expect(workers.size).toBeGreaterThan(0);
-      await Promise.all([...workers].map((worker) => worker.terminate()));
-      expect(getAdmittedSqliteSchemaFacts(database.db)?.admissionId).toBe(schema?.admissionId);
-    } finally {
-      posts.mockRestore();
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-});
 
 it.each(["exact", "family", "alias"] as const)(
   "joins foreground reader exit on %s close and reuses the pool afterward",

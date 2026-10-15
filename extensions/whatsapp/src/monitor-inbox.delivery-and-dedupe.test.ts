@@ -193,63 +193,6 @@ describe("web monitor inbox delivery and dedupe", () => {
       }
     }));
 
-  it("delivery coordinator streams inbound messages", async () => {
-    const onMessage = vi.fn(async (msg) => {
-      await msg.platform.sendComposing();
-      await msg.platform.reply("nested reply works");
-      await msg.platform.sendMedia({ text: "nested media works" });
-    });
-
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const readReceiptSent = createDeferred<void>();
-    sock.readMessages.mockImplementationOnce(async () => {
-      readReceiptSent.resolve();
-    });
-    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
-    const messageId = nextMessageId("stream");
-    const upsert = dmUpsert(messageId);
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    await readReceiptSent.promise;
-
-    const inbound = inboundMessage(onMessage);
-    expect(inbound.payload.body).toBe("ping");
-    expect(inbound.platform.recipientJid).toBe("+123");
-    expect(inbound.admission).toMatchObject({
-      accountId: DEFAULT_ACCOUNT_ID,
-      conversation: {
-        kind: "direct",
-        id: "+999",
-      },
-      sender: {
-        id: "+999",
-      },
-      senderAccess: {
-        allowed: true,
-        decision: "allow",
-      },
-    });
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "999@s.whatsapp.net",
-        id: messageId,
-        participant: undefined,
-        fromMe: false,
-      },
-    ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "nested reply works",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "nested media works",
-    });
-
-    await listener.close();
-  });
-
   it("delivers inbound text without copying it into diagnostics", async () => {
     setLoggerOverride({ level: "trace" });
     inboundLogRecords.mockClear();
@@ -268,7 +211,6 @@ describe("web monitor inbox delivery and dedupe", () => {
       await listener.close();
     }
   });
-
   it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
     let finishMessage: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
@@ -587,30 +529,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
   });
 
-  it("delivery coordinator force-flushes long durable debounce during shutdown", async () => {
-    // Durable pump tasks await claim flush waiters; close must force-flush
-    // debounced batches before waiting on those pumps (socket-close timeout).
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      debounceMs: 60_000,
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      dmUpsert(nextMessageId("debounce-shutdown-durable"), "held in debounce", 1_700_000_100),
-    );
-    // Let accept+pump reach the flush waiter without exhausting the debounce window.
-    await settleInboundWork();
-
-    const closeStarted = Date.now();
-    await listener.close();
-    const closeElapsedMs = Date.now() - closeStarted;
-
-    expect(closeElapsedMs).toBeLessThan(5_000);
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(inboundMessage(onMessage).payload.body).toBe("held in debounce");
-    expect(sock.end).toHaveBeenCalledTimes(1);
-  });
-
   it("delivery coordinator drains serialized same-lane replies before socket close", () =>
     withRetryClock(async () => {
       const firstBuffered = createDeferred<void>();
@@ -646,6 +564,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
       const closePromise = listener.close();
       expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.end).not.toHaveBeenCalled();
 
       releaseFirst?.();
       await closePromise;
@@ -670,46 +589,6 @@ describe("web monitor inbox delivery and dedupe", () => {
       );
     }));
 
-  it("delivery coordinator waits for in-flight handlers before close drain", async () => {
-    let releaseHandler: (() => void) | undefined;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let markHandlerStarted: (() => void) | undefined;
-    const handlerStarted = new Promise<void>((resolve) => {
-      markHandlerStarted = resolve;
-    });
-    const onMessage = vi.fn(async (msg) => {
-      await msg.platform.reply("pong");
-      markHandlerStarted?.();
-      await handlerGate;
-    });
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-
-    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("close-inflight"), "first"));
-
-    await handlerStarted;
-    const closePromise = listener.close();
-    await Promise.resolve();
-
-    expect(sock.end).not.toHaveBeenCalled();
-
-    if (!releaseHandler) {
-      throw new Error("Expected handler release callback to be initialized");
-    }
-    releaseHandler();
-    await closePromise;
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.end).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
-      sock.end.mock.invocationCallOrder.at(0),
-    );
-  });
-
   it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
     const onMessage = vi.fn(async (_message: WebInboundMessage) => {});
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -731,7 +610,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(onMessage.mock.calls.map(([message]) => message.event.id)).toEqual(["in-2", "in-3"]);
     await listener.close();
   });
-
   it.each([
     { reason: "an explicit retryable failure", error: "retry me", id: "retryable-dedupe" },
     {

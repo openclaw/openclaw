@@ -1071,28 +1071,20 @@ function dispatchDiagnosticEvent(
       try {
         const eventForListener = cloneDiagnosticValueForListener(enriched);
         const metadataForListener = createDiagnosticMetadataForListener(metadata);
-        if (interest?.includePrivateData === false) {
-          listener(eventForListener, metadataForListener, EMPTY_DIAGNOSTIC_PRIVATE_DATA);
-        } else if (isTrustedOtelDiagnosticListener(listener)) {
+        const otel = isTrustedOtelDiagnosticListener(listener);
+        let privateDataForListener = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
+        if (interest?.includePrivateData !== false && (privateData || otel)) {
           // Retain the host-owned transport for independently updated OTel installs.
           const cloned = structuredClone(privateData ?? {});
-          Reflect.deleteProperty(cloned, "hostPluginId");
-          listener(
-            eventForListener,
-            metadataForListener,
-            deepFreezeDiagnosticValue(
-              options.hostPluginId
-                ? Object.assign(cloned, { hostPluginId: options.hostPluginId })
-                : cloned,
-            ),
-          );
-        } else {
-          listener(
-            eventForListener,
-            metadataForListener,
-            privateData ? cloneDiagnosticValueForListener(privateData) : Object.freeze({}),
-          );
+          if (otel) {
+            Reflect.deleteProperty(cloned, "hostPluginId");
+            if (options.hostPluginId) {
+              Object.assign(cloned, { hostPluginId: options.hostPluginId });
+            }
+          }
+          privateDataForListener = deepFreezeDiagnosticValue(cloned);
         }
+        listener(eventForListener, metadataForListener, privateDataForListener);
       } catch (err) {
         const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
         console.error(
@@ -1256,6 +1248,19 @@ function emitDiagnosticEventWithTrust(
         break;
       default:
         enriched.kind = undefined;
+    }
+    switch (enriched.reason) {
+      case "none":
+      case "forced":
+      case "synchronous_phantom_processing":
+      case "all_available_garbage":
+      case "all_external_memory":
+      case "schedule_idle":
+      case "construct_retained":
+      case "other":
+        break;
+      default:
+        enriched.reason = "other";
     }
     enriched.thread =
       enriched.thread === undefined || enriched.thread === "main"

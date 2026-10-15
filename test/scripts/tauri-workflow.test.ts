@@ -3,6 +3,23 @@ import { minimatch } from "minimatch";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
 
+it("runs synthetic Gateway startup failures with the fixture-compiled candidate", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const steps: { run?: string }[] = workflow.jobs.build.steps;
+  const fixtureBuild = steps.findIndex((step) => step.run?.includes("stage_onboarding_runtime.py"));
+  const packageBuild = steps.findIndex((step) => step.run?.includes("@tauri-apps/cli"));
+  const failures = steps.flatMap((step, index) =>
+    step.run?.includes("--local-start-failure") ? [{ script: step.run, index }] : [],
+  );
+
+  expect(fixtureBuild).toBeGreaterThanOrEqual(0);
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.index).toBeGreaterThan(fixtureBuild);
+  expect(failures[0]?.index).toBeLessThan(packageBuild);
+  expect(failures[0]?.script).toContain("target/debug/openclaw-desktop --local-start-failure");
+  expect(failures[0]?.script).not.toContain("target/release/openclaw-desktop");
+});
+
 it.each([
   [["apps/linux/README.md"], false],
   [["apps/linux/omarchy/README.md"], false],

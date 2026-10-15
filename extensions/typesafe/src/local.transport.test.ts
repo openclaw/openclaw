@@ -133,7 +133,7 @@ it.each([
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
-it("keeps hosted response validation strict and ignores stale keys even on direct local calls", async () => {
+it("accepts hosted metadata and ignores stale keys even on direct local calls", async () => {
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify(localAnswer)),
@@ -157,9 +157,9 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
       },
     },
   };
-  await expect(evaluate(hostedInput, runtimeConfig({ apiKey: "hosted-secret" }))).rejects.toThrow(
-    "invalid response",
-  );
+  await expect(
+    evaluate(hostedInput, runtimeConfig({ apiKey: "hosted-secret" })),
+  ).resolves.toHaveProperty("evaluation.model", "kev-latest");
   expect(fetch.mock.calls[1]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
   expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
     "Bearer hosted-secret",

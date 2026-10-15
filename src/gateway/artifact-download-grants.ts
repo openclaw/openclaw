@@ -17,6 +17,8 @@ type Download = {
   assertCurrent: () => void;
   read: (request: ArtifactDownloadResponseRequest) => Promise<ArtifactDownloadResponse | undefined>;
   release: () => void;
+  readers: number;
+  retired: boolean;
 };
 
 // Connection-owned grants retain only a reader, never artifact bytes or durable state.
@@ -25,7 +27,10 @@ const downloads = new WeakMap<GatewayClient, Map<string, Download>>();
 function removeDownload(grants: Map<string, Download>, ticket: string) {
   const grant = grants.get(ticket);
   if (grant && grants.delete(ticket)) {
-    grant.release();
+    grant.retired = true;
+    if (grant.readers === 0) {
+      grant.release();
+    }
   }
 }
 
@@ -96,6 +101,8 @@ export function createArtifactDownload(params: {
     assertCurrent: params.assertCurrent,
     read: params.read,
     release: params.release,
+    readers: 0,
+    retired: false,
   });
   return {
     url: `${ARTIFACT_DOWNLOAD_PATH}${encodeURIComponent(client.connId)}/${ticket}`,
@@ -126,4 +133,29 @@ export function assertArtifactDownloadGrantCurrent(
     throw new Error("Artifact download expired");
   }
   grant.assertCurrent();
+}
+
+/** URL expiry closes admission, not an already admitted, backpressured transfer. */
+export function retainArtifactDownloadStream(
+  clients: ReadonlySet<GatewayClient>,
+  client: GatewayClient,
+  ticket: string,
+  grant: Download,
+) {
+  assertArtifactDownloadGrantCurrent(clients, client, ticket, grant);
+  grant.readers++;
+  return {
+    assertCurrent: () => {
+      if (!clients.has(client) || !canCreateArtifactDownload(client)) {
+        throw new Error("Artifact download connection is no longer available");
+      }
+      grant.assertCurrent();
+    },
+    release() {
+      grant.readers--;
+      if (grant.retired && grant.readers === 0) {
+        grant.release();
+      }
+    },
+  };
 }

@@ -667,12 +667,15 @@ The `Linux App` workflow checks affected pull requests with Rust formatting,
 ABI scanner's unit tests. It also runs the native Linux inline browser smoke
 under Xvfb, including pointer input, snapshots, dashboard replacement, and native
 save/cancel, and uploads the synthetic screenshots and JSON results as the
-`linux-inline-browser` proof artifact. Bundles, the full graphical first-run
-scenarios, and AppImage runtime checks remain manual dispatch checks.
+`linux-inline-browser` proof artifact. Automatic local onboarding and failed
+Gateway startup use the debug candidate compiled with the synthetic CLI. The
+failure scenario must run before packaging replaces those runtime resources with
+the real core package. Bundles, packaged first-run choices, and AppImage runtime
+checks remain manual dispatch checks.
 
 Manually dispatch `Linux App` on the branch to validate packaging before a
 release. It retains all pull-request checks, builds the `.deb` and AppImage,
-runs both native first-run cases and the packaged AppImage runtime smoke, and
+runs packaged first-run choices and the packaged AppImage runtime smoke, and
 uploads the bundles as the `openclaw-linux-companion` workflow artifact. This
 validation does not publish a release.
 

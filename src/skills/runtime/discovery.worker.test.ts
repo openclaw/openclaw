@@ -6,10 +6,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as boundaryFileRead from "../../infra/boundary-file-read.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { writePersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { writeRegistryPackagePlugin } from "../../plugins/test-helpers/plugin-registry-snapshot.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { pinConfigDir } from "../../utils.js";
@@ -21,6 +24,7 @@ import {
   type SkillsDiscoveryInput,
   type SkillsDiscoveryOutput,
 } from "./discovery-worker-contract.js";
+import { captureSkillsSourcePlanInput } from "./discovery-worker-input.js";
 
 const worker = vi.hoisted(() => ({
   handle: vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
@@ -36,6 +40,7 @@ import "./discovery.worker.js";
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
     await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
@@ -44,93 +49,111 @@ const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("shares one installed-index read across workspaces and observes writes on the next scan", async () => {
-  const root = temporary.make("skills-scan-inventory-");
-  const stateDir = path.join(root, "state");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  pinConfigDir();
-  const environment = captureSkillsDiscoveryEnvironment();
-  const pluginRoot = path.join(root, "plugin");
-  const workspaces = [path.join(root, "first-workspace"), path.join(root, "second-workspace")];
-  const config: OpenClawConfig = {
-    plugins: { load: { paths: [pluginRoot] }, entries: { fixture: { enabled: true } } },
-  };
-  writeRegistryPackagePlugin(pluginRoot, { pluginId: "fixture" });
-  for (const [index, workspaceDir] of workspaces.entries()) {
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", `local-${index}`),
-      name: `local-${index}`,
-      description: `Workspace ${index}`,
-    });
-  }
-  const publishPlugin = async (name: string) => {
-    await writeSkill({ dir: path.join(pluginRoot, name), name, description: name });
-    await fs.writeFile(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({ id: "fixture", configSchema: { type: "object" }, skills: [name] }),
-    );
-    const index = withPluginCache(createPluginCache(), () =>
-      loadInstalledPluginIndex({ config, env: process.env }),
-    );
-    await writePersistedInstalledPluginIndex(index, { env: process.env });
-  };
-  await publishPlugin("original");
-  const request: SkillsDiscoveryInput = {
-    kind: "scan",
-    path: process.env.PATH,
-    requests: workspaces.map((workspaceDir) => ({
-      key: workspaceDir,
-      environment,
-      selection: {
-        kind: "planned",
-        plan: {
-          input: {
-            workspaceDir,
-            environment,
-            acpRuntimeAvailable: false,
-            options: {
-              config,
-              bundledSkillsDir: "",
-              managedSkillsDir: path.join(stateDir, "skills"),
-              pluginSkillsDir: path.join(stateDir, "plugin-skills"),
-            },
-          },
-        },
-        request: {
-          limits: resolveSkillDiscoveryLimits(),
-          additionalBins: [],
-        },
-      },
-    })),
-  };
-  const scan = async (pluginName: string) => {
-    const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      const result = await worker.handle(structuredClone(request));
-      if (result.kind !== "scan") {
-        throw new Error("Expected scan results");
-      }
-      expect(
-        result.results.map(({ key, sources }) =>
-          mergeSkillRecords(sources.entries, key)
-            .map(({ skill }) => skill.name)
-            .toSorted(),
-        ),
-      ).toEqual(workspaces.map((_, index) => [`local-${index}`, pluginName].toSorted()));
-      expect(
-        observed.queries.filter((sql) =>
-          /^select "state_key", "value_json" from "config_machine_state"/i.test(sql),
-        ),
-      ).toHaveLength(1);
-    } finally {
-      observed.restore();
+it.each(["standalone", "gateway"])(
+  "%s discovery shares plugin inventory across workspaces and follows owner publication",
+  async (owner) => {
+    const root = temporary.make("skills-scan-inventory-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    pinConfigDir();
+    const pluginRoot = path.join(root, "plugin");
+    const workspaces = [path.join(root, "first-workspace"), path.join(root, "second-workspace")];
+    const config: OpenClawConfig = {
+      plugins: { load: { paths: [pluginRoot] }, entries: { fixture: { enabled: true } } },
+    };
+    writeRegistryPackagePlugin(pluginRoot, { pluginId: "fixture" });
+    for (const [index, workspaceDir] of workspaces.entries()) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", `local-${index}`),
+        name: `local-${index}`,
+        description: `Workspace ${index}`,
+      });
     }
-  };
-  await scan("original");
-  await publishPlugin("successor");
-  await scan("successor");
-});
+    const publishPlugin = async (name: string) => {
+      await writeSkill({ dir: path.join(pluginRoot, name), name, description: "Original" });
+      await fs.writeFile(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({ id: "fixture", configSchema: { type: "object" }, skills: [name] }),
+      );
+      const index = withPluginCache(createPluginCache(), () =>
+        loadInstalledPluginIndex({ config, env: process.env }),
+      );
+      await writePersistedInstalledPluginIndex(index, { env: process.env });
+      if (owner === "gateway") {
+        setGatewayPluginMetadataSnapshot(
+          createPluginMetadataSnapshotFixture({
+            plugins: [{ id: "fixture", origin: "config", rootDir: pluginRoot, skills: [name] }],
+          }),
+          { config },
+        );
+      }
+    };
+    const scan = async (pluginName: string, description: string) => {
+      const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        const request: SkillsDiscoveryInput = {
+          kind: "scan",
+          path: process.env.PATH,
+          requests: workspaces.map((workspaceDir) => ({
+            key: workspaceDir,
+            environment: captureSkillsDiscoveryEnvironment(),
+            selection: {
+              kind: "planned",
+              plan: {
+                input: captureSkillsSourcePlanInput(workspaceDir, {
+                  config,
+                  bundledSkillsDir: "",
+                  managedSkillsDir: path.join(stateDir, "skills"),
+                  pluginSkillsDir: path.join(stateDir, "plugin-skills"),
+                }),
+              },
+              request: {
+                limits: resolveSkillDiscoveryLimits(),
+                additionalBins: [],
+              },
+            },
+          })),
+        };
+        const result = await worker.handle(structuredClone(request));
+        if (result.kind !== "scan") {
+          throw new Error("Expected scan results");
+        }
+        expect(
+          result.results.map(({ key, sources }) =>
+            mergeSkillRecords(sources.entries, key)
+              .map(({ skill }) => ({ name: skill.name, description: skill.description }))
+              .toSorted((first, second) => first.name.localeCompare(second.name)),
+          ),
+        ).toEqual(
+          workspaces.map((_, index) =>
+            [
+              { name: `local-${index}`, description: `Workspace ${index}` },
+              { name: pluginName, description },
+            ].toSorted((first, second) => first.name.localeCompare(second.name)),
+          ),
+        );
+        expect(
+          observed.queries.filter((sql) =>
+            /^select "state_key", "value_json" from "config_machine_state"/i.test(sql),
+          ),
+        ).toHaveLength(owner === "gateway" ? 0 : 1);
+      } finally {
+        observed.restore();
+      }
+    };
+    await publishPlugin("original");
+    await scan("original", "Original");
+    await writeSkill({
+      dir: path.join(pluginRoot, "original"),
+      name: "original",
+      description: "Edited",
+    });
+    await scan("original", "Edited");
+    await publishPlugin("successor");
+    await scan("successor", "Original");
+  },
+);
 
 it("reads shared skill roots once per scan while retaining workspace entries and fresh content", async () => {
   const root = temporary.make("skills-scan-shared-roots-");

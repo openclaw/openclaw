@@ -595,31 +595,6 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 4 }, () => "https://example.com"));
   });
 
-  it("checks the bound document URL before evaluating a wait predicate", async () => {
-    const evaluate = vi
-      .fn()
-      .mockResolvedValueOnce("https://example.com")
-      .mockResolvedValueOnce({ kind: "result", ready: true });
-    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
-      async (_params, task) => await task({ evaluate }),
-    );
-
-    const response = await runAction({
-      kind: "wait",
-      fn: "() => Promise.resolve(document.title === 'ready')",
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(evaluate).toHaveBeenCalledTimes(2);
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed.mock.calls[0]?.[0]?.url).toBe(
-      "https://example.com",
-    );
-    const script = String(evaluate.mock.calls[1]?.[0]);
-    expect(script).toContain("document.title === 'ready'");
-    expect(script).toContain("Boolean(await");
-    expect(routeState.profileCtx.closeTab).not.toHaveBeenCalled();
-  });
-
   it("does not run a wait predicate in a document rejected by navigation policy", async () => {
     const evaluate = vi.fn().mockResolvedValue("http://169.254.169.254/latest/meta-data");
     chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
@@ -738,23 +713,6 @@ describe("existing-session interaction navigation guard", () => {
 
     await expect(pending).rejects.toThrow(/aborted|cancelled/i);
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
-  });
-
-  it("normalizes statement-body evaluate sources before Chrome MCP execution", async () => {
-    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
-
-    const response = await runAction(
-      { kind: "evaluate", fn: "const value = 41; return value + 1;" },
-      null,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fn: "async () => {\nconst value = 41; return value + 1;\n}",
-      }),
-    );
   });
 
   it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {

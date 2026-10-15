@@ -737,6 +737,21 @@ flush after 256 pending samples or on orderly worker shutdown. Individual collec
 are preserved; worker histogram updates can lag by one sampling interval.
 Workers without that port are not covered; a missing series does not mean zero GC.
 
+Node Code Mode also warns when an isolate exceeds 600 major collections per minute
+across an observation window of at least 10 seconds, at most once per worker per
+minute. `Code Mode worker GC storm` records the reusable metric `workerSlot`, native
+`workerThreadId`, pool `workerId`, current Code Mode `runId`, a 16-character SHA-256
+`sessionKeyHash`, lifetime `cellCount`, `activeCellCount`, and distinct pending
+`bridgeMethods`. Parked cells retain attribution; completed cells clear it. Idle
+warnings have no current run. Slots above the 64-worker metric bound are omitted.
+The record includes the window count and duration plus isolate-local `heapUsed`,
+`heapTotal`, `external`, `arrayBuffers`, and `heapSizeLimitBytes`. ArrayBuffers are
+included in external memory. These warnings use the existing memory port and do
+not require an exporter; they contain no guest source, arguments, or results.
+Attribution describes the cell active when the observer delivers the batch, not
+proof that the cell caused every collection in the window. Node's observer cannot
+report while synchronous guest execution blocks its event loop.
+
 ## RPC response size and heap changes
 
 The [Prometheus exporter](/gateway/prometheus) records

@@ -25,8 +25,7 @@ import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {

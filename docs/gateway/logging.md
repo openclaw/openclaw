@@ -62,13 +62,16 @@ transport failures remain warnings. The existing
 [model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
 promote transport details to `info` when enabled.
 
-Secret egress forwarding without credential substitution uses `debug`. Refusals
-and credential substitutions remain at `info`, and certificate failures remain
+Successful secret egress forwarding, including credential substitution, uses
+`debug`. Refusals remain at `info`, and certificate failures remain
 warnings. Their structured fields record the proxy outcome without request
 payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
 Code Mode and Tool Search catalog preparation summaries also use `debug`.
 [Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
 preparations, and model calls independently of log levels.
+
+Per-request GitHub API timing records also use `debug`, including fetches over
+500 ms. Transport failures and rate-limit errors retain their normal handling.
 
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
