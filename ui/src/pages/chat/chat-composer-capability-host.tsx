@@ -32,7 +32,7 @@ import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
-import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.tsx";
+import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,

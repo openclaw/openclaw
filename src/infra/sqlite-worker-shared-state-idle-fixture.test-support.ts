@@ -20,9 +20,9 @@ export function createSqliteWorkerBackend(input: undefined, context: { databaseP
         db.exec("BEGIN");
       }
       const result = backend.execute(command);
-      if (command.type === "deviceIdentity.read") {
-        unsettleInspection = command.input.identityKey === "idle-fixture:unsettled-inspection";
-        if (command.input.identityKey === "idle-fixture:local-reader" && !reader) {
+      if (command.type === "deviceAuth.read") {
+        unsettleInspection = command.input.deviceId === "idle-fixture:unsettled-inspection";
+        if (command.input.deviceId === "idle-fixture:local-reader" && !reader) {
           reader = db.prepare("SELECT name FROM sqlite_schema").iterate();
           reader.next();
         }

@@ -106,7 +106,7 @@ export async function createFormatFixture(databasePath: string): Promise<void> {
   }
 }
 
-export function createAgentFixture(databasePath: string, agentId: string): void {
+function createAgentFixture(databasePath: string, agentId: string): void {
   const database = new DatabaseSync(databasePath);
   try {
     database.exec(`

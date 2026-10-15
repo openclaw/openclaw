@@ -842,7 +842,7 @@ describe("prepared model catalog worker boundary", () => {
     const barrier = `${fixture.marker}.hold`;
     fs.writeFileSync(barrier, "", "utf8");
     const entered = observeCatalogEntry(receipts, fixture);
-    const catalog = fixture.snapshot.loadFullModelCatalog!();
+    const catalog = loadCompletedFullCatalog(fixture.snapshot);
     void catalog.catch(() => {});
     const accepted: ReturnType<typeof loadPreparedModelRuntimeAuth>[] = [];
     try {
