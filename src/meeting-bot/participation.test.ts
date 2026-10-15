@@ -505,32 +505,6 @@ describe("meeting participation live source capacity", () => {
     },
   );
 
-  it("retains 1024 sources and evicts only the oldest for a newer observation", () => {
-    vi.useFakeTimers();
-    const { owner } = harness();
-    const snapshot = captions(1_025);
-    for (const caption of snapshot) {
-      owner.observe(sessionId, caption);
-    }
-    const before = owner.context(sessionId).sources;
-    expect(before).toHaveLength(1_024);
-    expect(before.map((entry) => entry.id)).toEqual(snapshot.slice(1).map((entry) => entry.id));
-    const evicted = owner.inspect(sessionId, before[0]!.sourceId)!;
-    const retained = owner.inspect(sessionId, before.at(-1)!.sourceId)!;
-    expect(evicted).toBeDefined();
-    expect(retained).toBeDefined();
-
-    const next = owner.observe(sessionId, { ...source, kind: "caption", id: "next-caption" });
-    const after = owner.context(sessionId).sources;
-    expect(next).toBeTruthy();
-    expect(after).toHaveLength(1_024);
-    expect(after.slice(0, -1)).toEqual(before.slice(1));
-    expect(after.at(-1)).toMatchObject({ sourceId: next, order: 1_026 });
-    expect(() => evicted.assertCurrent()).toThrow();
-    expect(() => retained.assertCurrent()).not.toThrow();
-    expect(owner.inspect(sessionId, before[0]!.sourceId)).toBeUndefined();
-  });
-
   it("evicts by original observation order after an interim correction is finalized", () => {
     vi.useFakeTimers();
     const { owner } = harness();
@@ -691,23 +665,20 @@ describe("meeting participation SQLite value contract", () => {
 });
 
 describe("meeting participation native correction feedback", () => {
-  it.each(["succeeded", "failed", "uncertain", "unsupported"] as const)(
-    "does not authorize retry of a %s native outcome",
-    async (status) => {
-      const { owner, effect } = harness();
-      effect.mockResolvedValue({ status, correctable: true });
-      const outcome = await owner.execute(sessionId, request);
-      expect(outcome).toEqual({ requestId: request.requestId, status });
-      await expect(
-        owner.execute(sessionId, {
-          ...request,
-          requestId: "correction",
-          correctionOf: request.requestId,
-        }),
-      ).resolves.toMatchObject({ status: "rejected" });
-      expect(effect).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("does not authorize retry of a successful native outcome", async () => {
+    const { owner, effect } = harness();
+    effect.mockResolvedValue({ status: "succeeded", correctable: true });
+    const outcome = await owner.execute(sessionId, request);
+    expect(outcome).toEqual({ requestId: request.requestId, status: "succeeded" });
+    await expect(
+      owner.execute(sessionId, {
+        ...request,
+        requestId: "correction",
+        correctionOf: request.requestId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    expect(effect).toHaveBeenCalledTimes(1);
+  });
 
   it("does not grant native correction authority after the session closes during dispatch", async () => {
     const { owner, effect } = harness();

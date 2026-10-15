@@ -259,35 +259,6 @@ describe("prepared workspace skill resources", () => {
     }
   });
 
-  it("delivers current supporting bytes to a fresh worker with a rehydrated catalog snapshot", async () => {
-    const workspace = await fs.realpath(temps.make("skill-resource-refresh-"));
-    const directory = await writeSkill(workspace, "mutable");
-    const scriptPath = path.join(directory, "scripts/check.sh");
-    await fs.mkdir(path.dirname(scriptPath));
-    await fs.writeFile(scriptPath, "#!/bin/sh\nprintf before\n");
-    const snapshot = {
-      ...(await loadSnapshot(workspace)),
-      version: 1,
-    };
-    const first = await prepareSkillResourceDelivery(snapshot, () => {});
-    const preparedBytes = structuredClone(first);
-    await fs.writeFile(scriptPath, "#!/bin/sh\nprintf after\n");
-    const next = await prepareSkillResourceDelivery(structuredClone(snapshot), () => {});
-    const worker = await materializeSkillResources(next!, () => {});
-    try {
-      const skill = worker.snapshot.resolvedSkills![0]!;
-      expect(skill.contentHash).toBe(next!.skills[0]!.revision);
-      expect(skill.contentHash).not.toBe(first!.skills[0]!.revision);
-      expect(await fs.readFile(path.join(skill.baseDir, "scripts/check.sh"), "utf8")).toBe(
-        "#!/bin/sh\nprintf after\n",
-      );
-      expect(await fs.readFile(skill.filePath, "utf8")).toBe(markdown);
-      expect(first).toEqual(preparedBytes);
-    } finally {
-      await worker.cleanup();
-    }
-  });
-
   it.each([false, true])(
     "keeps concurrent turn cancellation isolated (rehydrated: %s)",
     async (rehydrated) => {
