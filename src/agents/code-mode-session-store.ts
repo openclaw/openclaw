@@ -232,7 +232,15 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
         });
       }
       return replay(manager.getBranch());
-    })();
+    })().catch((error: unknown) => {
+      if (error instanceof TypeError || error instanceof RangeError) {
+        throw new Error(
+          "Code Mode session store replay failed; repair the session before using store/load.",
+          { cause: error },
+        );
+      }
+      throw error;
+    });
     const current = await active.projection;
     assertCell();
     return current;

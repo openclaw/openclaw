@@ -2211,6 +2211,8 @@ packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
+packages/markdown-core/src/fences.ts
+packages/markdown-core/src/image-code-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts

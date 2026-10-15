@@ -1,5 +1,5 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
@@ -243,6 +243,33 @@ describe("refreshQueuedFollowupSession", () => {
 });
 
 describe("getFollowupQueue", () => {
+  it("settles evicted summary sources and retains surviving delivery correlations", () => {
+    const sources = Array.from({ length: 4 }, (_, index) => ({
+      prompt: `queued message ${index}`,
+      enqueuedAt: index,
+      run: makeRun(),
+      onQueueDisposition: vi.fn(),
+      deliveryCorrelations: [{ begin: () => undefined }],
+    }));
+    for (const source of sources) {
+      expect(
+        enqueueFollowupRun(QUEUE_KEY, source, {
+          mode: "followup",
+          cap: 1,
+          dropPolicy: "summarize",
+        }),
+      ).toBe(true);
+    }
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
+    expect(sources[0]?.onQueueDisposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    for (const source of sources.slice(1)) {
+      expect(source.onQueueDisposition).not.toHaveBeenCalled();
+    }
+    expect(queue.summaryElisions[0]?.sources[0]?.deliveryCorrelations).toBe(
+      sources[1]?.deliveryCorrelations,
+    );
+  });
+
   it("aborts work owned by a cleared queue", () => {
     const queuedRun: FollowupRun = {
       prompt: "queued message",

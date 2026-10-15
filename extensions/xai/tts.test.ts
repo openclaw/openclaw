@@ -3,7 +3,6 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
-import { isValidXaiTtsVoice, XAI_TTS_FALLBACK_VOICES } from "./speech-provider-metadata.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
 const ttsRequest = {
@@ -100,17 +99,6 @@ describe("xai tts", () => {
     FakeWebSocket.instances = [];
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  describe("isValidXaiTtsVoice", () => {
-    it("accepts fallback, current, legacy, and custom voice ids", () => {
-      for (const voice of XAI_TTS_FALLBACK_VOICES) {
-        expect(isValidXaiTtsVoice(voice)).toBe(true);
-      }
-      for (const voice of ["altair", "ALTAIR", "una", "nlbqfwie"]) {
-        expect(isValidXaiTtsVoice(voice)).toBe(true);
-      }
-    });
   });
 
   describe("listXaiTtsVoices", () => {

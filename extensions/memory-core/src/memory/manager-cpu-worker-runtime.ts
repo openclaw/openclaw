@@ -41,12 +41,14 @@ const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorker
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
   workerClass: "reader",
   sharedCompute: true,
+  databaseAccess: "read-only",
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
 const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
   workerClass: "compute",
   sharedCompute: true,
+  databaseAccess: "read-only",
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
 

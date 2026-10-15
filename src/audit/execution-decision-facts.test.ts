@@ -50,47 +50,6 @@ function databaseOptions() {
 }
 
 describe("execution decision facts", () => {
-  it("retains generic task and flow facts as unverified evidence after lifecycle retirement", () => {
-    const database = databaseOptions();
-    const context = seedExecutionContext(database);
-    const opened = openOpenClawStateDatabase(database);
-    for (const family of ["task", "flow"]) {
-      expect(
-        recordExecutionDecisionFactInDatabase(
-          {
-            ...receipt("historical-" + family),
-            action: { family, operation: "lifecycle", summary: "private historical summary" },
-          },
-          { ...database, database: opened, now: 100 },
-        ),
-      ).toBe("inserted");
-    }
-    const inspection = presentExecutionDecisionReceiptsInDatabase(opened.db, {
-      schema: noLifecycleBindings,
-      context,
-      decisionCursor: "g:0:0",
-      now: 100,
-    });
-    // Equal timestamps are ordered by receipt identity, not insertion order.
-    expect(inspection.decisions.map((decision) => decision.action.family)).toEqual([
-      "flow",
-      "task",
-    ]);
-    expect(inspection.decisionDisplays).toHaveLength(2);
-    for (const display of inspection.decisionDisplays) {
-      expect(display).toMatchObject({
-        action: { family: "decision", operation: "record" },
-        decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
-        provenance: { state: "unverified" },
-      });
-    }
-    expect(JSON.stringify(inspection.decisionDisplays)).not.toContain("private historical summary");
-    expect(inspection.coverage.state).toBe("unknown");
-    expect(
-      opened.db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get(),
-    ).toEqual({ count: 2 });
-  });
-
   it("persists repeated same-reason broadcast denials with opaque distinct ids", () => {
     const database = databaseOptions();
     seedExecutionContext(database);

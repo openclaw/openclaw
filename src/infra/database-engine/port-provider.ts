@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
+import { logbookPortProvider } from "./logbook-port.js";
 import {
   DatabasePortDataError,
   type DatabasePortProvider,
@@ -11,7 +12,10 @@ import {
 import { workboardPortProvider } from "./workboard-port.js";
 
 /** The only registration point for portable database families. */
-export const databasePortProviders: readonly DatabasePortProvider[] = [workboardPortProvider];
+export const databasePortProviders: readonly DatabasePortProvider[] = [
+  workboardPortProvider,
+  logbookPortProvider,
+];
 
 export function requireDatabasePortProvider(id: string) {
   const provider = databasePortProviders.find((entry) => entry.id === id);

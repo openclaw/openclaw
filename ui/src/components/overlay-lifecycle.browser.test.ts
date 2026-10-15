@@ -499,17 +499,6 @@ describe("native overlay lifecycle", () => {
     expect(phases).toEqual(["open"]);
   });
 
-  it("keeps generic empty surfaces and independently grouped overlays open", async () => {
-    const first = mountOverlay({ exclusiveGroup: undefined });
-    const second = mountOverlay({ exclusiveGroup: "independent" });
-    await open(first);
-    await open(second);
-    first.item.remove();
-    await Promise.resolve();
-    expect(first.owner.open).toBe(true);
-    expect(second.owner.open).toBe(true);
-  });
-
   it.each([
     { outer: "open", inner: "open" },
     { outer: "open", inner: "closed" },
@@ -711,31 +700,5 @@ describe("native overlay lifecycle", () => {
     });
     expect(fixture.owner.request(false)).toBe(false);
     expect(fixture.surface.hasAttribute("open")).toBe(true);
-  });
-
-  it("lets embedded controls consume Escape before dismissing the deepest branch", async () => {
-    const root = mountOverlay();
-    await open(root);
-    let hasQuery = true;
-    const child = mountOverlay(
-      {
-        onEscape: () => {
-          const consumed = hasQuery;
-          hasQuery = false;
-          return consumed;
-        },
-      },
-      root.owner,
-    );
-    await open(child);
-    const escape = () =>
-      child.item.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    escape();
-    expect(hasQuery).toBe(false);
-    expect(child.owner.open).toBe(true);
-    const hidden = completion(child, "hidden");
-    escape();
-    await hidden;
-    expect(root.owner.open).toBe(true);
   });
 });

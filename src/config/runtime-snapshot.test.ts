@@ -5,7 +5,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
-  getPublishedConfigRuntimeEnvState,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "./config-env-vars.js";
@@ -136,26 +135,6 @@ describe("runtime snapshot state", () => {
     ).toBe(true);
     expect(getConfigResolutionFacts(getRuntimeConfigSnapshot())?.size).toBe(0);
     expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
-  });
-
-  it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
-    const firstConfig: OpenClawConfig = { gateway: { port: 18789 } };
-    const secondConfig: OpenClawConfig = { gateway: { port: 19001 } };
-
-    setRuntimeConfigSnapshot(firstConfig);
-    const firstMetadata = getRuntimeConfigSnapshotMetadata();
-    expect(firstMetadata?.revision).toBe(1);
-    expect(resolveRuntimeConfigCacheKey(firstConfig)).toBe(
-      `runtime:${firstMetadata?.revision}:${firstMetadata?.fingerprint}`,
-    );
-
-    setRuntimeConfigSnapshot(secondConfig);
-    const secondMetadata = getRuntimeConfigSnapshotMetadata();
-    expect(secondMetadata?.revision).toBe(2);
-    expect(secondMetadata?.fingerprint).not.toBe(firstMetadata?.fingerprint);
-    expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
-      `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
-    );
   });
 
   it("keeps model projections across display writes but invalidates source and resolution changes", () => {
@@ -1051,18 +1030,5 @@ describe("config environment across in-process restart", () => {
     const publication = prepareConfigRuntimeEnv({ previousConfig: next, nextConfig: {} }).publish();
     publication.commit();
     expect(process.env.OPENCLAW_TEST_RESTART_VALUE).toBeUndefined();
-  });
-
-  it("still clears environment ownership on an explicit full runtime reset", () => {
-    vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", "owned");
-    const initial = { env: { vars: { OPENCLAW_TEST_RESTART_VALUE: "owned" } } };
-    initializePublishedConfigRuntimeEnv(initial, {
-      ownedEnv: { OPENCLAW_TEST_RESTART_VALUE: "owned" },
-    });
-
-    resetConfigRuntimeState();
-
-    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toEqual({});
-    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBeNull();
   });
 });

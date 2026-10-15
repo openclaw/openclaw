@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../../runtime-api.js";
 import { resolveMSTeamsRequestTimeoutMs } from "../request-timeout.js";
+import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import type { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 // Preserve module setup before modules that consume it.
@@ -68,18 +69,25 @@ describe("Teams inbound media recovery", () => {
     media.mockReset();
     dispatch.mockClear();
   });
-  it("dispatches recovered tagless files with instruction text and canonical channel IDs", async () => {
+  it("dispatches recovered tagless files without logging instruction text", async () => {
     media.mockResolvedValue([
       { path: "/tmp/from-graph.pdf", contentType: "application/pdf", kind: "document" },
     ]);
-    const { handle, getTeamDetails } = setup();
-    await handle({
-      text: "<at>Bot</at> Describe the attached image file",
-      channelData: {
-        team: { id: "19:raw-team@thread.skype" },
-        channel: { id: "19:channel@thread.tacv2" },
-      },
-    });
+    const { handle, getTeamDetails, deps } = setup();
+    const privateText = "Private launch note: describe the attached image file";
+    const rawText = `<at>Bot</at> ${privateText}`;
+    const verbose = vi.spyOn(getMSTeamsRuntime().logging, "shouldLogVerbose").mockReturnValue(true);
+    try {
+      await handle({
+        text: rawText,
+        channelData: {
+          team: { id: "19:raw-team@thread.skype" },
+          channel: { id: "19:channel@thread.tacv2" },
+        },
+      });
+    } finally {
+      verbose.mockRestore();
+    }
     expect(media).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         graphMediaFallback: true,
@@ -89,7 +97,7 @@ describe("Teams inbound media recovery", () => {
     );
     expect(getTeamDetails).toHaveBeenCalledExactlyOnceWith("19:raw-team@thread.skype");
     expect(context()).toMatchObject({
-      BodyForAgent: "Describe the attached image file",
+      BodyForAgent: privateText,
       NativeChannelId: "team-aad-group/19:channel@thread.tacv2",
       media: [
         expect.objectContaining({
@@ -100,6 +108,18 @@ describe("Teams inbound media recovery", () => {
       ],
     });
     expect(JSON.stringify(context())).not.toContain("19:raw-team@thread.skype/");
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "received message",
+      expect.objectContaining({ rawTextLength: rawText.length, textLength: privateText.length }),
+    );
+    expect(deps.log.debug).toHaveBeenCalledWith(expect.stringContaining("msteams inbound:"));
+    const logs = JSON.stringify([
+      vi.mocked(deps.log.info).mock.calls,
+      vi.mocked(deps.log.debug!).mock.calls,
+      vi.mocked(deps.log.error).mock.calls,
+      vi.mocked(deps.runtime.error).mock.calls,
+    ]);
+    expect(logs).not.toContain("Private launch note");
   });
   it("recovers explicit personal attachments without opting into Graph fallback or rewriting the Bot Framework ID", async () => {
     media.mockResolvedValue([

@@ -21,3 +21,6 @@ export type ConfirmDialogOptions = {
   skipPreference?: ConfirmDialogSkipPreference;
   requiredAcknowledgement?: string;
 };
+
+export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & { alternativeLabel: string };
+export type ConfirmDialogChoice = "confirm" | "alternative" | null;

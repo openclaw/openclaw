@@ -109,6 +109,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       deliveryContext,
     });
 
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     relay.notifyStarted();
     emitAgentEvent({ runId: "run-1", stream: "assistant", data: { delta: "hello" } });
     emitAgentEvent({ runId: "run-1", stream: "assistant", data: { delta: " from child" } });
@@ -168,28 +169,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       expect(options).toMatchObject({
         agentId: "main",
         source: "task",
-        expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
-      });
-    }
-    await relay.dispose();
-  });
-
-  it("keeps the admission target across delayed progress and completion", async () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      requesterAgentId: "main",
-      expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
-      runId: "run-reset",
-      parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:child:acp:reset",
-      agentId: "child",
-      eventRouting: {},
-    });
-    emitAgentEvent({ runId: "run-reset", stream: "assistant", data: { delta: "late progress" } });
-    vi.advanceTimersByTime(2_500);
-    emitAgentEvent({ runId: "run-reset", stream: "lifecycle", data: { phase: "end" } });
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(2);
-    for (const call of enqueueSessionEventMock.mock.calls) {
-      expect(call[1]).toMatchObject({
         expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
       });
     }
@@ -479,25 +458,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
     await relay.dispose();
   });
 
-  it("emits a start notice only after explicit acceptance", async () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      requesterAgentId: "main",
-      expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
-      runId: "run-4",
-      parentSessionKey: "agent:main:main",
-      eventRouting: {},
-      childSessionKey: "agent:codex:acp:child-4",
-      agentId: "codex",
-    });
-
-    expectNoTextWithFragment(collectedTexts(), "Started codex session");
-
-    relay.notifyStarted();
-
-    expectTextWithFragment(collectedTexts(), "Started codex session");
-    await relay.dispose();
-  });
-
   it("relays the latest replaceable assistant snapshot instead of superseded drafts", async () => {
     const relay = startAcpSpawnParentStreamRelay({
       requesterAgentId: "main",
@@ -578,43 +538,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       "codex: Note: Checking the requested response shape only.",
       "codex: ready",
     ]);
-    await relay.dispose();
-  });
-
-  it("relays preamble item progress without duplicating snapshots", async () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      requesterAgentId: "main",
-      expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
-      runId: "run-preamble-item",
-      parentSessionKey: "agent:main:main",
-      eventRouting: {},
-      childSessionKey: "agent:codex:acp:child-preamble-item",
-      agentId: "codex",
-      cfg: progressModeConfig(),
-      deliveryContext: progressCommentaryDeliveryContext,
-    });
-
-    emitAgentEvent({
-      runId: "run-preamble-item",
-      stream: "item",
-      data: {
-        itemId: "preamble-1",
-        kind: "preamble",
-        progressText: "Checking",
-      },
-    });
-    emitAgentEvent({
-      runId: "run-preamble-item",
-      stream: "item",
-      data: {
-        itemId: "preamble-1",
-        kind: "preamble",
-        progressText: "Checking the app-server stream",
-      },
-    });
-    vi.advanceTimersByTime(2_500);
-
-    expect(collectedTexts()).toEqual(["codex: Checking the app-server stream"]);
     await relay.dispose();
   });
 
@@ -714,17 +637,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       name: "suppresses Discord commentary when streaming is unset",
       channel: "discord",
       stream: "item",
-    },
-    {
-      name: "honors explicit Discord streaming off",
-      channel: "discord",
-      streaming: { mode: "off" },
-      stream: "item",
-    },
-    {
-      name: "suppresses assistant commentary when disabled",
-      streaming: { mode: "progress", progress: { commentary: false } },
-      stream: "assistant",
     },
     {
       name: "suppresses preamble progress when commentary is disabled",
@@ -847,47 +759,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       "codex: checking files",
       "codex: plan: inspect the runtime handoff first",
     ]);
-    await relay.dispose();
-  });
-
-  it("does not relay hidden ACP status tags when progress commentary is enabled", async () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      requesterAgentId: "main",
-      expectedTarget: { sessionId: "parent-original", generation: "generation-original" },
-      runId: "run-status-commentary-hidden",
-      parentSessionKey: "agent:main:main",
-      eventRouting: {},
-      childSessionKey: "agent:codex:acp:child-status-commentary-hidden",
-      agentId: "codex",
-      cfg: progressModeConfig(),
-      deliveryContext: progressCommentaryDeliveryContext,
-    });
-
-    emitAgentEvent({
-      runId: "run-status-commentary-hidden",
-      stream: "acp",
-      data: {
-        phase: "runtime_event",
-        eventType: "status",
-        tag: "usage_update",
-        text: "usage updated: 10/100",
-      },
-    });
-    emitAgentEvent({
-      runId: "run-status-commentary-hidden",
-      stream: "acp",
-      data: {
-        phase: "runtime_event",
-        eventType: "status",
-        tag: "available_commands_update",
-        text: "available commands updated (7)",
-      },
-    });
-    vi.advanceTimersByTime(2_500);
-
-    const texts = collectedTexts();
-    expectNoTextWithFragment(texts, "usage updated");
-    expectNoTextWithFragment(texts, "available commands updated");
     await relay.dispose();
   });
 

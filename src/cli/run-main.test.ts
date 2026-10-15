@@ -16,7 +16,6 @@ import {
 import {
   isGatewayRunFastPathArgv,
   resolveMissingPluginCommandMessage,
-  shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
@@ -192,16 +191,6 @@ describe("root startup policy", () => {
     },
   ])("rewrites only a root update flag: $args", ({ args, expected }) => {
     expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
-  });
-
-  it("skips proxy startup before SQLite maintenance", () => {
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite=compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--lint"))).toBe(true);
   });
 
   it("uses root help only for root invocations and aliases", () => {

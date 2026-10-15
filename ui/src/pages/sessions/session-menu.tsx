@@ -7,7 +7,6 @@ import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import {
   SessionMenu,
   type SessionMenuAction,
@@ -70,10 +69,6 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
               new Set([buildAgentMainSessionKey({ agentId: row.agentId ?? "main", mainKey })]),
             ),
           ),
-        hasChildren: hasSessionArchiveDescendants(
-          row,
-          context.sessions.state.result?.sessions ?? [],
-        ),
         pinned: context.navigation.snapshot.sidebarEntries.includes(
           serializeSidebarEntry({ type: "session", key: row.key }),
         ),

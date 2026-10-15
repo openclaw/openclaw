@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 // Whatsapp tests cover deliver reply plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { withWhatsAppSocketOperationTimeout } from "../socket-timing.js";
+import { whatsappOutboundLog } from "./loggers.js";
 
 const hoisted = vi.hoisted(() => ({
   recordChannelActivity: vi.fn(),
@@ -197,6 +199,31 @@ describe("deliverWebReply", () => {
   beforeAll(async () => {
     ({ createWhatsAppReplyTransportContext, deliverWebReply } = await import("./deliver-reply.js"));
   });
+
+  it.each([false, true])(
+    "keeps delivered text and media captions out of diagnostics (media=%s)",
+    async (hasMedia) => {
+      const text = "private outbound WhatsApp message with confidential account details";
+      const { msg, params } = hasMedia ? createImageDelivery(text) : createDelivery({ text });
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      vi.mocked(logVerbose).mockClear();
+      await deliverWebReply({ ...params, replyLogger: logger });
+
+      if (hasMedia) {
+        expect(expectFirstSendMediaPayload(msg).caption).toBe(text);
+      } else {
+        expect(replyText(msg)).toBe(text);
+      }
+      expect(logger.info).toHaveBeenCalled();
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(text);
+      expect(JSON.stringify(vi.mocked(logVerbose).mock.calls)).not.toContain(text);
+      if (hasMedia) {
+        const source = "http://example.com/img.jpg";
+        expect(JSON.stringify(logger.info.mock.calls)).not.toContain(source);
+        expect(JSON.stringify(vi.mocked(logVerbose).mock.calls)).not.toContain(source);
+      }
+    },
+  );
 
   it("does not resend an accepted reply when its transport reports a disconnect afterward", async () => {
     const { msg, params } = createDelivery({ text: "already delivered" });
@@ -419,12 +446,25 @@ describe("deliverWebReply", () => {
     });
     mockLoadedMedia("bad", "image/jpeg", "image");
     mockLoadedMedia("good", "application/pdf", "file", "good.pdf");
-    vi.mocked(msg.platform.sendMedia).mockRejectedValueOnce(new Error("boom"));
+    const errorDetail = "upload failed for http://example.com/bad.jpg";
+    vi.mocked(msg.platform.sendMedia).mockRejectedValueOnce(new Error(errorDetail));
     vi.mocked(msg.platform.sendMedia).mockResolvedValueOnce(
       createAcceptedWhatsAppSendResult("media", "media-second-1"),
     );
 
-    await deliverWebReply(params);
+    const outboundError = vi.spyOn(whatsappOutboundLog, "error").mockImplementation(() => {});
+    try {
+      await deliverWebReply(params);
+      expect(outboundError).toHaveBeenCalled();
+      expect(JSON.stringify(outboundError.mock.calls)).not.toContain(errorDetail);
+      expect(replyLogger.warn).toHaveBeenCalledWith(
+        { to: "+10000000000" },
+        "failed to send web media reply",
+      );
+      expect(JSON.stringify(replyLogger.warn.mock.calls)).not.toContain(errorDetail);
+    } finally {
+      outboundError.mockRestore();
+    }
 
     expect(loadWebMedia).toHaveBeenNthCalledWith(1, "http://example.com/bad.jpg", {
       maxBytes: 1024 * 1024,
@@ -446,7 +486,7 @@ describe("deliverWebReply", () => {
     expect(mockCallArg(msg.platform.sendMedia, 1, 1, "sendMedia")).toBeUndefined();
     expect(msg.platform.reply).toHaveBeenCalledTimes(1);
     expect(replyText(msg)).toContain("⚠️ Media failed");
-    expect(replyText(msg)).not.toContain("boom");
+    expect(replyText(msg)).not.toContain(errorDetail);
   });
 
   it("sends audio media as ptt voice note with visible text separately", async () => {

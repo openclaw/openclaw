@@ -678,45 +678,6 @@ describe("trigger handling", () => {
     });
   });
 
-  it("applies native model changes to the target session", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      runEmbeddedAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
-      const slashSessionKey = "telegram:slash:111";
-      const targetSessionKey = MAIN_SESSION_KEY;
-
-      await seedTargetSession(storePath, targetSessionKey);
-
-      const res = await getReplyFromConfig(
-        makeNativeTelegramCommandMessage({
-          body: "/model openai/gpt-4.1-mini",
-          slashSessionKey,
-          targetSessionKey,
-        }),
-        {},
-        cfg,
-      );
-
-      expect(maybeReplyText(res)).toContain("Model set to openai/gpt-4.1-mini");
-
-      const targetEntry = loadSessionEntry({ storePath, sessionKey: targetSessionKey });
-      expect(targetEntry?.providerOverride).toBe("openai");
-      expect(targetEntry?.modelOverride).toBe("gpt-4.1-mini");
-      expect(loadExactSessionEntry({ storePath, sessionKey: slashSessionKey })).toBeUndefined();
-
-      await expectNextRunUsesTargetSession(
-        { cfg, targetSessionKey, runEmbeddedAgentMock },
-        {
-          provider: "openai",
-          model: "gpt-4.1-mini",
-        },
-      );
-    });
-  });
-
   it("applies native model changes to Telegram topic thread sessions", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);

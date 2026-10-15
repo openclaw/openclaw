@@ -8,6 +8,11 @@ import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -33,6 +38,55 @@ afterEach(() => {
 });
 
 describe("chat pane session menu boundary", () => {
+  it("discovers nested sessions before the header archive choice", async () => {
+    const modal = createModalDialogTestFixture();
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      sessionId: "current-session",
+      kind: "direct",
+      label: "Parent task",
+      sharingRole: "owner",
+      childSessions: ["agent:main:child"],
+    };
+    const child: GatewaySessionRow = {
+      key: "agent:main:child",
+      sessionId: "child-session",
+      kind: "direct",
+      parentSessionKey: row.key,
+    };
+    let children: GatewaySessionRow[] = [];
+    const patch = vi.fn();
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture({
+        patch,
+        state: { result: sessionsResult([row, child], 1) },
+        describe: async () => ({ session: row }),
+        refreshList: async (query) => {
+          children = query?.spawnedBy === row.key ? [child] : [];
+        },
+        listSnapshot: () => ({
+          result: sessionsResult(children, 1),
+          agentId: "main",
+          loading: false,
+          error: null,
+        }),
+      }),
+    });
+    state.sessionKey = row.key;
+    state.sessionsResult = sessionsResult([row, child], 1);
+    try {
+      const pending = modal.track(pane.handleHeaderSessionAction({ kind: "toggle-archived" }, row));
+      const actions = await waitForConfirmDialogActions();
+      expect(actions.textContent).toContain("Archive 2 sessions");
+      answerConfirmDialog(actions, "cancel");
+      await pending;
+      expect(patch).not.toHaveBeenCalled();
+    } finally {
+      await modal.cleanup();
+    }
+  });
+
   it("pins a readable conversation in personal navigation without a session mutation", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:current",
