@@ -1,13 +1,13 @@
-import { html, type TemplateResult } from "lit";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
+import { solidContent, type LegacyTemplateResult } from "../lit/solid-content.tsx";
 import { icons } from "./icons.ts";
-import "./theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export function renderThemeBrandIcon(
-  claw: TemplateResult = icons.lobster,
+  claw: LegacyTemplateResult = icons.lobster,
   branding: ThemeBranding = currentThemeBranding(),
-  neutral: TemplateResult = icons.mark,
+  neutral: LegacyTemplateResult = icons.mark,
 ) {
   if (branding.brandIcon === "claw") {
     return claw;
@@ -15,8 +15,5 @@ export function renderThemeBrandIcon(
   if (branding.brandIcon === "mark") {
     return neutral;
   }
-  return html`<openclaw-theme-brand-icon
-    .branding=${branding}
-    aria-hidden="true"
-  ></openclaw-theme-brand-icon>`;
+  return solidContent(ThemeBrandIcon, { branding });
 }

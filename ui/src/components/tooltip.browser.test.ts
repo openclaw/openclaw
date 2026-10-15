@@ -1,8 +1,7 @@
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectSharedTooltipSkin } from "./tooltip.test-support.ts";
-import type { TooltipElement } from "./tooltip.ts";
-import "./tooltip.ts";
+import { focusWithoutTooltip, type TooltipElement } from "./tooltip.ts";
 import "../styles/base.css";
 
 afterEach(() => document.body.replaceChildren());
@@ -292,6 +291,29 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", () => {
+  it.each([false, true])(
+    "preserves scroll during tooltip-safe focus (wrapped=%s)",
+    async (wrapped) => {
+      const f = await fixture();
+      f.trigger.style.cssText = "display: block";
+      f.host.style.cssText = "height: 80px; overflow: auto";
+      const spacer = document.createElement("div");
+      spacer.style.height = "400px";
+      f.host.append(spacer);
+      if (!wrapped) {
+        f.host.prepend(f.trigger);
+        f.tooltip.remove();
+      }
+      f.host.scrollTop = 200;
+      focusWithoutTooltip(f.trigger, { preventScroll: true });
+      await commitTooltip(f.tooltip);
+      expect(document.activeElement).toBe(f.trigger);
+      expect(f.host.scrollTop).toBe(200);
+      expect(f.tooltip.hasAttribute("open")).toBe(false);
+      expect(f.events).toEqual([]);
+    },
+  );
+
   it.each(["trigger", "ancestor"] as const)(
     "does not open a duplicate label or capture Escape during a %s entrance fade",
     async (target) => {

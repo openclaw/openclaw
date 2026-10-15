@@ -232,8 +232,8 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
     this.#controller.previewForAnchor(anchor, content, input);
   }
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
-    this.#controller.focusTriggerWithoutOpening(target);
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
+    this.#controller.focusTriggerWithoutOpening(target, options);
   }
 
   #scheduleUpdate() {
@@ -296,12 +296,15 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
   }
 }
 
-export function focusWithoutTooltip(target: HTMLElement | null | undefined) {
+export function focusWithoutTooltip(
+  target: HTMLElement | null | undefined,
+  options?: FocusOptions,
+) {
   const tooltip = target?.closest<TooltipElement>("openclaw-tooltip");
   if (tooltip && target) {
-    tooltip.focusTriggerWithoutOpening(target);
+    tooltip.focusTriggerWithoutOpening(target, options);
   } else {
-    target?.focus();
+    target?.focus(options);
   }
 }
 

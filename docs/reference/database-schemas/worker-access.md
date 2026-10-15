@@ -50,6 +50,12 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Retained session-entry cache hits reuse the admission owner's physical identity
+without inspecting the pathname again. Observer reads rely on that same admitted
+reader instead of capturing and rechecking every candidate file independently.
+Committed writes still invalidate retained entries; config routing, native-open
+replacement detection, and live disclosure authority remain with their owners.
+
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
@@ -358,9 +364,6 @@ persist its final validity with the entry. They do not enqueue or reread their o
 row for session certification. Offline import, Doctor repair, and main-key
 policy changes explicitly queue validation and revoke the shared readiness cell
 and persisted receipt; rollback may conservatively leave readiness revoked.
-Startup uses this receipt to skip the legacy run-outcome scan on certified
-stores. Uncertified stores still normalize historical `running` and `queued`
-outcomes before canonical validation; current writers cannot persist those states.
 Those operations require exclusive offline or startup maintenance custody.
 Physical integrity admission remains valid independently of session readiness.
 The schema 25 migration seeds every existing node before admission; see
@@ -5108,8 +5111,9 @@ The host retains the last trajectory session's next sequence and retained UTF-8 
 count per physical execution owner. It passes these facts through the existing
 append request inside the writer FIFO, consumes them before awaiting the write,
 and installs the returned committed facts before releasing that FIFO. An unknown
-append outcome leaves the next request cold. Run-start and run-end liveness notices
-preserve these facts. Lifecycle row publications invalidate them; retention
+append outcome leaves the next request cold. Metadata-only session notifications,
+including run-start and run-end liveness notices, preserve these facts. Lifecycle
+row publications and explicit storage invalidations discard them; retention
 invalidates them inside its existing writer operation.
 Ordinary under-budget appends need no window read. Cold appends and actual overflow
 retain the SQL-side byte projection and bounded suffix scan. An hourly retention

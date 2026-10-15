@@ -186,7 +186,6 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       id: "copy-url",
       label: t("browser.copyUrl"),
       class: "session-menu__item",
-      attributes: { value: "copy-url" },
       icon: (
         <span class="session-menu__icon" aria-hidden="true">
           <Icon name="copy" />
@@ -198,7 +197,6 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       label: opensExternally() ? t("browser.openWithinOpenClaw") : t("browser.openNewTab"),
       class: "session-menu__item",
       attributes: {
-        value: opensExternally() ? "open-within-openclaw" : "open-new-tab",
         "data-new-tab-action": !opensExternally() ? "" : undefined,
       },
       icon: (

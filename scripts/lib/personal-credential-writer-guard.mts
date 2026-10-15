@@ -163,12 +163,14 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     ],
   ],
   // Enrollment preserves credential bytes with a CAS in the existing admitted transaction.
-  // Guard both worker entry points and their host dispatch; no raw writer escapes this chain.
+  // Doctor uses the native agent transaction only with exclusive maintenance, live admission
+  // and the same credential CAS/commit fence. Keep its exact host edge, not a file exemption.
   [
     key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
     [
       key(authWorker, "authProfiles.enrollAuthorization"),
       key("src/agents/auth-profiles/inline-usage.worker.ts", "bindSqliteWorkerBackend/execute"),
+      key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
     ],
   ],
   [

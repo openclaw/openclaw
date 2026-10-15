@@ -14,6 +14,10 @@ import type { BoardSnapshot } from "../lib/board/types.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
+import {
+  prepareTeamScaleSidebarListChurn,
+  type TeamScaleLiveEvent,
+} from "./control-ui-sidebar-list-fixture.ts";
 
 const TEAM_SCALE_COUNTS = {
   sessions: 300,
@@ -37,14 +41,6 @@ export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type TeamScaleLiveEvent = {
-  atMs: number;
-  kind: string;
-  event: string;
-  payload: unknown;
-  history?: { text?: string; message?: unknown };
-};
-
 type FixtureAsset = { body: string; contentType: string };
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 type FixtureOptions = {
@@ -54,6 +50,7 @@ type FixtureOptions = {
   sandboxUrl?: string;
   sandboxPort?: number;
   liveRun?: boolean;
+  sidebarListChurn?: boolean;
 };
 
 function personId(index: number) {
@@ -146,6 +143,26 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       lastMessagePreview: `Synthetic project ${index + 1}: reviewed the implementation and recorded the next concrete step.`,
     };
   });
+  if (options.sidebarListChurn) {
+    for (const [index, row] of sessions.entries()) {
+      const owner = people[index % counts.owners]!;
+      row.owner = {
+        actor: {
+          type: "human",
+          id: owner.id,
+          identity: { type: "profile", id: owner.id },
+          label: owner.name,
+        },
+      };
+      row.hiddenFromInvolvingMe = false;
+      if (index < 230 && owner.id !== people[0]!.id) {
+        row.participants = [
+          ...row.participants!,
+          { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
+        ];
+      }
+    }
+  }
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
@@ -543,6 +560,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     }
     return { atMs: (index + 1) * 160, kind, event, payload, history };
   });
+  if (options.sidebarListChurn) {
+    prepareTeamScaleSidebarListChurn({ sessions, people, liveEvents, selectedSessionKey, now });
+  }
   return {
     scenario,
     selectedSessionKey,
@@ -550,6 +570,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarEntries,
     events,
     liveEvents,
+    sidebarListChurn: options.sidebarListChurn
+      ? {
+          rows: sessions,
+          viewerProfileId: people[0]!.id,
+          now,
+          defaults: list([]).defaults,
+          owners: list([]).owners,
+        }
+      : undefined,
     liveHistory: options.liveRun
       ? {
           sessionId: pinnedRows[0]!.sessionId,

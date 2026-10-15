@@ -36,7 +36,7 @@ import {
 } from "../chat/components/chat-composer-mention-menu.tsx";
 import "../../components/tooltip.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.tsx";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import {
   handleSkillMenuKeydown,

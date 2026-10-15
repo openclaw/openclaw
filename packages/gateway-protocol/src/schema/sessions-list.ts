@@ -17,7 +17,7 @@ export const SESSION_LIST_SOURCES = [
 export const SessionsListParamsSchema = closedObject({
   /** Bounded caller attribution for response diagnostics; does not affect selection. */
   source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
-  /** Omit an unchanged sidebar row vector after current selection and authorization. */
+  /** Omit unchanged sidebar rows; delta:<revision> also accepts a retained window delta. */
   ifRowsRevision: Type.Optional(Type.String({ maxLength: 64 })),
   /** Compact omits capabilities; sidebar/dashboard retain their view and membership facts. */
   rowMode: Type.Optional(stringLiteralUnion(["compact", "dashboard", "sidebar"])),

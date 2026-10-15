@@ -42,8 +42,14 @@ const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
 const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
 const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
 const bytes = require('fs').readFileSync(path);`;
-const FS_SAFE_NATIVE_BATCH_BRANCH = "if (options.native) {";
-const FS_SAFE_NATIVE_BATCH_WORKER_URL = 'new URL("./owner-dacl-batch-worker.js", import.meta.url)';
+const FS_SAFE_NATIVE_BATCH = `    if (options.native) {
+        request.file = process.execPath;
+        request.args = ["--", fileURLToPath(new URL("./owner-dacl-batch-worker.js", import.meta.url))];
+        request.env = {
+            ...Object.fromEntries(Object.entries(invocation.env).filter(([key]) => !["NODE_OPTIONS", "NODE_PATH", "FS_SAFE_OWNER_DACL_BATCH_MODE"].includes(key.toUpperCase()))),
+            FS_SAFE_OWNER_DACL_BATCH_MODE: options.mode,
+        };
+    }`;
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -80,9 +86,6 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     ).href;
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
-  const fsSafeWindowsSecurityCommandPath = fs.realpathSync(
-    path.resolve(rootDir, "node_modules/@openclaw/fs-safe/dist/windows-security-command.js"),
-  );
   const photonRuntimePath = fs.realpathSync(
     path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs.js"),
   );
@@ -104,6 +107,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   );
   const websocketRuntimePath = fs.realpathSync(
     path.resolve("packages/gateway-client/src/websocket.ts"),
+  );
+  const fsSafeWindowsSecurityPath = fs.realpathSync(
+    path.join(
+      path.dirname(require.resolve("@openclaw/fs-safe/package.json")),
+      "dist/windows-security-command.js",
+    ),
   );
   const [packageJsonPath, browsersJsonPath, treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
@@ -149,19 +158,19 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       } catch {
         return null;
       }
-      if (resolvedId === fsSafeWindowsSecurityCommandPath) {
-        if (
-          code.split(FS_SAFE_NATIVE_BATCH_BRANCH).length !== 2 ||
-          !code.includes(FS_SAFE_NATIVE_BATCH_WORKER_URL)
-        ) {
-          this.error("fs-safe native batch bootstrap changed; update the worker deploy transform");
-        }
-        // Sealed bootstrap already fixes native mode to off. Drop only its unreachable
-        // native subprocess branch; retain Windows command-helper validation and failures.
-        return code.replace(FS_SAFE_NATIVE_BATCH_BRANCH, "if (false) {");
-      }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === fsSafeWindowsSecurityPath) {
+        if (code.split(FS_SAFE_NATIVE_BATCH).length !== 2) {
+          this.error("fs-safe native batch bootstrap changed; update the worker deploy transform");
+        }
+        return code.replace(
+          FS_SAFE_NATIVE_BATCH,
+          `    if (options.native) {
+        throw new Error("Native filesystem inspection is unavailable in the sealed worker runtime");
+    }`,
+        );
       }
       if (resolvedId === facadeRuntimePath) {
         if (code.split(FACADE_ACTIVATION_LOADER).length !== 2) {
