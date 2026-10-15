@@ -784,19 +784,22 @@ function revokeCompletionClaim(sessionId: string, runId?: string): void {
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts?: { preserveReplyRun?: ReplyOperation },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
   opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart"; preserveReplyRun?: ReplyOperation },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
-      if (abortReplyRunBySessionId(sessionId)) {
+      if (abortReplyRunBySessionId(sessionId, opts?.preserveReplyRun)) {
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
@@ -1189,11 +1192,7 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
 
 export { resolveActiveEmbeddedRunHandleSessionIdBySessionFile as resolveActiveEmbeddedRunSessionIdBySessionFile };
 
-export function getActiveEmbeddedRunSnapshot(
-  sessionId: string,
-): ActiveEmbeddedRunSnapshot | undefined {
-  return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
-}
+export { getActiveEmbeddedRunSnapshot } from "./active-run-projections.js";
 
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;

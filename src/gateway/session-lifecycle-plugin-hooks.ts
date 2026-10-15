@@ -1,8 +1,11 @@
 import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -18,11 +21,63 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
+import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+
+export async function emitGatewayBeforeResetPluginHook(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  messages?: unknown[];
+  target: GatewaySessionStoreTarget;
+  storePath: string;
+  entry?: SessionEntry;
+  reason: "new" | "reset";
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_reset")) {
+    return;
+  }
+
+  const sessionKey = params.target.canonicalKey;
+  const sessionId = params.entry?.sessionId;
+  const agentId = params.target.agentId;
+  const sessionFile = sessionId
+    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
+    : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const messages =
+    params.messages ??
+    (await readGatewayBeforeResetPluginHookMessages({
+      agentId,
+      entry: params.entry,
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }));
+
+  void hookRunner
+    .runBeforeReset(
+      {
+        sessionFile,
+        messages,
+        reason: params.reason,
+      },
+      {
+        agentId,
+        sessionKey,
+        sessionId,
+        workspaceDir,
+      },
+    )
+    .catch((err: unknown) => {
+      logVerbose(`before_reset hook failed: ${String(err)}`);
+    });
+}
 
 export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;

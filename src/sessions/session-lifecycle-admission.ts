@@ -1,5 +1,4 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
-import { AsyncLocalStorage } from "node:async_hooks";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -14,9 +13,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners } from "../shared/listeners.js";
-import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   agentWorkAdmissionIdentity,
@@ -26,6 +23,12 @@ import {
   sessionWorkAdmissionClosures as SESSION_WORK_ADMISSION_CLOSURES,
   type AgentWorkAdmissionIdentity,
 } from "./session-agent-work-admission.js";
+import {
+  SESSION_LIFECYCLE_ADMISSION_STATE,
+  type SessionWorkAdmission,
+  type SessionLifecycleMutationOwner,
+  type SessionLifecycleMutationKind,
+} from "./session-lifecycle-admission.state.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleMutationOperation,
@@ -38,7 +41,6 @@ import { createSessionIdentityLockRunner } from "./session-lifecycle-locks.js";
 import {
   clearSessionWorkAdmissionHandoffs,
   createSessionWorkAdmissionHandoff,
-  type HandoffSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
 import {
@@ -62,30 +64,6 @@ export {
 } from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-type SessionWorkAdmission = HandoffSessionWorkAdmission & {
-  agent?: AgentWorkAdmissionIdentity;
-  run?: SessionWorkRun;
-  phase: "pending" | "acquired";
-  owner?: symbol;
-  released: Promise<void>;
-};
-
-type SessionLifecycleMutationOwner = {
-  identities: readonly string[];
-  kind?: SessionLifecycleMutationKind;
-};
-
-type SessionLifecycleAdmissionState = {
-  lifecycleQueues: Map<string, StoreWriterQueue>;
-  mutationQueues: Map<string, StoreWriterQueue>;
-  activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
-  workReleaseListeners: Map<string, Set<() => void>>;
-  activeMutationRuns: Set<SessionLifecycleMutationOwner>;
-  idleWaiters: Map<string, Set<() => void>>;
-  currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
-};
-
-type SessionLifecycleMutationKind = "compaction";
 
 type SessionLifecycleMutationTarget = {
   scope: string;
@@ -100,20 +78,6 @@ type SessionLifecycleMutationParams<T> = {
   signal?: AbortSignal;
 } & (SessionLifecycleMutationTarget | { targets: Iterable<SessionLifecycleMutationTarget> });
 
-// Runtime chunks can load separate module instances while still coordinating
-// the same sessions. One shared state keeps every lock and admission visible.
-const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionLifecycleAdmissionState"),
-  (): SessionLifecycleAdmissionState => ({
-    lifecycleQueues: new Map(),
-    mutationQueues: new Map(),
-    activeAdmissions: new Map(),
-    workReleaseListeners: new Map(),
-    activeMutationRuns: new Set(),
-    idleWaiters: new Map(),
-    currentAdmissions: new AsyncLocalStorage(),
-  }),
-);
 const {
   activeAdmissions: ACTIVE_SESSION_WORK_ADMISSIONS,
   workReleaseListeners: SESSION_WORK_RELEASE_LISTENERS,

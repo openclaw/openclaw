@@ -10,6 +10,7 @@ import {
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
+import { isCurrentSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
@@ -33,6 +34,7 @@ import {
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
+  lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
@@ -277,8 +279,26 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
   return replyRunRegistry.get(sessionKey)?.routeThreadId;
 }
 
-export function isReplyRunActiveForSessionId(sessionId: string): boolean {
-  return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
+export function resolveInitiatingReplyOperationForSessionId(
+  sessionId: string,
+): ReplyOperation | undefined {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  const admission = operation && lifecycleAdmissionByOperation.get(operation)?.lease;
+  return operation &&
+    !operation.result &&
+    !operation.abortSignal.aborted &&
+    admission &&
+    isCurrentSessionWorkAdmission(admission)
+    ? operation
+    : undefined;
+}
+
+export function isReplyRunActiveForSessionId(
+  sessionId: string,
+  preserveReplyRun?: ReplyOperation,
+): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return operation !== undefined && operation !== preserveReplyRun;
 }
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
@@ -288,8 +308,12 @@ export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
   return Boolean(operation && !isReplyOperationPreBackendPhase(operation.phase));
 }
 
-export function abortReplyRunBySessionId(sessionId: string): boolean {
-  return resolveReplyRunForCurrentSessionId(sessionId)?.abortByUser() ?? false;
+export function abortReplyRunBySessionId(
+  sessionId: string,
+  preserveReplyRun?: ReplyOperation,
+): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return operation && operation !== preserveReplyRun ? operation.abortByUser() : false;
 }
 
 export { resolveReplyRunForCurrentSessionId as resolveActiveReplyOperationForSessionId };
@@ -299,9 +323,16 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   return operation ? forceClearReplyOperation(operation, cause) : false;
 }
 
-export function clearReplyRunForResetBySessionId(sessionId: string): void {
+export function clearReplyRunForResetBySessionId(
+  sessionId: string,
+  preserveReplyRun?: ReplyOperation,
+): void {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {
+  if (
+    !operation ||
+    operation === preserveReplyRun ||
+    isReplyOperationPreBackendPhase(operation.phase)
+  ) {
     return;
   }
   try {
@@ -318,7 +349,11 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
   timeoutMs?: number | null,
+  preserveReplyRun?: ReplyOperation,
 ): Promise<boolean> {
+  if (preserveReplyRun && resolveReplyRunForCurrentSessionId(sessionId) === preserveReplyRun) {
+    return Promise.resolve(true);
+  }
   const waitKey = resolveReplyRunWaitKey(sessionId);
   return waitKey ? replyRunRegistry.waitForIdle(waitKey, timeoutMs) : Promise.resolve(true);
 }
