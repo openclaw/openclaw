@@ -18,7 +18,7 @@ function ftsTableMatchesSchema(params: {
     .prepare(
       "SELECT type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
     )
-    .get(params.tableName) as { type?: unknown; sql?: unknown } | undefined;
+    .get(params.tableName);
   if (table?.type === "view") {
     throw new Error(`cannot modify ${params.tableName} because it is a view`);
   }
@@ -61,7 +61,7 @@ function ftsTableMatchesSchema(params: {
 
   const columns = params.db
     .prepare("SELECT name FROM pragma_table_info(?) ORDER BY cid")
-    .all(params.tableName) as Array<{ name?: unknown }>;
+    .all(params.tableName);
   return columns.length === params.expectedColumns.length &&
     columns.every((column, index) => column.name === params.expectedColumns[index])
     ? "matching"
