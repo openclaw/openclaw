@@ -5,10 +5,7 @@ import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-mode
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  getAgentEventLifecycleGeneration,
-  rotateAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
@@ -258,7 +255,6 @@ describe("Gateway status owner routing", () => {
     async (field) => {
       await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
         const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
-        const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const config = { agents: { entries: { main: {} } }, session: { store: target.storePath } };
         const recovery = field === "startupRecoveryWarning";
         const warning = recovery
@@ -270,7 +266,7 @@ describe("Gateway status owner routing", () => {
         const outcome = { ok: false, error: new Error(warning) } as const;
         try {
           if (recovery) {
-            recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
+            recordStartupRecoveryStoreResult({ target, outcome });
           } else {
             recordStartupMigrationWarnings([warning]);
           }
@@ -289,12 +285,11 @@ describe("Gateway status owner routing", () => {
             return;
           }
 
-          recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome: { ok: true } });
+          recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
           const healed = await callStatus(config, ["operator.admin"]);
           expect(healed.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
 
           rotateAgentEventLifecycleGeneration();
-          recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
           const restarted = await callStatus(config, ["operator.admin"]);
           expect(restarted.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
         } finally {

@@ -102,12 +102,13 @@ function Answer(props: StepProps & { label: string; onClick?: () => void }) {
       {props.label}
     </button>
   );
+  // Manual external-auth submission stays local to its disclosure form.
   return (
-    <Show when={props.leadingAction} fallback={button}>
-      <div class="wizard-step__actions wizard-step__actions--split">
+    <Show when={!props.externalAuthInput} fallback={button}>
+      <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
         {props.leadingAction}
         {button}
-      </div>
+      </openclaw-modal-actions>
     </Show>
   );
 }
@@ -164,7 +165,9 @@ function TextStep(props: StepProps) {
         <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
         <TextForm {...props} />
       </details>
-      <div class="wizard-step__actions wizard-step__actions--split">{props.leadingAction}</div>
+      <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+        {props.leadingAction}
+      </openclaw-modal-actions>
     </Show>
   );
 }
@@ -263,7 +266,11 @@ function OptionsStep(props: StepProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            {props.leadingAction}
+            <Show when={props.leadingAction}>
+              <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+                {props.leadingAction}
+              </openclaw-modal-actions>
+            </Show>
           </>
         }
       >
@@ -277,7 +284,7 @@ function ConfirmStep(props: StepProps) {
   return (
     <>
       <Message {...props} />
-      <div
+      <openclaw-modal-actions
         class={[
           "wizard-step__actions",
           { "wizard-step__actions--split": Boolean(props.leadingAction) },
@@ -296,7 +303,7 @@ function ConfirmStep(props: StepProps) {
             </button>
           )}
         </For>
-      </div>
+      </openclaw-modal-actions>
     </>
   );
 }
@@ -326,7 +333,9 @@ function ProgressStep(props: StepProps) {
       </Show>
       <SignIn step={props.step} />
       <Show when={props.leadingAction}>
-        <div class="wizard-step__actions wizard-step__actions--split">{props.leadingAction}</div>
+        <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+          {props.leadingAction}
+        </openclaw-modal-actions>
       </Show>
     </>
   );

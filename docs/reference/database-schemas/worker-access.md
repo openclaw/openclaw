@@ -393,9 +393,12 @@ Durable heartbeat outcome claims check the current row in their existing worker 
 Persistence and claims retain the agent executor directly, without opening a native
 database on the Gateway thread. Absent storage has no durable base session or outcome
 and remains absent. The worker owns admission and publishes committed results.
-Missing outcomes and already committed claims for the same run return without
-another write. New claims keep their atomic conditional update and live commit
-authority check; retries retain the original claim timestamp.
+The host retains bounded absent, present, and claimed outcome facts for the
+executor's physical lifetime. Persistence and claim receipts replace those facts;
+session removal, lifecycle replacement, and uncertain writes invalidate them.
+Known absence and committed claims return without another worker request. New
+claims keep their atomic conditional update and live commit authority check;
+retries retain the original claim timestamp and outcome data.
 
 Ordinary admitted session-entry and prepared transcript reads use the existing
 read workers and WAL snapshots without reserving the writer FIFO. Writer receipts
@@ -1862,7 +1865,8 @@ facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
 Entry patch preparation and commit reuse the resident actor's current canonical
-row, window, membership, and board facts. Prepared replacements still compare
+row, window, membership, board, and transcript watermark facts. Activity-summary
+patches therefore need no separate watermark read. Prepared replacements still compare
 against the current snapshot before writing, so an intervening patch cannot lose
 updates. Singleton canonical targets share this path; alias selections and missing
 residency retain their SQL readers.
@@ -2214,13 +2218,15 @@ Gateway deleted-agent checks batch ACP metadata candidates through the shared-st
 reader only for free ACP keys whose agent is absent. When initial admission needs
 the content-version marker, the reader fetches it and the first metadata cohort in
 one statement. Later reads reuse admitted version facts. The ACP writer publishes
-the exact changed metadata keys through the existing database admission exchange,
+bounded complete metadata postimages through the existing database admission exchange,
 including memory-session writes and offline migration/Doctor imports. Managed
 transactions combine their changed keys and publish only after commit; rollback
-retains the previous receipt. ACP cohorts invalidate on ACP receipts and schema
-changes, so unrelated shared-state writes do not discard them. Readers discard
-the whole bounded cohort on an ACP receipt because they can skip intervening
-receipts. Transactions, pinned snapshots, and authorizer-controlled reads keep
+retains the previous receipt. Host readers can consume covered committed rows
+and deletions directly. Unknown keys retain the worker read path; read fills stay
+local to their reader and cannot overwrite a newer write receipt. ACP cohorts
+refresh from committed postimages on ACP receipts and invalidate on schema
+changes, so unrelated shared-state writes do not discard them. Transactions,
+pinned snapshots, and authorizer-controlled reads keep
 their direct-read contracts.
 Reset rebinding uses the ACP
 writer after the session entry commits, retaining that entry writer's physical
@@ -4677,8 +4683,10 @@ retention, durability, and update behavior are unchanged.
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the
-workspace. Claim admission rechecks the live caller before mutation and commit;
-conditional release compares the exact claim inside the transaction. Commit
+workspace. Local claims without a remote environment admit the live caller once
+before their conditional DML and use SQLite autocommit for claim and release.
+Remote placement keeps transaction and commit admission; conditional release
+compares the exact claim in its write. Commit
 receipts publish claim authority and release observers before callers continue,
 including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
@@ -4883,8 +4891,8 @@ transaction. Its reader remains retained until commit or cleanup. Commit takes
 the writer again, refreshes live protection, and checks current authority, selected
 rows, transcript versions, and active ancestry. Only changed or newly protected
 candidates invalidate the retained selection. Conflicting selections return
-for fresh planning; unrelated writes invalidate age hints without cancelling the
-plan. Each actor retains at most two preparations, allowing a revoked
+for fresh planning; unrelated writes retain age hints, which entry receipts update
+without a second revision check. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
 operation and native close release those readers. No-op plans carry their current
 age and count facts through settlement. Automatic maintenance prepares protection
@@ -4894,7 +4902,11 @@ read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
 Gateway main thread. Exhaustive protected-only results suppress further passes
-until eligibility, policy, or the existing age deadline changes.
+until eligibility, policy, or the existing age deadline changes. Delivery settlement
+retains the entry count and tightens the retention deadline from its receipt when
+it releases the last durable claim. A young store below the capacity threshold
+stays idle without a count snapshot, age query, or empty write transaction; an
+already-due deadline or capacity pressure resumes exact planning.
 Committed registry publications update the retained capture before the final host
 maintenance grant, without another candidate read or worker-side registry digest.
 Protection published after that grant is ordered after the admitted maintenance
@@ -5474,7 +5486,10 @@ changes no stored transcript bytes, schema, retention, or update behavior.
 
 Pending-input history and exact pending-message reads use the same history worker
 for durable stores. Pages retain the 20-item and payload byte limits, ordering,
-and consumed-input filtering. Stale interruption commits through the agent writer,
+and consumed-input filtering. Prompt context reads its bounded page in one
+statement without the public history list's unused total count or snapshot
+envelope. SQL measures stored byte sizes before projecting message payloads.
+Stale interruption commits through the agent writer,
 which rereads candidates under its transaction and asks the live host custody
 owner at transaction and commit admission. Those host checks perform no SQL;
 an aborted but registered owner retains the right to finish cancelled. Confirmed
