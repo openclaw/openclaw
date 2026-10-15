@@ -38,6 +38,18 @@ import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contr
 import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
+const workerWarn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const log = actual.createSubsystemLogger(subsystem);
+      return subsystem === "node/worker" ? { ...log, warn: workerWarn } : log;
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
 
@@ -51,6 +63,7 @@ afterAll(async () => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  workerWarn.mockClear();
 });
 
 function launchInput() {
@@ -861,11 +874,9 @@ setInterval(() => {}, 1000);
 
   it("logs the original supervisor failure while returning only the generic error", async () => {
     const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-    const secret = "sk-abcdefghijklmnopqrstuv";
+    const failure = new Error("TEST_NODE_WORKER_SUPERVISOR_FAILURE");
     const supervisor = supervisorWith(fullReceipt());
-    supervisor.status.mockRejectedValueOnce(
-      new Error(`TEST_NODE_WORKER_SUPERVISOR_FAILURE Authorization: Bearer ${secret}`),
-    );
+    supervisor.status.mockRejectedValueOnce(failure);
     try {
       const { result } = await invokePrivate({
         command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -877,14 +888,42 @@ setInterval(() => {}, 1000);
         ok: false,
         error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
       });
-      expect(warn).toHaveBeenCalledOnce();
-      const logged = String(warn.mock.calls[0]?.[0]);
-      expect(logged).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
-      expect(logged).toContain("TEST_NODE_WORKER_SUPERVISOR_FAILURE");
-      expect(logged).not.toContain(secret);
+      // Redaction belongs to the logger transports, so the raw error reaches the logger intact.
+      expect(workerWarn).toHaveBeenCalledExactlyOnceWith("node worker supervisor command failed", {
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        code: "UNAVAILABLE",
+        error: failure,
+      });
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("does not log cancelled supervisor invocations as failures", async () => {
+    const supervisor = supervisorWith(fullReceipt());
+    supervisor.status.mockImplementationOnce(
+      (_launchId, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const invoking = invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1", waitMs: 20_000 }),
+      supervisor,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(supervisor.status).toHaveBeenCalledOnce());
+
+    controller.abort(new Error("invocation cancelled"));
+    const { request } = await invoking;
+
+    expect(workerWarn).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "node.invoke.result")).toEqual([]);
   });
 
   it("preserves a terminal capacity result across node invoke", async () => {

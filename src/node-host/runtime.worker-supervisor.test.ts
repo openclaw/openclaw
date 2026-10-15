@@ -8,6 +8,9 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
+import { readConfiguredLogTail } from "../logging/log-tail.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -162,5 +165,82 @@ describe("node-host runtime worker supervisor lifetime", () => {
     }
 
     expect((await store.get(input.launchId))?.state).toBe("interrupted");
+  });
+
+  it("keeps the original supervisor failure in the raw node log, not tails or console", async () => {
+    const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-runtime-log-"));
+    const logFile = path.join(fixture.root, "node.log");
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const marker = "TEST_NODE_WORKER_SUPERVISOR_FAILURE";
+    const consoleWarn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: consoleWarn, error: vi.fn() };
+    setLoggerOverride({ level: "info", consoleLevel: "warn", file: logFile });
+    const responses: Array<{ method: string; params: unknown }> = [];
+    const request: NodeHostClient["request"] = async <T = Record<string, unknown>>(
+      method: string,
+      params?: unknown,
+    ): Promise<T> => {
+      responses.push({ method, params });
+      return {} as T;
+    };
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 1 } },
+      },
+      env: { ...fixture.env, PATH: process.env.PATH },
+      platform: "linux",
+    });
+    expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
+    const runtime = prepared.start({ client: { request } });
+    let armed = false;
+    const execute = NodeWorkerJournalWorker.prototype.execute;
+    const spy = vi.spyOn(NodeWorkerJournalWorker.prototype, "execute").mockImplementation(function (
+      this: NodeWorkerJournalWorker,
+      command,
+      authority,
+    ) {
+      if (armed && command.type === "nodeWorker.turn.get") {
+        armed = false;
+        return Promise.reject(new Error(`${marker} Authorization: Bearer ${secret}`));
+      }
+      return execute.call(this, command, authority);
+    });
+
+    try {
+      armed = true;
+      await runtime.invoke({
+        id: "invoke-status",
+        nodeId: "node-1",
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-missing" }),
+      });
+      expect(armed).toBe(false);
+      const result = responses.find(({ method }) => method === "node.invoke.result")?.params;
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
+      });
+
+      await flushLogger();
+      const raw = fs.readFileSync(logFile, "utf8");
+      expect(raw).toContain(marker);
+      expect(raw).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
+      expect(raw).toContain(secret);
+      const tail = (await readConfiguredLogTail()).lines.join("\n");
+      expect(tail).toContain(marker);
+      expect(tail).not.toContain(secret);
+      expect(consoleWarn).toHaveBeenCalled();
+      expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain(secret);
+    } finally {
+      spy.mockRestore();
+      try {
+        await runtime.close();
+        await flushLogger();
+      } finally {
+        resetLogger();
+        setLoggerOverride(null);
+        loggingState.rawConsole = null;
+      }
+    }
   });
 });

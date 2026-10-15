@@ -24,6 +24,7 @@ import {
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE,
   NodeWorkerBundleInstallError,
@@ -68,6 +69,8 @@ import {
 } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
+
+const log = createSubsystemLogger("node/worker");
 
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
 const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
@@ -302,11 +305,14 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       logWarn(
         `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
       );
-    } else if (code === "UNAVAILABLE") {
+    } else if (code === "UNAVAILABLE" && !signal?.aborted) {
       // The caller only sees the generic message; keep the original failure in the node log.
-      logWarn(
-        `node worker supervisor command failed (${params.command}, ${code}): ${boundedWorkerErrorWithCode(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
-      );
+      // Cancelled invocations fail with the abort reason, which is not a supervisor fault.
+      log.warn("node worker supervisor command failed", {
+        command: params.command,
+        code,
+        error,
+      });
     }
     return { handled: true as const, ok: false as const, code, message };
   }
