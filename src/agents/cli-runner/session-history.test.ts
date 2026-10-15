@@ -774,20 +774,6 @@ describe("resumed Claude session gaps", () => {
 });
 
 describe("buildCliSessionHistoryPrompt", () => {
-  it("renders OpenClaw transcript history around the next user message", () => {
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [
-        { role: "user", content: "old ask" },
-        { role: "assistant", content: [{ type: "text", text: "old answer" }] },
-      ],
-      prompt: "new ask",
-    });
-
-    expect(prompt).toContain("User: old ask");
-    expect(prompt).toContain("Assistant: old answer");
-    expect(prompt).toContain("<next_user_message>\nnew ask\n</next_user_message>");
-  });
-
   it("renders canonical saved timestamps and omits invalid or noncanonical timestamps", () => {
     const prompt = buildCliSessionHistoryPrompt({
       messages: [

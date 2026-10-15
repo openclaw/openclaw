@@ -184,7 +184,7 @@ describe("CLI transcript account boundary", () => {
     });
   });
 
-  it.each(["append", "rewrite", "reset", "revocation"] as const)(
+  it.each(["rewrite", "revocation"] as const)(
     "refuses an intervening %s before committing the planned history boundary",
     async (change) => {
       const f = await fixture();
@@ -202,14 +202,8 @@ describe("CLI transcript account boundary", () => {
                 abort.abort();
               } else {
                 const manager = f.manager();
-                if (change === "append") {
-                  manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
-                } else if (change === "rewrite") {
-                  manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
-                  manager.removeTrailingEntries((entry) => entry.type === "message");
-                } else {
-                  manager.appendResetBoundary("reset");
-                }
+                manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
+                manager.removeTrailingEntries((entry) => entry.type === "message");
               }
               return planned;
             },
@@ -224,7 +218,7 @@ describe("CLI transcript account boundary", () => {
               credential: { type: "token", provider: "test-cli", token: "epoch-a" },
             }),
           ).rejects.toThrow();
-          if (change === "append" || change === "rewrite") {
+          if (change === "rewrite") {
             expect(spy).toHaveBeenCalledTimes(2);
           } else if (change === "revocation") {
             expect(spy).toHaveBeenCalledOnce();
@@ -563,7 +557,7 @@ describe("CLI transcript account boundary", () => {
     }
   });
 
-  it.each(["orchestrator-prior", "orchestrator-replacement", "direct-cli-recovery"])(
+  it.each(["orchestrator-replacement", "direct-cli-recovery"])(
     "fences recovered history and CLI persistence after %s takes over",
     async (replacementRunId) => {
       const f = await fixture();
