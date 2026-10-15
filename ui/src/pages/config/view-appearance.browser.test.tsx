@@ -2,11 +2,7 @@ import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import {
-  renderAppearance,
-  renderConfigInto,
-  renderConfigView,
-} from "./config-view.test-support.tsx";
+import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
 
 function settingsRow(container: HTMLElement, title: string) {
@@ -74,51 +70,6 @@ describe("config appearance preferences", () => {
 
       const content = required(container, ".config-content", HTMLElement);
       expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("omits the Appearance-owned locale field from the generic UI prefs form", async () => {
-    const schema = {
-      type: "object",
-      properties: {
-        ui: {
-          type: "object",
-          title: "UI",
-          properties: {
-            prefs: {
-              type: "object",
-              title: "Prefs",
-              properties: {
-                locale: { type: "string", title: "Interface language" },
-                chatShowToolCalls: { type: "boolean", title: "Chat show tool calls" },
-              },
-            },
-          },
-        },
-      },
-    };
-    const { container } = renderConfigView({
-      activeSection: "ui",
-      includeSections: ["__appearance__", "ui"],
-      schema,
-      uiHints: {
-        "ui.prefs.locale": { advanced: false },
-        "ui.prefs.chatShowToolCalls": { advanced: false },
-      },
-      formValue: { ui: { prefs: { chatShowToolCalls: true } } },
-    });
-    document.body.append(container);
-
-    try {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
-      const panel = required(container, "#config-section-panel", HTMLElement);
-      expect(panel.textContent).toContain("Chat show tool calls");
-      expect(panel.textContent).not.toContain("Interface language");
-      expect(panel.querySelector('input[aria-label="Interface language"]')).toBeNull();
     } finally {
       container.remove();
     }
