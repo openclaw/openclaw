@@ -74,6 +74,7 @@ export function useBrowserFollowupFixture() {
       deviceIdentity?: boolean;
       transientProjectionFailures?: number;
       persistDuringDispatch?: boolean;
+      dispatchAfterRelease?: () => Promise<void>;
       storage?: "durable" | "memory";
     } = {},
   ) {
@@ -191,6 +192,7 @@ export function useBrowserFollowupFixture() {
         throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
       }
       await dispatchRelease.promise;
+      await options.dispatchAfterRelease?.();
       if (options.persistDuringDispatch) {
         if (!replyOptions?.userTurnTranscriptRecorder) {
           throw new Error("Expected dispatch to own the admitted user input");

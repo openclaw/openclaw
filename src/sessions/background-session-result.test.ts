@@ -21,6 +21,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
+import * as sessionLifecycleAdmission from "./session-lifecycle-admission.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -63,6 +64,7 @@ describe("commitBackgroundResultToSession", () => {
       identities: [target.sessionKey, target.sessionId],
       assertAllowed: () => {},
     });
+    const releaseSpy = vi.spyOn(sessionLifecycleAdmission, "getSessionWorkAdmissionRelease");
     let commitSettled = false;
     const controller = new AbortController();
     const updates: unknown[] = [];
@@ -90,7 +92,7 @@ describe("commitBackgroundResultToSession", () => {
     let laterAdmission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
 
     try {
-      await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+      await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
       expect(commitSettled).toBe(false);
       let laterAdmissionSettled = false;
       laterAdmission = beginSessionWorkAdmission({
@@ -109,13 +111,15 @@ describe("commitBackgroundResultToSession", () => {
           },
         ),
       );
-      await Promise.resolve();
-      expect(laterAdmissionSettled).toBe(false);
+      await vi.waitFor(() => expect(laterAdmissionSettled).toBe(true));
+      expect(commitSettled).toBe(false);
       admission.release();
+      await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledTimes(2));
+      expect(commitSettled).toBe(false);
+      (await laterAdmission).release();
 
       const first = await commit;
       expect(first).toMatchObject({ ok: true });
-      (await laterAdmission).release();
       const retry = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
@@ -171,6 +175,7 @@ describe("commitBackgroundResultToSession", () => {
         () => {},
       );
       await Promise.allSettled([commit, ...observations]);
+      releaseSpy.mockRestore();
     }
   });
 
@@ -218,7 +223,7 @@ describe("commitBackgroundResultToSession", () => {
         );
         pending.push(completionSettlement);
         await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
-        expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
         expect(prepareDisplayContent).not.toHaveBeenCalled();
         const sourceMutation = admission.run(async () => {
           sourceResponse = await callGatewayHandler(

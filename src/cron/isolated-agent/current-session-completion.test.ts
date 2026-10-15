@@ -19,10 +19,8 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-} from "../../sessions/session-lifecycle-admission.js";
+import * as sessionLifecycleAdmission from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   createChannelTestPluginBase,
@@ -398,9 +396,10 @@ describe("current-session completion media", () => {
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
         assertAllowed: () => {},
       });
+      const releaseSpy = vi.spyOn(sessionLifecycleAdmission, "getSessionWorkAdmissionRelease");
       const commit = fixture.commit();
       try {
-        await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+        await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
         expect(await fixture.records()).toEqual([]);
         await replaceSessionEntry(fixture.scope, {
           sessionId: "replacement-session",
@@ -415,6 +414,7 @@ describe("current-session completion media", () => {
       } finally {
         admission.release();
         await commit;
+        releaseSpy.mockRestore();
         await fixture.dispose();
       }
     });
