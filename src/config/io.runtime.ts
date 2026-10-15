@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
@@ -14,6 +16,7 @@ import { getDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migrati
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
+import { isInvalidConfigError } from "./io.invalid-config.js";
 import { replaceEnvSnapshot } from "./io.read-helpers.js";
 import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import { finalizeCommittedConfigWrite } from "./io.runtime-write-finalization.js";
@@ -207,6 +210,31 @@ function createCurrentConfigReader(params: { configPath?: string; env?: NodeJS.P
   });
 }
 
+const MAX_CONFIG_UNAVAILABLE_REASON_CHARS = 300;
+
+/** Config warnings stay on one bounded line, so the rejection reason is collapsed and capped. */
+function describeUnavailableConfigReason(error: unknown): string | undefined {
+  // Invalid-config details already carry the per-issue lines without repeating the path the
+  // warning prints; they need the same redaction formatErrorMessage applies to other errors.
+  const reason =
+    isInvalidConfigError(error) && error.details
+      ? redactSensitiveText(error.details)
+      : formatErrorMessage(error);
+  const collapsed = reason
+    .split("\n")
+    .map((line) => line.trim().replace(/^-\s+/, ""))
+    .filter(Boolean)
+    .join("; ");
+  if (!collapsed) {
+    return undefined;
+  }
+  return truncateWithMarker(collapsed, MAX_CONFIG_UNAVAILABLE_REASON_CHARS, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: true,
+  });
+}
+
 /** Inspection may degrade location selection; it never admits invalid config for state repairs. */
 export function readCurrentConfigForResolution(
   params: { config?: OpenClawConfig; configPath?: string; env?: NodeJS.ProcessEnv } = {},
@@ -220,20 +248,25 @@ export function readCurrentConfigForResolution(
   }
   const io = createCurrentConfigReader(params);
   let config: OpenClawConfig | undefined;
+  let unavailableReason: string | undefined;
   try {
     const loaded = io.loadConfig({ skipSuspiciousRecovery: true });
     if (fs.existsSync(io.configPath)) {
       config = loaded;
     }
-  } catch {
-    // Directory inspection preserves access even when the config cannot be loaded.
+  } catch (error) {
+    // Directory inspection preserves access even when the config cannot be loaded, but the
+    // rejection reason is the only evidence separating a refused config from a missing one.
+    unavailableReason = describeUnavailableConfigReason(error);
   }
   const issues = config
     ? []
     : [
         {
           path: io.configPath,
-          message: "Config unavailable; using environment and default agent directory settings.",
+          message: unavailableReason
+            ? `Config unavailable (${unavailableReason}); using environment and default agent directory settings.`
+            : "Config unavailable; using environment and default agent directory settings.",
         },
       ];
   logConfigWarningsOnce({
