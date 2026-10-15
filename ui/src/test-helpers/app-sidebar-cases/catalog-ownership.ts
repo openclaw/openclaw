@@ -59,7 +59,11 @@ describe("AppSidebar session catalog ownership", () => {
     excluded.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
     await publish();
     expect(prepare).toHaveBeenCalledTimes(2);
-    expect(sidebar.textContent).toContain("Another host is unavailable");
+    expect(
+      sidebar
+        .querySelector('[data-session-section="catalog:codex"] .sidebar-session-group-toggle')
+        ?.getAttribute("aria-label"),
+    ).toContain("Another host is unavailable");
 
     excluded.nextCursor = "next-owner-filtered-page";
     await publish();
