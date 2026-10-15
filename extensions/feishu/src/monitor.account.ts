@@ -15,7 +15,10 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import { resolveFeishuChatType } from "./chat-type.js";
+import { getChatInfo } from "./chat.js";
 import { createEventDispatcher } from "./client.js";
+import { createConfiguredFeishuClient } from "./configured-client.js";
 import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
@@ -36,6 +39,17 @@ import { normalizeFeishuEventChatType, type ResolvedFeishuAccount } from "./type
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
+type FetchReactionChatInfo = (params: {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  chatId: string;
+}) => Promise<{ chat_mode?: unknown; chat_type?: unknown }>;
+
+const fetchReactionChatInfo: FetchReactionChatInfo = async (params) => {
+  const client = createConfiguredFeishuClient(params);
+  return getChatInfo(client, params.chatId);
+};
+
 export { FeishuRetryableSyntheticEventError };
 
 export type FeishuReactionCreatedEvent = {
@@ -54,6 +68,7 @@ type ResolveReactionSyntheticEventParams = {
   event: FeishuReactionCreatedEvent;
   botOpenId?: string;
   fetchMessage?: typeof getMessageFeishu;
+  fetchChatInfo?: FetchReactionChatInfo;
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   uuid?: () => string;
@@ -69,6 +84,7 @@ export async function resolveReactionSyntheticEvent(
     event,
     botOpenId,
     fetchMessage = getMessageFeishu,
+    fetchChatInfo = fetchReactionChatInfo,
     verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
     logger,
     uuid = () => crypto.randomUUID(),
@@ -120,7 +136,17 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  const syntheticChatIdRaw = event.chat_id?.trim() || reactedMsg.chatId?.trim();
+  let resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  if (!resolvedChatType && syntheticChatIdRaw) {
+    const chatInfo = await raceWithTimeoutAndAbort(
+      fetchChatInfo({ cfg, accountId, chatId: syntheticChatIdRaw }),
+      { timeoutMs: verificationTimeoutMs },
+    )
+      .then((result) => (result.status === "resolved" ? result.value : undefined))
+      .catch(() => undefined);
+    resolvedChatType = resolveFeishuChatType(chatInfo ?? {});
+  }
   if (!resolvedChatType) {
     logger?.(
       `feishu[${accountId}]: skipping reaction ${emoji} on ${messageId} without chat type context`,
@@ -128,7 +154,6 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
   const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
   return {
     sender: {
