@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
+import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -174,12 +175,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    if (!backend.modelProvider?.trim()) {
-      reportRegistrationWarning(
-        record,
-        `cli backend "${id}" is missing modelProvider; provider-to-runtime binding will be skipped. Set modelProvider to the canonical model provider id to enable this binding.`,
-      );
-    }
+    warnOnMissingCliBackendModelProvider(backend, (message) =>
+      reportRegistrationWarning(record, message),
+    );
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }

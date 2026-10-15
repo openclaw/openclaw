@@ -173,9 +173,10 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
     Set `modelProvider` to the canonical model provider whose models the CLI
     executes. It can match the backend id, as above, or a separate provider id.
-    Omitting it or supplying a blank value emits a plugin registration warning:
-    direct CLI references still work, but no provider-to-runtime binding is
-    created. OpenClaw does not infer this field from `id`.
+    Omitting it or supplying a blank value emits a warning during runtime or
+    setup-only registration: direct CLI references still work, but no
+    provider-to-runtime binding is created. OpenClaw does not infer this field
+    from `id`.
 
   </Step>
 </Steps>
