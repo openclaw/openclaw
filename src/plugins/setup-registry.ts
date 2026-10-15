@@ -537,6 +537,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
+    const recordDiagnostics: PluginSetupRegistryDiagnostic[] = [];
     const api = buildPluginApi({
       id: record.id,
       name: record.name ?? record.id,
@@ -563,7 +564,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
             return;
           }
           warnOnMissingCliBackendModelProvider(backend, (message) => {
-            diagnostics.push({
+            recordDiagnostics.push({
               pluginId: record.id,
               code: "setup-cli-backend-missing-model-provider",
               runtimeId: backend.id,
@@ -617,6 +618,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       });
       continue;
     }
+    diagnostics.push(...recordDiagnostics);
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
     for (const [key, entry] of recordProviders) {

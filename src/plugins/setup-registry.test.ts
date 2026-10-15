@@ -313,11 +313,12 @@ describe("setup registry", () => {
     ]);
   });
 
-  it("publishes each plugin setup registration atomically on synchronous success", () => {
+  it("publishes each plugin setup registration atomically without leaked warnings", () => {
     const setup = { providers: [{ id: "shared-provider" }], cliBackends: ["shared-cli"] };
     const throwing = fixture({ id: "shared-plugin", setup });
     manifests(throwing, fixture({ id: "shared-plugin", setup }));
     const throwingRegister = vi.fn((api: SetupRegistryApi) => {
+      api.registerCliBackend({ id: "shared-cli", config: { command: "throwing" } });
       contributions(api, "throwing");
       throw new Error("setup registration failed");
     });
