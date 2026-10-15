@@ -62,8 +62,8 @@ vi.mock("../../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: mocks.configWriteAllowed,
   readConfigFileSnapshot: mocks.readConfig,
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: mocks.ownershipAllowed,
 }));
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({

@@ -49,7 +49,10 @@ import {
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
-import { isSecretsRuntimeDisplayChange } from "./runtime-source-contract.js";
+import {
+  hasSameSecretProviderDefinition,
+  isSecretsRuntimeDisplayChange,
+} from "./runtime-source-contract.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -356,31 +359,6 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
     }
   }
   return merged;
-}
-
-export function hasSameSecretProviderDefinition(
-  ref: SecretRef,
-  configs: OpenClawConfig[],
-): boolean {
-  const definition = configs[0]?.secrets?.providers?.[ref.provider];
-  if (
-    !configs.every((config) =>
-      isDeepStrictEqual(config.secrets?.providers?.[ref.provider], definition),
-    )
-  ) {
-    return false;
-  }
-  if (!definition || !("pluginIntegration" in definition)) {
-    return true;
-  }
-  // Plugin integration ownership is not fully normalized to one entry. Preserve a resolved value
-  // only across an unchanged plugin/channel snapshot, or rollback can pair it with rejected owner state.
-  const dependency = (config: OpenClawConfig) => ({
-    plugins: config.plugins,
-    channels: config.channels,
-  });
-  const previous = dependency(configs[0]!);
-  return configs.every((config) => isDeepStrictEqual(dependency(config), previous));
 }
 
 function preserveResolvedSecretRefValues(
@@ -1066,6 +1044,11 @@ export function prepareSecretsRuntimeDisplaySnapshot(
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
 export function getActiveSecretsRuntimeSnapshotRevisionState(): number {
   return activeSnapshotRevision;
+}
+
+/** Stable activation owner across provider-only refreshes. */
+export function getActiveSecretsRuntimeSnapshotLineageRevisionState(): number {
+  return activeSnapshotLineageStartRevision;
 }
 
 /** Whether the active snapshot is the activation or a scoped descendant of one revision. */
