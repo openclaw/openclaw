@@ -377,6 +377,53 @@ describe("GitHub agent reader", () => {
     },
   );
 
+  it.each(["fresh", "cached"] as const)(
+    "stops GitHub I/O and %s delivery after identity reassignment",
+    async (mode) => {
+      fixture = await createFixture();
+      if (mode === "cached") {
+        await fixture.read();
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const fetcher = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+      const pausedPath =
+        mode === "cached" ? "/repos/octocat/reader" : "/repos/octocat/reader/issues/1";
+      fixture.fetcher.mockClear().mockImplementation(async (input, init) => {
+        if (new URL(requestUrl(input)).pathname === pausedPath) {
+          entered.resolve();
+          await release.promise;
+        }
+        return fetcher(input, init);
+      });
+      const pending = fixture.read({ refresh: mode === "fresh" });
+      const rejected = expect(pending).rejects.toThrow("GitHub identity changed");
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("GitHub read completed before the identity change");
+          }),
+        ]);
+        const requestsBeforeChange = fixture.fetcher.mock.calls.length;
+        const agent = expectDefined(fixture.config.agents?.entries?.reader, "reader configuration");
+        agent.tools = { ...agent.tools, github: { profileId: `ghp_${"8".repeat(32)}` } };
+        setRuntimeConfigSnapshot(fixture.config);
+        release.resolve();
+        await rejected;
+        expect(fixture.fetcher).toHaveBeenCalledTimes(requestsBeforeChange);
+        if (mode === "cached") {
+          expect(
+            fixture.fetcher.mock.calls.map(([input]) => new URL(requestUrl(input)).pathname),
+          ).toEqual([pausedPath]);
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+      }
+    },
+  );
+
   it("rejects direct RPC use without an admitted reader invocation", async () => {
     fixture = await createFixture();
     await expect(
