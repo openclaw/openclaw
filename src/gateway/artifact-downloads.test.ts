@@ -17,7 +17,12 @@ import {
 } from "./artifact-download-projection.js";
 import { handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
 import { createGatewayRequest as createRequest } from "./hooks-test-helpers.js";
-import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
+import {
+  ANIMATED_GIF_BYTES,
+  APNG_BYTES,
+  createBmpBuffer,
+  TIFF_BYTES,
+} from "./http-image.test-support.js";
 import { encodeImageThumbnail } from "./managed-image-thumbnail-cache.js";
 import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
@@ -116,26 +121,40 @@ it.each(["source", "connection", "expiry"] as const)(
   },
 );
 
-it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "compact"] as const)(
+it.each([
+  "image",
+  "file",
+  "invalid-image",
+  "gif",
+  "apng",
+  "apng-metadata",
+  "compact",
+  "bmp",
+  "tiff",
+] as const)(
   "serves best-effort HTTP thumbnails and preserves original downloads (%s)",
   async (kind) => {
     const source =
-      kind === "image"
-        ? createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 })
-        : kind === "gif"
-          ? ANIMATED_GIF_BYTES
-          : kind === "apng"
-            ? APNG_BYTES
-            : kind === "apng-metadata"
-              ? apngWithLargeMetadata()
-              : kind === "compact"
-                ? (
-                    await createImageProcessor().encode(createNoisyPngBuffer(32, 32), {
-                      format: "jpeg",
-                      quality: 10,
-                    })
-                  ).data
-                : Buffer.from("original");
+      kind === "bmp"
+        ? createBmpBuffer(2, 2)
+        : kind === "tiff"
+          ? TIFF_BYTES
+          : kind === "image"
+            ? createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 })
+            : kind === "gif"
+              ? ANIMATED_GIF_BYTES
+              : kind === "apng"
+                ? APNG_BYTES
+                : kind === "apng-metadata"
+                  ? apngWithLargeMetadata()
+                  : kind === "compact"
+                    ? (
+                        await createImageProcessor().encode(createNoisyPngBuffer(32, 32), {
+                          format: "jpeg",
+                          quality: 10,
+                        })
+                      ).data
+                    : Buffer.from("original");
     if (kind === "compact") {
       expect((await encodeImageThumbnail(source)).data.byteLength).toBeGreaterThan(
         source.byteLength,
@@ -146,13 +165,17 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
       type: kind === "file" ? "file" : "image",
       title: "fixture",
       mimeType:
-        kind === "file"
-          ? "text/plain"
-          : kind === "gif"
-            ? "image/gif"
-            : kind === "compact"
-              ? "image/jpeg"
-              : "image/png",
+        kind === "bmp"
+          ? "image/bmp"
+          : kind === "tiff"
+            ? "image/tiff"
+            : kind === "file"
+              ? "text/plain"
+              : kind === "gif"
+                ? "image/gif"
+                : kind === "compact"
+                  ? "image/jpeg"
+                  : "image/png",
       download: { mode: "bytes" },
       data: source.toString("base64"),
     };

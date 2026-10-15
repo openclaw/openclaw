@@ -17,6 +17,7 @@ import {
 } from "./ingress-attribution.js";
 import {
   encodeImageThumbnail,
+  isKnownStillImageBuffer,
   resolveManagedImageThumbnail,
 } from "./managed-image-thumbnail-cache.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -80,9 +81,12 @@ export async function handleArtifactDownloadHttpRequest(
     if (thumbnail && prepared?.body) {
       let bytes = prepared.body;
       const cacheKey = createHash("sha256").update(bytes).digest("hex");
-      const encoded = await resolveManagedImageThumbnail(cacheKey, () =>
-        encodeImageThumbnail(bytes),
-      ).catch(() => undefined);
+      const source = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const encoded = (await isKnownStillImageBuffer(source))
+        ? await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(bytes)).catch(
+            () => undefined,
+          )
+        : undefined;
       if (encoded?.transformed && encoded.data.byteLength < bytes.byteLength) {
         bytes = new Uint8Array(encoded.data);
         prepared.artifact = { ...prepared.artifact, mimeType: "image/png" };

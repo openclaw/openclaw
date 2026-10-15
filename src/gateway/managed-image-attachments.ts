@@ -78,7 +78,7 @@ import {
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import {
-  isStillImageBuffer,
+  shouldPreserveImageAnimation,
   readManagedImageThumbnailFromFile,
 } from "./managed-image-thumbnail-cache.js";
 import {
@@ -1124,7 +1124,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
             if (!metadata) {
               throw createManagedImageAttachmentError(metadataLimitError);
             }
-            if (!(await isStillImageBuffer(originalBuffer))) {
+            if (shouldPreserveImageAnimation(originalBuffer)) {
               // A single-frame resize would silently replace the animated original.
               throw createManagedImageAttachmentError(metadataLimitError);
             }

@@ -2,7 +2,11 @@ import { sliceMimeSniffBuffer } from "@openclaw/media-core/mime";
 import pLimit from "p-limit";
 import type { openLocalFileSafely } from "../infra/fs-safe.js";
 import { LruCache } from "../infra/lru-cache.js";
-import { isAnimatedWebpBuffer, isStillPngBuffer } from "../media/image-ops.js";
+import {
+  isAnimatedWebpBuffer,
+  isStillPngBuffer,
+  readImageProbeFromHeader,
+} from "../media/image-ops.js";
 import { createImageProcessor } from "../media/image-processor.js";
 
 // Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
@@ -10,7 +14,8 @@ const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
 
 export type ManagedImageThumbnail = { data: Buffer; transformed: boolean };
 
-export async function isStillImageBuffer(source: Buffer): Promise<boolean> {
+/** Artifact previews conservatively optimize only known-still browser formats. */
+export async function isKnownStillImageBuffer(source: Buffer): Promise<boolean> {
   const sourceType = await import("file-type")
     .then(({ fileTypeFromBuffer }) => fileTypeFromBuffer(sliceMimeSniffBuffer(source)))
     .catch(() => undefined);
@@ -23,9 +28,19 @@ export async function isStillImageBuffer(source: Buffer): Promise<boolean> {
   );
 }
 
+/** Keep browser animation containers intact; other inputs retain the processor's conversion contract. */
+export function shouldPreserveImageAnimation(source: Buffer): boolean {
+  const format = readImageProbeFromHeader(source)?.format;
+  return (
+    format === "gif" ||
+    (format === "png" && !isStillPngBuffer(source)) ||
+    (format === "webp" && isAnimatedWebpBuffer(source))
+  );
+}
+
 export async function encodeImageThumbnail(source: Uint8Array): Promise<ManagedImageThumbnail> {
   const buffer = Buffer.from(source.buffer, source.byteOffset, source.byteLength);
-  if (!(await isStillImageBuffer(buffer))) {
+  if (shouldPreserveImageAnimation(buffer)) {
     return { data: buffer, transformed: false };
   }
   const { data } = await createImageProcessor().encode(source, {

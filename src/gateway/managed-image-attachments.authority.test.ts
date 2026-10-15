@@ -10,7 +10,12 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-d
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { ANIMATED_GIF_BYTES, ANIMATED_WEBP_BYTES, APNG_BYTES } from "./http-image.test-support.js";
+import {
+  ANIMATED_GIF_BYTES,
+  ANIMATED_WEBP_BYTES,
+  APNG_BYTES,
+  createBmpBuffer,
+} from "./http-image.test-support.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
@@ -123,6 +128,12 @@ describe("managed media response authority", () => {
       still: true,
     },
     {
+      filename: "legacy.bmp",
+      contentType: "image/bmp",
+      source: createBmpBuffer(1600, 800),
+      still: true,
+    },
+    {
       filename: "animation.gif",
       contentType: "image/gif",
       source: ANIMATED_GIF_BYTES,
@@ -186,9 +197,9 @@ describe("managed media response authority", () => {
       const { result } = await requestManagedImage(thumbnailUrl);
 
       expect(result.statusCode).toBe(200);
-      expect(result.headers["content-type"]).toBe(contentType);
+      expect(result.headers["content-type"]).toBe(still ? "image/png" : contentType);
       expect(result.headers["content-disposition"]).toContain(
-        still ? "cat-thumbnail.png" : filename,
+        still ? `${path.parse(filename).name}-thumbnail.png` : filename,
       );
       expect(result.headers["cache-control"]).toBe("private, max-age=300, immutable");
       expect(result.headers["content-length"]).toBe(String(localThumbnail!.byteLength));
@@ -196,11 +207,11 @@ describe("managed media response authority", () => {
       expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
       const head = await requestManagedImage(thumbnailUrl, "HEAD");
       expect(head.result.statusCode).toBe(200);
-      expect(head.result.headers["content-type"]).toBe(contentType);
+      expect(head.result.headers["content-type"]).toBe(still ? "image/png" : contentType);
       expect(head.result.headers["content-length"]).toBe(String(localThumbnail!.byteLength));
       expect(head.result.body).toHaveLength(0);
       const original = await requestManagedImage(download!.url);
-      expect(original.result.body).toEqual(source);
+      expect(original.result.body.equals(source)).toBe(true);
     },
   );
 
@@ -244,6 +255,42 @@ describe("managed media response authority", () => {
         ).toEqual([attachmentId]);
       }),
   );
+
+  it("fits an oversized BMP through managed ingestion and serves a PNG preview", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const source = createBmpBuffer(5000, 500);
+      const blocks = await createManagedOutgoingMediaBlocks({
+        sessionKey: "agent:main:main",
+        stateDir,
+        messageId: "msg-1",
+        items: [{ url: `data:image/bmp;base64,${source.toString("base64")}`, trustedLocal: false }],
+      });
+      expect(blocks[0]).toMatchObject({ type: "image", width: 4090, height: 409 });
+      expect(blocks[1]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("resized from 5000×500"),
+      });
+      readSessionMessagesMock.mockResolvedValue([
+        { role: "assistant", content: blocks, __openclaw: { id: "msg-1" } },
+      ]);
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+      const download = await resolveManagedOutgoingImageArtifactDownload({
+        sessionKey: "agent:main:main",
+        stateDir,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      });
+      const { result } = await requestManagedImage(
+        download!.url.replace(/\/full(?=\?)/u, "/thumbnail"),
+      );
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-type"]).toBe("image/png");
+      expect(readImageProbeFromHeader(result.body)).toMatchObject({
+        format: "png",
+        width: 1200,
+        height: 120,
+      });
+    });
+  });
 
   it.each(["revoked", "rejected", "retired", "schema-missing"] as const)(
     "refuses a %s worker ownership read before opening media",

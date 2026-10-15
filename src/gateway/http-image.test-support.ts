@@ -1,3 +1,25 @@
+export function createBmpBuffer(width: number, height: number): Buffer {
+  const stride = Math.ceil((width * 3) / 4) * 4;
+  const bytes = Buffer.alloc(54 + stride * height, 128);
+  bytes.fill(0, 0, 54);
+  bytes.write("BM");
+  bytes.writeUInt32LE(bytes.length, 2);
+  bytes.writeUInt32LE(54, 10);
+  bytes.writeUInt32LE(40, 14);
+  bytes.writeInt32LE(width, 18);
+  bytes.writeInt32LE(height, 22);
+  bytes.writeUInt16LE(1, 26);
+  bytes.writeUInt16LE(24, 28);
+  bytes.writeUInt32LE(stride * height, 34);
+  return bytes;
+}
+
+// Single-frame 4×2 TIFF encoded by FFmpeg; native codecs are required for conversion.
+export const TIFF_BYTES = Buffer.from(
+  "SUkqAGYAAAD9UQFa8P1RAVrwCAAIAAgASAAAAAEAAABIAAAAAQAAAExhdmM2Mi4xMS4xMDAADwAAAAEAAADrAAAAAQAAAIAAAAABAAAA8AAAAAEAAACAAAAAAQAAAPAAAAABAAAAEAD+AAQAAQAAAAAAAAAAAQQAAQAAAAQAAAABAQQAAQAAAAIAAAACAQMAAwAAABIAAAADAQMAAQAAAAWAAAAGAQMAAQAAAAYAAAARAQQAAQAAAAgAAAAVAQMAAQAAAAMAAAAWAQQAAQAAAJIEAAAXAQQAAQAAAAoAAAAaAQUAAQAAABgAAAAbAQUAAQAAACAAAAAoAQMAAQAAAAIAAAAxAQIADgAAACgAAAASAgMAAgAAAAIAAgAUAgUABgAAADYAAAAAAAAA",
+  "base64",
+);
+
 // Valid 2×2 APNG with two RGBA frames; file-type distinguishes it from PNG.
 export const APNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACGFjVEwAAAACAAAAAPONk3AAAAAaZmNUTAAAAAAAAAACAAAAAgAAAAAAAAAAAAEACgAA6FTcAAAAABFJREFUeJxj+M/A8B+EGWAMAEfKB/lnWW63AAAAGmZjVEwAAAABAAAAAgAAAAIAAAAAAAAAAAABAAoAAHMnNtQAAAAUZmRBVAAAAAJ4nGNgYPj/H4KhDAA/0gf51gDBTQAAAABJRU5ErkJggg==",
