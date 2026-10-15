@@ -422,7 +422,6 @@ describe("plugin registry refresh config ownership", () => {
       },
     );
   });
-
   it("preserves the installed index when config is invalid, then refreshes restored disk policy", async () => {
     await withOpenClawTestState(
       { label: "registry-refresh-invalid-config", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },

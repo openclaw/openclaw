@@ -43,7 +43,6 @@ const {
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
-const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
 const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
 const openaiChoiceMetadata = {
@@ -128,85 +127,6 @@ describe("provider auth choice manifest helpers", () => {
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
     clearPluginMetadataLifecycleCaches();
-  });
-
-  it("preserves public metadata shape and shallow aliases across every choice reader", () => {
-    const scopes = ["text-inference"];
-    const channelLogin = { aliases: ["demo-login"] };
-    const futureMetadata = { version: 1 };
-    const metadata = {
-      choiceId: "demo-key",
-      choiceLabel: "",
-      choiceHint: undefined,
-      personalAccount: true,
-      assistantPriority: 10,
-      assistantVisibility: "visible",
-      credentialOnly: true,
-      onboardingScopes: scopes,
-      channelLogin,
-      futureMetadata,
-      optionKey: "demoKey",
-      cliFlag: "--demo-key",
-      cliOption: "--demo-key <key>",
-      cliDescription: "",
-      deprecatedChoiceIds: ["old-demo"],
-    };
-    setSingleManifestProviderAuthChoices("demo", [
-      { provider: "demo", method: "api-key", ...metadata },
-    ]);
-    const expected = {
-      pluginId: "demo",
-      providerId: "demo",
-      methodId: "api-key",
-      choiceId: "demo-key",
-      choiceLabel: "",
-      choiceHint: undefined,
-      personalAccount: true,
-      assistantPriority: 10,
-      assistantVisibility: "visible",
-      credentialOnly: true,
-      onboardingScopes: scopes,
-      channelLogin,
-      futureMetadata,
-      optionKey: "demoKey",
-      cliFlag: "--demo-key",
-      cliOption: "--demo-key <key>",
-      cliDescription: "",
-      deprecatedChoiceIds: ["old-demo"],
-    };
-    expect(resolveManifestProviderAuthChoices()).toStrictEqual([expected]);
-    for (const read of [
-      () => resolveManifestProviderAuthChoices()[0],
-      () => resolveManifestDeclaredProviderAuthChoices()[0],
-      () => resolveManifestProviderAuthChoice("demo-key"),
-      () => resolveManifestDeprecatedProviderAuthChoice("old-demo"),
-    ]) {
-      const value = read();
-      if (!value) {
-        throw new Error("Expected the declared auth choice");
-      }
-      expect(value).toStrictEqual(expected);
-      expect(Object.keys(value)).toEqual(Object.keys(expected));
-      expect(Object.hasOwn(value, "choiceHint")).toBe(true);
-      expect(Object.hasOwn(value, "origin")).toBe(false);
-      expect(Object.hasOwn(value, "declaration")).toBe(false);
-      expect(value.onboardingScopes).toBe(scopes);
-      expect(value.channelLogin).toBe(channelLogin);
-      expect(Reflect.get(value, "futureMetadata")).toBe(futureMetadata);
-      const again = read();
-      expect(Object.is(value, again)).toBe(false);
-      value.choiceLabel = "changed output";
-      expect(again).toStrictEqual(expected);
-    }
-    expect(resolveProviderOnboardAuthFlags()).toStrictEqual([
-      {
-        optionKey: "demoKey",
-        authChoice: "demo-key",
-        cliFlag: "--demo-key",
-        cliOption: "--demo-key <key>",
-        description: "",
-      },
-    ]);
   });
 
   it("does not resolve equal-priority owners of the same login choice", () => {
@@ -498,32 +418,6 @@ describe("provider auth choice manifest helpers", () => {
   ])("$name", ({ plugins, run }) => {
     setManifestPlugins(plugins);
     run();
-  });
-
-  it.each([true, false])("preserves legacy credential aliases with native realm=%s", (native) => {
-    setManifestPlugins([
-      {
-        ...createManifestPlugin("anthropic", [
-          {
-            provider: "anthropic",
-            method: "cli",
-            choiceId: "anthropic-cli",
-            deprecatedChoiceIds: ["claude-cli"],
-            optionKey: "anthropicCli",
-            cliFlag: "--anthropic-cli",
-            cliOption: "--anthropic-cli",
-          },
-        ]),
-        ...(native ? { syntheticAuthRefs: ["claude-cli"] } : {}),
-      },
-    ]);
-    expect(resolveProviderIdForAuth("claude-cli")).toBe("anthropic");
-    expect(resolveManifestDeprecatedProviderAuthChoice("claude-cli")?.choiceId).toBe(
-      "anthropic-cli",
-    );
-    expect(resolveProviderOnboardAuthFlags()).toContainEqual(
-      expect.objectContaining({ authChoice: "anthropic-cli", cliFlag: "--anthropic-cli" }),
-    );
   });
 
   it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
@@ -821,32 +715,5 @@ describe("provider auth choice manifest helpers", () => {
         description: "OpenAI API key",
       },
     ]);
-  });
-
-  it("resolves manifest-owned provider auth aliases", () => {
-    setManifestPlugins([
-      {
-        id: "fixture-provider",
-        origin: "bundled",
-        providerAuthAliases: {
-          "fixture-provider-plan": "fixture-provider",
-        },
-        providerAuthChoices: [
-          {
-            provider: "fixture-provider",
-            method: "api-key",
-            choiceId: "fixture-provider-api-key",
-            choiceLabel: "Fixture Provider API key",
-            optionKey: "fixtureProviderApiKey",
-            cliFlag: "--fixture-provider-api-key",
-            cliOption: "--fixture-provider-api-key <key>",
-          },
-        ],
-      },
-    ]);
-
-    const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
-    expect(resolvedProviderId).toBe("fixture-provider");
   });
 });

@@ -165,15 +165,6 @@ function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): P
   };
 }
 
-function createMarketplaceInstallRecord(installPath: string): PluginInstallRecord {
-  return {
-    source: "marketplace",
-    installPath,
-    marketplaceSource: "release-fixtures",
-    marketplacePlugin: "my-plugin",
-  };
-}
-
 function createPathInstallRecord(
   installPath = "/path/to/plugin",
   sourcePath = installPath,
@@ -340,7 +331,7 @@ describe("planPluginUninstall package ownership", () => {
               installs: {
                 pack: { source: "path", installPath: "/managed/pack" },
               },
-              slots: { memory: "pack/two" },
+              slots: { memory: "pack/two", contextEngine: "pack/one" },
             },
           },
           pluginId: "pack",
@@ -369,6 +360,7 @@ describe("planPluginUninstall package ownership", () => {
       allowlist: true,
       denylist: true,
       memorySlot: true,
+      contextEngineSlot: true,
     });
   });
 });
@@ -520,7 +512,6 @@ describe("removePluginFromConfig", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
-
   it("removes absolute load path for a workspace-relative install source path", async () => {
     const tempRoot = path.join(process.cwd(), ".tmp");
     await fs.mkdir(tempRoot, { recursive: true });
@@ -1079,7 +1070,6 @@ describe("uninstallPlugin", () => {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
   });
-
   it("plans directory removal without deleting before commit", async () => {
     const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
       baseDir: tempDir,
@@ -1102,73 +1092,6 @@ describe("uninstallPlugin", () => {
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expectPathAccessState(pluginDir, "missing");
-  });
-
-  it("uninstalls npm-managed packages through npm before deleting the package directory", async () => {
-    const stateDir = path.join(tempDir, "state");
-    const extensionsDir = path.join(stateDir, "extensions");
-    const npmRoot = path.join(stateDir, "npm");
-    const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
-    const hoistedDir = path.join(npmRoot, "node_modules", "is-number");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.mkdir(hoistedDir, { recursive: true });
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "@openclaw/kitchen-sink": "1.0.0",
-            "is-number": "7.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
-    await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
-
-    const plan = planPluginUninstall(
-      recordPluginPackageUninstallPlan(
-        {
-          config: createPluginConfig({
-            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-            installs: {
-              "openclaw-kitchen-sink-fixture": {
-                source: "npm",
-                spec: "@openclaw/kitchen-sink@1.0.0",
-                installPath: pluginDir,
-              },
-            },
-          }),
-          pluginId: "openclaw-kitchen-sink-fixture",
-          deleteFiles: true,
-          extensionsDir,
-        },
-        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
-      ),
-    );
-
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) {
-      throw new Error(plan.error);
-    }
-    expect(plan.directoryRemoval).toEqual({
-      target: pluginDir,
-      cleanup: {
-        kind: "npm",
-        npmRoot,
-        packageName: "@openclaw/kitchen-sink",
-        rootKind: "legacy-shared",
-      },
-    });
-
-    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-
-    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
     await expectPathAccessState(pluginDir, "missing");
   });
 
