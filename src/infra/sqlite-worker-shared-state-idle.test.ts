@@ -77,10 +77,10 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
       // Exercise native idle ownership without preparing the unrelated task-flow runtime.
       const read = () =>
         executeOpenClawStateWorker(context, {
-          type: "deviceIdentity.read",
-          input: { identityKey: `idle-fixture:${mode}` },
+          type: "deviceAuth.read",
+          input: { deviceId: `idle-fixture:${mode}`, role: "operator", readOnly: false },
         });
-      expect(await read()).toBeNull();
+      expect(await read()).toEqual({ entry: null, expectedToken: null });
       const worker = messages.mock.contexts[0];
       if (!(worker instanceof Worker)) {
         throw new Error("Expected the canonical shared-state worker");
@@ -167,7 +167,7 @@ it("retains the original healthy worker after one minute and closes it after 30 
   f.advance(minute);
   f.scheduled(minute)();
   // Joining a real call also joins the original owner's retirement, if it retired at one minute.
-  expect(await f.read()).toBeNull();
+  expect(await f.read()).toEqual({ entry: null, expectedToken: null });
   expect(f.worker.threadId).not.toBe(-1);
   f.advance(minute);
   f.scheduled(minute)();
@@ -177,7 +177,7 @@ it("retains the original healthy worker after one minute and closes it after 30 
   f.advance(29 * minute);
   f.scheduled(29 * minute)();
   await exited;
-  expect(await f.read()).toBeNull();
+  expect(await f.read()).toEqual({ entry: null, expectedToken: null });
 });
 
 it("retires an unavailable actor even when its completed idle result is healthy", async () => {
@@ -189,7 +189,7 @@ it("retires an unavailable actor even when its completed idle result is healthy"
     f.advance(minute);
     f.scheduled(minute)();
     await vi.waitFor(() => expect(f.worker.threadId).toBe(-1));
-    expect(await f.read()).toBeNull();
+    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
   } finally {
     available.mockRestore();
   }
@@ -227,7 +227,7 @@ it("keeps a healthy worker when another connection holds the WAL reader", async 
     f.scheduled(minute)();
     await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
     expect(f.worker.threadId).not.toBe(-1);
-    expect(await f.read()).toBeNull();
+    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
     expect(f.worker.threadId).not.toBe(-1);
   } finally {
     if (reader.isTransaction) {
@@ -266,8 +266,8 @@ it("ignores an inspection result and old expiry when real work resumes", async (
     entered.resolve();
     await finish.promise;
     return scope.execute({
-      type: "deviceIdentity.read",
-      input: { identityKey: "idle-fixture:idle" },
+      type: "deviceAuth.read",
+      input: { deviceId: "idle-fixture:idle", role: "operator", readOnly: false },
     });
   });
   await entered.promise;
@@ -283,7 +283,7 @@ it("ignores an inspection result and old expiry when real work resumes", async (
   } finally {
     finish.resolve();
   }
-  expect(await active).toBeNull();
+  expect(await active).toEqual({ entry: null, expectedToken: null });
   oldInspection();
   f.advance(minute);
   f.scheduled(minute)();
@@ -359,7 +359,7 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
     await vi.waitFor(() => expect(settled).toBe(true));
     expect(await active).toBe("completed without dispatch");
     await nextTurn();
-    expect(await f.read()).toBeNull();
+    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
   } finally {
     send.mockRestore();
     resume?.();
@@ -372,8 +372,8 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const read = {
-  type: "deviceIdentity.read",
-  input: { identityKey: "idle-fixture:idle-custody" },
+  type: "deviceAuth.read",
+  input: { deviceId: "idle-fixture:idle-custody", role: "operator", readOnly: false },
 } as const;
 
 async function openClient(context: OpenClawStateWorkerContext) {
@@ -437,15 +437,21 @@ poolIt(
       expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
 
       resume.resolve();
-      await expect(active).resolves.toBeNull();
-      await expect(executeOpenClawStateWorker(next, read)).resolves.toBeNull();
+      await expect(active).resolves.toEqual({ entry: null, expectedToken: null });
+      await expect(executeOpenClawStateWorker(next, read)).resolves.toEqual({
+        entry: null,
+        expectedToken: null,
+      });
       await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
       expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-      await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toBeNull();
+      await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toEqual({
+        entry: null,
+        expectedToken: null,
+      });
 
       await expect(
         executeOpenClawStateWorker(context, {
-          type: "deviceIdentity.read",
+          type: "deviceIdentity.load",
           input: { identityKey },
         }),
       ).resolves.toEqual(identity);
@@ -503,17 +509,17 @@ poolIt("joins expiring idle-client maintenance without retiring a healthy co-use
     });
     await expect(
       runOpenClawStateWorkerOperation(peerContext, (scope) => scope.execute(read)),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ entry: null, expectedToken: null });
     expect(idleClosed).toBe(false);
     expect(f.worker.threadId).not.toBe(-1);
 
     resume.resolve();
-    await expect(accepted).resolves.toBeNull();
+    await expect(accepted).resolves.toEqual({ entry: null, expectedToken: null });
     await idleClosing;
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
     await expect(
       runOpenClawStateWorkerOperation(peerContext, (scope) => scope.execute(read)),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ entry: null, expectedToken: null });
 
     expect(f.worker.threadId).not.toBe(-1);
     peerClosing = maintenance.close();
@@ -640,7 +646,7 @@ poolIt.each(["ordinary", "cleanup"] as const)(
       cleanupStore = undefined;
       await expect(
         runOpenClawStateWorkerOperation(firstContext, (scope) => scope.execute(read)),
-      ).resolves.toBeNull();
+      ).resolves.toEqual({ entry: null, expectedToken: null });
     } finally {
       messages.mockRestore();
       await Promise.allSettled([

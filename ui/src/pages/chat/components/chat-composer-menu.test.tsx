@@ -259,9 +259,9 @@ it("retains attachment choices while the native menu closes and reopens", async 
   const trigger = view.container.querySelector<HTMLButtonElement>(
     ".agent-chat__input-btn--attach",
   )!;
-  const choice = view.container.querySelector<HTMLElement>('[data-value="test-toggle"]')!;
   trigger.click();
   await waitForSolid(() => expect(open()).toBe(true));
+  const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
   setOpen(false);
   flush();
   setOpen(true);

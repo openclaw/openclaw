@@ -61,7 +61,7 @@ describe("evidence invocation owner", () => {
     const before = parent.snapshot(snapshotOptions);
     const changed = structuredClone(before);
     changed.occurrences.find((item) => item.id === comparison)!.terminalStatus = "fail";
-    expect(() => parent.importChild(0, changed)).toThrow(/completed or immutable/);
+    parent.select(0, parent.importChild(0, changed));
     expect(parent.snapshot(snapshotOptions)).toEqual(before);
   });
 
@@ -76,7 +76,7 @@ describe("evidence invocation owner", () => {
     child.select(0, id);
     const changed = child.snapshot(snapshotOptions);
     changed.occurrences.find((item) => item.id === id)!.launch.source.ref = "other-source";
-    expect(() => parent.importChild(0, changed)).toThrow(/immutable/);
+    expect(() => parent.importChild(0, changed)).toThrow(/foreign/);
     expect(parent.snapshot(snapshotOptions)).toEqual(before);
   });
 
@@ -127,7 +127,7 @@ describe("evidence invocation owner", () => {
     child.select(0, retry);
     const input = child.snapshot(snapshotOptions);
     parent.importChild(0, input);
-    expect(() => parent.select(0, first)).toThrow(/selected observation is ineffective/);
+    parent.select(0, first);
     expect(() => parent.snapshot(snapshotOptions)).toThrow(/selected observation is ineffective/);
   });
 
@@ -186,7 +186,7 @@ describe("evidence invocation owner", () => {
     },
   );
 
-  it("rejects continued scheduling and immutable row substitution without partial import", () => {
+  it("rejects continued scheduling changes and retains captured rows during continuation", () => {
     const parent = createInvocation();
     const first = parent.begin(0);
     parent.complete(first, { status: "fail", entries: [entry("fail")] });
@@ -215,8 +215,10 @@ describe("evidence invocation owner", () => {
     child.select(0, retry);
     const changed = child.snapshot(snapshotOptions);
     changed.entries[0]!.test.title = "rewritten history";
-    expect(() => parent.importChild(0, changed)).toThrow(/existing observation/);
+    parent.importChild(0, changed);
     expect(parent.snapshot(snapshotOptions)).toEqual(before);
+    parent.select(0, retry);
+    expect(parent.snapshot(snapshotOptions).entries[0]?.test.title).toBe("Synthetic check");
   });
 
   it("captures explicit assertion declarations before launch without using later catalog mutations", () => {
@@ -308,7 +310,7 @@ describe("evidence invocation owner", () => {
     expect(parent.snapshot(snapshotOptions)).toEqual(final);
   });
 
-  it("rejects an explicit retry of a blocked observation", () => {
+  it("rejects publication of an explicit retry of a blocked observation", () => {
     const status = "blocked";
     const invocation = createInvocation();
     const first = invocation.begin(0, null);
@@ -319,7 +321,8 @@ describe("evidence invocation owner", () => {
     invocation.select(0, first);
     const second = invocation.begin(0, first);
     invocation.complete(second, { status: "pass", entries: [entry("pass")] });
-    expect(() => invocation.select(0, second)).toThrow(/retry selection/);
+    invocation.select(0, second);
+    expect(() => invocation.snapshot(snapshotOptions)).toThrow(/retry selection/);
   });
 
   it.each([

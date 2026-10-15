@@ -99,6 +99,22 @@ function BoardWidgetCellContent(
     subscribe: (owner, notify) => owner?.subscribe?.(notify) ?? (() => {}),
     equality: "revision",
   });
+  // Usage and other Gateway publications do not change a frame's connection
+  // authority. Sample mutable lifecycle facts before comparing the binding.
+  const gatewayBinding = createMemo(
+    () => {
+      const snapshot = gateway.read();
+      return [
+        snapshot?.phase,
+        snapshot?.client,
+        snapshot?.hello,
+        snapshot?.restartPending,
+        snapshot?.suspensionPhase,
+        context?.gateway.connectionRevision,
+      ] as const;
+    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
   const loader = new LazyCustomElementRequestController({ requestUpdate });
   const loadError = () => {
     revision();
@@ -142,10 +158,11 @@ function BoardWidgetCellContent(
     };
   });
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
-  const contribution = () =>
+  const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
-      : null;
+      : null,
+  );
 
   async function runAction(action: () => Promise<void>, failureMessage?: string) {
     if (actionPending || props.busy) {
@@ -223,7 +240,7 @@ function BoardWidgetCellContent(
         props.sessionKey,
         active(),
         contribution(),
-        gateway.read(),
+        gatewayBinding(),
       ] as const,
     () =>
       untrack(() => {
@@ -294,7 +311,7 @@ function BoardWidgetCellContent(
   );
   let observedErrorBinding = false;
   createEffect(
-    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gateway.revision()] as const,
+    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gatewayBinding()] as const,
     () => {
       // The first observation belongs to the initial render, including its error fallback.
       if (observedErrorBinding && bodyErrored) {

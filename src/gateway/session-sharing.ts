@@ -90,7 +90,6 @@ export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutationAsync,
-  authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
   isResolvedIncognitoSession,

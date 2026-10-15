@@ -124,32 +124,13 @@ export const createTelegramMessageProcessor = (
   const { runtime, telegramDeps, buildContext, opts, ...contextOptions } = deps;
   const { bot, account } = contextOptions;
   const sessionRuntime = {
-    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
-      ? {
-          buildChannelInboundEventContext:
-            buildContext ?? telegramDeps.buildChannelInboundEventContext,
-        }
-      : {}),
-    ...(telegramDeps.readSessionUpdatedAtAsync
-      ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
-      : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermarkAsync
-      ? { readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync }
-      : {}),
-    ...(telegramDeps.recordInboundSession
-      ? { recordInboundSession: telegramDeps.recordInboundSession }
-      : {}),
-    ...(telegramDeps.resolveAmbientTranscriptWatermarkKey
-      ? { resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey }
-      : {}),
-    ...(telegramDeps.resolveInboundLastRouteSessionKey
-      ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }
-      : {}),
-    ...(telegramDeps.resolvePinnedMainDmOwnerFromAllowlist
-      ? {
-          resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
-        }
-      : {}),
+    buildChannelInboundEventContext: buildContext ?? telegramDeps.buildChannelInboundEventContext,
+    readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync,
+    readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync,
+    recordInboundSession: telegramDeps.recordInboundSession,
+    resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey,
+    resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey,
+    resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
     resolveStorePath: telegramDeps.resolveStorePath,
   };
   const resolveDirectAvatar = createTelegramDirectAvatarResolver({
@@ -159,9 +140,7 @@ export const createTelegramMessageProcessor = (
     token: opts.token,
     transport: deps.telegramTransport,
   });
-  const contextRuntime = telegramDeps.recordChannelActivity
-    ? { recordChannelActivity: telegramDeps.recordChannelActivity }
-    : undefined;
+  const contextRuntime = { recordChannelActivity: telegramDeps.recordChannelActivity };
 
   return async ({
     ctx: primaryCtx,

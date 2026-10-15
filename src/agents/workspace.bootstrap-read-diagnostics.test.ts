@@ -270,7 +270,7 @@ describe("workspace bootstrap source identity", () => {
   it("carries canonical source identity through extra-file conversion", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-source-identity-");
     const nestedDir = path.join(tempDir, "packages", "core");
-    const rootAliasDir = path.join(tempDir, "root-memory-alias");
+    const rootAliasDir = path.join(tempDir, "root-memory-alias[1]");
     const nestedAliasDir = path.join(tempDir, "nested-memory-alias");
     await fs.mkdir(nestedDir, { recursive: true });
     await fs.writeFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "root memory", "utf8");
@@ -381,24 +381,6 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         name: "SOUL.md",
         path: path.join(packageDir, "SOUL.md"),
         content: "soul",
-        missing: false,
-      },
-    ]);
-  });
-
-  it("loads literal bootstrap paths with square brackets", async () => {
-    const workspaceDir = createWorkspaceDir("literal-brackets");
-    const packageDir = path.join(workspaceDir, "pkg[1]");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
-
-    const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[1]/AGENTS.md"]);
-
-    expect(files).toStrictEqual([
-      {
-        name: "AGENTS.md",
-        path: path.join(packageDir, "AGENTS.md"),
-        content: "literal agents",
         missing: false,
       },
     ]);

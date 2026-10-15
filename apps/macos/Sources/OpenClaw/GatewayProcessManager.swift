@@ -1451,14 +1451,6 @@ extension GatewayProcessManager {
             startGeneration: self.gatewayStartGeneration)
     }
 
-    func _testEnableLaunchAgentIfNeeded(port: Int) async -> String? {
-        await self.enableLaunchAgentIfNeeded(port: port).error
-    }
-
-    func _testEnableLaunchAgentIfNeededInstalled(port: Int) async -> Bool {
-        await self.enableLaunchAgentIfNeeded(port: port).installed
-    }
-
     func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
         let failure = await self.resolveLaunchAgentReadinessFailure(
             port: port,

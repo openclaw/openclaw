@@ -165,15 +165,16 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     writeFailureTrailer(options.failureTool, exitCode);
     if (childSignal && !interrupted) {
       process.kill(process.pid, childSignal);
-      return;
+      return { interrupted };
     }
     process.exitCode = exitCode;
-    return;
+    return { interrupted };
   }
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
   const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
   let forceKillTimer = null;
+  let interrupted = false;
   const signalHandlers = new Map();
   const cleanup = () => {
     if (forceKillTimer) {
@@ -189,6 +190,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
 
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
+      interrupted = true;
       signalChild(child, signal, detached);
       // A lifecycle-owning implementation must finish killing its own child groups.
       // A competing shim deadline can kill that owner and orphan those children.
@@ -224,11 +226,12 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     if (result.signal) {
       writeFailureTrailer(options.failureTool, signalExitCode(result.signal));
       process.kill(process.pid, result.signal);
-      return;
+      return { interrupted };
     }
     const exitCode = result.code ?? options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted };
   } catch (error) {
     cleanup();
     if (options.workerRun) {
@@ -238,6 +241,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     const exitCode = options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted };
   }
 }
 
@@ -250,10 +254,11 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   /** @type {Promise<unknown> | undefined} */
   let borrower;
   try {
-    await runCliShimProcess(moduleUrl, options, nodeArgs, (child) => {
+    const result = await runCliShimProcess(moduleUrl, options, nodeArgs, (child) => {
       borrower = options.workerRun.borrow(child, completion.promise);
     });
     completion.resolve(process.exitCode ?? 0);
+    return result;
   } catch (error) {
     if (borrower) {
       completion.reject(error);
@@ -268,12 +273,13 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
 
 async function runCliShim(moduleUrl, options, nodeArgs) {
   try {
-    await runCliShimInner(moduleUrl, options, nodeArgs);
+    return await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
     const exitCode = options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted: false };
   }
 }
 
@@ -298,7 +304,7 @@ export async function runTsxCliShim(moduleUrl, options = {}) {
       console.error(error);
       writeFailureTrailer(options.failureTool, 1);
       process.exitCode = 1;
-      return;
+      return { interrupted: false };
     }
   }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);

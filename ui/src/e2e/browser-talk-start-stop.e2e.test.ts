@@ -881,6 +881,7 @@ suite.define(() => {
       const currentRelaySessionId = "relay-current-e2e";
       const staleRelaySessionId = "relay-stale-e2e";
       const gateway = await installMockGateway(page, {
+        featureCapabilities: ["talk-session-close-disposition"],
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.client.create": {
@@ -995,7 +996,10 @@ suite.define(() => {
             .getRequests("talk.session.close")
             .then((requests) => requests.map((request) => request.params)),
         )
-        .toEqual([{ sessionId: staleRelaySessionId }, { sessionId: currentRelaySessionId }]);
+        .toEqual([
+          { sessionId: staleRelaySessionId },
+          { sessionId: currentRelaySessionId, disposition: "abort" },
+        ]);
     });
   });
 

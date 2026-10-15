@@ -324,7 +324,6 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
     case "batch": {
       // Bound nesting before recursing: oversized bodies parse fine, but
       // unbounded recursion overflows the stack before the count check runs.
-      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
       if (depth > ACT_MAX_BATCH_DEPTH) {
         throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
       }

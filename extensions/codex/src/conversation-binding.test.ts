@@ -923,6 +923,7 @@ describe("codex conversation binding", () => {
 
   it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
@@ -939,6 +940,7 @@ describe("codex conversation binding", () => {
       sessionFile,
       threadId: "thread-old",
       workspaceDir: tempDir,
+      agentDir,
       model: "gpt-5.4-mini",
       modelProvider: "openai",
     });
@@ -948,6 +950,9 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params).not.toHaveProperty("permissions");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
     expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir }),
+    );
     const bindingAfterStart = await readTestConversationBinding(sessionFile);
     expect(bindingAfterStart?.threadId).toBe("thread-new");
     expect(bindingAfterStart?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
@@ -1346,33 +1351,6 @@ describe("codex conversation binding", () => {
     },
   );
 
-  it("stores and uses the owning agent dir for bound app-server sessions", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async () => ({
-        thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-        model: "gpt-5.4-mini",
-      })),
-    });
-
-    await prepareTestConversationBinding({
-      sessionFile,
-      workspaceDir: tempDir,
-      agentDir,
-      model: "gpt-5.4-mini",
-    });
-
-    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
-      agentDir?: unknown;
-    };
-    expect(sharedClientParams?.agentDir).toBe(agentDir);
-    await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-new",
-      clientId: "test-client",
-    });
-  });
-
   it("rejects binding when the binding agent exec auto mode may need unrouted approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const request = vi.fn();
@@ -1453,7 +1431,7 @@ describe("codex conversation binding", () => {
         async () => undefined,
       );
     }
-    expect(releaseEvicted).toHaveBeenCalledExactlyOnceWith("thread-evicted");
+    expect(releaseEvicted).toHaveBeenCalledExactlyOnceWith("thread-evicted", undefined, undefined);
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
       client,
       release: vi.fn(),

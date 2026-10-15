@@ -191,8 +191,10 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/openclaw-bun.json
 scripts/lib/package-dist-inventory-contract.mts
 scripts/lib/package-lifecycle-marker.mjs
+scripts/lib/pinned-bun.mts
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -230,6 +232,7 @@ scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/run-vitest.mts
+scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
 scripts/tsx.mjs
 scripts/verify-pr-hosted-gates.mjs
@@ -355,6 +358,7 @@ src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/context.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
@@ -1910,6 +1914,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-pool.ts

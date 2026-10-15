@@ -515,4 +515,22 @@ describe("rich message plan wiring", () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.plainText).toContain("example.com");
   });
+
+  it("keeps raw-block entity detection page-local and reports degradation once", () => {
+    const pages = planTelegramTextDeliveryPages({
+      text: "source text is not the rich-block projection",
+      maxChars: 20,
+      richMessages: true,
+      richMessage: {
+        blocks: [
+          { type: "paragraph", text: "README.md" },
+          { type: "paragraph", text: "owner@example.com" },
+        ],
+      },
+      degradationReasons: ["list-limit"],
+    });
+    expect(pages.map((page) => page.plainText)).toEqual(["README.md", "owner@example.com"]);
+    expect(pages.map((page) => page.richMessage?.skip_entity_detection)).toEqual([undefined, true]);
+    expect(pages.map((page) => page.degradationReasons)).toEqual([["list-limit"], undefined]);
+  });
 });

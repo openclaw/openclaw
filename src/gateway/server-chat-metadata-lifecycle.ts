@@ -34,7 +34,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
 }) {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
-  let preparedModelRuntimeEventVersion = 0;
   const { createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const { ChatMetadataSnapshotUnavailableError } =
@@ -115,7 +114,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
         if (context) {
           invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
         }
-        preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
           // Initial catch-up may already be building an owner published before attachment.
           // Later invalidations preserve the existing replacement wait or terminal failure.
@@ -195,22 +193,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       // Publications that complete before listener registration would otherwise be missed.
       // During ordinary startup the owner is published after attachment, so an unavailable
       // snapshot here is expected and the publication listener performs the first refresh.
-      const eventVersion = preparedModelRuntimeEventVersion;
       await runtime.refresh().then(
         () => {
-          // A successful catch-up proves availability when publication completed before the
-          // listener was registered. Do not overwrite a newer invalidation or failure event.
-          if (preparedModelRuntimeEventVersion === eventVersion) {
-            preparedModelRuntimeState = "available";
-          }
+          preparedModelRuntimeState = "available";
         },
         (error: unknown) => {
           if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-            // Capture reached a published owner before this later metadata build failed. Keep
-            // stable auth/skill changes able to retry unless a newer owner event says otherwise.
-            if (preparedModelRuntimeEventVersion === eventVersion) {
-              preparedModelRuntimeState = "available";
-            }
+            preparedModelRuntimeState = "available";
             params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
           }
         },
