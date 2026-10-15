@@ -10,7 +10,7 @@
   "dependencies": {
     "@pierre/diffs": "1.5.2",
     "@shikijs/langs": "4.5.0",
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.0",
     "typebox": "1.3.36",
     "zod": "4.6.5"
   },

@@ -1585,47 +1585,39 @@ describe("update-startup", () => {
     }
   });
 
-  it("disables all automatic update traffic when checkOnStart is false", async () => {
-    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-    const log = { info: vi.fn() };
+  it.each(["checkOnStart", "OPENCLAW_NO_AUTO_UPDATE"] as const)(
+    "disables all automatic update traffic with %s",
+    async (optOut) => {
+      mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+      if (optOut === "OPENCLAW_NO_AUTO_UPDATE") {
+        process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
+      }
+      const runAutoUpdate = createAutoUpdateSuccessMock();
+      const log = { info: vi.fn() };
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { ...createBetaAutoUpdateConfig().update, checkOnStart: false } },
-      runAutoUpdate,
-      log,
-    });
+      await runGatewayUpdateCheck({
+        cfg: {
+          update: {
+            ...createBetaAutoUpdateConfig().update,
+            ...(optOut === "checkOnStart" ? { checkOnStart: false } : {}),
+          },
+        },
+        runAutoUpdate,
+        log,
+      });
 
-    await clock.advanceBy(60_000);
+      await clock.advanceBy(60_000);
 
-    expect(log.info).not.toHaveBeenCalled();
-    expect(readPersistedUpdateCheckState()).toBeNull();
-    expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
-    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(checkUpdateStatus).not.toHaveBeenCalled();
-    expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()).toMatchObject({ channel: "beta", autoEnabled: false });
-  });
-
-  it("disables update notices, telemetry, and auto-update with OPENCLAW_NO_AUTO_UPDATE", async () => {
-    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
-    process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
-    const log = { info: vi.fn() };
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-
-    await runGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
-      log,
-      runAutoUpdate,
-    });
-
-    expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
-    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(checkUpdateStatus).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
-  });
+      expect(log.info).not.toHaveBeenCalled();
+      expect(readPersistedUpdateCheckState()).toBeNull();
+      expect(runAutoUpdate).not.toHaveBeenCalled();
+      expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+      expect(checkUpdateStatus).not.toHaveBeenCalled();
+      expect(getUpdateAvailable()).toBeNull();
+      expect(getUpdateSchedule()).toMatchObject({ channel: "beta", autoEnabled: false });
+    },
+  );
 
   it("keeps external auto-update supervision authoritative over native systemd markers", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");

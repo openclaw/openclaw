@@ -111,6 +111,39 @@ describe("model catalog display cache", () => {
     }
   });
 
+  it("demands native discovery for a published pending catalog instead of parking on it", async () => {
+    const reply = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock().mockReturnValue(reply.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "main" };
+    const pending = { models: [prepared], pendingProviders: ["example"] };
+    const preview = { ...scope, preparedOnly: true };
+    publishModelCatalogResult(beginModelCatalogRead(client, preview), preview, pending);
+    expect(await loadModelCatalog(client, preview)).toEqual(pending);
+    expect(request).not.toHaveBeenCalled();
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, pending);
+    const first = loadModelCatalog(client, scope);
+    const second = loadModelCatalog(client, scope);
+    try {
+      expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+        agentId: "main",
+        view: "configured",
+      });
+      expect(peekModelCatalog(client, scope)?.models).toEqual([prepared]);
+      reply.resolve({ models: [published], pendingProviders: [] });
+      expect(await first).toEqual({ models: [published], pendingProviders: [] });
+      expect(await second).toEqual({ models: [published], pendingProviders: [] });
+      expect(await loadModelCatalog(client, scope)).toEqual({
+        models: [published],
+        pendingProviders: [],
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      reply.resolve({ models: [published], pendingProviders: [] });
+      await Promise.all([first, second]);
+    }
+  });
+
   it("reuses a published snapshot synchronously until its Gateway generation changes", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce({ models: [prepared] })
