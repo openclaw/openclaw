@@ -17,14 +17,14 @@ const ToolExecutionOwner = resolveGlobalSingleton(
         this.#bind = bind;
       }
 
-      static bind<T extends object>(target: object, source: T): T {
+      static bindSource<T extends object>(target: object, source: T): T {
         return #bind in target ? target.#bind(source) : source;
       }
     },
 );
 
 export function bindPluginToolExecutionSource<T extends object>(target: object, source: T): T {
-  return ToolExecutionOwner.bind(target, source);
+  return ToolExecutionOwner.bindSource(target, source);
 }
 
 const SOURCE_TOOL = Symbol.for("openclaw.beforeToolCallSourceTool");
