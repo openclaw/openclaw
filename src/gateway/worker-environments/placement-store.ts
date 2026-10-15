@@ -221,7 +221,8 @@ export function createWorkerSessionPlacementStore(
       sessionIds: readonly string[],
       readOptions: { current?: boolean } = {},
     ): Promise<WorkerSessionPlacementProjection> {
-      const ids = [...new Set(sessionIds.map((id) => required(id, "session id")))];
+      const normalizedIds = sessionIds.map((id) => required(id, "session id"));
+      const ids = [...new Set(normalizedIds)];
       const conflicts = new Map(
         ids.flatMap((id) => {
           const conflict = workspaceResultConflicts.get(id);
@@ -268,7 +269,40 @@ export function createWorkerSessionPlacementStore(
           });
         }
       }
-      return placements ? { ...projection, placements } : projection;
+      if (sessionIds.every((id, index) => id === normalizedIds[index])) {
+        return placements ? { ...projection, placements } : projection;
+      }
+      // Stored session entries can retain whitespace even though placement keys are normalized.
+      const requestedIds = new Map(sessionIds.map((id, index) => [id, normalizedIds[index]!]));
+      const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
+        const requested = new Map<string, T>();
+        for (const [original, normalized] of requestedIds) {
+          const value = records.get(normalized);
+          if (value !== undefined) {
+            requested.set(original, value);
+          }
+        }
+        return requested;
+      };
+      const byRequestedSet = (normalizedSessionIds: ReadonlySet<string>) =>
+        new Set(
+          [...requestedIds].flatMap(([original, normalized]) =>
+            normalizedSessionIds.has(normalized) ? [original] : [],
+          ),
+        );
+      return {
+        ...projection,
+        placements: byRequestedId(placements ?? projection.placements),
+        moves: byRequestedId(projection.moves),
+        pendingResults: byRequestedId(projection.pendingResults),
+        workspaceJournalOwnerSessionIds: byRequestedSet(projection.workspaceJournalOwnerSessionIds),
+        workspaceResultReconcilingSessionIds: byRequestedSet(
+          projection.workspaceResultReconcilingSessionIds,
+        ),
+        workspaceRecoveryPendingSessionIds: byRequestedSet(
+          projection.workspaceRecoveryPendingSessionIds,
+        ),
+      };
     },
 
     readPublishedProjection(change: SessionRowChange) {
