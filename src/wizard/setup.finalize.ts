@@ -344,6 +344,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
           status: "ready",
           action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
         };
+      } catch (error) {
+        // A rejected restart must degrade like the sibling branches instead of
+        // stopping the progress with the success label and propagating (#173348).
+        restartDoneMessage = t("wizard.finalize.gatewayService");
+        gateway = { status: "failed", error: formatErrorMessage(error) };
       } finally {
         progress.stop(restartDoneMessage);
       }

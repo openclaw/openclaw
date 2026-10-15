@@ -1208,6 +1208,29 @@ describe("finalizeSetupWizard", () => {
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
   });
 
+  it("reports a failed restart instead of a success label", async () => {
+    const progressStop = vi.fn();
+    gatewayServiceIsLoaded.mockResolvedValue(true);
+    gatewayServiceRestart.mockRejectedValueOnce(new Error("launchctl restart failed"));
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async (params: { message: string }) =>
+        params.message === "Gateway service already installed" ? "restart" : "later",
+      ) as never,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: progressStop })),
+    });
+
+    const result = await ensureGatewayServiceForOnboarding(
+      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
+    );
+
+    expect(result.gateway).toEqual({
+      status: "failed",
+      error: "launchctl restart failed",
+    });
+    expect(progressStop).not.toHaveBeenCalledWith("Gateway service restarted.");
+  });
+
   it("preserves the installed service when reinstall authentication fails", async () => {
     let installed = true;
     gatewayServiceIsLoaded.mockImplementation(async () => installed);
