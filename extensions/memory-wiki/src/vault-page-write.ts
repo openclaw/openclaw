@@ -49,6 +49,18 @@ export async function readExistingWikiPage(
   }
 }
 
+export function readExistingWikiPageUtf8(
+  vault: VaultRoot,
+  relativePath: string,
+  fallback: () => string,
+): Promise<string> {
+  return readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await vault.readBytes(relativePath), relativePath),
+    isMissingWikiPageError,
+    fallback,
+  );
+}
+
 export async function writeManagedMarkdownFile(params: {
   rootDir: string;
   relativePath: string;
@@ -60,9 +72,9 @@ export async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
-  const original = await readExistingWikiPage(
-    async () => decodeWikiPageUtf8(await root.readBytes(params.relativePath), params.relativePath),
-    isMissingWikiPageError,
+  const original = await readExistingWikiPageUtf8(
+    root,
+    params.relativePath,
     () => `# ${params.title}\n`,
   );
   params.signal?.throwIfAborted();

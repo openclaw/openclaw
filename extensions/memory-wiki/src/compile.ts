@@ -66,11 +66,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
-import {
-  isMissingWikiPageError,
-  readExistingWikiPage,
-  writeManagedMarkdownFile,
-} from "./vault-page-write.js";
+import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
@@ -779,19 +775,16 @@ async function refreshDashboardPages(params: {
     params.signal?.throwIfAborted();
     const relativePath = `reports/${name}.md`;
     const root = await fsRoot(params.config.vault.path);
-    const original = await readExistingWikiPage(
-      async () => decodeWikiPageUtf8(await root.readBytes(relativePath), relativePath),
-      isMissingWikiPageError,
-      () =>
-        renderWikiMarkdown({
-          frontmatter: {
-            pageType: "report",
-            id: `report.${name}`,
-            title: definition.title,
-            status: "active",
-          },
-          body: `# ${definition.title}\n`,
-        }),
+    const original = await readExistingWikiPageUtf8(root, relativePath, () =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "report",
+          id: `report.${name}`,
+          title: definition.title,
+          status: "active",
+        },
+        body: `# ${definition.title}\n`,
+      }),
     );
     const parsed = parseWikiMarkdown(original);
     const originalBody = parsed.body.trim().length > 0 ? parsed.body : `# ${definition.title}\n`;
