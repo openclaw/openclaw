@@ -33,8 +33,8 @@ describe("github item references", () => {
       toStreamingMarkdownParts(source, { githubRepo }).join(""),
     ]) {
       const fragment = htmlFragment(html);
-      const chip = [...fragment.querySelectorAll("a")].findLast((a) =>
-        a.textContent?.endsWith("#24"),
+      const chip = [...fragment.querySelectorAll("a")].findLast(
+        (a) => a.textContent === "acme/research#24",
       );
       expect(chip?.getAttribute("href")).toBe("https://github.com/acme/research/pull/24");
     }
@@ -65,8 +65,8 @@ describe("github item references", () => {
     ],
   ])("keeps unrelated links and explicit qualifiers independent in %s", (source, target) => {
     const fragment = render(source, { githubRepo, githubRepositories });
-    const chip = [...fragment.querySelectorAll("a")].findLast((a) =>
-      a.textContent?.endsWith("#24"),
+    const chip = [...fragment.querySelectorAll("a")].findLast(
+      (a) => a.textContent === target.replace("/pull/", "#"),
     );
     expect(chip?.getAttribute("href")).toBe("https://github.com/" + target);
   });
