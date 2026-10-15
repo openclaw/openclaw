@@ -292,6 +292,21 @@ export abstract class AppSidebarBase {
     return this.context?.plugins?.registrations("navigation") ?? [];
   }
 
+  pendingSessionCreate() {
+    const pending = this.context?.chatSubmissions?.readCreate();
+    return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
+  }
+
+  public getRouteSessionKey(): string {
+    // A provisional row owns only presentation, never the saved Gateway selection.
+    return (
+      this.pendingSessionCreate()?.creation.sessionKey ||
+      this.sessionKey.trim() ||
+      this.context?.gateway.snapshot.sessionKey.trim() ||
+      ""
+    );
+  }
+
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
     const context = this.context;
     if (!context) {

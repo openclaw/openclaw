@@ -14,6 +14,7 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -128,6 +129,61 @@ it("rebinds the real shared-state lease worker and joins its retained generation
     expect(retainedWorker.threadId).toBe(-1);
     await exited;
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+  });
+});
+
+it("passes the exact persisted owner identity to the lease callback", async () => {
+  await withOpenClawTestState({ label: "lease-callback-identity" }, async (state) => {
+    await withOpenClawStateLease(
+      leaseOptions(state.env, "callback-identity"),
+      async (lease, identity) => {
+        lease.assertOwned();
+        expect(identity).toMatchObject({ scope: "core:test", key: "callback-identity" });
+        const database = openOpenClawStateDatabase({ env: state.env });
+        expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, identity)).toBeGreaterThan(
+          Date.now(),
+        );
+        expect(
+          leaseStore.readOpenClawStateLeaseExpiry(database.db, {
+            ...identity,
+            owner: "not-the-lease-owner",
+          }),
+        ).toBeUndefined();
+      },
+    );
+  });
+});
+
+it("holds an exact Claw package owner until async release completes", async () => {
+  await withOpenClawTestState({ label: "claw-package-lease-owner" }, async (state) => {
+    const artifact = { kind: "plugin", source: "clawhub", ref: "sample/plugin" } as const;
+    const options = { env: state.env, required: true };
+    const lease = await acquireClawPackageLifecycleLease(artifact, options);
+    if (!lease) {
+      throw new Error("Expected the package lease to be acquired");
+    }
+    try {
+      lease.heartbeat();
+      const database = openOpenClawStateDatabase({ env: state.env });
+      expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, lease.identity)).toBeGreaterThan(
+        Date.now(),
+      );
+      expect(
+        leaseStore.readOpenClawStateLeaseExpiry(database.db, {
+          ...lease.identity,
+          owner: "not-the-package-owner",
+        }),
+      ).toBeUndefined();
+      await expect(acquireClawPackageLifecycleLease(artifact, options)).rejects.toThrow();
+    } finally {
+      await lease.release();
+    }
+    const next = await acquireClawPackageLifecycleLease(artifact, options);
+    if (!next) {
+      throw new Error("Expected the released package lease to be reacquired");
+    }
+    expect(next.identity.owner).not.toBe(lease.identity.owner);
+    await next.release();
   });
 });
 
