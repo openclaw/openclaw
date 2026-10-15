@@ -992,10 +992,6 @@ describe("launchd install", () => {
   it("writes LaunchAgent environment to an owner-only env file when provided", async () => {
     const tmpDir = "/Users/test/.openclaw/tmp";
     const apiKey = "secret-api-key";
-    state.dirs.add("/Users/test");
-    state.dirModes.set("/Users/test", 0o777);
-    state.dirs.add("/Users/test/Library");
-    state.dirModes.set("/Users/test/Library", 0o700);
     await installLaunchAgent(
       defaultLaunchAgentFixture(ENV, {
         environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey, NODE_OPTIONS: "", UNUSED: "" },
@@ -1030,10 +1026,6 @@ describe("launchd install", () => {
     expect(state.fileModes.get(ENV_FILE)).toBe(0o600);
     expect(state.fileModes.get(WRAPPER)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
-    expect(state.dirModes.get("/Users/test")).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library")).toBe(0o700);
-    expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755 & ~process.umask());
-    expect(state.fileModes.get(plistPath)).toBe(0o644);
 
     const command = await readLaunchAgentProgramArguments(ENV);
     expect(command?.programArguments).toEqual(defaultProgramArguments);
@@ -1234,6 +1226,18 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>\n    <true/>");
     expect(plist).toContain("<string>node</string>");
     expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
+  });
+
+  it("tightens writable parents without widening private directories", async () => {
+    state.dirs.add("/Users/test");
+    state.dirModes.set("/Users/test", 0o777);
+    state.dirs.add("/Users/test/Library");
+    state.dirModes.set("/Users/test/Library", 0o700);
+    await installLaunchAgent(defaultLaunchAgentFixture(ENV));
+    expect(state.dirModes.get("/Users/test")).toBe(0o755);
+    expect(state.dirModes.get("/Users/test/Library")).toBe(0o700);
+    expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755 & ~process.umask());
+    expect(state.fileModes.get(resolveLaunchAgentPlistPath(ENV))).toBe(0o644);
   });
 
   it.each([

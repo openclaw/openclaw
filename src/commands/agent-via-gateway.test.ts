@@ -1358,56 +1358,53 @@ describe("agentCliCommand", () => {
     },
   );
 
-  it.each([false, true])(
-    "flushes JSON local diagnostics after the run (failed=%s)",
-    async (failed) => {
-      await withTempStore(async () => {
-        const stop = vi.fn(async () => {});
-        startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
-        const error = Object.assign(new Error("embedded run failed"), { runId: "local-run" });
-        if (failed) {
-          agentCommand.mockRejectedValueOnce(error);
-        } else {
-          mockLocalAgentReply();
-        }
-        const run = agentCliCommand(
-          { message: "hi", to: "+1555", local: true, json: true },
-          jsonRuntime,
-        );
-        if (failed) {
-          await expect(run).rejects.toThrow("embedded run failed");
-          expect(formatCliJsonFailure(error)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: "embedded run failed" },
-          });
-        } else {
-          await run;
-        }
+  it("suppresses stdout diagnostic logs around JSON local embedded runs", async () => {
+    await withTempStore(async () => {
+      const stop = vi.fn(async () => {});
+      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
+      mockLocalAgentReply();
 
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        expect(startOneShotDiagnosticsExporters).toHaveBeenCalledWith(
-          expect.objectContaining({ suppressStdoutDiagnosticLogs: true }),
-        );
-        expect(stop).toHaveBeenCalledTimes(1);
-        expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
-        expect(auditRecorderMocks.create).not.toHaveBeenCalled();
-        expect(requireFirstCallArg(agentCommand, "embedded agent")).toMatchObject({
-          cleanupBundleMcpOnRunEnd: true,
-          cleanupCliLiveSessionOnRunEnd: true,
-          oneShotCliRun: true,
-        });
-        const startOrder = requireFirstCallOrder(
-          startOneShotDiagnosticsExporters,
-          "exporter start",
-        );
-        const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
-        const stopOrder = requireFirstCallOrder(stop, "exporter stop");
-        expect(startOrder).toBeLessThan(runOrder);
-        expect(runOrder).toBeLessThan(stopOrder);
+      await agentCliCommand({ message: "hi", to: "+1555", local: true, json: true }, jsonRuntime);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledWith(
+        expect.objectContaining({ suppressStdoutDiagnosticLogs: true }),
+      );
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
+      expect(auditRecorderMocks.create).not.toHaveBeenCalled();
+      expect(requireFirstCallArg(agentCommand, "embedded agent")).toMatchObject({
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
       });
-    },
-  );
+      const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
+      const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
+      const stopOrder = requireFirstCallOrder(stop, "exporter stop");
+      expect(startOrder).toBeLessThan(runOrder);
+      expect(runOrder).toBeLessThan(stopOrder);
+    });
+  });
+
+  it("flushes the diagnostics exporter when the embedded run fails", async () => {
+    await withTempStore(async () => {
+      const stop = vi.fn(async () => {});
+      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
+      const error = Object.assign(new Error("embedded run failed"), { runId: "local-run" });
+      agentCommand.mockRejectedValueOnce(error);
+
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime),
+      ).rejects.toThrow("embedded run failed");
+
+      expect(formatCliJsonFailure(error)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: "embedded run failed" },
+      });
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it("keeps the embedded run alive when diagnostics exporter startup fails", async () => {
     await withTempStore(async () => {

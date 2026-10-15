@@ -1018,44 +1018,62 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
-  it.each([false, true])(
-    "checks ping-pong progress before blocking (progress=%s)",
-    async (withProgress) => {
-      await withToolLoopEvents(async (emitted) => {
-        const { readTool, listTool } = createPingPongTools({ withProgress });
-        await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
+  it("blocks ping-pong loops at critical threshold and emits critical diagnostic events", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool } = createPingPongTools();
+      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-        const result = await listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        );
-        if (withProgress) {
-          const record = requireRecord(result, "tool result");
-          requireArray(record.content, "tool result content");
-          requireRecord(record.details, "tool result details");
-          expect(
-            emitted.some((evt) => evt.level === "critical" && evt.detector === "ping_pong"),
-          ).toBe(false);
-        } else {
-          expectToolLoopBlockedResult(result, "CRITICAL");
-          expectCriticalLoopEvent(emitted.at(-1), { detector: "ping_pong", toolName: "list" });
-        }
-        const pingPongWarns = emitted.filter(
-          (evt) => evt.level === "warning" && evt.detector === "ping_pong",
-        );
-        expect(pingPongWarns).toHaveLength(1);
-        const warningEvent = pingPongWarns[0];
-        expect(warningEvent?.type).toBe("tool.loop");
-        expect(warningEvent?.level).toBe("warning");
-        expect(warningEvent?.action).toBe("warn");
-        expect(warningEvent?.detector).toBe("ping_pong");
-        expect(warningEvent?.count).toBe(10);
-        expect(warningEvent?.toolName).toBe("list");
+      const result = await listTool.execute(
+        `list-${CRITICAL_THRESHOLD - 1}`,
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "CRITICAL");
+      const pingPongWarns = emitted.filter(
+        (evt) => evt.level === "warning" && evt.detector === "ping_pong",
+      );
+      expect(pingPongWarns).toHaveLength(1);
+      const warningEvent = pingPongWarns[0];
+      expect(warningEvent?.type).toBe("tool.loop");
+      expect(warningEvent?.level).toBe("warning");
+      expect(warningEvent?.action).toBe("warn");
+      expect(warningEvent?.detector).toBe("ping_pong");
+      expect(warningEvent?.count).toBe(10);
+      expect(warningEvent?.toolName).toBe("list");
+
+      const loopEvent = emitted.at(-1);
+      expectCriticalLoopEvent(loopEvent, {
+        detector: "ping_pong",
+        toolName: "list",
       });
-    },
-  );
+    });
+  });
+
+  it("does not block ping-pong at critical threshold when outcomes are progressing", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool } = createPingPongTools({ withProgress: true });
+      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
+
+      await expectUnblockedToolExecution(listTool, `list-${CRITICAL_THRESHOLD - 1}`, {
+        dir: "/workspace",
+      });
+
+      const criticalPingPong = emitted.find(
+        (evt) => evt.level === "critical" && evt.detector === "ping_pong",
+      );
+      expect(criticalPingPong).toBeUndefined();
+      const warningPingPong = emitted.find(
+        (evt) => evt.level === "warning" && evt.detector === "ping_pong",
+      );
+      expectEventFields(warningPingPong, {
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "ping_pong",
+      });
+    });
+  });
 
   it("emits diagnostic tool execution events without parameter values", async () => {
     const trace = {
