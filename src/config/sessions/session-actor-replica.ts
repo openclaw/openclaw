@@ -14,8 +14,13 @@ import type {
   SessionActorHotState,
   SessionActorLifetime,
   SessionActorOutcome,
-  SessionActorTarget,
 } from "./session-actor-contract.js";
+import {
+  indexSessionActorReplicaCell,
+  retainSessionActorReplicaCell,
+  sessionActorReplicaTargetKey,
+  unindexSessionActorReplicaCell,
+} from "./session-actor-replica-index.js";
 import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
@@ -40,7 +45,6 @@ import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -79,7 +83,7 @@ function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): 
 
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
-  () => ({ cells: new Map(), snapshots: 0, bytes: 0 }),
+  () => ({ cells: new Map(), cellsBySessionKey: new Map(), snapshots: 0, bytes: 0 }),
   (owner) => {
     owner.unsubscribe?.();
     owner.unsubscribe = undefined;
@@ -87,6 +91,7 @@ const pool = resolveGlobalSingleton<ReplicaPool>(
       discard(cell);
     }
     owner.cells.clear();
+    owner.cellsBySessionKey.clear();
     owner.snapshots = 0;
     owner.bytes = 0;
   },
@@ -99,7 +104,11 @@ export function ensureReplicaSubscription(): void {
   // Lifecycle cleanup also clears listeners; subscribe only when this owner resumes.
   pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
     // Receipt installation reorders the LRU map, so visit the original cells once.
-    const cellsBeforePublication = [...pool.cells.values()];
+    const cellsBeforePublication = [
+      ...("all" in change
+        ? pool.cells.values()
+        : (pool.cellsBySessionKey.get(change.sessionKey) ?? [])),
+    ];
     const publishedKey =
       !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
     const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
@@ -115,7 +124,7 @@ export function ensureReplicaSubscription(): void {
         },
       };
       if (
-        !pool.cells.has(targetKey(target)) &&
+        !pool.cells.has(sessionActorReplicaTargetKey(target)) &&
         created.source.writeToken ===
           readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
       ) {
@@ -261,36 +270,6 @@ export function ensureReplicaSubscription(): void {
   });
 }
 
-function targetKey(target: SessionActorTarget): string {
-  const { database, sessionKey } = target;
-  return JSON.stringify(
-    database.kind === "file"
-      ? [database.kind, database.physicalIdentity, database.birthtime, sessionKey]
-      : [database.kind, database.handle, database.incarnation, sessionKey],
-  );
-}
-
-function getOrCreateCell(target: FileTarget): ReplicaCell {
-  const key = targetKey(target);
-  let cell = pool.cells.get(key);
-  if (!cell) {
-    cell = {
-      target,
-      // Matching depends only on this cell's fixed physical target, never its receipts.
-      publicationScope: {
-        sessionKeys: collectSessionEntryLookupKeys(target.sessionKey),
-        storePaths: new Set([target.database.nativeLocation]),
-        databaseIdentities: new Set([target.database.physicalIdentity]),
-      },
-      handles: 0,
-      bytes: 0,
-      transcriptBytes: 0,
-    };
-    pool.cells.set(key, cell);
-  }
-  return cell;
-}
-
 function discard(cell: ReplicaCell): void {
   if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
@@ -361,7 +340,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
 export function readSessionActorTranscriptReplica(
   state: SessionActorHotState,
 ): SessionActorTranscriptReplica | undefined {
-  const cell = pool.cells.get(targetKey(state.target));
+  const cell = pool.cells.get(sessionActorReplicaTargetKey(state.target));
   return cell?.snapshot?.writeToken === state.writeToken ? cell.transcript : undefined;
 }
 
@@ -369,28 +348,31 @@ export function retainSessionActorTranscriptReplica(
   state: SessionActorHotState,
   transcript: SessionActorTranscriptReplica,
 ): void {
-  const cell = pool.cells.get(targetKey(state.target));
+  const cell = pool.cells.get(sessionActorReplicaTargetKey(state.target));
   if (cell?.snapshot?.writeToken === state.writeToken) {
     retainTranscript(cell, transcript);
   }
 }
 
 function forgetUnused(cell: ReplicaCell): void {
-  const key = targetKey(cell.target);
+  const key = sessionActorReplicaTargetKey(cell.target);
   const empty = !cell.snapshot && !cell.entry && !cell.transcript;
   if (!cell.handles && empty && pool.cells.get(key) === cell) {
     pool.cells.delete(key);
+    unindexSessionActorReplicaCell(pool, cell);
   }
 }
 
 function touch(cell: ReplicaCell): void {
-  const key = targetKey(cell.target);
+  const key = sessionActorReplicaTargetKey(cell.target);
   const replaced = pool.cells.get(key);
   if (replaced && replaced !== cell) {
     discard(replaced);
+    unindexSessionActorReplicaCell(pool, replaced);
   }
   pool.cells.delete(key);
   pool.cells.set(key, cell);
+  indexSessionActorReplicaCell(pool, cell);
   for (const candidate of pool.cells.values()) {
     if (!candidate.snapshot && !candidate.entry && !candidate.transcript) {
       forgetUnused(candidate);
@@ -416,7 +398,7 @@ export function readSessionActorProjectionReceipt(
 
 function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentity) {
   ensureReplicaSubscription();
-  const cell = pool.cells.get(targetKey(target));
+  const cell = pool.cells.get(sessionActorReplicaTargetKey(target));
   const state = cell?.snapshot ?? cell?.entry;
   if (!cell || !state || cell.generation === undefined) {
     return undefined;
@@ -597,7 +579,7 @@ export function retainSessionActorEntryFacts(
   }
   for (const [index, { target, facts, dependencySessionIds }] of prepared.entries()) {
     const writeToken = tokens[index]!;
-    const cell = getOrCreateCell(target);
+    const cell = retainSessionActorReplicaCell(pool, target);
     if (cell.snapshot) {
       const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
       if (current === cell.snapshot.writeToken) {
@@ -618,8 +600,8 @@ export function createSessionActorReplica(params: {
 }) {
   ensureReplicaSubscription();
   const target = structuredClone(params.target);
-  const key = targetKey(target);
-  const owned = getOrCreateCell(target);
+  const key = sessionActorReplicaTargetKey(target);
+  const owned = retainSessionActorReplicaCell(pool, target);
   owned.handles += 1;
   let closed = false;
 
@@ -645,7 +627,7 @@ export function createSessionActorReplica(params: {
   ): boolean =>
     expectedGeneration !== undefined &&
     expectedGeneration === generation() &&
-    targetKey(state.target) === key &&
+    sessionActorReplicaTargetKey(state.target) === key &&
     state.writeToken === writeToken;
   const install = (
     state: SessionActorHotState,
