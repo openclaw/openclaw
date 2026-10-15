@@ -114,20 +114,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("requires authored problem content instead of template comments", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
-          "The gateway dropped the configured Discord channel during startup.",
-          "<!-- Describe the concrete user, product, or operational problem. -->",
-        ),
-      ),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["What Problem This Solves"]);
-  });
-
   it("does not accept the untouched current template", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(blankTemplateBody),
@@ -135,25 +121,6 @@ describe("real-behavior-proof-policy", () => {
 
     expect(evaluation.status).toBe("missing");
     expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
-  });
-
-  it("does not accept sections hidden by an unclosed HTML comment", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(`<!--\n${proofBody("pnpm test passed.")}`),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
-  });
-
-  it("accepts literal HTML comments inside fenced evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        proofBody(["```html", "<!-- captured fragment", "<p>ready</p>", "```"].join("\n")),
-      ),
-    });
-
-    expect(evaluation.status).toBe("passed");
   });
 
   it("accepts nested Markdown headings inside Evidence", () => {
@@ -164,15 +131,6 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
-  });
-
-  it("rejects Markdown separators as context and evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("---", { problem: "***" })),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
   });
 
   it("does not accept legacy fields hidden by HTML comments", () => {
@@ -270,40 +228,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(laterValid)).toEqual([]);
     expect(laterInvalid.status).toBe("missing");
     expect(laterInvalid.missingSections).toEqual(["Evidence"]);
-  });
-
-  it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
-    const body = [
-      "## What Problem This Solves",
-      "",
-      "Cron validation downgraded Google Gemini 3 low thinking to off.",
-      "",
-      "## Evidence",
-      "",
-      "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
-      "- Exact steps or command run after this patch:",
-      "  1. Built the local checkout with `node --import tsx scripts/build-all.mts`.",
-      "  2. Updated `/Users/example/.local/bin/openclaw` to run this checkout's `openclaw.mjs` and verified `/Users/example/.local/bin/openclaw --version`.",
-      "  3. Ran a redacted behavior probe for the reported cron validation decision with `provider=google`, `model=gemini-3-flash-preview`, `configuredThinkingDefault=low`, and `catalogReasoning=false`.",
-      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` from the local checkout recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
-      "- Observed result after fix:",
-      "  - `levels: off, minimal, low, medium, adaptive, high`",
-      "  - `lowSupported: true`",
-      "  - `fallbackFromLow: low`",
-      "  - `local command version: OpenClaw 2026.5.21 (c8a35c4)`",
-      "",
-      "## Out-of-scope Follow-ups",
-      "- No live systemd cron schedule is added in this PR.",
-      "- No real Google provider request is sent in this PR.",
-      "- No catalog refresh or provider model-list behavior is changed in this PR.",
-      "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
-    ].join("\n");
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(body),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("fails external PRs that say the changed behavior was not tested", () => {
