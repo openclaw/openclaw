@@ -7,14 +7,24 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const inventories = new Map();
 
 // Share one process snapshot across UI ownership and fast-lane discovery.
-export function getRepositoryFileInventory(directory = repoRoot) {
-  const cwd = resolve(directory);
-  if (!inventories.has(cwd)) {
+export function getRepositoryFileInventory(directory, selected) {
+  const cwd = resolve(directory ?? repoRoot);
+  const key = JSON.stringify([cwd, selected]);
+  if (!inventories.has(key)) {
     // Share working-tree facts without probing each inventoried owner. Include
     // untracked destinations and remove indexed paths deleted by unstaged renames.
     const result = spawnSync(
       "git",
-      ["ls-files", "--cached", "--others", "--deleted", "--exclude-standard", "-t", "-z"],
+      [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--deleted",
+        "--exclude-standard",
+        "-t",
+        "-z",
+        ...(selected ? ["--", ...selected.map((file) => `:(literal)${file}`)] : []),
+      ],
       {
         cwd,
         encoding: "utf8",
@@ -32,9 +42,9 @@ export function getRepositoryFileInventory(directory = repoRoot) {
         }
       }
     }
-    inventories.set(cwd, files);
+    inventories.set(key, files);
   }
-  return inventories.get(cwd);
+  return inventories.get(key);
 }
 
 /** Resolve an inventoried owner after a TS/TSX rename, retaining absent paths. */
@@ -42,14 +52,16 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  const inventory = getRepositoryFileInventory(cwd);
-  const exists = (candidate) =>
-    inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
-  if (exists(file)) {
+  if (existsSync(resolve(cwd, file))) {
     return file;
   }
   const alternate = file.endsWith(".tsx") ? file.slice(0, -1) : `${file}x`;
-  return exists(alternate) ? alternate : file;
+  if (existsSync(resolve(cwd, alternate))) {
+    return alternate;
+  }
+  // Sparse checkout owners can exist only in the index. Ordinary imports need no Git scan.
+  const inventory = getRepositoryFileInventory(cwd);
+  return !inventory?.has(file) && inventory?.has(alternate) ? alternate : file;
 }
 
 /** Watch both extensions, including deleted paths that cannot be resolved on disk. */

@@ -98,7 +98,7 @@ describe("unit-fast vitest lane", () => {
       childProcess.spawnSync = function patchedSpawnSync(...args) {
         const [command, commandArgs] = args;
         if (command === "git" && commandArgs?.[0] === "ls-files") {
-          gitLsFilesCalls += 1;
+          gitLsFilesCalls += Number(!commandArgs.includes("--"));
           const stdout = [
             "src/agents/agent-tools.deferred-followup-guidance.test.ts",
             "src/agents/session-maintenance/coordinator.test.ts",
@@ -146,7 +146,7 @@ describe("unit-fast vitest lane", () => {
         paths.isUnitFastIsolatedTestFile(file),
         paths.isUnitFastTimerTestFile(file),
       ]);
-      console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads }));
+      console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads, fullInventoryReads: gitLsFilesCalls }));
       const { resolveCiTestRuntimeSelections } = await import("./scripts/lib/ci-test-runtime.mts");
       const runtimeSelections = ["unit-fast", "unit-fast-isolated"].map((name, index) => ({
         target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-compatible"),
@@ -200,7 +200,7 @@ describe("unit-fast vitest lane", () => {
           unselectedFileReads,
         );
         const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
-        console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
+        console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"), gitLsFilesCalls);
         delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
         process.argv = ["node", "vitest", "run"];
         const { createVitestRunSpecs } = await import("./scripts/test-projects.test-support.mts");
@@ -256,6 +256,7 @@ describe("unit-fast vitest lane", () => {
         [false, false, false],
       ],
       unselectedFileReads: 0,
+      fullInventoryReads: 0,
     });
     const runtime = configProbeResult.stdout.match(/UNIT_FAST_RUNTIME_PROBE (.+)/u);
     expect(runtime, configProbeResult.stdout).not.toBeNull();
@@ -309,7 +310,7 @@ describe("unit-fast vitest lane", () => {
       { include, excluded },
       { include, excluded },
     ]);
-    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true");
+    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true 1");
   });
 
   it("keeps lifecycle drains in their reset-capable owner without dropping test coverage", () => {
