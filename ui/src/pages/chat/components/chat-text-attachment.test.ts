@@ -174,6 +174,19 @@ it.each([
   expect(panel.querySelector("a[download]")).not.toBeNull();
 });
 
+it.each([
+  { title: "archive.bin", mimeType: "application/octet-stream" },
+  { title: "notes.txt", src: "https://files.example/notes.txt" },
+  { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },
+])("does not fetch unsupported or external documents: $title $mimeType $src", async (content) => {
+  const fetchMock = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetchMock);
+  const panel = await mountAttachment(content);
+  expect(panel.querySelector("pre")).toBeNull();
+  expect(panel.querySelector("a[download]")).not.toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 type RejectedAttachment = {
   failure: "metadata" | "advertised" | "streamed" | "bytes" | "unavailable" | "timeout";
   content?: Partial<Extract<SidebarContent, { kind: "attachment" }>>;

@@ -458,6 +458,25 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("bounds oversized prompts before compact preservation", async () => {
+    const writes: string[] = [];
+    const recorder = await createCapturedRuntimeRecorder(writes);
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data.truncated).toBeUndefined();
+    expect(parsed.data.prompt.truncated).toBe(true);
+    expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
   it("keeps normal schema-v1 event payloads unchanged", async () => {
     const writes: string[] = [];
     const recorder = await createCapturedRuntimeRecorder(writes);
