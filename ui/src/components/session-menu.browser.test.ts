@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { mountMenu, selectMenuValue } from "../test-helpers/session-menu.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
@@ -70,4 +70,52 @@ it("keeps compact custom snooze keyboard input inside its popover", async () => 
   expect(onAction).not.toHaveBeenCalled();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect.element(picker).not.toBeVisible();
+});
+
+async function openIconSubmenu(onAction = vi.fn()) {
+  await page.viewport(1280, 800);
+  await mountMenu({ onAction });
+  const outside = document.createElement("div");
+  outside.style.cssText = "position:fixed;right:0;bottom:0;width:40px;height:40px";
+  document.body.append(outside);
+  onTestFinished(() => outside.remove());
+  await userEvent.hover(outside);
+  await page.getByText("Advanced", { exact: true }).hover();
+  await page.getByText("Icon & color", { exact: true }).hover();
+  // Opening settles once the picker moves focus to its first color.
+  await expect.element(page.getByRole("button", { name: "No color", exact: true })).toHaveFocus();
+  return outside;
+}
+
+it("keeps custom icon entry open while the pointer is in the system emoji viewer", async () => {
+  const onAction = vi.fn();
+  const outside = await openIconSubmenu(onAction);
+  await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
+  const field = page.getByRole("textbox", { name: "Custom icon", exact: true });
+  await expect.element(field).toHaveFocus();
+  // The viewer inserts text while the pointer is over its OS window, outside the submenu.
+  await field.fill("🦀");
+  // Web Awesome closes a hover-left submenu 100 ms after the pointer moves away.
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  try {
+    await userEvent.hover(outside);
+    vi.advanceTimersByTime(150);
+  } finally {
+    vi.useRealTimers();
+  }
+  await expect
+    .element(page.getByRole("menuitem", { name: "Icon & color", exact: true }))
+    .toHaveAttribute("aria-expanded", "true");
+  await expect.element(field).toBeVisible();
+  await expect.element(field).toHaveValue("🦀");
+  await page.getByRole("button", { name: "Set", exact: true }).click();
+  expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🦀" });
+});
+
+it("still closes the icon submenu when the pointer leaves without text entry", async () => {
+  const outside = await openIconSubmenu();
+  const item = page.getByRole("menuitem", { name: "Icon & color", exact: true });
+  await expect.element(item).toHaveAttribute("aria-expanded", "true");
+  await userEvent.hover(outside);
+  await expect.element(item).toHaveAttribute("aria-expanded", "false");
 });

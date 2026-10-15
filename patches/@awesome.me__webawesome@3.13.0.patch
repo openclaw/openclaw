@@ -798,7 +798,7 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
    /** Sets focus on the control. */
    focus(options) {
 diff --git a/dist/chunks/chunk.XSKA3LE6.js b/dist/chunks/chunk.XSKA3LE6.js
-index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45f941bfed 100644
+index 000b05d33179ddd930fd72221becf7a7e3042a2f..90271f0d4a112ea42643f866f98c667f10827d7b 100644
 --- a/dist/chunks/chunk.XSKA3LE6.js
 +++ b/dist/chunks/chunk.XSKA3LE6.js
 @@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -937,16 +937,19 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -231,7 +197,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -231,7 +197,10 @@ var WaDropdown = class extends WebAwesomeElement {
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
 -          if (!submenuItemHovered && !submenuElementHovered) {
-+          if (this.activeSubmenus.includes(branch) && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
++          // Focused text entry keeps its submenu while the pointer is away, e.g. in an OS emoji viewer.
++          const focused = currentSubmenuItem.getRootNode().activeElement;
++          const editing = !!focused && currentSubmenuItem.contains(focused) && focused.matches('textarea, input:not([type="checkbox"], [type="radio"]), [contenteditable]:not([contenteditable="false"])');
++          if (this.activeSubmenus.includes(branch) && !editing && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -241,15 +207,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,15 +210,20 @@ var WaDropdown = class extends WebAwesomeElement {
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -972,7 +975,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -266,12 +237,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -266,12 +240,7 @@ var WaDropdown = class extends WebAwesomeElement {
          return;
        }
        this.customStates.set("open", this.open);
@@ -986,7 +989,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -300,104 +266,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -300,104 +269,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -1167,7 +1170,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -405,8 +363,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -405,8 +366,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -1176,7 +1179,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -433,60 +389,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -433,60 +392,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -1276,7 +1279,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -506,6 +459,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -506,6 +462,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x, y, placement: placement2 }) => {
@@ -1982,7 +1985,7 @@ index 7d00635638361679a37070b02f3c2df9f6921cea..52b573eeac08eb9ada098fb43b9648c6
    async stop() {
      return new Promise((resolve) => {
 diff --git a/dist-cdn/chunks/chunk.R3TB74QH.js b/dist-cdn/chunks/chunk.R3TB74QH.js
-index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd088819820f 100644
+index f2c229192dc968570e8350f74778ffb0993c3b20..9465619767238bf288212b6b236253a520264baf 100644
 --- a/dist-cdn/chunks/chunk.R3TB74QH.js
 +++ b/dist-cdn/chunks/chunk.R3TB74QH.js
 @@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -2121,16 +2124,19 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -241,7 +207,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,7 +207,10 @@ var WaDropdown = class extends WebAwesomeElement {
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
 -          if (!submenuItemHovered && !submenuElementHovered) {
-+          if (this.activeSubmenus.includes(branch) && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
++          // Focused text entry keeps its submenu while the pointer is away, e.g. in an OS emoji viewer.
++          const focused = currentSubmenuItem.getRootNode().activeElement;
++          const editing = !!focused && currentSubmenuItem.contains(focused) && focused.matches('textarea, input:not([type="checkbox"], [type="radio"]), [contenteditable]:not([contenteditable="false"])');
++          if (this.activeSubmenus.includes(branch) && !editing && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -251,15 +217,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -251,15 +220,20 @@ var WaDropdown = class extends WebAwesomeElement {
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -2156,7 +2162,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -276,12 +247,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -276,12 +250,7 @@ var WaDropdown = class extends WebAwesomeElement {
          return;
        }
        this.customStates.set("open", this.open);
@@ -2170,7 +2176,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -310,104 +276,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -310,104 +279,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -2351,7 +2357,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -415,8 +373,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -415,8 +376,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -2360,7 +2366,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -443,60 +399,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -443,60 +402,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -2460,7 +2466,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -516,6 +469,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -516,6 +472,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x: x2, y, placement: placement2 }) => {
