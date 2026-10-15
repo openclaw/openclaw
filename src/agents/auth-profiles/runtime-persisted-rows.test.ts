@@ -54,6 +54,51 @@ it("releases retired database baselines while retaining named live owners", asyn
   expect(read).toHaveBeenCalledTimes(3);
 });
 
+it.each([true, false])(
+  "shares immutable persisted rows regardless of worker cacheability: %s",
+  async (cacheable) => {
+    const databasePath = path.join(tempDirs.make("auth-row-cache-"), "auth.sqlite");
+    using database = openNodeSqliteDatabase(databasePath);
+    database.exec("CREATE TABLE cache_fixture (value)");
+    const rows = {
+      store: {
+        status: "readable" as const,
+        raw: {
+          version: 1,
+          profiles: {
+            "example:key": {
+              type: "api_key",
+              provider: "example",
+              keyRef: { source: "env", provider: "default", id: "EXAMPLE_KEY" },
+            },
+          },
+        },
+      },
+      state: { status: "readable" as const, raw: { order: { example: ["example:key"] } } },
+      cacheable,
+    };
+    const read = vi.fn(async () => rows);
+    const cache = createRuntimeAuthProfileRowsCache(() => "1");
+    const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
+    const first = await resolve();
+    expect(await resolve()).toBe(first);
+    expect(read).toHaveBeenCalledTimes(1);
+    // Reject changes at every retained level, including credential refs and order arrays.
+    function assertImmutable(value: unknown) {
+      if (value === null || typeof value !== "object") {
+        return;
+      }
+      expect(Reflect.set(value, "injected", true)).toBe(false);
+      for (const [key, child] of Object.entries(value)) {
+        expect(Reflect.set(value, key, null)).toBe(false);
+        assertImmutable(child);
+      }
+    }
+    assertImmutable(first);
+    expect(await resolve()).toEqual(rows);
+  },
+);
+
 it("serves a committed postimage without rereading or freezing its publisher", async () => {
   const databasePath = path.join(tempDirs.make("auth-row-postimage-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
@@ -117,17 +162,6 @@ it("retains rows across session writes and invalidates them on auth writer-worke
       input: undefined,
     });
     const first = await resolve();
-    function assertImmutable(value: unknown) {
-      if (value === null || typeof value !== "object") {
-        return;
-      }
-      expect(Reflect.set(value, "injected", true)).toBe(false);
-      for (const [key, child] of Object.entries(value)) {
-        expect(Reflect.set(value, key, null)).toBe(false);
-        assertImmutable(child);
-      }
-    }
-    assertImmutable(first);
     expect(await resolve()).toBe(first);
     expect(read).toHaveBeenCalledTimes(1);
     expect(
