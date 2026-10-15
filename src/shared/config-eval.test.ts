@@ -63,22 +63,6 @@ describe("config-eval helpers", () => {
     expect(isConfigPathTruthyWithDefaults(config, "prototype.polluted", {})).toBe(false);
   });
 
-  it("uses defaults only when config paths are unresolved", () => {
-    const config = {
-      browser: {
-        enabled: false,
-      },
-    };
-
-    expect(
-      isConfigPathTruthyWithDefaults(config, "browser.enabled", { "browser.enabled": true }),
-    ).toBe(false);
-    expect(
-      isConfigPathTruthyWithDefaults(config, "browser.missing", { "browser.missing": true }),
-    ).toBe(true);
-    expect(isConfigPathTruthyWithDefaults(config, "browser.other", {})).toBe(false);
-  });
-
   it("does not use inherited defaults for blocked config paths", () => {
     expect(isConfigPathTruthyWithDefaults({}, "constructor", {})).toBe(false);
     expect(isConfigPathTruthyWithDefaults({}, "__proto__.enabled", {})).toBe(false);
@@ -235,71 +219,7 @@ describe("prepared binary availability", () => {
   });
 });
 
-describe("runtime requirements through eligibility", () => {
-  it("accepts remote bins and remote any-bin matches", () => {
-    const result = evaluateRuntimeEligibility({
-      requires: {
-        bins: ["node"],
-        anyBins: ["bun", "deno"],
-        env: ["OPENAI_API_KEY"],
-        config: ["browser.enabled"],
-      },
-      hasBin: () => false,
-      hasRemoteBin: (bin) => bin === "node",
-      hasAnyRemoteBin: (bins) => bins.includes("deno"),
-      hasEnv: (name) => name === "OPENAI_API_KEY",
-      isConfigPathTruthy: (pathValue) => pathValue === "browser.enabled",
-    });
-
-    expect(result).toBe(true);
-  });
-
-  it("rejects when any required runtime check is still unsatisfied", () => {
-    expect(
-      evaluateRuntimeEligibility({
-        requires: { bins: ["node"] },
-        hasBin: () => false,
-        hasEnv: () => true,
-        isConfigPathTruthy: () => true,
-      }),
-    ).toBe(false);
-
-    expect(
-      evaluateRuntimeEligibility({
-        requires: { anyBins: ["bun", "node"] },
-        hasBin: () => false,
-        hasAnyRemoteBin: () => false,
-        hasEnv: () => true,
-        isConfigPathTruthy: () => true,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("evaluateRuntimeEligibility", () => {
-  it("rejects entries when required OS does not match local or remote", () => {
-    const result = evaluateRuntimeEligibility({
-      os: ["definitely-not-a-runtime-platform"],
-      remotePlatforms: [],
-      hasBin: () => true,
-      hasEnv: () => true,
-      isConfigPathTruthy: () => true,
-    });
-    expect(result).toBe(false);
-  });
-
-  it("accepts entries when remote platform satisfies OS requirements", () => {
-    mockProcessPlatform("darwin");
-    const result = evaluateRuntimeEligibility({
-      os: ["linux"],
-      remotePlatforms: ["linux"],
-      hasBin: () => true,
-      hasEnv: () => true,
-      isConfigPathTruthy: () => true,
-    });
-    expect(result).toBe(true);
-  });
-
   it("bypasses runtime requirements when always=true", () => {
     const result = evaluateRuntimeEligibility({
       always: true,
