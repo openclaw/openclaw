@@ -1,8 +1,8 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/context.ts";
-import { TestHost } from "./controller.test-support.ts";
-import { GatewayPageController } from "./gateway-page-controller.ts";
+import { GatewayPageBinding } from "./gateway-page-binding.ts";
 
 function snapshot(
   client: GatewayBrowserClient | null,
@@ -44,20 +44,19 @@ function createGateway(initial: ApplicationGatewaySnapshot) {
   };
 }
 
-describe("GatewayPageController", () => {
+describe("GatewayPageBinding", () => {
   it("notifies availability recovery once without changing the connection epoch", () => {
     const client = {} as GatewayBrowserClient;
     const connected = snapshot(client, "connected");
     const source = createGateway({ ...connected, suspensionPhase: "draining" });
-    const host = new TestHost();
     const onSnapshot = vi.fn();
     const ensureInitialData = vi.fn();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => source.gateway,
       onSnapshot,
       ensureInitialData,
     });
-    host.connect();
+    controller.connect();
     const scope = controller.capture();
     source.publish({ ...connected, suspensionPhase: "accepting" });
     expect(onSnapshot).toHaveBeenLastCalledWith(
@@ -82,18 +81,17 @@ describe("GatewayPageController", () => {
   it("binds the current source and retires work across same-client reconnects", () => {
     const client = {} as GatewayBrowserClient;
     const source = createGateway(snapshot(client, "connected"));
-    const host = new TestHost();
     const identityChanges = vi.fn();
     const invalidations = vi.fn();
     const ensureInitialData = vi.fn();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => source.gateway,
       onIdentityChange: identityChanges,
       invalidateRequests: invalidations,
       ensureInitialData,
     });
 
-    host.connect();
+    controller.connect();
     const first = controller.capture();
     expect(controller.client).toBe(client);
     expect(controller.connected).toBe(true);
@@ -115,17 +113,16 @@ describe("GatewayPageController", () => {
     const first = createGateway(snapshot(client, "connected"));
     const second = createGateway(snapshot(client, "connected"));
     let gateway = first.gateway;
-    const host = new TestHost();
     const identityChanges = vi.fn();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => gateway,
       onIdentityChange: identityChanges,
     });
-    host.connect();
+    controller.connect();
     const scope = controller.capture();
 
     gateway = second.gateway;
-    host.update();
+    controller.refresh();
 
     expect(scope && controller.isCurrent(scope)).toBe(false);
     expect(identityChanges).toHaveBeenLastCalledWith(
@@ -135,11 +132,10 @@ describe("GatewayPageController", () => {
 
   it("checks route data by exact source and snapshot identity", () => {
     const current = createGateway(snapshot({} as GatewayBrowserClient, "connected"));
-    const host = new TestHost();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => current.gateway,
     });
-    host.connect();
+    controller.connect();
 
     expect(
       controller.isRouteDataCurrent({
@@ -160,11 +156,10 @@ describe("GatewayPageController", () => {
     const hello = {} as NonNullable<ApplicationGatewaySnapshot["hello"]>;
     const firstSnapshot = { ...snapshot(client, "connected"), hello };
     const current = createGateway(firstSnapshot);
-    const host = new TestHost();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => current.gateway,
     });
-    host.connect();
+    controller.connect();
     const routeData = {
       gateway: current.gateway,
       gatewaySnapshot: firstSnapshot,
@@ -180,28 +175,26 @@ describe("GatewayPageController", () => {
     expect(controller.isRouteDataCurrent(routeData)).toBe(false);
   });
 
-  it("can reconnect after the host detaches", () => {
+  it("can reconnect after disposal", () => {
     const current = createGateway(snapshot({} as GatewayBrowserClient, "connected"));
-    const host = new TestHost();
     const identityChanges = vi.fn();
-    const controller = new GatewayPageController(host, {
+    const controller = new GatewayPageBinding(vi.fn(), {
       getGateway: () => current.gateway,
       onIdentityChange: identityChanges,
     });
-    host.connect();
+    controller.connect();
     const stale = controller.capture();
 
-    host.disconnect();
+    controller.dispose();
     expect(stale && controller.isCurrent(stale)).toBe(false);
     expect(controller.capture()).toBeNull();
     expect(identityChanges).not.toHaveBeenCalled();
 
-    // Lit may commit a queued update after removal; it must not reopen the binding.
-    host.update();
+    current.publish(snapshot({} as GatewayBrowserClient, "connected"));
     expect(controller.capture()).toBeNull();
     expect(identityChanges).not.toHaveBeenCalled();
 
-    host.connect();
+    controller.connect();
     expect(controller.capture()).not.toBeNull();
     expect(identityChanges).toHaveBeenCalledTimes(1);
   });

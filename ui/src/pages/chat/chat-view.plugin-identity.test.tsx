@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiHost,
   ControlUiSurface,
@@ -109,6 +109,11 @@ describe("native chat view session identity", () => {
       ),
       { container, wrapper: provider.wrapper },
     );
+    onTestFinished(() => {
+      view.unmount();
+      lifetime.abort();
+      container.remove();
+    });
 
     await vi.waitFor(() => {
       expect(reportError).not.toHaveBeenCalled();

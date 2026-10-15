@@ -17,10 +17,6 @@ import {
   TurnCoverage,
 } from "@google/genai";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
-import {
-  resolveExpiresAtMsFromDurationMs,
-  timestampMsToIsoString,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -227,15 +223,13 @@ function buildRealtimeInputConfig(
     : undefined;
   const turnCoverage = config.turnCoverage ? TURN_COVERAGE[config.turnCoverage] : undefined;
   const automaticActivityDetection = {
-    ...(typeof config.automaticActivityDetectionDisabled === "boolean"
+    ...(config.automaticActivityDetectionDisabled !== undefined
       ? { disabled: config.automaticActivityDetectionDisabled }
       : {}),
     ...(startSensitivity ? { startOfSpeechSensitivity: startSensitivity } : {}),
     ...(endSensitivity ? { endOfSpeechSensitivity: endSensitivity } : {}),
-    ...(typeof config.prefixPaddingMs === "number"
-      ? { prefixPaddingMs: config.prefixPaddingMs }
-      : {}),
-    ...(typeof config.silenceDurationMs === "number"
+    ...(config.prefixPaddingMs !== undefined ? { prefixPaddingMs: config.prefixPaddingMs } : {}),
+    ...(config.silenceDurationMs !== undefined
       ? { silenceDurationMs: config.silenceDurationMs }
       : {}),
   };
@@ -293,7 +287,7 @@ function buildGoogleLiveConnectConfig(
   const thinkingConfig = buildThinkingConfig(config, model);
   return {
     responseModalities: [Modality.AUDIO],
-    ...(typeof config.temperature === "number" && config.temperature > 0
+    ...(config.temperature !== undefined && config.temperature > 0
       ? { temperature: config.temperature }
       : {}),
     speechConfig: {
@@ -308,7 +302,7 @@ function buildGoogleLiveConnectConfig(
     ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    ...(!isGemini31LiveModel(model) && typeof config.enableAffectiveDialog === "boolean"
+    ...(!isGemini31LiveModel(model) && config.enableAffectiveDialog !== undefined
       ? { enableAffectiveDialog: config.enableAffectiveDialog }
       : {}),
     ...(thinkingConfig ? { thinkingConfig } : {}),
@@ -350,9 +344,9 @@ function formatGoogleLiveCloseEvent(
   if (!event) {
     return "code=unknown reason=unknown";
   }
-  const code = typeof event.code === "number" ? event.code : "unknown";
+  const code = event.code ?? "unknown";
   const reason = event.reason?.trim() || "none";
-  const clean = typeof event.wasClean === "boolean" ? ` clean=${event.wasClean}` : "";
+  const clean = event.wasClean !== undefined ? ` clean=${event.wasClean}` : "";
   return `code=${code} reason=${reason}${clean}`;
 }
 
@@ -1190,18 +1184,9 @@ async function createGoogleRealtimeBrowserSession(
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
   const nowMs = Date.now();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS, {
-    nowMs,
-  });
-  const newSessionExpiresAtMs = resolveExpiresAtMsFromDurationMs(
-    GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS,
-    { nowMs },
-  );
-  const expireTime = timestampMsToIsoString(expiresAtMs);
-  const newSessionExpireTime = timestampMsToIsoString(newSessionExpiresAtMs);
-  if (expiresAtMs === undefined || !expireTime || !newSessionExpireTime) {
-    throw new Error("Google realtime browser session expiry is outside the supported Date range");
-  }
+  const expireTime = new Date(nowMs + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS).toISOString();
+  const newSessionExpiresAtMs = nowMs + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const newSessionExpireTime = new Date(newSessionExpiresAtMs).toISOString();
   const ai = createGoogleGenAI({
     apiKey,
     httpOptions: {

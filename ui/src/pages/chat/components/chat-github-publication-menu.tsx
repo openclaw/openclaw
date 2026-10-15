@@ -40,7 +40,6 @@ export function GitHubPublicationMenu(props: {
       id: choice.source,
       label: `@${choice.login}${props.duplicateLogin ? ` · ${choice.label}` : ""}`,
       class: "session-menu__item",
-      attributes: { value: choice.source },
       type: "radio" as const,
       checked: props.selected === choice.source,
       disabled: props.busy,

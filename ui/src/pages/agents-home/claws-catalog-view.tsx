@@ -68,7 +68,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
   );
 }
 
-export function renderClawsCatalogDialog(props: ClawsCatalogViewProps) {
+export function ClawsCatalogView(props: ClawsCatalogViewProps) {
   return (
     <Show
       when={props.selected}

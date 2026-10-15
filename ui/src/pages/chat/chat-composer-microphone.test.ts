@@ -30,11 +30,9 @@ afterEach(async () => {
   await resetComposerFixture(() => discoverRealtimeTalkInputsMock.mockReset());
 });
 
-type PickerDropdown = HTMLElement & { open: boolean; updateComplete: Promise<unknown> };
-
 async function mountedPicker(container: HTMLElement) {
   return waitForSolid(() => {
-    const dropdown = container.querySelector<PickerDropdown>("wa-dropdown.chat-talk-input-picker");
+    const dropdown = container.querySelector<HTMLElement>(".chat-talk-input-picker");
     expect(dropdown).not.toBeNull();
     return dropdown!;
   });
@@ -51,9 +49,8 @@ async function mountPicker(composerProps: ReturnType<typeof props>) {
 
 async function openPicker(container: HTMLElement) {
   const dropdown = await mountedPicker(container);
-  await dropdown?.updateComplete;
   button(container, t("chat.composer.microphoneInput")).click();
-  await dropdown?.updateComplete;
+  await waitForSolid(() => expect(dropdown.hasAttribute("open")).toBe(true));
   return dropdown;
 }
 
@@ -84,25 +81,20 @@ describe("composer microphone picker", () => {
     draw();
 
     const dropdown = await mountedPicker(container);
-    await dropdown?.updateComplete;
-    expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
-    button(container, t("chat.composer.microphoneInput")).click();
-    await dropdown?.updateComplete;
+    expect(dropdown?.hasAttribute("open")).toBe(false);
+    expect(dropdown?.querySelector(".chat-talk-input-picker__item")).toBeNull();
+    await openPicker(container);
 
-    expect(dropdown?.open).toBe(true);
-    await vi.waitFor(() =>
+    expect(dropdown?.hasAttribute("open")).toBe(true);
+    await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
     );
     const items = [
-      ...container.querySelectorAll<HTMLElement & { value: string }>(
-        ".chat-talk-input-picker__item",
-      ),
+      ...container.querySelectorAll<HTMLButtonElement>(".chat-talk-input-picker__item"),
     ];
-    expect(items.map((item) => item.textContent?.trim())).toEqual([
-      t("chat.composer.systemDefaultMicrophone"),
-      "Studio microphone",
-      "USB headset",
-    ]);
+    expect(
+      items.map((item) => item.querySelector(".chat-talk-input-picker__label")?.textContent),
+    ).toEqual([t("chat.composer.systemDefaultMicrophone"), "Studio microphone", "USB headset"]);
     expect(items.map((item) => item.getAttribute("role"))).toEqual([
       "menuitemradio",
       "menuitemradio",
@@ -111,22 +103,39 @@ describe("composer microphone picker", () => {
     expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
       "true",
     );
-    expect(items.map((item) => item.getAttribute("type"))).toEqual(["normal", "normal", "normal"]);
     expect(
       items
         .find((item) => item.value === "studio-mic")
         ?.querySelector(".chat-talk-input-picker__check")
-        ?.getAttribute("slot"),
-    ).toBe("details");
+        ?.querySelector("svg"),
+    ).toBeInstanceOf(SVGElement);
+
+    await waitForSolid(() =>
+      expect(dropdown.querySelector("[data-menu-content]")?.getAttribute("data-phase")).toBe(
+        "open",
+      ),
+    );
+    const focused = items.find((item) => item.value === "studio-mic")!;
+    focused.focus();
+    composerProps.composerHoldToRecord = false;
+    draw();
+    await waitForSolid(() => {
+      expect(
+        container
+          .querySelector(".chat-talk-input-picker__preference")
+          ?.getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(container.querySelector('[value="studio-mic"]')).toBe(focused);
+      expect(document.activeElement).toBe(focused);
+    });
 
     items.find((item) => item.value === "headset")?.click();
-    await dropdown?.updateComplete;
-    expect(loadSettings().realtimeTalkInputDeviceId).toBe("headset");
-    expect(dropdown?.open).toBe(false);
+    await waitForSolid(() => expect(loadSettings().realtimeTalkInputDeviceId).toBe("headset"));
+    await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
 
     button(container, t("chat.composer.microphoneInput")).click();
-    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
-    expect(dropdown?.open).toBe(true);
+    await waitForSolid(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(
       [...container.querySelectorAll(".chat-talk-input-picker__item")].map((item) =>
         item.getAttribute("aria-checked"),
@@ -152,19 +161,17 @@ describe("composer microphone picker", () => {
     const { container, dropdown, draw } = await mountPicker(composerProps);
 
     await openPicker(container);
-    await dropdown?.updateComplete;
 
     const preference = container.querySelector<HTMLElement>(
       '.chat-talk-input-picker__preference[role="menuitemcheckbox"]',
     );
     expect(preference?.getAttribute("aria-checked")).toBe("true");
     preference?.click();
-    await dropdown?.updateComplete;
 
-    expect(onComposerHoldToRecordChange).toHaveBeenCalledWith(false);
+    await waitForSolid(() => expect(onComposerHoldToRecordChange).toHaveBeenCalledWith(false));
     expect(loadSettings().composerHoldToRecord).toBe(false);
     expect(loadSettings().realtimeTalkInputDeviceId).toBe("studio-mic");
-    expect(dropdown?.open).toBe(true);
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(
       container
         .querySelector<HTMLElement>('.chat-talk-input-picker__preference[role="menuitemcheckbox"]')
@@ -209,16 +216,17 @@ describe("composer microphone picker", () => {
       });
       const { container, dropdown } = await mountPicker(composerProps);
 
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
       );
-      expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
+      expect(dropdown?.hasAttribute("open")).toBe(false);
+      expect(dropdown?.querySelector("[data-chat-talk-capability]")).toBeNull();
       if (pending) {
         button(container, t("chat.composer.startVoiceInput")).click();
       } else {
         await openPicker(container);
       }
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(
           [...container.querySelectorAll<HTMLElement>("[data-chat-talk-capability]")].map(
             (entry) => entry.dataset.chatTalkCapability,
@@ -228,7 +236,7 @@ describe("composer microphone picker", () => {
       if (!pending) {
         return;
       }
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(
           container.querySelectorAll('[data-chat-talk-capability][data-status="unavailable"]'),
         ).toHaveLength(2),
@@ -251,7 +259,7 @@ describe("composer microphone picker", () => {
           alert.parentElement?.matches(".chat-talk-input-picker__capability-copy strong"),
         ),
       ).toBe(true);
-      await vi.waitFor(() => expect(dropdown?.open).toBe(true));
+      await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(true));
 
       expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" });
@@ -275,12 +283,12 @@ describe("composer microphone picker", () => {
         "menuitem",
       ]);
       settingsItems[0]?.click();
-      expect(onOpenTalkSettings).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(onOpenTalkSettings).toHaveBeenCalledOnce());
       expect(onOpenDictationSettings).not.toHaveBeenCalled();
       settingsItems[1]?.click();
-      expect(onOpenDictationSettings).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(onOpenDictationSettings).toHaveBeenCalledOnce());
       expect(loadSettings().realtimeTalkInputDeviceId).toBe("studio-mic");
-      expect(dropdown?.open).toBe(true);
+      expect(dropdown?.hasAttribute("open")).toBe(true);
     },
   );
 
@@ -308,7 +316,7 @@ describe("composer microphone picker", () => {
       );
       await openPicker(container);
       if (hasInputs) {
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
         );
         expect(
@@ -323,13 +331,12 @@ describe("composer microphone picker", () => {
         expect(container.querySelector(".chat-talk-input-picker__hint")?.textContent).toContain(
           t("chat.composer.microphoneAppliesNextSession"),
         );
-        dropdown?.dispatchEvent(
+        document.activeElement?.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
         );
-        await dropdown?.updateComplete;
-        expect(dropdown?.open).toBe(false);
+        await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
       } else {
-        const empty = await vi.waitFor(() => {
+        const empty = await waitForSolid(() => {
           const node = container.querySelector(".chat-talk-input-picker__empty");
           expect(node?.textContent?.trim()).toBe(t(messageKey));
           return node;
@@ -356,7 +363,7 @@ describe("composer microphone picker", () => {
     const { container, dropdown } = await mountPicker(composerProps);
 
     await openPicker(container);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(container.querySelector(".chat-talk-input-picker__empty")?.textContent?.trim()).toBe(
         t("chat.composer.microphoneNoneFound"),
       ),
@@ -369,21 +376,21 @@ describe("composer microphone picker", () => {
       issue: null,
     });
     mediaDevices.dispatchEvent(new Event("devicechange"));
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
     );
     expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
 
     discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
     mediaDevices.dispatchEvent(new Event("devicechange"));
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0),
     );
 
-    dropdown?.dispatchEvent(
+    document.activeElement?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    await dropdown?.updateComplete;
+    await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
     const callsWhileClosed = discoverRealtimeTalkInputsMock.mock.calls.length;
     mediaDevices.dispatchEvent(new Event("devicechange"));
     await Promise.resolve();
