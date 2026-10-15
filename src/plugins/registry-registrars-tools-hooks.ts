@@ -60,6 +60,7 @@ const conversationHookNames = new Set<PluginHookName>([
   "before_agent_finalize",
   "agent_end",
   "before_agent_run",
+  "before_channel_ingress",
 ]);
 
 function isConversationHookName(hookName: PluginHookName): boolean {

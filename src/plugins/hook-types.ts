@@ -131,6 +131,7 @@ const PLUGIN_HOOK_NAMES = [
   "cron_reconciled",
   "cron_changed",
   "skill_changed",
+  "before_channel_ingress",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -361,6 +362,28 @@ type PluginHookAfterCompactionEvent = {
 export type PluginHookInboundClaimResult = {
   handled: boolean;
   reply?: ReplyPayload;
+};
+
+/** Event-owned provider facts before binding/media download; never requester authority. */
+export type PluginHookBeforeChannelIngressEvent = {
+  /** Channel-specific primitive DTO; never the transport's native journal/update object. */
+  readonly providerUpdate: Readonly<Record<string, unknown>>;
+};
+
+export type PluginHookBeforeChannelIngressContext = {
+  readonly channelId: string;
+  readonly accountId: string;
+  readonly abortSignal: AbortSignal;
+  /** Report actual pre-adoption preparation liveness; expires with this handler. */
+  readonly heartbeat: () => void;
+  readonly heartbeatIntervalMs?: number;
+};
+
+export type PluginHookBeforeChannelIngressResult = {
+  /** Prepared inbound text, not an outbound reply or adoption receipt. */
+  text: string;
+  /** Skip native attachment loading when the text already replaces those attachments. */
+  suppressAttachments?: boolean;
 };
 
 export type PluginHookBeforeDispatchEvent = {
@@ -878,6 +901,11 @@ export type PluginHookHandlerMap = {
   channel_pairing_requested: AsyncPluginHook<
     PluginHookChannelPairingRequestedEvent,
     PluginHookChannelPairingContext
+  >;
+  before_channel_ingress: AsyncPluginHook<
+    PluginHookBeforeChannelIngressEvent,
+    PluginHookBeforeChannelIngressContext,
+    PluginHookBeforeChannelIngressResult
   >;
   before_dispatch: AsyncPluginHook<
     PluginHookBeforeDispatchEvent,

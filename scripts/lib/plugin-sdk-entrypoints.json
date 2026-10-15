@@ -105,6 +105,7 @@
   "speech-settings",
   "tts-runtime",
   "plugin-command-runtime",
+  "plugin-hook-runtime",
   "plugin-runtime",
   "channel-secret-basic-runtime",
   "channel-secret-owner-runtime",

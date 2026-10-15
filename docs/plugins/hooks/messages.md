@@ -17,6 +17,47 @@ before ordinary model dispatch. Return `{ handled: true, text: "..." }` to
 send a final reply, or `{ handled: true }` to handle it without text. This is a
 claim, not an API for rewriting outbound or inbound content.
 
+Channel implementations can obtain the existing host-owned hook runner from
+`openclaw/plugin-sdk/plugin-hook-runtime`. This focused subpath avoids the deprecated
+`plugin-runtime` barrel and does not create or expose another registry.
+
+`before_channel_ingress` prepares a durable transport update before native
+middleware downloads or transcribes attachments. Telegram currently supplies it
+for `message` and `edited_message` updates after the native spool commits and claims the
+update, on both polling and webhook paths. Other update kinds retain native
+handling. Return `{ text, suppressAttachments: true }` to dispatch prepared
+text without loading the original attachments, or return nothing to leave the
+update unchanged. The first preparer returning a result wins in priority order.
+
+The event's `providerUpdate` is an event-owned DTO containing channel-specific
+primitive identity, text/caption and attachment facts. It never aliases the native
+transport update. Telegram includes sender/chat IDs, bot flag, message/update IDs,
+thread/reply IDs and media IDs/size; it excludes channel credentials. Treat its
+sender, chat, message, and update identifiers as **untrusted transport facts**,
+not authenticated requester authority. The channel has not performed ordinary
+binding/allowlist checks yet; plugins must verify their own consent and target
+binding before processing content. Never mutate this event. Registration honors
+the existing `allowConversationAccess` policy. No bot token or
+other channel credential is provided. The result can change only body and
+attachment fields; native transport identity, routing, and reply metadata remain
+channel-owned. This hook grants no requester-bound subagent or delivery authority.
+
+Long preparation must honor `ctx.abortSignal` and report actual liveness through
+`ctx.heartbeat()` at `ctx.heartbeatIntervalMs` while its operation is active.
+The heartbeat capability expires when that handler returns, fails, times out, or
+is cancelled. It never adopts the update or clears the native pre-adoption
+watchdog. Errors fail closed back to the existing native retry owner; retries
+receive the original spooled payload. Reuse durable terminal preparation receipts
+rather than repeating accepted or uncertain operations. Scope closure fences
+late results; it does not cancel previously accepted external work.
+
+For private Telegram preparation clients, the activated Telegram `runtime-api.js`
+public surface exports `createTelegramClientFetch` and `getOrCreateAccountThrottler`.
+Compose the former with the native transport and the service shutdown signal;
+install the latter's `.transformer` on the grammY API client. This preserves
+native request/body deadlines, cancellation, and token-scoped flood waits.
+The service owns and closes its transport on shutdown and startup failure.
+
 `reply_dispatch` is the advanced takeover hook: it receives the finalized
 message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple

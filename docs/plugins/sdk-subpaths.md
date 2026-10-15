@@ -415,6 +415,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-command-runtime` | Registry-generation-bound native plugin command candidates, terminal catalog decisions, and exact selected dispatch execution |
+    | `plugin-sdk/plugin-hook-runtime` | `getGlobalHookRunner` for native hook dispatch through the existing host-owned runner; no command, HTTP or registry-management exports |
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |

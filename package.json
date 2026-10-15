@@ -3,7 +3,10 @@
   "version": "2026.10.3",
   "openclaw": {
     "updateAdmissionProtocol": 1,
-    "databaseEngines": ["sqlite", "postgres"],
+    "databaseEngines": [
+      "sqlite",
+      "postgres"
+    ],
     "schemaVersions": {
       "state": 23,
       "agent": 27
@@ -840,6 +843,10 @@
     "./plugin-sdk/plugin-command-runtime": {
       "types": "./dist/plugin-sdk/plugin-command-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-command-runtime.js"
+    },
+    "./plugin-sdk/plugin-hook-runtime": {
+      "types": "./dist/plugin-sdk/plugin-hook-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-hook-runtime.js"
     },
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
