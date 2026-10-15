@@ -492,7 +492,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       if (!msg.message && msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
         // Baileys re-emits the decrypted copy under the same key after a
         // placeholder resend; admitting the stub would complete that key first.
-        logWhatsAppVerbose(options.verbose, `Skipping undecrypted message ${msg.key?.id}`);
         continue;
       }
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
