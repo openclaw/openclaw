@@ -155,6 +155,59 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 
+  it.each(["POST", "PATCH"])(
+    "publishes updates arriving during an activity %s",
+    async (operation) => {
+      const { client, createActivityMessage, updateMessageBody } = createClientMock();
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      let remoteBody = "";
+      let blocked = false;
+      const write = async (method: string, body: string) => {
+        if (method === operation && !blocked) {
+          blocked = true;
+          entered.resolve();
+          await resume.promise;
+        }
+        remoteBody = body;
+        return { id: "msg_1" };
+      };
+      createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
+      updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
+      const publisher = createPublisher(client);
+      const event = { itemId: "work", kind: "tool", name: "read" };
+
+      publisher.onItemEvent({ ...event, progressText: "First" });
+      if (operation === "PATCH") {
+        await publisher.finalize();
+        publisher.onItemEvent({ ...event, progressText: "Second" });
+      }
+      await entered.promise;
+      publisher.onItemEvent({ ...event, progressText: "Latest" });
+      resume.resolve();
+      await publisher.finalize();
+
+      expect(remoteBody).toBe("Read: Latest");
+    },
+  );
+
+  it("does not retry an ambiguous failed activity POST when a later frame arrives", async () => {
+    const { client, createActivityMessage, updateMessageBody } = createClientMock();
+    const onError = vi.fn();
+    createActivityMessage.mockRejectedValueOnce(new Error("connection lost after dispatch"));
+    const publisher = createPublisher(client, { onError });
+    const event = { itemId: "work", kind: "tool", name: "read" };
+
+    publisher.onItemEvent({ ...event, progressText: "First" });
+    await publisher.finalize();
+    publisher.onItemEvent({ ...event, progressText: "Latest" });
+    await publisher.finalize();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(createActivityMessage).toHaveBeenCalledOnce();
+    expect(updateMessageBody).not.toHaveBeenCalled();
+  });
+
   it("renders non-tool item kinds as commentary rows and skips lifecycle lanes", async () => {
     const { client, createActivityMessage } = createClientMock();
     const publisher = createPublisher(client);
