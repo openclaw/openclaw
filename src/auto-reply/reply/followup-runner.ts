@@ -393,6 +393,7 @@ export function createFollowupRunner(
               ? {
                   visibleReplySent,
                   failed: !admittedTurn || completion.kind === "failed",
+                  completed: Boolean(admittedTurn) && completion.kind === "completed",
                   ...(deliveryPending ? { transportPending: true } : {}),
                 }
               : undefined,
