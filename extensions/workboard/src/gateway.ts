@@ -371,12 +371,10 @@ export function registerWorkboardGatewayMethods(params: {
     return { ...result, card: redactClaimToken(result.card) };
   });
   register("workboard.cards.specify", WRITE_SCOPE, async (request) => {
+    const patch = await prepareWorkspaceInput(request, request.params, "patch");
+    const expectedUpdatedAt = readExpectedUpdatedAt(request.params);
     return redactCardResult(
-      store.specify(
-        readId(request.params),
-        await prepareWorkspaceInput(request, request.params, "patch"),
-        null,
-      ),
+      store.specify(readId(request.params), { ...patch, expectedUpdatedAt }, null),
     );
   });
   register("workboard.cards.decompose", WRITE_SCOPE, async (request) => {
