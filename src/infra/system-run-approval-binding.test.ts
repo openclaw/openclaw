@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   buildSystemRunApprovalEnvBinding,
@@ -191,6 +192,12 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       keys: ["alpha", "z_key"],
       changed: { alpha: "changed", z_key: "b" },
     },
+    {
+      input: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      equivalent: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      keys: ["ProgramFiles(x86)"],
+      changed: { "ProgramFiles(x86)": "D:\\SDKs" },
+    },
   ])(
     "normalizes env keys and binds their values: $keys",
     ({ input, equivalent, keys, changed }) => {
@@ -232,6 +239,10 @@ describe("matchSystemRunApprovalBinding", () => {
 
   it.each([
     {
+      name: "argv mismatch",
+      actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
+    },
+    {
       name: "cwd mismatch",
       actual: { ...expected, cwd: "/var/tmp" },
     },
@@ -261,11 +272,11 @@ describe("matchSystemRunApprovalBinding", () => {
 
 describe("POSIX shell stdin option detection", () => {
   it.each([
-    {
-      argv: ["bash", "-se", "job.sh"],
+    ...["-s", "-se", "-es", "-ls", "-lse"].map((flag) => ({
+      argv: ["bash", flag, "job.sh"],
       loading: true,
       index: null,
-    },
+    })),
     { argv: ["bash", "--", "-se"], loading: false, index: 2 },
     { argv: ["bash", "job.sh", "-secret"], loading: false, index: 1 },
   ])("detects stdin options only before the operand: $argv", ({ argv, loading, index }) => {
@@ -328,6 +339,55 @@ describe("mutable file operand binding", () => {
           accessSpy.mockRestore();
         }
       } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "denies protected executable resolution drift after preparation",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      const resolution = commandResolution.resolveCommandResolutionFromArgv(["ls"], undefined, {
+        PATH: "/bin:/usr/bin",
+      });
+      if (!resolution) {
+        throw new Error("expected executable resolution");
+      }
+      const resolve = vi
+        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
+        .mockReturnValue(resolution);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: {
+              kind: "segments",
+              segments: [{ argv: ["ls", "*.ts"], raw: "ls *.ts", resolution }],
+            },
+            env: { PATH: "/bin:/usr/bin" },
+          }),
+        );
+        resolve.mockReturnValue({
+          ...resolution,
+          execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
+        });
+        await expect(
+          revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+        ).resolves.toEqual({
+          ok: false,
+          message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+        });
+        expect(resolve).toHaveBeenLastCalledWith(
+          ["ls", "*.ts"],
+          undefined,
+          expect.objectContaining({ PATH: "/bin:/usr/bin" }),
+          process.platform,
+          { useCache: false },
+        );
+      } finally {
+        resolve.mockRestore();
         policy.mockRestore();
       }
     },
@@ -495,6 +555,9 @@ describe("mutable file operand binding", () => {
         [
           [["sh", "-s", "job.sh"], startup],
           [["bash", "-se", "job.sh"], startup],
+          [["bash", "-es", "job.sh"], startup],
+          [["bash", "-ls", "job.sh"], startup],
+          [["bash", "-lse", "job.sh"], startup],
           ["bash --rcfile init.sh -i job.sh", startup],
           [["bash", "-O", "extglob", "-i", "job.sh"], startup],
           [["bash", "--rcfile", "init.sh", "-c", "echo ok"], startup],

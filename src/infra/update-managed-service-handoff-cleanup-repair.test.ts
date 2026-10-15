@@ -144,6 +144,13 @@ describe("managed handoff repair facts", () => {
       expected: 4_000_000,
     },
     {
+      name: "parent",
+      recoveryTimeoutMs: 1_000,
+      parentExitTimeoutMs: 5_000_000,
+      commandArgv: ["--timeout", "2"],
+      expected: 5_000_000,
+    },
+    {
       name: "command",
       recoveryTimeoutMs: 1_000,
       parentExitTimeoutMs: 2_000,

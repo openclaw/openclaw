@@ -443,16 +443,18 @@ it.each([
   });
 });
 
-it.each(["self-only", "incomplete"])(
+it.each(["home-only", "self-only", "env-exec", "incomplete"])(
   "does not probe a manager with %s context",
   async (context) => {
     await withManager(async () => {
       if (context === "incomplete") {
         deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
+      } else if (context === "env-exec") {
+        deleteTestEnvValue("OCM_SELF");
       } else {
         deleteTestEnvValue("OCM_ACTIVE_ENV");
         deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
-        deleteTestEnvValue("OCM_HOME");
+        deleteTestEnvValue(context === "home-only" ? "OCM_SELF" : "OCM_HOME");
       }
       const respond = vi.fn();
       if (context === "incomplete") {

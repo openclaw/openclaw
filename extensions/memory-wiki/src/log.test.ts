@@ -52,6 +52,13 @@ function observeOpen(configure: (handle: Handle) => void | Promise<void>) {
 }
 
 describe("loadMemoryWikiVaultIdentity", () => {
+  it("replays LF, CRLF and an authoritative final record without a newline", async () => {
+    for (const raw of [journal, journal.replaceAll("\n", "\r\n"), journal.trimEnd()]) {
+      const { root } = await createJournal(raw);
+      assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+    }
+  });
+
   it("ignores malformed records and partial tails without splitting lone CR", async () => {
     const { root, file } = await createJournal(journal + 'not-json\n{"partial":');
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);

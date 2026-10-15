@@ -101,7 +101,7 @@ function stubEngineOverview() {
 }
 
 describe("openclaw.setup", () => {
-  it.each([false, true])(
+  it.each([undefined, false, true])(
     "uses verified client locality for custom auth (%s)",
     async (isLocalClient) => {
       setupInferenceMocks.activateSetupInference.mockResolvedValue({

@@ -249,6 +249,7 @@ describe("startSshPortForward", () => {
 
   it.each([
     { ownership: "mixed", listeners: [{ pid: 4242 }, { pid: 4343 }] },
+    { ownership: "unknown", listeners: [{}] },
     { ownership: "unavailable", listeners: [] },
   ])(
     "rejects a busy port with $ownership ownership while SSH is still alive",
