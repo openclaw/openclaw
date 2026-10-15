@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
@@ -130,7 +131,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       preparedRunAdmission.close();
     }
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
     log.error(`Failed to generate slug: ${message}`);
     return null;
   }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -685,7 +686,7 @@ async function resumeMainSessionWithinAdmission(
       return "settled";
     }
     log.warn(
-      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? formatErrorStackWithMessage(error) : String(error)}`,
     );
     return "failed";
   } finally {

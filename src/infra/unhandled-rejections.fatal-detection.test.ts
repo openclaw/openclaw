@@ -7,6 +7,7 @@ vi.mock("../runtime.js", () => ({
   restoreRuntimeTerminalState: restoreRuntimeTerminalStateMock,
 }));
 
+import { formatErrorStackWithMessage } from "./errors.js";
 import {
   installUnhandledRejectionHandler,
   isUncaughtExceptionHandled,
@@ -190,7 +191,7 @@ describe("process error handlers", () => {
       expect(errorSpy.mock.calls).toEqual(
         thrown.map((failure) => [
           "[openclaw] Unhandled rejection handler failed:",
-          failure instanceof Error ? (failure.stack ?? failure.message) : failure,
+          failure instanceof Error ? formatErrorStackWithMessage(failure) : failure,
         ]),
       );
       expect(exitCalls).toEqual([]);
