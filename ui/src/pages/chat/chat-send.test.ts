@@ -1071,7 +1071,7 @@ describe("handleSendChat", () => {
         requestHandlers: {
           "chat.send": (params: unknown) => {
             const payload = requireRecord(params, "chat send payload");
-            return { runId: payload.idempotencyKey, status };
+            return status === "ok" ? { runId: payload.idempotencyKey, status } : { status };
           },
           ...(status === "ok"
             ? {
@@ -3373,7 +3373,9 @@ describe("handleSendChat", () => {
       expect(runIds[1] === originalRunId).toBe(state === "unconfirmed");
       expect(host.chatQueue).toStrictEqual([]);
       if (state === "unconfirmed") {
-        expect(targets).toEqual(Array(2).fill("agent:main:workspace"));
+        expect(targets).toEqual(
+          Array(2).fill(sessionKey === "global" ? "global" : "agent:main:workspace"),
+        );
         expect(host.chatRunId).toBe(originalRunId);
         expect(
           host.chatMessages.map((entry) => requireRecord(entry, "retried transcript").role),

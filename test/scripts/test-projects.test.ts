@@ -3152,6 +3152,7 @@ describe("test selector native source facts", () => {
       'import { group } from "source"; Object.values(group); void group[key];',
       [["source", ["group"]]],
     ],
+    ['import { group } from "source"; void { ...group };', [["source", ["group"]]]],
     [
       'import { group } from "source"; void { ...group }; void { group }; const { member } = group; typeof group; group?.member;',
       [["source", ["group"]]],
