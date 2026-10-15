@@ -182,7 +182,6 @@ export async function createAgentAccountingPersistenceFixture({
     sessionEntry: entry,
     sessionStore,
     sessionKey,
-    generationFence: { sessionId: entry.sessionId, expectedStoreEntry: entry },
   });
   const turn: AdmittedFollowupTurn = {
     runId: context.runId,

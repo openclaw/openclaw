@@ -1,4 +1,3 @@
-import { html, LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
@@ -17,6 +16,8 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   ChatPaneSessionPanelToggleController,
@@ -291,39 +292,49 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     return { ok: true };
   });
   const commit = createDeferred();
-  class ScheduledBrowserPane extends LitElement {
-    readonly state = createPageState(
-      createInitializationContext(),
-      { invalidate: () => this.requestUpdate(), afterCommit: () => () => {} },
-      this,
+  const pane = document.createElement("div");
+  let pendingUpdate: Promise<void> | undefined;
+  const state = createPageState(
+    createInitializationContext(),
+    { invalidate: requestUpdate, afterCommit: () => () => {} },
+    pane,
+  );
+  state.sidebarLayout = { columns: [] };
+  state.sessionKey = "agent:main:local-preview";
+  const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
+  const toggles = new ChatPaneSessionPanelToggleController({
+    current: () => ({
+      renderRoot: pane,
+      state,
+      linkReaders: [],
+      pluginPanels: [],
+      updateComplete: pendingUpdate ?? Promise.resolve(),
+    }),
+    pending,
+    requestUpdate,
+    updateSidebarLayout: (layout) => {
+      state.sidebarLayout = layout;
+      requestUpdate();
+    },
+  });
+  function BrowserCard(props: { sessionKey: string; presented: boolean; refresh: boolean }) {
+    return (
+      <openclaw-browser-panel
+        data-sidebar-panel-host
+        prop:embedded={true}
+        prop:available={true}
+        prop:client={gateway.client}
+        prop:sessionKey={props.sessionKey}
+        prop:presented={props.presented}
+        prop:refreshOnPresentation={props.refresh}
+      />
     );
-    readonly pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
-    readonly toggles = new ChatPaneSessionPanelToggleController({
-      current: () => ({
-        renderRoot: this,
-        state: this.state,
-        linkReaders: [],
-        pluginPanels: [],
-        updateComplete: this.updateComplete,
-      }),
-      pending: this.pending,
-      requestUpdate: () => this.requestUpdate(),
-      updateSidebarLayout: (layout) => {
-        this.state.sidebarLayout = layout;
-        this.requestUpdate();
-      },
-    });
-    override createRenderRoot() {
-      return this;
-    }
-    protected override async scheduleUpdate() {
-      if (this.hasUpdated) {
-        await commit.promise;
-      }
-      await super.scheduleUpdate();
-    }
-    override render() {
-      return renderSidebarRegion({
+  }
+  const conversation = document.createElement("main");
+  conversation.textContent = "Conversation";
+  function draw() {
+    renderPaneLegacyContent(
+      renderSidebarRegion({
         presentationId: "delayed-browser-card",
         availableWidth: 1400,
         callbacks: {
@@ -335,37 +346,38 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
           resizePanel: () => undefined,
           setOpen: () => undefined,
         },
-        layout: this.state.sidebarLayout,
+        layout: state.sidebarLayout,
         narrow: false,
         panelDefinitions: sidebarPanelDefinitions().map((definition) =>
           Object.assign(definition, {
             available: definition.slot === "browser",
             content:
               definition.slot === "browser"
-                ? html`<openclaw-browser-panel
-                    embedded
-                    .available=${true}
-                    .client=${gateway.client}
-                    .sessionKey=${this.state.sessionKey}
-                    .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
-                    .refreshOnPresentation=${!this.pending.has("browser")}
-                  ></openclaw-browser-panel>`
+                ? solidContent(BrowserCard, {
+                    sessionKey: state.sessionKey,
+                    presented: isSidebarSlotVisible(state.sidebarLayout, "browser"),
+                    refresh: !pending.has("browser"),
+                  })
                 : null,
           }),
         ),
-        primary: html`<main>Conversation</main>`,
-        requestUpdate: () => this.requestUpdate(),
-      });
-    }
+        primary: conversation,
+        requestUpdate,
+      }),
+      pane,
+    );
   }
-  customElements.define("scheduled-browser-pane", ScheduledBrowserPane);
-  const pane = document.createElement("scheduled-browser-pane") as ScheduledBrowserPane;
-  pane.state.sidebarLayout = { columns: [] };
-  pane.state.sessionKey = "agent:main:local-preview";
+  function requestUpdate() {
+    // Expose the new commit promise before the browser card can mount.
+    pendingUpdate ??= commit.promise.then(() => {
+      draw();
+      pendingUpdate = undefined;
+    });
+  }
   document.body.append(pane);
   try {
-    await pane.updateComplete;
-    pane.toggles.handle(
+    draw();
+    toggles.handle(
       "browser",
       "openclaw-browser-panel",
       new CustomEvent("openclaw:browser-toggle", {
@@ -376,9 +388,10 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
       }),
     );
     await vi.advanceTimersByTimeAsync(0);
+    expect(pane.querySelector("openclaw-browser-panel")).toBeNull();
     commit.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    await pane.updateComplete;
+    await pendingUpdate;
     expect(gateway.request).toHaveBeenCalledWith(
       "browser.request",
       expect.objectContaining({

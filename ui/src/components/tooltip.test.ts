@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { solidContent } from "../lit/solid-content.tsx";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
-import { renderKbd } from "./kbd.ts";
 import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
   createTooltip,
@@ -112,7 +113,7 @@ describe("openclaw-tooltip", () => {
 
   it("renders shortcut templates without changing plain descriptions or dismissal", async () => {
     const { tooltip, trigger } = createTooltip("Search (⌘K)");
-    tooltip.contentTemplate = html`Search (${renderKbd(["⌘", "K"], { inline: true })})`;
+    tooltip.contentTemplate = html`Search (${solidContent(Kbd, { keys: ["⌘", "K"], inline: true })})`;
     document.body.append(tooltip);
     await commitTooltip(tooltip);
 

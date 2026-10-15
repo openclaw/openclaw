@@ -556,7 +556,7 @@ export function toWikiPageSummary(params: {
   return result.status === "valid" ? result.page : null;
 }
 
-export class WikiPageNotUtf8Error extends Error {
+class WikiPageNotUtf8Error extends Error {
   constructor(displayPath: string) {
     super(
       `Wiki page is not valid UTF-8 and cannot be rewritten safely: ${displayPath}. ` +

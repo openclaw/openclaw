@@ -727,6 +727,11 @@ The refit seeks up to five completed scheduled `ci.yml` runs on `main` with a
 success or failure conclusion and parsed compact measurements from successful
 jobs. Scheduled CI owns main validation even when per-push test work is
 disabled, so skipped push runs cannot hide its measurements.
+UI file samples are excluded when the test file differs from the sampled main
+revision. Those files retain their existing prices until matching-source samples
+satisfy the normal independent-run and replacement-band rules. Excluded samples
+never supply evidence for pruning a changed file's price. Shared helper or product
+changes can still affect unchanged tests; these weights remain advisory.
 Cancelled, timed-out, neutral, and other workflow outcomes are excluded.
 Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence

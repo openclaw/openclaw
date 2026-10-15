@@ -84,16 +84,17 @@ function installStreamingReplyProbe() {
       return socket;
     },
   });
-  // oxlint-disable-next-line typescript/unbound-method -- Capture the native hook and preserve each caller's receiver below.
-  const parse = DOMParser.prototype.parseFromString;
-  DOMParser.prototype.parseFromString = function (this: DOMParser, source, type) {
+  const parserPrototype: {
+    parseFromString: (this: DOMParser, source: string, type: DOMParserSupportedType) => Document;
+  } = DOMParser.prototype;
+  const parse = parserPrototype.parseFromString;
+  DOMParser.prototype.parseFromString = function (this: DOMParser, source: unknown, type) {
     const start = performance.now();
     try {
-      return parse.call(this, source, type);
+      return Reflect.apply(parse, this, [source, type]);
     } finally {
       if (active && current) {
         current.parseCalls++;
-        // oxlint-disable-next-line typescript/no-unnecessary-type-conversion -- Native inputs include TrustedHTML, which lib.dom omits.
         current.parseChars += String(source).length;
         current.parseMs += performance.now() - start;
       }
@@ -102,22 +103,23 @@ function installStreamingReplyProbe() {
   const innerHTML = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML")!;
   Object.defineProperty(Element.prototype, "innerHTML", {
     ...innerHTML,
-    set(value: string) {
+    set(value: unknown) {
       const start = performance.now();
       try {
         innerHTML.set!.call(this, value);
       } finally {
         if (active && current && this instanceof HTMLTemplateElement) {
           current.parseCalls++;
-          // oxlint-disable-next-line typescript/no-unnecessary-type-conversion -- Native inputs include TrustedHTML, which lib.dom omits.
           current.parseChars += String(value).length;
           current.parseMs += performance.now() - start;
         }
       }
     },
   });
-  // oxlint-disable-next-line typescript/unbound-method -- The native hook is invoked with each element as its receiver.
-  const rect = Element.prototype.getBoundingClientRect;
+  const elementPrototype: {
+    getBoundingClientRect: (this: Element) => DOMRect;
+  } = Element.prototype;
+  const rect = elementPrototype.getBoundingClientRect;
   Element.prototype.getBoundingClientRect = function (this: Element) {
     if (active && current) {
       current.geometryReads++;

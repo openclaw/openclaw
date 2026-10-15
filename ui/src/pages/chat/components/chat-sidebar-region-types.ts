@@ -15,7 +15,7 @@ export type SidebarPanelDefinition = {
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
   content: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent | null;
-  loading: LegacyTemplateResult;
+  loading: LegacyTemplateResult | LegacyDirectiveResult;
   headerAction?: LegacyTemplateResult | LegacyDirectiveResult;
   headerLink?: { href: string; label: string };
   empty: {

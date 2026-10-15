@@ -122,6 +122,12 @@ old adjacent seal survives. The deployment controller delegates migration and
 restore to these native update owners, so it does not independently preserve
 or validate seals. No database schema change is required for this seal format.
 
+After an agent schema migration, the schema owner registers the database while
+its verified connection is still open. Later opens in the same Doctor process
+can reuse that admission instead of repeating its full integrity scan. The
+pre-migration integrity check, recovery backups, and restart seal requirements
+remain unchanged.
+
 | When                                             | Check                                                                                                                        |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | Startup with a matching, recent clean-close seal | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans |
@@ -206,6 +212,9 @@ still owns pending work. Each path still joins its accepted writers, pending ope
 and WAL maintenance before native close. The selected root refuses fresh native
 opens and new resource admission until every path settles, including failed closes;
 accepted cleanup can still use its existing admitted connection.
+Offline maintenance can release an already-owned lease after operation policy is
+revoked while its original physical database custody remains held. That cleanup
+authority does not admit new ordinary work or a replacement database.
 After shutdown grace, cached native handles also retire through their normal idle
 eviction path as soon as their final borrower releases them. They do not wait for
 the restart marker or the ordinary 30-minute idle window. Accepted cleanup can

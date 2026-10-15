@@ -85,7 +85,3 @@ export function livePresentation(value: PresentationValue, inverted = false) {
 export function presentedContent(value: PresentationValue, content: unknown) {
   return presentation(value, (presented) => (presented ? content : nothing));
 }
-
-export function presentedProperty<T>(value: PresentationValue, shown: T, hidden: T) {
-  return presentation(value, (presented) => live(presented ? shown : hidden));
-}

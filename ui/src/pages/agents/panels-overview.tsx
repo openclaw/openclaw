@@ -37,9 +37,9 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertCodexModelListResponse,
   assertCodexPassiveTurnItems,
-  readCodexTurnCompletedNotification,
+  prepareCodexServerNotification,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
@@ -144,16 +144,19 @@ describe("assertCodexModelListResponse", () => {
   });
 });
 
-describe("readCodexTurnCompletedNotification", () => {
+describe("prepareCodexServerNotification", () => {
   it("does not merge defaults from unrelated thread item union branches", () => {
-    const turn = readCodexTurnCompletedNotification({
-      threadId: "thread-1",
-      turn: {
-        id: "turn-1",
-        status: "completed",
-        items: [{ id: "item-1", type: "plan", text: "ship it" }],
+    const turn = prepareCodexServerNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ id: "item-1", type: "plan", text: "ship it" }],
+        },
       },
-    })?.turn;
+    }).completedTurn;
 
     expect(turn?.items[0]).toEqual({ id: "item-1", type: "plan", text: "ship it" });
   });

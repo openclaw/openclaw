@@ -1,7 +1,7 @@
-import { html } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import {
   createInitializationContext,
   createTestChatPane,
@@ -9,6 +9,19 @@ import {
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
+
+function PaneLabels(props: { label: string | undefined; id: string }) {
+  return (
+    <>
+      <span>{props.label}</span>
+      <span>{props.id}</span>
+    </>
+  );
+}
+
+function StreamOutput(props: { value: string | null }) {
+  return <output>{props.value}</output>;
+}
 
 // MessageChannel supplies distinct browser tasks without a timer or a real-frame race.
 async function task(action: () => void) {
@@ -44,7 +57,7 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: html`<span>${pane.paneLabel}</span><span>${pane.paneId}</span>`,
+      layout: solidContent(PaneLabels, { label: pane.paneLabel, id: pane.paneId }),
     }),
     presentedChanged: () => {},
   });
@@ -156,7 +169,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   pane.state = state;
   pane.chatState.attach(state);
   Object.assign(pane, {
-    render: () => ({ layout: html`<output>${state.chatStream}</output>` }),
+    render: () => ({ layout: solidContent(StreamOutput, { value: state.chatStream }) }),
   });
   const updates = vi.spyOn(pane, "render");
   state.chatStream = "First stream revision";
