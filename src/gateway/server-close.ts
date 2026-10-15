@@ -256,7 +256,6 @@ export async function prepareGatewayClose(
     const admissions = await measureCloseStep("reply-drain", () =>
       prepareGatewayRunShutdown({
         ...params,
-        restart,
         timeoutMs:
           typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
             ? Math.max(0, Math.floor(opts.drainTimeoutMs))

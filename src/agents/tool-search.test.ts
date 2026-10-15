@@ -1602,6 +1602,10 @@ describe("Tool Search", () => {
       }
       first.execute = vi.fn(async () => jsonResult({ marker: "first" }));
       const { ctx, catalogRef } = catalogFixture([first], { config });
+      const previous = expectDefined(catalogRef.current, "registered catalog");
+      const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+      await runtime.search("current capability");
+      expect(previous.searchCount).toBe(1);
 
       const second = pluginTool("fake_current_run", "Current-run capability");
       second.parameters = first.parameters;
@@ -1612,7 +1616,9 @@ describe("Tool Search", () => {
       });
 
       expect(reused.catalogReused).toBe(true);
-      const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+      expect(catalogRef.current).toBe(previous);
+      expect(catalogRef.current?.counterScope).toBe(previous.counterScope);
+      expect(catalogRef.current?.searchCount).toBe(1);
       await expect(runtime.callValue("fake_current_run")).resolves.toEqual({ marker: "second" });
       expect(first.execute).not.toHaveBeenCalled();
       expect(second.execute).toHaveBeenCalledOnce();
@@ -1627,6 +1633,9 @@ describe("Tool Search", () => {
           ...ctx,
         });
         expect(changed.catalogReused).toBe(false);
+        expect(catalogRef.current?.counterScope).not.toBe(previous.counterScope);
+        expect(catalogRef.current?.searchCount).toBe(0);
+        expect(catalogRef.current?.callCount).toBe(0);
         expect(
           catalogRef.current?.entries.find((entry) => entry.name === second.name)?.parameters,
         ).toEqual(second.parameters);

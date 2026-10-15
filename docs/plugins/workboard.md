@@ -303,6 +303,10 @@ This metadata lets an operator see how a card moved through the board without
 opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+New and edited comments are limited to 2000 characters. Unchanged stored comment
+bodies, including older oversized comments, retain their exact text during dispatch
+and other card updates. The existing per-card metadata budget still applies.
+
 The plugin and Control UI use one Workboard card contract. Control UI refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller

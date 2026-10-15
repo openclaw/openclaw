@@ -41,6 +41,15 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
+  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
+  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
+  const partitionFor = (key: string) => {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
+    }
+    return partitions?.[hash & 63];
+  };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
   const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
@@ -218,6 +227,15 @@ export function createSessionRowSelection(
     }
     updateCreator(oldWinner, true);
     updateCreator(winner);
+    const partition = partitionFor(key);
+    if (partition) {
+      partition.revision = {};
+      if (winner) {
+        partition.entries.set(key, winner.pair);
+      } else {
+        partition.entries.delete(key);
+      }
+    }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
       removeInvolvement(key);
@@ -290,8 +308,18 @@ export function createSessionRowSelection(
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
       assertCanonical();
+      if (!candidates && !partitions) {
+        partitions = Array.from({ length: 64 }, () => ({
+          revision: {},
+          entries: new Map<string, SessionEntryPair>(),
+        }));
+        for (const [key, target] of winners) {
+          partitionFor(key)!.entries.set(key, target.pair);
+        }
+      }
       return {
         configuredAgentIds,
+        partitions: candidates ? undefined : partitions,
         entries(this: void, archived: SessionsListParams["archived"]) {
           const orderKey = `${sortBy}:${archived ?? false}`;
           let entries = !candidates && sortBy && orders.get(orderKey)?.entries;

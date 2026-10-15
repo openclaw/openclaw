@@ -6,11 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveExistingSqliteFileUri,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -218,12 +214,10 @@ function createFixtureBackend(
         ).rows.map((row) => row.value);
       }
       if (command.type === "commitWithoutReceipt") {
-        const { DatabaseSync } = requireNodeSqlite();
         // Exit inside the native call: the durable COMMIT precedes its receipt observer.
-        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the database.
-        const exec = DatabaseSync.prototype.exec;
-        DatabaseSync.prototype.exec = function (sql) {
-          Reflect.apply(exec, this, [sql]);
+        const exec = db.exec.bind(db);
+        db.exec = (sql) => {
+          exec(sql);
           if (sql === "COMMIT") {
             process.exit(17);
           }

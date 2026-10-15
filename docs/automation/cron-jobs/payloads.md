@@ -189,10 +189,13 @@ activation. A manual source upgrade must include `openclaw doctor --fix` before
 starting the Gateway. Startup reports potentially unmigrated host-account jobs
 before scheduling; it does not capture credentials or rewrite jobs.
 
-Environment-only and provider-config API keys have no durable account ownership,
-so Doctor reports them instead of silently substituting a stored account. New
-host-managed jobs reject them at creation. Store the key in an auth profile and
-select that profile instead. Credentialless models remain usable without an account.
+Environment-only and provider-config API keys have no durable account ownership.
+A legacy job whose route uses such a key keeps running on that key without adoption;
+once a stored account becomes eligible for its route, the job stops with the
+adoption instructions instead of switching to that account. New host-managed jobs
+reject these keys at creation: store the key in an auth profile and select that
+profile instead. An account refusal ends the run; it never falls back to another
+model or provider. Credentialless models remain usable without an account.
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.

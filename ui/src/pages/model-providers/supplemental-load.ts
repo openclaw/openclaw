@@ -1,16 +1,16 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
+  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
   setData: (data: ModelProvidersData) => void;
