@@ -53,7 +53,7 @@ export function resolveDiscordChannelParentIdSafe(channel: unknown): string | un
   return resolveDiscordChannelStringWithAliasSafe(channel, "parentId", "parent_id");
 }
 
-export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
+function resolveDiscordChannelParentSafe(channel: unknown): unknown {
   return readDiscordChannelPropertySafe(channel, "parent");
 }
 

@@ -35,7 +35,7 @@ import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
-import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
+import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,
@@ -331,7 +331,6 @@ function ChatContent(input: { props: ChatProps }) {
       </button>
     </div>
   );
-  const taskSuggestionTray = createMemo(() => renderChatTaskSuggestionTray(input.props));
   return (
     <section
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
@@ -451,7 +450,7 @@ function ChatContent(input: { props: ChatProps }) {
                     </Show>
                     <Show
                       when={
-                        input.props.detailsEnabled || taskSuggestionTray() !== emptyLegacyContent
+                        input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
                       }
                     >
                       <div
@@ -465,7 +464,7 @@ function ChatContent(input: { props: ChatProps }) {
                             <ChatTopbarNotices {...input.props} />
                           </Show>
                         </div>
-                        <LitContent value={taskSuggestionTray()} />
+                        <ChatTaskSuggestionTray view={input.props} />
                       </div>
                     </Show>
                     <div class="chat-footer">

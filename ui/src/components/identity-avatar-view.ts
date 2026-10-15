@@ -338,7 +338,7 @@ export function resolveAgentIdentityAvatarView(agent: AgentIdentity) {
   };
 }
 
-export function renderAgentAvatarFallback(agent: AgentIdentity) {
+function renderAgentAvatarFallback(agent: AgentIdentity) {
   return guard([agent.id, agent.textAvatar], () =>
     until(
       agent.textAvatar

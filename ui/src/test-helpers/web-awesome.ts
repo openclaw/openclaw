@@ -1,8 +1,9 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type { ReactiveElement } from "lit";
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 
 export async function settleWebAwesome(root: ParentNode): Promise<void> {
-  for (const element of root.querySelectorAll<ReactiveElement>(
+  for (const element of root.querySelectorAll<WaDropdown | WaDropdownItem | WaPopup>(
     "wa-dropdown, wa-dropdown-item, wa-popup",
   )) {
     await element.updateComplete;

@@ -28,7 +28,7 @@ describe("public session document", () => {
     const html = render([], { entryUrl });
     expect(html).toContain(`href="${entryUrl}"`);
     expect(html).toContain("Log in");
-    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('<noscript><meta http-equiv="refresh" content="15"></noscript>');
     expect(html).toContain('data-public-refresh="true"');
     expect(html).toContain('redirect:"error"');
     expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
@@ -146,7 +146,7 @@ describe("public session document", () => {
     expect(html).toContain("Checking the files.");
     expect(html).toContain("The cause is clear.");
     expect(html).toContain("Fixed the issue.");
-    expect(html.match(/<details class="tools">/g)).toHaveLength(1);
+    expect(html.match(/<details class="tools" data-public-item=/g)).toHaveLength(1);
     expect(html).toContain("Ran 2 tools");
     expect(html).toContain("src/example.ts");
     expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);

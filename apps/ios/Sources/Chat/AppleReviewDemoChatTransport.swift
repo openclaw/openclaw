@@ -25,6 +25,10 @@ enum ScreenshotFixtureMode {
     static var reactionsEnabled: Bool {
         !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
     }
+
+    static var progressCardEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
+    }
 }
 
 struct LocalChatFixture {
@@ -237,18 +241,29 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard ScreenshotFixtureMode.progressCardEnabled,
+              ["progressCard.get", "progressCard.refresh"].contains(method)
+        else { return nil }
+        return true
+    }
+
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
-        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
             revision: 1,
             updatedat: 0,
-            markdown: """
+            markdown: ScreenshotFixtureMode.progressCardEnabled ? nil : """
             <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
 
             Now: reading the sample diff.
             """,
-            steps: [])
+            steps: ScreenshotFixtureMode.progressCardEnabled ? [
+                ProgressCardStep(step: "Collect the sample data", status: .completed),
+                ProgressCardStep(step: "Draft the summary", status: .inProgress),
+                ProgressCardStep(step: "Share the result", status: .pending),
+            ] : [])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -502,7 +517,8 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
-        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
+        let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         var startupSnapshot: OpenClawChatInFlightRun?
         if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
@@ -535,6 +551,7 @@ private actor LocalFixtureChatStore {
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
             messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
             thinkingLevel: self.thinkingLevel,
+            // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] },
