@@ -56,6 +56,34 @@ describe("system package ownership", () => {
     expect(host).not.toHaveBeenCalled();
   });
 
+  it("explains a missing package-manager executable without suggesting database repair", async () => {
+    const onWarning = vi.fn();
+    const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+      result("", {
+        code: null,
+        termination: "error",
+        error: Object.assign(new Error("spawn pacman ENOENT"), { code: "ENOENT" }),
+      }),
+    );
+    await withMockedPlatform("linux", async () => {
+      await expect(
+        createSystemPackageOwnershipInspection(100, { runCommand, onWarning }).assertUnowned(
+          "/fixture/openclaw",
+        ),
+      ).resolves.toBeUndefined();
+    });
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("pacman executable was not found"),
+    );
+    expect(onWarning.mock.calls[0]?.[0]).toContain(
+      "Continuing without verified system-package ownership",
+    );
+    expect(onWarning.mock.calls[0]?.[0]).not.toMatch(
+      /restore access to the active pacman database/iu,
+    );
+  });
+
   it.each(["linux"] as const)(
     "retains the pre-mutation error contract for a positive %s owner",
     async (platform) => {
