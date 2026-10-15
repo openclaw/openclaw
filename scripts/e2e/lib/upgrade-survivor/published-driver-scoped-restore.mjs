@@ -39,8 +39,10 @@ export async function provePublishedDriverScopedRestore({ state, env, artifacts,
         ANALYZE;
       `);
       if (agentId === agents[1]) {
-        // Valid SQLite, but the real v27 INSERT SELECT cannot read this missing column.
-        database.exec("ALTER TABLE context_engine_turn_outbox DROP COLUMN last_error;");
+        // Preserve v26 admission, then fail the real v27 CREATE TABLE in its transaction.
+        database.exec(
+          "CREATE TABLE context_engine_turn_outbox_sequence_migration (blocked INTEGER);",
+        );
       }
     } finally {
       database.close();
@@ -59,7 +61,7 @@ export async function provePublishedDriverScopedRestore({ state, env, artifacts,
   assert.match(
     fs.readFileSync(path.join(artifacts, "scoped-migration-expected-failure.stdout"), "utf8") +
       fs.readFileSync(path.join(artifacts, "scoped-migration-expected-failure.stderr"), "utf8"),
-    /last_error/,
+    /context_engine_turn_outbox_sequence_migration/,
     "Doctor failed outside the intended outbox migration",
   );
   const committed = inspect(healthy.pathname);
