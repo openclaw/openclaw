@@ -1,13 +1,9 @@
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
-import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
-import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
-import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
 import { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import {
@@ -16,7 +12,6 @@ import {
 } from "../plugins/plugin-install-preflight.js";
 import { defaultRuntime } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
-import type { ClawHubSkillUninstallPlan } from "../skills/lifecycle/workspace-types.js";
 import {
   acquireClawPackageLifecycleLease,
   maintainClawPackageLifecycleLease,
@@ -26,9 +21,9 @@ import {
   persistClawPackageRefForAdd,
   readClawPackageRefsForAdd,
   updateClawPackageRefStatusForAdd,
-  type ClawAddStateOptions,
 } from "./add-state-write.js";
-import { packageFromAction, type PlannedClawPackage } from "./package-plan-action.js";
+import type { InstallClawPackagesOptions } from "./package-install-options.js";
+import { packageFromAction } from "./package-plan-action.js";
 import { bindClawPluginBeforeCommit } from "./package-plugin-before-commit.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
 import {
@@ -41,21 +36,21 @@ import {
   ownerInstallIsNewerThanRefs,
 } from "./package-resume.js";
 import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
+import { rollbackStatelessClawPackagesWithStamps } from "./package-stateless-rollback.js";
 import {
   inspectClawPluginCapabilities,
   probeClawPluginArtifact,
   sourceHostPluginConflict,
 } from "./plugin-capability-probe.js";
-import { runClawPluginBatch, type ClawPluginRuntimeOptions } from "./plugin-runtime.js";
-import {
-  persistClawPackageRef,
-  readClawPackageRefs,
-  updateClawPackageRefStatus,
-  type PersistedClawPackageRef,
-} from "./provenance.js";
-import type { ClawAddPlan, ClawPackage } from "./types.js";
+import { runClawPluginBatch } from "./plugin-runtime.js";
+import type { PersistedClawPackageRef } from "./provenance.js";
+import type { ClawAddPlan } from "./types.js";
 
 export { preflightClawPackage } from "./package-preflight.js";
+export type {
+  ClawPluginInstallConsent,
+  ClawSkillInstallConsent,
+} from "./package-install-options.js";
 
 export class ClawPackageInstallError extends Error {
   constructor(
@@ -74,64 +69,6 @@ const statelessPluginInstallStamps = new WeakMap<
   PersistedClawPackageRef,
   { pluginId: string; installedAt: string }
 >();
-
-type PackageInstallerDeps = {
-  installPlugin?: (params: Parameters<typeof installManagedPlugin>[0]) => Promise<void>;
-  uninstallPlugin?: (params: Parameters<typeof uninstallPluginWithPolicy>[0]) => Promise<void>;
-  probePlugin?: typeof installPluginFromClawHub;
-  installSkill?: typeof installSkillFromClawHub;
-  preflightPlugin?: typeof preflightPluginInstall;
-  preflightSkill?: typeof preflightSkillFromClawHub;
-  persistPackageRef?: (
-    plan: Parameters<typeof persistClawPackageRef>[0],
-    pkg: Parameters<typeof persistClawPackageRef>[1],
-    options?: Parameters<typeof persistClawPackageRef>[2],
-  ) => ReturnType<typeof persistClawPackageRef> | Promise<ReturnType<typeof persistClawPackageRef>>;
-  completePackageRef?: (
-    ref: Parameters<typeof updateClawPackageRefStatus>[0],
-    status: Parameters<typeof updateClawPackageRefStatus>[1],
-    options?: Parameters<typeof updateClawPackageRefStatus>[2],
-  ) =>
-    | ReturnType<typeof updateClawPackageRefStatus>
-    | Promise<ReturnType<typeof updateClawPackageRefStatus>>;
-  readPackageRefs?: (
-    options?: Parameters<typeof readClawPackageRefs>[0],
-  ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
-  acquirePackageLease?: typeof acquireClawPackageLifecycleLease;
-  resolvePlugin?: typeof resolveInstalledClawHubPlugin;
-  inspectPluginCapabilities?: typeof inspectClawPluginCapabilities;
-};
-
-export type ClawPluginInstallConsent = {
-  onCapabilityConsent: PluginCapabilityConsentHandler;
-  confirmInstall?: (pluginId: string, warning?: string) => Promise<boolean>;
-};
-
-export type ClawSkillInstallConsent = {
-  assertApproved: (
-    pkg: Pick<PlannedClawPackage, "ref" | "version" | "integrity"> & { riskWarning: string },
-  ) => void;
-};
-
-type InstallClawPackagesOptions = ClawPluginRuntimeOptions &
-  ClawAddStateOptions & {
-    config?: OpenClawConfig;
-    clawHubBaseUrl?: string;
-    pluginConsent?: ClawPluginInstallConsent;
-    skillConsent?: ClawSkillInstallConsent;
-    deps?: PackageInstallerDeps;
-    pluginInstallMode?: "install" | "update";
-    assertPluginOwnerCurrent?: () => Promise<void>;
-    nowMs?: number;
-    onExternalMutation?: (pkg: ClawPackage) => void;
-    skillUpgrade?: {
-      ref: string;
-      plan: ClawHubSkillUninstallPlan;
-      assertCurrent: () => Promise<void>;
-    };
-    onSkillTransaction?: (pkg: ClawPackage, transaction: PackageDirInstallTransaction) => void;
-    stateless?: boolean;
-  };
 
 export async function installClawPackages(
   plan: ClawAddPlan,
@@ -170,87 +107,11 @@ export async function rollbackStatelessClawPackages(
     "assertCurrent" | "deps" | "env" | "path" | "runtime"
   > = {},
 ): Promise<string[]> {
-  const errors: string[] = [];
-  const deps = options.deps ?? {};
-  const acquirePackageLease = deps.acquirePackageLease ?? acquireClawPackageLifecycleLease;
-  const readPackageRefs = deps.readPackageRefs ?? readClawPackageRefsForAdd;
-  const resolvePlugin = deps.resolvePlugin ?? resolveInstalledClawHubPlugin;
-  const runtime = options.runtime ?? defaultRuntime;
-  for (const pkg of packages.toReversed()) {
-    if (pkg.kind !== "plugin" || pkg.origin !== "claw-introduced") {
-      continue;
-    }
-    const stamp = statelessPluginInstallStamps.get(pkg);
-    if (!stamp) {
-      continue;
-    }
-    let lease: MaintainedClawPackageLifecycleLease | null = null;
-    try {
-      const acquired = await acquirePackageLease(
-        { kind: "plugin", source: "clawhub", ref: pkg.ref },
-        { env: options.env, path: options.path, required: true },
-      );
-      if (!acquired) {
-        throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
-      }
-      lease = maintainClawPackageLifecycleLease(acquired);
-      const owners = await readPackageRefs({
-        ...options,
-        kind: "plugin",
-        source: "clawhub",
-        ref: pkg.ref,
-        version: pkg.version,
-        integrity: pkg.integrity,
-      });
-      if (owners.some((owner) => owner.status === "pending" || owner.status === "complete")) {
-        continue;
-      }
-      const installed = await resolvePlugin({ clawhubPackage: pkg.ref });
-      if (
-        installed.status !== "found" ||
-        installed.pluginId !== stamp.pluginId ||
-        installed.record.installedAt !== stamp.installedAt ||
-        installed.installedVersion !== pkg.version ||
-        !installed.record.integrity ||
-        normalizeClawHubSha256Integrity(installed.record.integrity) !==
-          normalizeClawHubSha256Integrity(pkg.integrity)
-      ) {
-        continue;
-      }
-      const activeLease = lease;
-      // The Add batch may be closed; CLI uninstall schedules its own runtime restart.
-      const params: Parameters<typeof uninstallPluginWithPolicy>[0] = {
-        pluginId: installed.pluginId,
-        caller: "cli",
-        invalidateRuntimeCache: false,
-        clawManaged: true,
-        beforePersistentApply: () => {
-          activeLease.assertCurrent();
-          options.assertCurrent?.();
-        },
-        onWarning: (warning) => runtime.log(warning),
-      };
-      options.assertCurrent?.();
-      if (deps.uninstallPlugin) {
-        await deps.uninstallPlugin(params);
-      } else {
-        const removed = await uninstallPluginWithPolicy(params);
-        if (!removed.ok) {
-          throw new Error(removed.error);
-        }
-      }
-      pkg.status = "rolled_back";
-    } catch (error) {
-      errors.push(`plugin ${pkg.ref} cleanup failed: ${coerceErrorMessage(error)}`);
-    } finally {
-      try {
-        await lease?.release();
-      } catch (error) {
-        errors.push(`plugin ${pkg.ref} cleanup lease failed: ${coerceErrorMessage(error)}`);
-      }
-    }
-  }
-  return errors;
+  return await rollbackStatelessClawPackagesWithStamps(
+    packages,
+    options,
+    statelessPluginInstallStamps,
+  );
 }
 
 async function installClawPackagesUnlocked(

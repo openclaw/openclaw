@@ -8,7 +8,6 @@ import type { ClawHubSkillUninstallPlan } from "../skills/lifecycle/workspace-ty
 import {
   installClawPackages as installClawPackagesCore,
   preflightClawPackage,
-  rollbackStatelessClawPackages,
 } from "./packages.js";
 import {
   emptyPluginCapabilityEvidence,
@@ -1044,66 +1043,5 @@ describe("installClawPackages", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
-  });
-
-  it("rolls back an unchanged plugin introduced by an unpublished Add", async () => {
-    const installed = {
-      status: "found" as const,
-      pluginId: "audit",
-      installedVersion: pluginPackage.version,
-      record: {
-        source: "clawhub" as const,
-        integrity,
-        installedAt: "2026-10-14T01:00:00.000Z",
-      },
-    };
-    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
-    const deps = {
-      installPlugin: vi.fn().mockResolvedValue(undefined),
-      uninstallPlugin,
-      probePlugin,
-      preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-      resolvePlugin: vi.fn().mockResolvedValue(installed),
-      readPackageRefs: vi.fn().mockResolvedValue([]),
-      acquirePackageLease,
-    };
-    const refs = await installClawPackages(plan([pluginPackage]), {
-      stateless: true,
-      deps,
-    });
-
-    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
-    expect(uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginId: "audit", clawManaged: true }),
-    );
-    expect(refs[0]?.status).toBe("rolled_back");
-  });
-
-  it("keeps a newly installed plugin if its install identity changed", async () => {
-    let installedAt = "2026-10-14T01:00:00.000Z";
-    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
-    const deps = {
-      installPlugin: vi.fn().mockResolvedValue(undefined),
-      uninstallPlugin,
-      probePlugin,
-      preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-      resolvePlugin: vi.fn(async () => ({
-        status: "found" as const,
-        pluginId: "audit",
-        installedVersion: pluginPackage.version,
-        record: { source: "clawhub" as const, integrity, installedAt },
-      })),
-      readPackageRefs: vi.fn().mockResolvedValue([]),
-      acquirePackageLease,
-    };
-    const refs = await installClawPackages(plan([pluginPackage]), {
-      stateless: true,
-      deps,
-    });
-    installedAt = "2026-10-14T01:00:01.000Z";
-
-    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
-    expect(uninstallPlugin).not.toHaveBeenCalled();
-    expect(refs[0]?.status).toBe("complete");
   });
 });

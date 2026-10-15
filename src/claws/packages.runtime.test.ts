@@ -418,6 +418,95 @@ describe("Claw committed plugin requirement handoff", () => {
   );
 });
 
+describe("stateless Claw plugin rollback", () => {
+  const pluginPackage = {
+    kind: "plugin",
+    source: "clawhub",
+    ref: "@owner/audit",
+    version: "2.0.1",
+    integrity,
+  } as const;
+
+  function rollbackDeps(installedAt: () => string) {
+    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
+    return {
+      uninstallPlugin,
+      installPlugin: vi.fn().mockResolvedValue(undefined),
+      preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
+      probePlugin: vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
+        await request.onPluginArtifactInspect?.({
+          pluginId: "audit",
+          stagedArtifactDir: "/tmp/staged-audit",
+          mode: "install",
+        });
+        return {
+          ok: true as const,
+          pluginId: "audit",
+          packageName: "@owner/audit",
+          targetDir: "/tmp/plugin",
+          extensions: [],
+          clawhub: {
+            source: "clawhub" as const,
+            clawhubUrl: "https://clawhub.ai",
+            clawhubPackage: "@owner/audit",
+            clawhubFamily: "code-plugin" as const,
+            integrity,
+          },
+        };
+      }),
+      inspectPluginCapabilities: vi.fn((_rootDir: string, pluginId: string) => ({
+        ...emptyPluginCapabilityEvidence,
+        grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+      })),
+      resolvePlugin: vi.fn(async () => ({
+        status: "found" as const,
+        pluginId: "audit",
+        installedVersion: pluginPackage.version,
+        record: { source: "clawhub" as const, integrity, installedAt: installedAt() },
+      })),
+      readPackageRefs: vi.fn().mockResolvedValue([]),
+      acquirePackageLease: vi.fn(async () => testPackageLease()),
+    };
+  }
+
+  const pluginConsent = {
+    onCapabilityConsent: vi.fn(async (review: { reviewToken: string }) => ({
+      reviewToken: review.reviewToken,
+    })),
+    confirmInstall: vi.fn(async () => true),
+  };
+
+  it("removes an unchanged plugin introduced by an unpublished Add", async () => {
+    const deps = rollbackDeps(() => "2026-10-14T01:00:00.000Z");
+    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
+      stateless: true,
+      pluginConsent,
+      deps,
+    });
+
+    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
+    expect(deps.uninstallPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "audit", clawManaged: true }),
+    );
+    expect(refs[0]?.status).toBe("rolled_back");
+  });
+
+  it("keeps an introduced plugin if its install identity changed", async () => {
+    let installedAt = "2026-10-14T01:00:00.000Z";
+    const deps = rollbackDeps(() => installedAt);
+    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
+      stateless: true,
+      pluginConsent,
+      deps,
+    });
+    installedAt = "2026-10-14T01:00:01.000Z";
+
+    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
+    expect(deps.uninstallPlugin).not.toHaveBeenCalled();
+    expect(refs[0]?.status).toBe("complete");
+  });
+});
+
 describe("Claw source-host plugin collision", () => {
   const pinnedBundledPlugin = {
     kind: "plugin",
