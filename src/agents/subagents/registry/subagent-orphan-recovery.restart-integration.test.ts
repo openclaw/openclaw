@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -7,7 +6,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -16,7 +15,6 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { runStartupSessionMaintenanceForTest } from "../../../gateway/server-startup-session-migration.test-support.js";
 import {
@@ -38,12 +36,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import {
-  resolveIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
@@ -52,6 +45,7 @@ import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.live-tail.test-support.js";
 import {
   registerAbsentChildRestoreOwnershipTest,
+  registerMissingStorageRecoveryTests,
   registerRawChildRestoreOwnershipTest,
 } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -74,7 +68,6 @@ import {
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
@@ -85,95 +78,10 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
 registerAbsentChildRestoreOwnershipTest();
 
-it.each(["durable", "incognito"] as const)(
-  "classifies missing %s storage for recovery without creating its database",
-  async (storage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const databasePath = (
-        storage === "incognito"
-          ? resolveIncognitoOpenClawAgentSqlitePath
-          : resolveOpenClawAgentSqlitePath
-      )({ agentId: "main", env: state.env });
-      if (storage === "incognito") {
-        onTestFinished(() =>
-          memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath }),
-        );
-      }
-      const childSessionKey = `agent:main:subagent:${storage === "incognito" ? "incognito-" : ""}missing-store`;
-      const entry = makeRunRecord({
-        runId: "missing-store-run",
-        childSessionKey,
-        childSessionIdentity: { sessionId: "lost-session", lifecycleRevision: "lost-revision" },
-        execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
-      });
-      const recover = (candidate: SubagentRunRecord) =>
-        recoverInterruptedSubagentRow({
-          entry: candidate,
-          runId: candidate.runId,
-          gatewayRuntime: undefined,
-          isCurrent: () => true,
-          warn: vi.fn(),
-        });
-      expect(existsSync(databasePath)).toBe(false);
-      expect(
-        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
-      ).toBeUndefined();
-      const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
-      expect(await recover(running)).toEqual({ status: "ignored" });
-      const result = await recover(entry);
-      expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
-      if (result.status !== "terminal") {
-        throw new Error("Expected missing child storage to permit terminal settlement");
-      }
-      expect(await result.recoveryCurrent?.prepare()).toBe(true);
-      expect(result.recoveryCurrent?.isHostCurrent()).toBe(true);
-      expect(
-        await recover({
-          ...running,
-          execution: {
-            ...running.execution,
-            restartRecovery: {
-              phase: "accepted",
-              sessionId: "lost-session",
-              sessionMarker: "lost-session:1",
-              idempotencyKey: "lost-recovery",
-            },
-          },
-        }),
-      ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
-      expect(existsSync(databasePath)).toBe(false);
-      expect(
-        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
-      ).toBeUndefined();
-
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: childSessionKey },
-        {
-          sessionId: "successor-session",
-          lifecycleRevision: "successor-lifecycle",
-          updatedAt: Date.now(),
-        },
-      );
-      if (storage === "durable") {
-        expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
-        expect(await result.recoveryCurrent?.prepare()).toBe(false);
-        expect(await result.sessionEffects?.isCurrent()).toBe(false);
-      } else {
-        // Old recovery bookkeeping may finish after creation; it cannot apply session effects.
-        expect(result.suppressSessionEffects).toBe(true);
-      }
-      const missingRow = await recover({ ...entry, childSessionKey: `${childSessionKey}-other` });
-      expect(missingRow.status).toBe("terminal");
-      if (missingRow.status === "terminal") {
-        expect(missingRow.suppressSessionEffects).not.toBe(true);
-      }
-    });
-  },
-);
+registerMissingStorageRecoveryTests();
 
 describe("subagent orphan recovery — faithful restart path", () => {
-  const fixture = useSubagentRestartRecoveryFixture();
+  const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it("recovers a raw child key using its recorded owner without borrowing another agent's session", async () => {
@@ -318,7 +226,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
       });
     } finally {
       await fixture.settle();
-      await lock.release();
+      try {
+        // A Gateway closes agent databases before retiring its shared-state owner.
+        await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+      } finally {
+        await lock.release();
+      }
     }
   });
 
