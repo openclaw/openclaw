@@ -389,7 +389,7 @@ describe("createInternalAgentTurnFacade", () => {
     );
   });
 
-  it.each(["final", "error"])(
+  it.each(["final", "error", "failed-final", "timeout-final"])(
     "preserves acceptance ordering and the post-acceptance %s",
     async (completion) => {
       let sourceCurrent = true;
@@ -411,10 +411,26 @@ describe("createInternalAgentTurnFacade", () => {
         if (completion === "error") {
           throw dispatchError;
         }
-        io.emitFinal([true, { runId: "run-1", status: "ok", summary: "done" }, undefined], {
-          runId: "run-1",
-          terminal: true,
-        });
+        io.emitFinal(
+          [
+            true,
+            {
+              runId: "run-1",
+              status:
+                completion === "failed-final"
+                  ? "error"
+                  : completion === "timeout-final"
+                    ? "timeout"
+                    : "ok",
+              summary: "done",
+            },
+            undefined,
+          ],
+          {
+            runId: "run-1",
+            terminal: true,
+          },
+        );
       });
       const onAccepted = vi.fn(() => accepted.resolve());
 
@@ -433,7 +449,16 @@ describe("createInternalAgentTurnFacade", () => {
       } else {
         await expect(result).resolves.toEqual({
           ok: true,
-          payload: { runId: "run-1", status: "ok", summary: "done" },
+          payload: {
+            runId: "run-1",
+            status:
+              completion === "failed-final"
+                ? "error"
+                : completion === "timeout-final"
+                  ? "timeout"
+                  : "ok",
+            summary: "done",
+          },
           error: undefined,
           meta: { runId: "run-1", terminal: true },
         });

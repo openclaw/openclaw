@@ -255,6 +255,7 @@ export function createInternalAgentTurnFacade(
                 io,
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                commitAdmission: dispatchOptions.commitAdmission,
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,

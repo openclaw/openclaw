@@ -42,10 +42,14 @@ import {
   type AgentSessionPersistResult,
 } from "./agent-session-persist.js";
 import { prepareAgentWaitForTurn } from "./agent-wait.js";
-import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
+import type {
+  AgentTurnAdmissionCommit,
+  RequesterSettleWakeReplay,
+} from "./internal-facade.types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 type AgentTurnStartRequest = {
+  commitAdmission?: AgentTurnAdmissionCommit;
   privateCompletion?: true;
   /** Trusted input-owner policy; not accepted from the wire request. */
   replyExpectation?: ReplyExpectation;
@@ -65,6 +69,7 @@ export function createAgentTurnService(
 ) {
   const startTurn = async ({
     privateCompletion,
+    commitAdmission,
     replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
@@ -510,6 +515,7 @@ export function createAgentTurnService(
           client: principal,
         };
         const preparedDispatch = await prepareAgentRunDispatch({
+          commitAdmission,
           ...runParams,
           lifecycleStorePath: sessionStorePath ?? `agent:${activeSessionAgentId}`,
           assertAdmissionCurrent: assertRequestCurrent,

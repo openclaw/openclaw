@@ -1,5 +1,6 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { isCompetingSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -12,7 +13,7 @@ function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
 export function createCurrentProcessOwnerLookup(params: {
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
-}): (entry: SessionEntry, sessionKey: string) => boolean {
+}): (entry: SessionEntry, sessionKey: string, storePath: string) => boolean {
   const providedIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedKeys =
@@ -20,7 +21,10 @@ export function createCurrentProcessOwnerLookup(params: {
       ? undefined
       : normalizeStringSet(params.activeSessionKeys);
   // Re-read live projections at each check so an async scan cannot retain a stale owner view.
-  return (entry, sessionKey) => {
+  return (entry, sessionKey, storePath) => {
+    if (isCompetingSessionWorkAdmissionActive(storePath, [entry.sessionId])) {
+      return true;
+    }
     const ids = providedIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
     const keys = providedKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
     return ids.has(entry.sessionId) || (ids.size === 0 && keys.has(sessionKey));

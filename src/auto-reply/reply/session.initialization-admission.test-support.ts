@@ -8,6 +8,8 @@ import {
 import * as lifecycleReads from "../../config/sessions/lifecycle-read.js";
 import {
   loadSessionEntry,
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
@@ -38,6 +40,71 @@ export function registerSessionInitializationAdmissionTests({
 }: {
   makeStorePath: (prefix: string, agentId?: string) => Promise<string>;
 }) {
+  it("preserves a metadata-created generation through native reply admission and initialization", async () => {
+    const storePath = await makeStorePath("openclaw-inbound-generation-", "main");
+    const sessionKey = "agent:main:telegram:dm:inbound-generation";
+    const scope = { agentId: "main", storePath, sessionKey };
+    const ctx = telegramTurn(sessionKey, "hello", "inbound-user");
+    await recordInboundSessionMeta({ storePath, sessionKey, ctx });
+    const entry = loadSessionEntry(scope);
+    if (!entry?.lifecycleRevision) {
+      throw new Error("Inbound creation must establish its native lifecycle generation");
+    }
+    await updateSessionLastRoute({
+      storePath,
+      sessionKey,
+      channel: "telegram",
+      to: "inbound-user",
+    });
+    const admitted = await admitReplyTurn({
+      ...scope,
+      sessionId: entry.sessionId,
+      kind: "visible",
+      resetTriggered: false,
+    });
+    if (admitted.status !== "owned" || !admitted.databaseClaim) {
+      throw new Error("Fixture requires a retained reply admission");
+    }
+    try {
+      const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
+        initSessionState({
+          cfg: { session: { store: storePath } },
+          ctx,
+          replyOperation: admitted.operation,
+        }),
+      );
+      expect(initialized.isNewSession).toBe(false);
+      expect(initialized.sessionEntry).toMatchObject({
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      });
+      expect(admitted.databaseClaim.isCurrent()).toBe(true);
+      const reader = getReplyOperationSessionReader(admitted.operation);
+      if (!reader) {
+        throw new Error("Native admission must retain its current reader");
+      }
+      await expect(
+        reader.withRead(
+          { sessionKeys: [sessionKey] },
+          () => {},
+          (cohort) => cohort.entries.find((row) => row.sessionKey === sessionKey)?.entry,
+        ),
+      ).resolves.toMatchObject({
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      });
+    } finally {
+      admitted.operation.complete();
+      await waitForReplyRunSuccessorAdmission(sessionKey, null);
+    }
+    const reset = await initSessionState({
+      cfg: { session: { store: storePath } },
+      ctx: telegramTurn(sessionKey, "/new", "inbound-user"),
+    });
+    expect(reset.sessionEntry.lifecycleRevision).not.toBe(entry.lifecycleRevision);
+    expect(reset.sessionEntry.lifecycleRevision).toEqual(expect.any(String));
+  });
+
   it.each(["same-id", "new-id", "created", "reset-before-read"] as const)(
     "hands the acknowledged %s initialization to a fresh view of its original admission",
     async (kind) => {

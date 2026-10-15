@@ -553,6 +553,7 @@ export async function startGatewayPostAttachRuntime(
     trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
+    recoverDurableQuestionInteractions?: () => Promise<void>;
     getReadiness: ReadinessChecker;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -861,6 +862,13 @@ export async function startGatewayPostAttachRuntime(
                 loaderStatsBefore.sourceTransformFallbacks,
             ],
           ]);
+          if (!candidateCanary && params.isClosing?.() !== true) {
+            try {
+              await params.recoverDurableQuestionInteractions?.();
+            } catch (error) {
+              params.log.warn(`durable question restart recovery failed: ${String(error)}`);
+            }
+          }
           let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
           await startupLog;
           if (params.isClosing?.()) {

@@ -116,6 +116,8 @@ import {
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
+import { registerDurableQuestionRecoveryCases } from "./main-session-question-recovery.test-harness.js";
+import { createDeliveredReceiptEntry } from "./main-session-recovery-delivery-receipt.test-support.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
@@ -313,18 +315,8 @@ async function makeMainSessionFixture(
   };
 }
 
-function deliveredReceiptEntry(
-  toolCallId = "message-call-1",
-  sourceRunId = "discord-message-1",
-): Partial<SessionEntry> {
-  return {
-    restartRecoveryDeliveryReceiptState: "delivered-terminal",
-    restartRecoveryDeliveryToolCallId: toolCallId,
-    restartRecoveryDeliveryRunId: "recovery-1",
-    restartRecoveryDeliverySourceRunId: sourceRunId,
-    restartRecoveryDeliveryContext: discordDeliveryContext,
-  };
-}
+const deliveredReceiptEntry = (toolCallId?: string, sourceRunId?: string) =>
+  createDeliveredReceiptEntry(discordDeliveryContext, toolCallId, sourceRunId);
 
 function makeDeliveredReceiptFixture(
   toolCallId = "message-call-1",
@@ -462,6 +454,14 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  registerDurableQuestionRecoveryCases(() => ({
+    gatewayRuntime: mockRecoveryRuntime,
+    makeMainSessionFixture,
+    expectRecovery,
+    seedQueuedFinal,
+    tmpDir,
+    discordDeliveryContext,
+  }));
   it.each(["finish", "stop"] as const)(
     "bounds resumed turns and preserves waiting work on %s",
     async (outcome) => {

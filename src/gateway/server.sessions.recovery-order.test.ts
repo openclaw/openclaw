@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
+import { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   loadSessionEntry,
@@ -10,9 +11,12 @@ import {
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import { reconcileOrphanedGatewaySessionRecovery } from "./session-recovery-service.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -23,8 +27,92 @@ import {
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import * as placementLifecycle from "./worker-environments/session-placement-lifecycle.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+test("startup orphan marking waits for foreground recovery reconciliation", async () => {
+  // admit_recovery persists this statusless custody before a provider starts.
+  // The same retained state is covered by the native orphaned chat recovery cases.
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:startup-reconciliation";
+  const sessionId = "startup-reconciliation-source";
+  const scope = { agentId: "main", storePath, sessionKey };
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId, {
+        status: undefined,
+        abortedLastRun: false,
+        mainRestartRecovery: { cycleId: "unfinished-cycle", revision: 1, chargedAttempts: 0 },
+        restartRecoveryDeliveryRunId: "interrupted-run",
+        restartRecoveryDeliverySourceRunId: "interrupted-run",
+      }),
+    },
+  });
+  const cfg = getRuntimeConfig();
+  const target = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
+  const entry = loadSessionEntry(scope);
+  if (!entry) {
+    throw new Error("Expected the native reconciliation source");
+  }
+  const prepared = createDeferredCore();
+  const release = createDeferredCore();
+  const startupFence = createDeferredCore();
+  const preparePlacement = placementLifecycle.prepareSessionWorkerPlacementMutationCheckAsync;
+  const placement = vi
+    .spyOn(placementLifecycle, "prepareSessionWorkerPlacementMutationCheckAsync")
+    .mockImplementationOnce(async (params) => {
+      const check = await preparePlacement(params);
+      prepared.resolve();
+      await release.promise;
+      return check;
+    });
+  const reconcile = reconcileOrphanedGatewaySessionRecovery({
+    cfg,
+    target,
+    entry,
+    workerPlacementContext: {},
+  });
+  let startup: ReturnType<typeof markStartupOrphanedMainSessionsForRecovery> | undefined;
+  let restoreFence = () => {};
+  try {
+    await prepared.promise;
+    const mutate = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    // Observe the mutation request before calling its real runner; this signal
+    // does not itself prove queue entry or ownership. Both writers still run.
+    const fence = vi
+      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
+      .mockImplementation((operation, params) => {
+        if (operation === "recovery-mark") {
+          startupFence.resolve();
+        }
+        return mutate(operation, params);
+      });
+    restoreFence = () => fence.mockRestore();
+    startup = markStartupOrphanedMainSessionsForRecovery({
+      cfg,
+      agentIds: new Set(["main"]),
+      stateDir: process.env.OPENCLAW_STATE_DIR,
+    });
+    // Before coordination, the native startup write finishes through the held
+    // reconciliation fence. After coordination its mutation request lets the
+    // real reconciliation resume before startup can write.
+    await Promise.race([startup, startupFence.promise]);
+    release.resolve();
+    await expect(reconcile).resolves.toMatchObject({ abortedLastRun: true });
+    // Once reconciliation commits, startup must re-plan against its marked row.
+    expect(await startup).toEqual({ marked: 0, skipped: 0 });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionId,
+      abortedLastRun: true,
+    });
+  } finally {
+    release.resolve();
+    await Promise.allSettled([reconcile, ...(startup ? [startup] : [])]);
+    restoreFence();
+    placement.mockRestore();
+  }
+});
 
 test.each([false, true])(
   "concurrent cloud recovery waits for its canonical successor and rechecks queued authority (revoked: %s)",
