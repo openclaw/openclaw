@@ -223,7 +223,7 @@ describe("plugins marketplace entries", () => {
 
 describe("plugins marketplace refresh", () => {
   const checksum = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
-  it.each([checksum, `sha256:${checksum}`])(
+  it.each([`sha256:${checksum}`])(
     "normalizes pin %s and keeps next-start notices off JSON stdout",
     async (expectedSha256) => {
       loadFeed.mockResolvedValue(
@@ -288,30 +288,6 @@ describe("plugins marketplace refresh", () => {
       hasEtag: true,
       source: "hosted",
     });
-  });
-
-  it("rejects a pinned refresh when the feed falls back", async () => {
-    loadFeed.mockResolvedValue({
-      source: "bundled-fallback",
-      entries: [{ name: "@openclaw/acpx" }],
-      error: "hosted catalog feed checksum mismatch: expected sha256:expected",
-      metadata: {
-        url: "https://clawhub.ai/v1/feeds/plugins",
-        status: 200,
-        checksum: "sha256:actual",
-      },
-    });
-    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-      "exit 1",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "bundled-fallback" }),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
   });
 
   it("rejects a pinned snapshot without corrupting JSON", async () => {

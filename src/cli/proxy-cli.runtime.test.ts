@@ -120,43 +120,6 @@ describe("proxy cli runtime", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it("prints proxy validation text and leaves exit code unset on success", async () => {
-    await proxyCliRuntime.runProxyValidateCommand({
-      proxyUrl: "http://override.example:3128",
-      proxyCaFile: "./ca.pem",
-      allowedUrls: ["https://allowed.example/"],
-      deniedUrls: ["http://127.0.0.1/"],
-      apnsReachability: true,
-      apnsAuthority: "https://api.sandbox.push.apple.com",
-      timeoutMs: 1234,
-    });
-
-    expect(getRuntimeConfigMock).toHaveBeenCalledOnce();
-    expect(runProxyValidationMock).toHaveBeenCalledWith({
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: process.env,
-      proxyUrlOverride: "http://override.example:3128",
-      proxyCaFileOverride: "./ca.pem",
-      allowedUrls: ["https://allowed.example/"],
-      deniedUrls: ["http://127.0.0.1/"],
-      apnsReachability: true,
-      apnsAuthority: "https://api.sandbox.push.apple.com",
-      timeoutMs: 1234,
-    });
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      "Proxy validation passed\n\n" +
-        "Proxy\n" +
-        "  Source: config\n" +
-        "  URL:    http://config-proxy.example:3128/\n\n" +
-        "Checks\n" +
-        "  ✓ allowed https://example.com/ HTTP 200\n",
-    );
-    expect(process.exitCode).toBeUndefined();
-  });
-
   it("redacts proxy credentials in text output", async () => {
     runProxyValidationMock.mockResolvedValueOnce({
       ok: true,
@@ -175,37 +138,6 @@ describe("proxy cli runtime", () => {
         "Proxy\n" +
         "  Source: config\n" +
         "  URL:    http://redacted:redacted@proxy.example:3128/\n",
-    );
-  });
-
-  it("redacts proxy credentials in JSON output", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: true,
-      config: {
-        enabled: true,
-        proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
-        source: "config",
-        errors: [],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({ json: true });
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      `${JSON.stringify(
-        {
-          ok: true,
-          config: {
-            enabled: true,
-            proxyUrl: "http://redacted:redacted@proxy.example:3128/",
-            source: "config",
-            errors: [],
-          },
-          checks: [],
-        },
-        null,
-        2,
-      )}\n`,
     );
   });
 

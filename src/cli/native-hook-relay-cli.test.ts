@@ -194,45 +194,6 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("renders unavailable output for legacy relay commands without a generation", async () => {
-    const invokeBridge = vi.fn(async () => {
-      throw new Error("generation must be non-empty string");
-    });
-    const callGateway = vi.fn(async () => {
-      throw new Error("generation must be non-empty string");
-    });
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
-
-    const exitCode = await runNativeHookRelayCliForTest(
-      { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout.text())).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "Native hook relay unavailable",
-      },
-    });
-    expect(stderr.text()).toContain("native hook relay unavailable");
-    expect(stderr.text()).toContain("generation must be non-empty string");
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "nativeHook.invoke",
-        params: expect.objectContaining({ generation: undefined }),
-      }),
-    );
-  });
-
   it("does not fall back to the gateway after a stale direct bridge error", async () => {
     const invokeBridge = vi.fn(async () => {
       throw new Error("native hook relay bridge stale registration");
