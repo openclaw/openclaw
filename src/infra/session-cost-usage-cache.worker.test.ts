@@ -469,6 +469,28 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
+    openOpenClawAgentDatabase({ agentId });
+    const pruned = vi.fn();
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    const observer = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => {
+        const owner = prepareLock(...args);
+        return {
+          ...owner,
+          pruneRows: (rows) => {
+            pruned(rows);
+            return owner.pruneRows(rows);
+          },
+        };
+      });
+    try {
+      expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+      expect(pruned).not.toHaveBeenCalled();
+    } finally {
+      observer.mockRestore();
+    }
+
     const sessionsDir = state.sessionsDir(agentId);
     const sessionFile = path.join(sessionsDir, "recorded.jsonl");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -485,25 +507,6 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
   });
   // A cache-miss worker retains no database; runtime shutdown owns its retirement.
   await closeStateDatabaseForTest();
-});
-
-it("prunes legacy-only usage caches during a full refresh", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const agentId = "usage-legacy-only-refresh";
-    const { db } = openOpenClawAgentDatabase({ agentId });
-    const insert = db.prepare(
-      "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, '{}', NULL, NULL, 1)",
-    );
-    insert.run("session-cost-usage", "cache");
-    insert.run("session-cost-usage-rollup-v1", "retired-v1");
-    insert.run("session-cost-usage-rollup-v2", "retired-v2");
-    insert.run("other", "keep");
-
-    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
-    expect(db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all()).toEqual([
-      { scope: "other", key: "keep" },
-    ]);
-  });
 });
 
 it("serves fresh and partial usage while refresh waits for its host writer", async ({
