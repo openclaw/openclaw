@@ -710,7 +710,9 @@ describe("native command adapter", () => {
     });
     const fixtureRpcCalls = () =>
       nativeMocks.rpc.mock.calls.filter(
-        ([options]) => options.configPath !== "/private/preflight/config.json",
+        ([options]) =>
+          options.configPath !== "/private/preflight/config.json" &&
+          options.method !== "diagnostics.lanes",
       );
     let simulatorReady = false;
     let sourceChanged = false;
@@ -730,6 +732,15 @@ describe("native command adapter", () => {
     let nativeCommandActive = false;
     let historyReadBeforeCommandExit = false;
     nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "diagnostics.lanes") {
+        expect(lifecycle).not.toContain("gateway-cleanup");
+        return {
+          workerCount: 3,
+          workerPoolCount: 1,
+          lanes: [{ lane: "private-session", activeCount: 1, queuedCount: 2, maxConcurrent: 1 }],
+          token: "private-credential",
+        };
+      }
       if (options.configPath === "/private/preflight/config.json") {
         expect(options).toMatchObject({
           method: "device.pair.setupStatus",
@@ -1598,6 +1609,11 @@ describe("native command adapter", () => {
           expect.objectContaining({
             trial: 1,
             setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupDiagnostics: expect.arrayContaining([
+              expect.objectContaining({ stage: "before-simulator" }),
+              expect.objectContaining({ stage: "after-simulator" }),
+              expect.objectContaining({ stage: "setup-code", gatewayExited: false }),
+            ]),
           }),
         ]);
         expect(
@@ -1614,6 +1630,13 @@ describe("native command adapter", () => {
         expect(report.trials).toHaveLength(1);
         expect(report.trials[0]?.errors).toContain("cleanup-failed");
         expect(proof.resourcesPreserved).toBe(true);
+        if (scenario === "cleanup-failure") {
+          expect(proof.fixtures).toEqual([
+            expect.objectContaining({
+              cleanupFailures: [expect.objectContaining({ source: "gateway", code: "failed" })],
+            }),
+          ]);
+        }
         return;
       }
       if (scenario === "test-exit") {

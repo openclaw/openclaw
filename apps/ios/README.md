@@ -189,6 +189,11 @@ GitHub first qualifies pairing and chat in a separate job. Signing and upload
 then use a fresh checkout of the same commit, so qualification build outputs
 cannot dirty the release source.
 
+The qualification proof includes Gateway process and host resource snapshots around
+simulator boot. Setup failures add a bounded process sample, a read-only worker/queue
+snapshot, and classified Gateway events; cleanup failures identify the fixture owner.
+The artifact excludes raw logs, command arguments, paths, and pairing credentials.
+
 The entry point freezes the live App Store plan and unchanged source SHA,
 generates reviewed release notes from changes since the latest public build,
 and saves the text as a release artifact. After upload and Apple processing, it
