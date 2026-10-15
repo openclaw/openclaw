@@ -33,6 +33,7 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -354,6 +355,7 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
+  onObservedReplyDelivery?: () => Promise<void> | void;
 }): Promise<ReplyPayload[]> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
@@ -413,8 +415,15 @@ async function sendFollowupPayloads(params: {
   const dispatchPayload = async (payload: ReplyPayload) => {
     if (deliverQueuedBatch) {
       queuedPayloads.push(payload);
-    } else {
-      await fallbackDispatcher?.(payload);
+    } else if (fallbackDispatcher) {
+      const delivery = await deliverBlockReply(() => fallbackDispatcher(payload));
+      if (
+        delivery.outcome === "delivered" &&
+        !delivery.pending &&
+        (!originRoutable || sameChannelOrigin)
+      ) {
+        await params.onObservedReplyDelivery?.();
+      }
     }
   };
   let deliveredCrossChannelOrigin = false;
@@ -492,6 +501,7 @@ async function sendFollowupPayloads(params: {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
+        await params.onObservedReplyDelivery?.();
         if (!result.ok) {
           logVerbose(
             `followup queue: route-reply partially failed after delivery: ${
@@ -540,6 +550,7 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
+  onObservedReplyDelivery?: () => Promise<void> | void;
 }): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
@@ -603,6 +614,7 @@ export async function deliverFollowupDecision(params: {
     mirror:
       decision.kind === "deliver" && params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
+    onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
   return { kind: "completed", payloads: delivered };
 }

@@ -135,6 +135,13 @@ function statusReactionFixture() {
   });
   return { controller, reactions, restoration, nextRestoration };
 }
+function beginQueuedDelivery(plan: ReturnType<typeof createWhatsAppReplyPlan>) {
+  const settle = plan.replyOptions.queuedDeliveryCorrelations?.[0]?.begin();
+  if (typeof settle !== "function") {
+    throw new Error("Expected a source-bound queued delivery correlation");
+  }
+  return settle;
+}
 function nonPortablePaths(value: unknown, path = "inbound", seen = new Set<object>()): string[] {
   if (typeof value === "function") {
     return [path];
@@ -514,31 +521,65 @@ describe("WhatsApp reply delivery", () => {
     },
   );
   it.each([
-    { outcome: "completed" as const, emoji: "✅" },
-    { outcome: "failed" as const, emoji: "❌" },
+    { visibleReplySent: true, emoji: "✅" },
+    { visibleReplySent: false, emoji: "❌" },
   ])(
-    "finishes a queued source reaction with $emoji when its follow-up is $outcome",
-    async ({ outcome, emoji }) => {
+    "waits for queued delivery before showing $emoji (visible=$visibleReplySent)",
+    async ({ visibleReplySent, emoji }) => {
       const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
       const { plan } = await fixture({ statusReactionController: controller });
       expect(plan.finalize({ deferredToActiveRun: "followup", counts: {} })).toBe(false);
       await restoration;
       expect(reactions).toEqual(["👀"]);
 
+      const settle = beginQueuedDelivery(plan);
+      plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+      expect(reactions).toEqual(["👀"]);
       const completed = nextRestoration();
-      plan.replyOptions.onAgentRunTerminalOutcome?.(outcome);
+      settle({ visibleReplySent, failed: false });
       await completed;
       expect(reactions).toEqual(["👀", emoji, "👀"]);
     },
   );
-  it("preserves a follow-up outcome received before the original dispatch finalizes", async () => {
+  it("preserves queued delivery settled before the original dispatch finalizes", async () => {
     const { controller, reactions, restoration } = statusReactionFixture();
     const { plan } = await fixture({ statusReactionController: controller });
     plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
     expect(reactions).toEqual([]);
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     await restoration;
     expect(reactions).toEqual(["✅", "👀"]);
+  });
+  it("shows execution failure immediately and does not replace it with delivery success", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onAgentRunTerminalOutcome?.("failed");
+    await restoration;
+    expect(reactions).toEqual(["❌", "👀"]);
+    beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    expect(controller.restoreInitial).toHaveBeenCalledOnce();
+  });
+  it("keeps a deferred retry pending and matches direct dispatch for a settled silent turn", async () => {
+    const queued = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: queued.controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await queued.restoration;
+    beginQueuedDelivery(plan)();
+    expect(queued.reactions).toEqual(["👀"]);
+
+    const completed = queued.nextRestoration();
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    beginQueuedDelivery(plan)({ visibleReplySent: false, failed: false });
+    await completed;
+    expect(queued.reactions).toEqual(["👀", "❌", "👀"]);
+
+    const direct = statusReactionFixture();
+    const { plan: directPlan } = await fixture({ statusReactionController: direct.controller });
+    directPlan.finalize({ counts: {} });
+    await direct.restoration;
+    expect(direct.reactions).toEqual(["❌", "👀"]);
   });
   it("shows an error when an accepted follow-up is evicted before it runs", async () => {
     const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
@@ -546,14 +587,14 @@ describe("WhatsApp reply delivery", () => {
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     await restoration;
     const completed = nextRestoration();
-    plan.replyOptions.onFollowupQueueDisposition?.();
+    plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-old");
     await completed;
     expect(reactions).toEqual(["👀", "❌", "👀"]);
   });
   it("keeps a queue-cap rejection failed even when its notice is delivered", async () => {
     const { controller, reactions, restoration } = statusReactionFixture();
     const { plan, deliver } = await fixture({ statusReactionController: controller });
-    plan.replyOptions.onFollowupQueueDisposition?.();
+    plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-new");
     await deliver({ text: "The message queue is full." });
     expect(plan.finalize({ counts: { final: 1 } })).toBe(true);
     await restoration;

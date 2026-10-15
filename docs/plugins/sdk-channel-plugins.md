@@ -427,6 +427,13 @@ when initialization must finish before the child runs.
       without waiting for `onAgentRunTerminalOutcome`. Summarized overflow remains
       pending and does not report a drop through this callback.
 
+      A `queuedDeliveryCorrelations` entry stays bound to its source through collect
+      batching. Its `begin()` cleanup receives an optional settlement with
+      `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
+      An omitted settlement means the attempt deferred or retained retry ownership.
+      Use the settlement for delivery-dependent completion UI; an agent's successful
+      execution callback can arrive before any reply is sent.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.

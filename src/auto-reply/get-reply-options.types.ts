@@ -98,7 +98,8 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  begin: () => (() => void) | void;
+  /** An omitted settlement retains queued/retry ownership rather than reporting a terminal result. */
+  begin: () => ((settlement?: { visibleReplySent: boolean; failed: boolean }) => void) | void;
 };
 
 /**

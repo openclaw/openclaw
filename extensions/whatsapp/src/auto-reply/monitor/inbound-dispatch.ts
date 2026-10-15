@@ -569,10 +569,13 @@ export function createWhatsAppReplyPlan(params: {
   let didLogHeartbeatStrip = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;
+  let queuedDeliveryOutcome: typeof agentRunOutcome;
+  let reactionFinished = false;
   const finalizeStatusReaction = async (outcome: typeof agentRunOutcome) => {
-    if (!statusReactionController) {
+    if (!statusReactionController || reactionFinished) {
       return;
     }
+    reactionFinished = outcome !== undefined;
     if (outcome === "failed") {
       await statusReactionController.setError();
     } else if (outcome === "completed") {
@@ -582,7 +585,7 @@ export function createWhatsAppReplyPlan(params: {
   };
   const onAgentRunTerminalOutcome = (outcome: "completed" | "failed") => {
     agentRunOutcome = outcome;
-    if (reactionDeferred) {
+    if (outcome === "failed") {
       void finalizeStatusReaction(outcome);
     }
   };
@@ -784,7 +787,7 @@ export function createWhatsAppReplyPlan(params: {
       );
     },
   };
-  const replyOptions = {
+  const replyOptions: NonNullable<ChannelInboundTurnPlan["replyOptions"]> = {
     ...(params.turnAdoptionLifecycle
       ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
       : {}),
@@ -803,6 +806,20 @@ export function createWhatsAppReplyPlan(params: {
       ? {
           onAgentRunTerminalOutcome,
           onFollowupQueueDisposition: () => onAgentRunTerminalOutcome("failed"),
+          queuedDeliveryCorrelations: [
+            {
+              begin: () => (settlement) => {
+                if (!settlement) {
+                  return;
+                }
+                queuedDeliveryOutcome =
+                  settlement.failed || !settlement.visibleReplySent ? "failed" : "completed";
+                if (reactionDeferred) {
+                  void finalizeStatusReaction(queuedDeliveryOutcome);
+                }
+              },
+            },
+          ],
           onToolStart: async (payload: { name?: string }) => {
             const toolName = payload.name?.trim();
             if (toolName) {
@@ -839,11 +856,13 @@ export function createWhatsAppReplyPlan(params: {
       const didQueueVisibleReply = hasVisibleInboundReplyDispatch(dispatchResult);
       const didDeliverVisibleReply = didSendReply || dispatchResult.observedReplyDelivery === true;
 
-      // Queued follow-ups retain this source's observer; admission itself is not a failure.
+      // Execution success is not delivery evidence; queued sources settle after transport.
       reactionDeferred = dispatchResult.deferredToActiveRun !== undefined;
       void finalizeStatusReaction(
         reactionDeferred
-          ? agentRunOutcome
+          ? agentRunOutcome === "failed"
+            ? "failed"
+            : queuedDeliveryOutcome
           : agentRunOutcome === "failed" ||
               readAgentRunTerminalOutcome(dispatchResult) === "failed" ||
               !didDeliverVisibleReply

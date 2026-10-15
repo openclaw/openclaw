@@ -627,6 +627,8 @@ describe("createFollowupRunner", () => {
     });
     const presentationGate = createDeferred();
     const presentationStarted = createDeferred();
+    const endCorrelation = vi.fn();
+    turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
     let presentation: Promise<void> | undefined;
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
     const decision = {
@@ -649,6 +651,7 @@ describe("createFollowupRunner", () => {
       ) => {
         expect(params.decision).toEqual(decision);
         order.push("delivered");
+        await params.onObservedReplyDelivery?.();
         return { kind: "completed", payloads: decision.payloads };
       },
     );
@@ -677,12 +680,18 @@ describe("createFollowupRunner", () => {
       expect(order).toContain("presentation-settling");
       expect(state.completeLifecycle).not.toHaveBeenCalled();
       expect(turn.operation.complete).not.toHaveBeenCalled();
+      expect(endCorrelation).not.toHaveBeenCalled();
     } finally {
       presentationGate.resolve();
       await settledRun;
       await presentation;
     }
     await run;
+
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+      visibleReplySent: true,
+      failed: true,
+    });
 
     expect(order).toEqual([
       "progress-drained",

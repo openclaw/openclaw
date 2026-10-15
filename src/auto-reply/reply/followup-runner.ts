@@ -112,20 +112,6 @@ export function createFollowupRunner(
         ),
       ),
     );
-  const deliverProgress = async (
-    turn: AdmittedFollowupTurn,
-    payloads: ReplyPayload[],
-    kind: "tool" | "block",
-  ) => {
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads },
-      turn,
-      defaults,
-      runId: turn.runId,
-      runFollowup,
-      kind,
-    });
-  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -134,12 +120,36 @@ export function createFollowupRunner(
     let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
+    let visibleReplySent = false;
+    let sourceRetry = false;
+    const onObservedReplyDelivery = async () => {
+      if (visibleReplySent) {
+        return;
+      }
+      visibleReplySent = true;
+      await defaults.opts?.onObservedReplyDelivery?.();
+    };
+    const deliverProgress = async (
+      turn: AdmittedFollowupTurn,
+      payloads: ReplyPayload[],
+      kind: "tool" | "block",
+    ) => {
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads },
+        turn,
+        defaults,
+        runId: turn.runId,
+        runFollowup,
+        kind,
+        onObservedReplyDelivery,
+      });
+    };
     const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
       : (queued.deliveryCorrelations ?? [])
           .map((correlation) => correlation.begin())
-          .filter((end): end is () => void => typeof end === "function");
+          .filter((end) => typeof end === "function");
     try {
       if (initiallyAborted) {
         disposition = { kind: "consumed" };
@@ -218,7 +228,7 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
       ) {
-        await defaults.opts?.onObservedReplyDelivery?.();
+        await onObservedReplyDelivery();
       }
       const deliveryOpts = {
         ...defaults.opts,
@@ -226,6 +236,7 @@ export function createFollowupRunner(
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+        onObservedReplyDelivery,
       };
       const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
         {
@@ -278,9 +289,11 @@ export function createFollowupRunner(
         defaults,
         runId: execution.execution.runId,
         runFollowup,
+        onObservedReplyDelivery,
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      sourceRetry = delivery.kind === "source-retry";
       // Gateway final batches are returned above, not delivered: their one-shot
       // source owner settles in finally. Allocate its successor before that boundary.
       if (
@@ -356,6 +369,7 @@ export function createFollowupRunner(
             completion,
           });
         } catch (error) {
+          completion = { kind: "failed", error: formatErrorMessage(error) };
           defaultRuntime.error?.(
             `followup queue: completion delivery failed; refusing replay: ${formatErrorMessage(error)}`,
           );
@@ -371,7 +385,11 @@ export function createFollowupRunner(
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
-          end();
+          end(
+            disposition.kind === "consumed" && admittedTurn && !sourceRetry
+              ? { visibleReplySent, failed: completion.kind === "failed" }
+              : undefined,
+          );
         } catch (error) {
           defaultRuntime.error?.(
             `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(error)}`,

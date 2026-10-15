@@ -10,6 +10,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
@@ -123,15 +124,22 @@ async function deliverBatch(params: {
   originatingChannel: string;
   outcomes: Array<"delivered" | "failed">;
   payloads: ReplyPayload[];
+  fallbackOutcome?: "delivered" | "failed-before-deliver" | "channel-transform";
+  onObservedReplyDelivery?: () => void;
 }) {
   channelState.outcomes = [...params.outcomes];
-  const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+  const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {
+    if (params.fallbackOutcome) {
+      setBlockReplyDelivery(Promise.resolve({ outcome: params.fallbackOutcome }));
+    }
+  });
   await deliverFollowupDecision({
     decision: { kind: "deliver", payloads: params.payloads },
     turn: createTurn(params),
     defaults: createDefaults(onBlockReply),
     runId: "run-1",
     runFollowup: vi.fn(async () => {}),
+    onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
   return onBlockReply;
 }
@@ -162,6 +170,27 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each([
+    { route: "delivered", fallback: "failed-before-deliver", origin: "discord", visible: true },
+    { route: "failed", fallback: "failed-before-deliver", origin: "discord", visible: false },
+    { route: "failed", fallback: "channel-transform", origin: "discord", visible: false },
+    { route: "failed", fallback: "delivered", origin: "discord", visible: true },
+    { route: "failed", fallback: "delivered", origin: "slack", visible: false },
+  ] as const)(
+    "reports settled source visibility for $origin: $route / $fallback",
+    async ({ route, fallback, origin, visible }) => {
+      const observed = vi.fn();
+      await deliverBatch({
+        messageProvider: "discord",
+        originatingChannel: origin,
+        outcomes: [route],
+        payloads: [{ text: "queued reply" }],
+        fallbackOutcome: fallback,
+        onObservedReplyDelivery: observed,
+      });
+      expect(observed).toHaveBeenCalledTimes(visible ? 1 : 0);
+    },
+  );
   it.each(["a2a", "slack"])(
     "delivers queued terminal content and keeps host notices specific to human channels: %s",
     async (channel) => {
